@@ -126,12 +126,42 @@ export const createOrder: RequestHandler = async (req, res, next) => {
       },
     });
 
-    // Realtime broadcast
+    // Realtime broadcast: admin dashboard sees order:new immediately.
     try {
       const { emitNewOrder } = await import('../../realtime/channels.js');
       emitNewOrder(req.app.locals.io, order);
     } catch {
       // realtime not critical
+    }
+
+    // Server-side WhatsApp confirmation (no-op if cloud API not configured —
+    // the mobile app's deep-link is the primary path).
+    try {
+      const { sendWhatsAppMessage, buildOrderConfirmationText } =
+        await import('../../integrations/whatsapp.js');
+      const customer = await prisma.user.findUnique({
+        where: { id: req.user.id },
+        select: { phone: true, name: true },
+      });
+      if (customer?.phone) {
+        void sendWhatsAppMessage({
+          toPhone: customer.phone,
+          text: buildOrderConfirmationText({
+            orderNumber: order.orderNumber,
+            serviceNameAr: service.nameAr,
+            customerName: customer.name,
+          }),
+        }).then((sent) => {
+          if (sent) {
+            void prisma.order.update({
+              where: { id: order.id },
+              data: { whatsappSentAt: new Date() },
+            });
+          }
+        });
+      }
+    } catch {
+      // not critical
     }
 
     created(res, order);
@@ -211,6 +241,8 @@ export const approveOrder: RequestHandler = async (req, res, next) => {
         reason: 'Customer approved quoted price',
       },
     });
+    const { dispatchOrderStatusChanged } = await import('./orderEvents.js');
+    await dispatchOrderStatusChanged(req.app, updated, OrderStatus.ACCEPTED);
     ok(res, updated);
   } catch (err) {
     next(err);
@@ -244,6 +276,8 @@ export const cancelMine: RequestHandler = async (req, res, next) => {
         reason: input.reason,
       },
     });
+    const { dispatchOrderStatusChanged } = await import('./orderEvents.js');
+    await dispatchOrderStatusChanged(req.app, updated, OrderStatus.CANCELLED);
     ok(res, updated);
   } catch (err) {
     next(err);

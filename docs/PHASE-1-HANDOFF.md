@@ -1,7 +1,58 @@
 # Phase 1 Handoff — أحمد ← خالد
 
 > **Status:** Phase 1 (Admin Backend + Dashboard) جاهز للاستهلاك.
-> خالد يقدر يبدأ Phase 2 (Mobile + Customer endpoints) بدون تعديل أي شيء بنيناه هنا.
+> Phase 2 (Mobile) متكامل تماماً مع نفس الـ DB ونفس الـ Backend — لا قواعد بيانات منفصلة.
+
+---
+
+## 🔗 كيف الـ Dashboard + Mobile مربوطين
+
+```
+┌─────────────────┐   ┌─────────────────┐
+│  Dashboard      │   │  Mobile App     │
+│  (Vite :5173)   │   │  (Expo Go)      │
+└────────┬────────┘   └────────┬────────┘
+         │  HTTP+WS            │  HTTP+WS
+         ↓                     ↓
+       ┌───────────────────────────┐
+       │  Backend API :4000        │
+       │  (Express + Socket.IO)    │
+       └────────────┬──────────────┘
+                    │ Prisma
+                    ↓
+            ┌─────────────────┐
+            │  MySQL 8 :3306  │   ← قاعدة بيانات واحدة
+            │  tamem          │
+            └─────────────────┘
+```
+
+**تطبيق العميل + لوحة التحكم يقرآن ويكتبان على نفس قاعدة البيانات**، عبر نفس الـ Backend. لا يوجد API منفصل أو DB منفصلة. كل أمر يصدر من الـ dashboard ينتشر فوراً للموبايل عبر Socket.IO، والعكس.
+
+### دورة طلب كاملة (مثبتة في الكود)
+
+1. عميل في الموبايل يضغط "تأكيد" → `POST /api/v1/orders`
+2. Backend يحفظ Order + OrderStatusHistory في DB
+3. Backend يرسل `order:new` socket event → admin:orders room
+4. Backend يرسل WhatsApp confirmation للعميل (لو credentials متاحة)
+5. Dashboard يلتقط الـ event ويُحدّث `/orders` فوراً + toast
+6. Admin يفتح drawer ويضغط "مراجعة" → `PATCH /api/v1/admin/orders/:id/status`
+7. Backend → `dispatchOrderStatusChanged()` (في `orders/orderEvents.ts`):
+   - يحدّث DB
+   - ينشئ Notification record للعميل
+   - يرسل `order:status` socket event على user:`<customerId>` + order:`<id>` + admin:orders
+   - يرسل WhatsApp message (لو الحالة تتطلّب)
+8. الموبايل يلتقط الـ event ويُحدّث `OrdersScreen` + `OrderTrackingScreen` فوراً
+9. الموبايل يجيب الـ Notification الجديدة من `/notifications` ويعرضها في `NotificationsScreen`
+
+### Single Source of Truth Files (لا تكرّر منطقها)
+
+| Concern            | الملف                                                                                                                                                |
+| ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| State Machine      | `packages/shared-types/src/orderStates.ts` (FE+BE) + `apps/backend/src/modules/orders/transitions.ts` (guard)                                        |
+| Order side-effects | `apps/backend/src/modules/orders/orderEvents.ts` — أي تغيير حالة يمر بـ `dispatchOrderStatusChanged()`                                               |
+| Socket rooms       | `apps/backend/src/realtime/channels.ts` + `realtime/ws.ts` (server) — `apps/dashboard/src/lib/socket.ts` + `apps/mobile/src/lib/socket.ts` (clients) |
+| API client         | `packages/api-client/src/index.ts` (الـ dashboard يستخدم الـ typed methods، الموبايل يستخدم `api.raw.*`)                                             |
+| Validation         | `packages/validators/src/**` (نفس zod schemas للموبايل والداشبورد والباك)                                                                            |
 
 ---
 

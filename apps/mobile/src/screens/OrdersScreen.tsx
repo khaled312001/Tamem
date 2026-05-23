@@ -1,6 +1,8 @@
-import { useQuery } from '@tanstack/react-query';
+import { useNavigation } from '@react-navigation/native';
+import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Package } from 'lucide-react-native';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
   FlatList,
@@ -16,6 +18,8 @@ import { ORDER_STATUS_AR, type OrderStatus } from '@tamem/types';
 
 import { GradientHeader } from '../components/GradientHeader';
 import { api } from '../lib/api';
+import { connectSocket } from '../lib/socket';
+import type { OrdersStackParamList } from '../navigation/OrdersStack';
 import { colors, fontFamilies, fontSizes, radii, spacing } from '../theme/tokens';
 
 interface OrderListItem {
@@ -46,13 +50,38 @@ const ACTIVE_STATUSES = new Set<OrderStatus>([
   'DELIVERED',
 ]);
 
+type Nav = NativeStackNavigationProp<OrdersStackParamList, 'OrdersList'>;
+
 export function OrdersScreen() {
   const [tab, setTab] = useState<'current' | 'completed'>('current');
+  const navigation = useNavigation<Nav>();
+  const qc = useQueryClient();
 
   const { data, isLoading, refetch, isFetching } = useQuery<OrderListItem[]>({
     queryKey: ['orders-mine'],
     queryFn: () => api.raw.get('/orders/mine').then((r) => r.data.data),
   });
+
+  // Realtime: subscribe to my user:<id> channel so status updates from admin
+  // refresh the list immediately.
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      const s = await connectSocket();
+      const refresh = () => {
+        if (!cancelled) qc.invalidateQueries({ queryKey: ['orders-mine'] });
+      };
+      s.on('order:status', refresh);
+      s.on('order:new', refresh);
+      return () => {
+        s.off('order:status', refresh);
+        s.off('order:new', refresh);
+      };
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [qc]);
 
   const orders = (data ?? []).filter((o) => {
     const isActive = ACTIVE_STATUSES.has(o.status);
@@ -95,7 +124,10 @@ export function OrdersScreen() {
             </View>
           }
           renderItem={({ item }) => (
-            <Pressable style={({ pressed }) => [styles.card, pressed && styles.pressed]}>
+            <Pressable
+              onPress={() => navigation.navigate('OrderTracking', { orderId: item.id })}
+              style={({ pressed }) => [styles.card, pressed && styles.pressed]}
+            >
               <View style={styles.cardHeader}>
                 <Text style={styles.orderNum}>#{item.orderNumber}</Text>
                 <View

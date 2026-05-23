@@ -5,10 +5,10 @@ import { OrderStatus, UserRole } from '@tamem/types';
 import { assignDriverSchema, cancelOrderSchema, setPriceSchema } from '@tamem/validators';
 
 import { prisma } from '../../db/prisma.js';
-import { emitOrderStatusChange } from '../../realtime/channels.js';
 import { ConflictError, NotFoundError } from '../../utils/errors.js';
 import { ok, paginated } from '../../utils/response.js';
 
+import { dispatchOrderStatusChanged } from './orderEvents.js';
 import { assertTransition } from './transitions.js';
 
 const param = (v: unknown): string => {
@@ -159,7 +159,7 @@ export const adminUpdateStatus: RequestHandler = async (req, res, next) => {
       },
     });
 
-    emitOrderStatusChange(req.app.locals.io, updated);
+    await dispatchOrderStatusChanged(req.app, updated, updated.status);
     ok(res, updated);
   } catch (err) {
     next(err);
@@ -198,7 +198,7 @@ export const adminSetPrice: RequestHandler = async (req, res, next) => {
           metadata: { quotedPrice: input.quotedPrice },
         },
       });
-      emitOrderStatusChange(req.app.locals.io, updated);
+      await dispatchOrderStatusChanged(req.app, updated, OrderStatus.PRICED);
     }
     ok(res, updated);
   } catch (err) {
@@ -245,7 +245,7 @@ export const adminAssignDriver: RequestHandler = async (req, res, next) => {
           metadata: { driverId: driver.id },
         },
       });
-      emitOrderStatusChange(req.app.locals.io, updated);
+      await dispatchOrderStatusChanged(req.app, updated, OrderStatus.DRIVER_ASSIGNED);
     }
     ok(res, updated);
   } catch (err) {
@@ -304,7 +304,7 @@ export const adminCancel: RequestHandler = async (req, res, next) => {
         reason: input.reason,
       },
     });
-    emitOrderStatusChange(req.app.locals.io, updated);
+    await dispatchOrderStatusChanged(req.app, updated, updated.status);
     ok(res, updated);
   } catch (err) {
     next(err);

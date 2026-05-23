@@ -4,10 +4,10 @@ import { StyleSheet, View } from 'react-native';
 
 import { QuickOrderFAB } from '../components/QuickOrderFAB';
 import { NotificationsScreen } from '../screens/NotificationsScreen';
-import { OrdersScreen } from '../screens/OrdersScreen';
 import { ProfileScreen } from '../screens/ProfileScreen';
 
 import { HomeStack } from './HomeStack';
+import { OrdersStack } from './OrdersStack';
 
 import { colors, fontFamilies, fontSizes } from '../theme/tokens';
 
@@ -51,7 +51,7 @@ export function AppTabs() {
         />
         <Tabs.Screen
           name="Orders"
-          component={OrdersScreen}
+          component={OrdersStack}
           options={{
             title: 'طلباتي',
             tabBarIcon: ({ color, size }) => <Package size={size} color={color} />,

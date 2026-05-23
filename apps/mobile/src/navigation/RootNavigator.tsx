@@ -3,6 +3,7 @@ import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { useEffect, useState } from 'react';
 
 import { registerForPushNotifications } from '../lib/push';
+import { connectSocket, disconnectSocket } from '../lib/socket';
 import { SplashScreen } from '../screens/SplashScreen';
 import { useAuth } from '../stores/auth';
 
@@ -28,6 +29,11 @@ export function RootNavigator() {
   useEffect(() => {
     if (user) {
       void registerForPushNotifications();
+      // Eagerly open the WebSocket so screens get realtime order updates without
+      // each one having to open its own connection.
+      void connectSocket();
+    } else {
+      disconnectSocket();
     }
   }, [user]);
 
