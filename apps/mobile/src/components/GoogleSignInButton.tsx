@@ -41,19 +41,39 @@ interface GoogleSignInButtonProps {
   onError?: (message: string) => void;
 }
 
+// Read at module load — process.env values are inlined at build time in Expo.
+const WEB_CLIENT_ID = process.env.EXPO_PUBLIC_GOOGLE_CLIENT_ID;
+const ANDROID_CLIENT_ID = process.env.EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID;
+const IOS_CLIENT_ID = process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID;
+
+// Whether ANY Google OAuth client id is configured for the current platform.
+// On web `webClientId` is mandatory; on native at least one of android/ios is needed.
+const HAS_GOOGLE_CONFIG =
+  (Platform.OS === 'web' && !!WEB_CLIENT_ID) ||
+  (Platform.OS === 'android' && !!ANDROID_CLIENT_ID) ||
+  (Platform.OS === 'ios' && !!IOS_CLIENT_ID);
+
 /**
- * Official Google Sign-In button — follows Google's branding guidelines:
- * white background, 1px gray border, 4-color "G" logo on the right (RTL),
- * "تسجيل الدخول بحساب جوجل" label centered.
+ * Official Google Sign-In button. If no OAuth client id is configured for the
+ * current platform we render a disabled placeholder instead of calling the
+ * Google hook — passing `webClientId: undefined` to useAuthRequest crashes the
+ * whole screen with "Client Id property must be defined".
  */
-export function GoogleSignInButton({ label, onError }: GoogleSignInButtonProps) {
+export function GoogleSignInButton(props: GoogleSignInButtonProps) {
+  if (!HAS_GOOGLE_CONFIG) {
+    return <DisabledGoogleButton label={props.label} />;
+  }
+  return <ConfiguredGoogleButton {...props} />;
+}
+
+function ConfiguredGoogleButton({ label, onError }: GoogleSignInButtonProps) {
   const setSession = useAuth((s) => s.setSession);
   const [loading, setLoading] = useState(false);
 
   const [request, response, promptAsync] = Google.useAuthRequest({
-    webClientId: process.env.EXPO_PUBLIC_GOOGLE_CLIENT_ID,
-    androidClientId: process.env.EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID,
-    iosClientId: process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID,
+    webClientId: WEB_CLIENT_ID,
+    androidClientId: ANDROID_CLIENT_ID,
+    iosClientId: IOS_CLIENT_ID,
     scopes: ['profile', 'email', 'openid'],
   });
 
@@ -124,6 +144,18 @@ export function GoogleSignInButton({ label, onError }: GoogleSignInButtonProps) 
           <Text style={styles.label}>{label ?? 'الدخول بحساب جوجل'}</Text>
         )}
         {/* spacer to keep the label visually centered when the logo is on the side */}
+        <View style={styles.spacer} />
+      </View>
+    </Pressable>
+  );
+}
+
+function DisabledGoogleButton({ label }: { label?: string }) {
+  return (
+    <Pressable disabled style={[styles.btn, styles.disabled]}>
+      <View style={styles.row}>
+        <GoogleLogo size={20} />
+        <Text style={styles.label}>{label ?? 'الدخول بحساب جوجل'}</Text>
         <View style={styles.spacer} />
       </View>
     </Pressable>
