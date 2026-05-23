@@ -1,12 +1,13 @@
 /**
- * Mobile theme tokens — mirror of packages/ui-kit/src/tokens.ts.
- * React Native styling diverges from web Tailwind enough that we duplicate
- * rather than maintain a universal abstraction.
+ * Mobile theme tokens — exact match for design-tamem.html palette.
+ * Warm off-white background, gold/red accents, dark navy text.
  */
 
 export const colors = {
   brand: {
     red: '#E0301E',
+    redDark: '#B82414',
+    redLight: '#FDEAE2',
     orange: '#EC7A2C',
     gold: '#F2A93B',
     gray: '#58595B',
@@ -14,29 +15,43 @@ export const colors = {
   },
   white: '#FFFFFF',
   black: '#000000',
-  surface: '#FAFAF9',
-  border: '#E7E5E4',
+  // Warm tones from design-tamem.html
+  surface: '#FCF8F4',
+  soft: '#F7EFE7',
+  line: '#F0E4DA',
+  line2: '#E8D8C9',
+  border: '#F0E4DA',
   danger: '#DC2626',
+  success: '#1A9F6E',
+  successLight: '#E5F6EE',
+  ink: '#2B2622',
   text: {
-    primary: '#241310',
-    secondary: '#57534E',
-    muted: '#A8A29E',
+    primary: '#2B2622',
+    secondary: '#58595B',
+    muted: '#9A9088',
     onBrand: '#FFFFFF',
   },
   status: {
-    NEW: '#3B82F6',
-    UNDER_REVIEW: '#8B5CF6',
+    NEW: '#B82414',
+    UNDER_REVIEW: '#5E35B1',
     PRICED: '#0EA5E9',
-    AWAITING_CUSTOMER_APPROVAL: '#EAB308',
-    ACCEPTED: '#10B981',
+    AWAITING_CUSTOMER_APPROVAL: '#9A6B16',
+    ACCEPTED: '#157A52',
     DRIVER_ASSIGNED: '#06B6D4',
     PICKED_UP: '#14B8A6',
-    IN_ROUTE: '#F59E0B',
-    DELIVERED: '#22C55E',
-    COMPLETED: '#16A34A',
+    IN_ROUTE: '#9A6B16',
+    DELIVERED: '#157A52',
+    COMPLETED: '#157A52',
     CANCELLED: '#71717A',
-    REJECTED: '#EF4444',
+    REJECTED: '#B82414',
   },
+} as const;
+
+// Gradient pairs (use with expo-linear-gradient)
+export const gradients = {
+  brand: ['#E0301E', '#EC7A2C'] as const,
+  brandGold: ['#EC7A2C', '#F2A93B'] as const,
+  splash: ['#E0301E', '#C4280F', '#9A1A0A', '#241310'] as const,
 } as const;
 
 export const spacing = {
@@ -76,12 +91,4 @@ export const fontFamilies = {
   bodyExtraBold: 'Tajawal_800ExtraBold',
   // Legacy alias
   heading: 'Cairo_900Black',
-} as const;
-
-export const fontWeights = {
-  regular: '400',
-  semibold: '600',
-  bold: '700',
-  extrabold: '800',
-  black: '900',
 } as const;

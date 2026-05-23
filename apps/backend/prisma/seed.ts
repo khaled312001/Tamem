@@ -303,6 +303,97 @@ async function main() {
   );
 
   // ============================================
+  // Mock merchants (for dashboard + mobile map testing)
+  // ============================================
+  const merchantPwd = await bcrypt.hash('merchant123', 12);
+  const mockMerchants = [
+    {
+      phone: '+201000000010',
+      name: 'مدير اسكندراني',
+      storeName: 'Iskandarani Restaurant',
+      storeNameAr: 'مطعم اسكندراني',
+      categoryId: 'restaurants',
+      addressLine: 'شارع الجمهورية، قفط',
+      lat: 26.0297,
+      lng: 32.8146,
+      rating: 4.7,
+    },
+    {
+      phone: '+201000000011',
+      name: 'مدير السبعي',
+      storeName: 'El Sabaie Market',
+      storeNameAr: 'ماركت السبعي',
+      categoryId: 'supermarkets',
+      addressLine: 'ميدان قفط',
+      lat: 26.031,
+      lng: 32.815,
+      rating: 4.8,
+    },
+    {
+      phone: '+201000000012',
+      name: 'د. حسين كمال',
+      storeName: 'Hussein Kamal Pharmacy',
+      storeNameAr: 'صيدلية د/ حسين كمال محمد',
+      categoryId: 'pharmacies',
+      addressLine: 'شارع المحطة، قفط',
+      lat: 26.028,
+      lng: 32.813,
+      rating: 4.9,
+    },
+  ];
+  for (const m of mockMerchants) {
+    const existing = await prisma.user.findUnique({ where: { phone: m.phone } });
+    if (existing) continue;
+    await prisma.user.create({
+      data: {
+        phone: m.phone,
+        name: m.name,
+        passwordHash: merchantPwd,
+        role: 'MERCHANT',
+        isPhoneVerified: true,
+        isActive: true,
+        city: 'قفط',
+        governorate: 'قنا',
+        merchantProfile: {
+          create: {
+            storeName: m.storeName,
+            storeNameAr: m.storeNameAr,
+            categoryId: m.categoryId,
+            addressLine: m.addressLine,
+            lat: m.lat,
+            lng: m.lng,
+            governorate: 'قنا',
+            city: 'قفط',
+            rating: m.rating,
+            isOpen: true,
+          },
+        },
+      },
+    });
+  }
+  console.info(`✅ ${mockMerchants.length} mock merchants seeded`);
+
+  // ============================================
+  // Mock offer (banner)
+  // ============================================
+  const existingOffer = await prisma.offer.findFirst({
+    where: { title: 'First Order 20% Off' },
+  });
+  if (!existingOffer) {
+    await prisma.offer.create({
+      data: {
+        title: 'First Order 20% Off',
+        titleAr: 'خصم 20% على أول طلب',
+        imageUrl: 'https://placehold.co/600x300/E0301E/FFFFFF.png?text=TAMEM20',
+        linkType: 'NONE',
+        sortOrder: 1,
+        isActive: true,
+      },
+    });
+    console.info(`✅ 1 default offer seeded`);
+  }
+
+  // ============================================
   // Mock orders — for dashboard testing before mobile is wired up
   // ============================================
   const existingMockOrder = await prisma.order.findFirst({

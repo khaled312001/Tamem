@@ -1,28 +1,30 @@
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
+import { LinearGradient } from 'expo-linear-gradient';
+import { Lock, Phone, Truck } from 'lucide-react-native';
 import { useState } from 'react';
 import { Controller, useForm } from 'react-hook-form';
 import {
   Alert,
-  Image,
   KeyboardAvoidingView,
   Platform,
   Pressable,
   ScrollView,
   StyleSheet,
   Text,
-  TextInput,
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { type LoginInput, loginSchema } from '@tamem/validators';
 
+import { GradientButton } from '../components/GradientButton';
+import { IconField } from '../components/IconField';
 import { api } from '../lib/api';
 import type { AuthStackParamList } from '../navigation/AuthStack';
 import { useAuth } from '../stores/auth';
-import { colors, fontFamilies, fontSizes, radii, spacing } from '../theme/tokens';
+import { colors, fontFamilies, fontSizes, gradients, radii, spacing } from '../theme/tokens';
 
 type NavProp = NativeStackNavigationProp<AuthStackParamList, 'Login'>;
 
@@ -64,81 +66,84 @@ export function LoginScreen() {
           keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={false}
         >
-          <Image source={require('../assets/logo.jpg')} style={styles.logo} resizeMode="contain" />
-
-          <Text style={styles.title}>أهلاً بك من جديد</Text>
-          <Text style={styles.subtitle}>سجّل دخولك لتبدأ الطلب</Text>
-
-          <View style={styles.field}>
-            <Text style={styles.label}>رقم الهاتف</Text>
-            <Controller
-              control={control}
-              name="phone"
-              render={({ field: { value, onChange, onBlur } }) => (
-                <TextInput
-                  value={value}
-                  onChangeText={onChange}
-                  onBlur={onBlur}
-                  keyboardType="phone-pad"
-                  style={[styles.input, errors.phone && styles.inputError]}
-                  placeholder="+201XXXXXXXXX"
-                  placeholderTextColor={colors.text.muted}
-                  autoComplete="tel"
-                />
-              )}
-            />
-            {errors.phone && <Text style={styles.errorText}>{errors.phone.message}</Text>}
+          {/* Brand header */}
+          <View style={styles.brandRow}>
+            <LinearGradient
+              colors={gradients.brand}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 1 }}
+              style={styles.brandIcon}
+            >
+              <Truck size={22} color={colors.white} />
+            </LinearGradient>
+            <View>
+              <Text style={styles.title}>أهلاً بك من جديد</Text>
+              <Text style={styles.subtitle}>سجّل دخولك لتبدأ الطلب</Text>
+            </View>
           </View>
 
-          <View style={styles.field}>
-            <Text style={styles.label}>كلمة المرور</Text>
-            <Controller
-              control={control}
-              name="password"
-              render={({ field: { value, onChange, onBlur } }) => (
-                <TextInput
-                  value={value}
-                  onChangeText={onChange}
-                  onBlur={onBlur}
-                  secureTextEntry
-                  style={[styles.input, errors.password && styles.inputError]}
-                  placeholder="••••••••"
-                  placeholderTextColor={colors.text.muted}
-                  autoComplete="password"
-                />
-              )}
-            />
-            {errors.password && <Text style={styles.errorText}>{errors.password.message}</Text>}
-          </View>
+          {/* Fields */}
+          <Controller
+            control={control}
+            name="phone"
+            render={({ field: { value, onChange, onBlur } }) => (
+              <IconField
+                Icon={Phone}
+                placeholder="رقم الهاتف"
+                keyboardType="phone-pad"
+                value={value}
+                onChangeText={onChange}
+                onBlur={onBlur}
+                error={errors.phone?.message}
+                autoComplete="tel"
+              />
+            )}
+          />
+          <Controller
+            control={control}
+            name="password"
+            render={({ field: { value, onChange, onBlur } }) => (
+              <IconField
+                Icon={Lock}
+                placeholder="كلمة المرور"
+                secureTextEntry
+                value={value}
+                onChangeText={onChange}
+                onBlur={onBlur}
+                error={errors.password?.message}
+                autoComplete="password"
+              />
+            )}
+          />
 
           <Pressable style={styles.forgotLink}>
             <Text style={styles.forgotText}>نسيت كلمة المرور؟</Text>
           </Pressable>
 
-          <Pressable
+          <GradientButton
+            label={loading ? 'جاري الدخول…' : 'تسجيل الدخول'}
             onPress={handleSubmit(onSubmit)}
-            disabled={loading}
-            style={({ pressed }) => [
-              styles.button,
-              pressed && styles.buttonPressed,
-              loading && styles.buttonDisabled,
-            ]}
-          >
-            <Text style={styles.buttonText}>{loading ? 'جاري الدخول…' : 'تسجيل الدخول'}</Text>
-          </Pressable>
+            loading={loading}
+          />
 
+          {/* Divider */}
           <View style={styles.divider}>
             <View style={styles.dividerLine} />
-            <Text style={styles.dividerText}>أو</Text>
+            <Text style={styles.dividerText}>أو سجّل بـ</Text>
             <View style={styles.dividerLine} />
           </View>
 
+          {/* Google (placeholder for now) */}
           <Pressable
-            onPress={() => navigation.navigate('Register')}
-            style={({ pressed }) => [styles.registerLink, pressed && styles.buttonPressed]}
+            style={({ pressed }) => [styles.googleBtn, pressed && styles.pressed]}
+            onPress={() => Alert.alert('قريباً', 'تسجيل الدخول بحساب جوجل قيد التفعيل')}
           >
+            <Text style={styles.googleText}>الدخول بحساب جوجل</Text>
+          </Pressable>
+
+          <Pressable onPress={() => navigation.navigate('Register')} style={styles.registerLink}>
             <Text style={styles.registerText}>
-              ليس لديك حساب؟ <Text style={styles.registerCta}>أنشئ حساب جديد</Text>
+              ليس لديك حساب؟ <Text style={styles.registerCta}>أنشئ حساب</Text>
             </Text>
           </Pressable>
         </ScrollView>
@@ -148,84 +153,64 @@ export function LoginScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: colors.white },
+  container: { flex: 1, backgroundColor: colors.surface },
   flex: { flex: 1 },
-  content: { flexGrow: 1, padding: spacing.xl, justifyContent: 'center' },
-  logo: { width: 180, height: 100, alignSelf: 'center', marginBottom: spacing.xl },
+  content: { flexGrow: 1, padding: spacing.xl, paddingTop: spacing.xxl, justifyContent: 'center' },
+  brandRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
+    marginBottom: spacing.xl,
+  },
+  brandIcon: {
+    width: 48,
+    height: 48,
+    borderRadius: radii.md,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   title: {
-    fontSize: fontSizes.xxl,
+    fontSize: fontSizes.lg,
     fontFamily: fontFamilies.headingBlack,
-    color: colors.text.primary,
-    textAlign: 'center',
+    color: colors.ink,
   },
   subtitle: {
-    fontSize: fontSizes.sm,
-    color: colors.text.muted,
-    marginTop: spacing.sm,
-    marginBottom: spacing.xxl,
-    textAlign: 'center',
-    fontFamily: fontFamilies.body,
-  },
-  field: { marginBottom: spacing.lg },
-  label: {
-    fontSize: fontSizes.sm,
-    fontFamily: fontFamilies.bodyBold,
-    color: colors.text.primary,
-    marginBottom: spacing.xs,
-  },
-  input: {
-    backgroundColor: colors.surface,
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: radii.md,
-    padding: spacing.md,
-    fontSize: fontSizes.md,
-    color: colors.text.primary,
-    textAlign: 'right',
-    fontFamily: fontFamilies.body,
-  },
-  inputError: { borderColor: colors.danger },
-  errorText: {
-    color: colors.danger,
     fontSize: fontSizes.xs,
-    marginTop: spacing.xs,
+    color: colors.text.muted,
     fontFamily: fontFamilies.body,
+    marginTop: 2,
   },
-  forgotLink: { alignSelf: 'flex-start', marginBottom: spacing.lg },
+  forgotLink: { alignSelf: 'flex-start', marginVertical: spacing.sm },
   forgotText: {
     color: colors.brand.red,
     fontSize: fontSizes.sm,
-    fontFamily: fontFamilies.bodyMedium,
-  },
-  button: {
-    backgroundColor: colors.brand.red,
-    paddingVertical: spacing.md,
-    borderRadius: radii.md,
-    alignItems: 'center',
-  },
-  buttonPressed: { opacity: 0.85 },
-  buttonDisabled: { opacity: 0.5 },
-  buttonText: {
-    color: colors.white,
     fontFamily: fontFamilies.bodyBold,
-    fontSize: fontSizes.md,
   },
-  divider: { flexDirection: 'row', alignItems: 'center', marginVertical: spacing.xl },
-  dividerLine: { flex: 1, height: 1, backgroundColor: colors.border },
+  divider: { flexDirection: 'row', alignItems: 'center', marginVertical: spacing.lg },
+  dividerLine: { flex: 1, height: 1, backgroundColor: colors.line2 },
   dividerText: {
     marginHorizontal: spacing.md,
     color: colors.text.muted,
-    fontSize: fontSizes.sm,
+    fontSize: fontSizes.xs,
     fontFamily: fontFamilies.body,
   },
-  registerLink: { alignItems: 'center' },
+  googleBtn: {
+    backgroundColor: colors.white,
+    borderRadius: radii.lg,
+    paddingVertical: spacing.md,
+    alignItems: 'center',
+    borderWidth: 1.5,
+    borderColor: colors.line2,
+    minHeight: 50,
+    justifyContent: 'center',
+  },
+  googleText: { color: colors.ink, fontFamily: fontFamilies.bodyBold, fontSize: fontSizes.md },
+  pressed: { opacity: 0.85 },
+  registerLink: { alignItems: 'center', marginTop: spacing.xl },
   registerText: {
     color: colors.text.secondary,
     fontSize: fontSizes.sm,
     fontFamily: fontFamilies.body,
   },
-  registerCta: {
-    color: colors.brand.red,
-    fontFamily: fontFamilies.bodyBold,
-  },
+  registerCta: { color: colors.brand.red, fontFamily: fontFamilies.bodyBold },
 });

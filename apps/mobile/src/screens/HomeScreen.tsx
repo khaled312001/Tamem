@@ -1,50 +1,176 @@
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { useQuery } from '@tanstack/react-query';
+import { LinearGradient } from 'expo-linear-gradient';
+import { Gift, Package, Search, ShoppingBag, Store, Truck } from 'lucide-react-native';
+import {
+  ActivityIndicator,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
+} from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { colors, fontFamilies, radii, spacing } from '../theme/tokens';
+import { GradientHeader } from '../components/GradientHeader';
+import { api } from '../lib/api';
+import { useAuth } from '../stores/auth';
+import { colors, fontFamilies, fontSizes, gradients, radii, spacing } from '../theme/tokens';
+
+interface Offer {
+  id: string;
+  title: string;
+  titleAr: string;
+  imageUrl: string;
+}
+
+interface Merchant {
+  id: string;
+  storeNameAr: string;
+  rating?: number | null;
+  isOpen: boolean;
+  category?: { nameAr: string };
+}
 
 const SERVICES = [
-  { key: 'delivery', label: 'دليفري', sub: 'داخل المدينة', color: colors.brand.red },
-  { key: 'shipping', label: 'شحن', sub: 'بين المناطق', color: colors.brand.orange },
-  { key: 'merchant', label: 'تاجر', sub: 'طلبات جملة', color: colors.brand.gold },
-];
+  {
+    key: 'delivery',
+    label: 'دليفري',
+    sub: 'داخل المدينة',
+    Icon: ShoppingBag,
+    color: gradients.brand,
+  },
+  {
+    key: 'shipping',
+    label: 'شحن',
+    sub: 'بين المناطق',
+    Icon: Package,
+    color: gradients.brandGold,
+  },
+  {
+    key: 'merchant',
+    label: 'تاجر',
+    sub: 'طلبات جملة',
+    Icon: Store,
+    color: gradients.brandGold,
+  },
+] as const;
 
 export function HomeScreen() {
+  const user = useAuth((s) => s.user);
+
+  const { data: offers } = useQuery<Offer[]>({
+    queryKey: ['offers'],
+    queryFn: () => api.raw.get('/offers').then((r) => r.data.data),
+  });
+
+  const { data: merchants, isLoading: loadingMerchants } = useQuery<Merchant[]>({
+    queryKey: ['merchants'],
+    queryFn: () => api.raw.get('/merchants').then((r) => r.data.data),
+  });
+
+  const topOffer = offers?.[0];
+  const topMerchants = merchants?.slice(0, 3) ?? [];
+
   return (
-    <SafeAreaView style={styles.container} edges={['top']}>
-      <ScrollView contentContainerStyle={styles.scroll}>
-        <View style={styles.header}>
-          <View>
-            <Text style={styles.greeting}>أهلاً 👋</Text>
-            <Text style={styles.location}>قفط — قنا</Text>
-          </View>
+    <SafeAreaView edges={['top']} style={styles.container}>
+      <GradientHeader
+        greeting={`أهلاً ${user?.name?.split(' ')[0] ?? 'بك'}`}
+        location="قفط — قنا"
+        hasNotifications
+      />
+
+      <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
+        <View style={styles.searchWrap}>
+          <Search size={16} color={colors.text.muted} />
+          <TextInput
+            placeholder="ابحث عن مطعم، محل، أو منتج…"
+            placeholderTextColor={colors.text.muted}
+            style={styles.searchInput}
+          />
         </View>
 
-        <View style={styles.banner}>
-          <Text style={styles.bannerTitle}>خصم 20% على أول طلب</Text>
-          <Text style={styles.bannerSub}>استخدم كود TAMEM20 — لفترة محدودة</Text>
-        </View>
+        {topOffer && (
+          <LinearGradient
+            colors={gradients.brand}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 1 }}
+            style={styles.banner}
+          >
+            <View style={styles.bannerIcon}>
+              <Gift size={20} color={colors.white} />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.bannerTitle}>{topOffer.titleAr}</Text>
+              <Text style={styles.bannerSub}>استخدم كود TAMEM20 — لفترة محدودة</Text>
+            </View>
+          </LinearGradient>
+        )}
 
         <Text style={styles.sectionTitle}>خدماتنا</Text>
         <View style={styles.services}>
-          {SERVICES.map((s) => (
+          {SERVICES.map(({ key, label, sub, Icon, color }) => (
             <Pressable
-              key={s.key}
-              style={({ pressed }) => [
-                styles.serviceCard,
-                { backgroundColor: s.color },
-                pressed && styles.cardPressed,
-              ]}
+              key={key}
+              style={({ pressed }) => [styles.serviceCard, pressed && styles.pressed]}
             >
-              <Text style={styles.serviceLabel}>{s.label}</Text>
-              <Text style={styles.serviceSub}>{s.sub}</Text>
+              <LinearGradient
+                colors={color}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 1 }}
+                style={styles.serviceIcon}
+              >
+                <Icon size={20} color={colors.white} />
+              </LinearGradient>
+              <Text style={styles.serviceLabel}>{label}</Text>
+              <Text style={styles.serviceSub}>{sub}</Text>
             </Pressable>
           ))}
         </View>
 
-        <Text style={styles.placeholder}>
-          المزيد من المكونات (Categories, Nearby Stores, Top Stores) — Phase 2.
-        </Text>
+        <Text style={styles.sectionTitle}>الأكثر طلبًا</Text>
+        {loadingMerchants ? (
+          <ActivityIndicator color={colors.brand.red} style={{ marginVertical: spacing.lg }} />
+        ) : topMerchants.length === 0 ? (
+          <Text style={styles.empty}>لا توجد متاجر بعد</Text>
+        ) : (
+          topMerchants.map((m) => (
+            <Pressable
+              key={m.id}
+              style={({ pressed }) => [styles.merchantCard, pressed && styles.pressed]}
+            >
+              <View style={styles.merchantIcon}>
+                <Store size={20} color={colors.brand.red} />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.merchantName}>{m.storeNameAr}</Text>
+                <Text style={styles.merchantSub}>
+                  ⭐ {Number(m.rating ?? 0).toFixed(1)} · {m.category?.nameAr ?? '—'}
+                </Text>
+              </View>
+              <View style={m.isOpen ? styles.tagOpen : styles.tagClosed}>
+                <Text style={m.isOpen ? styles.tagOpenText : styles.tagClosedText}>
+                  {m.isOpen ? 'مفتوح' : 'مغلق'}
+                </Text>
+              </View>
+            </Pressable>
+          ))
+        )}
+
+        <View style={styles.darkStrip}>
+          <LinearGradient
+            colors={gradients.brandGold}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 1 }}
+            style={styles.darkStripIcon}
+          >
+            <Truck size={16} color={colors.brand.dark} />
+          </LinearGradient>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.darkStripTitle}>توصيل سريع خلال 30 دقيقة</Text>
+            <Text style={styles.darkStripSub}>داخل مدينة قفط — للطلبات القريبة</Text>
+          </View>
+        </View>
       </ScrollView>
     </SafeAreaView>
   );
@@ -52,48 +178,177 @@ export function HomeScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.surface },
-  scroll: { padding: spacing.lg, paddingBottom: spacing.xxl },
-  header: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: spacing.xl },
-  greeting: {
-    fontSize: 20,
-    fontFamily: fontFamilies.heading,
-    fontWeight: '900',
-    color: colors.text.primary,
-  },
-  location: { fontSize: 12, color: colors.text.muted, marginTop: 2 },
-  banner: {
-    backgroundColor: colors.brand.dark,
-    borderRadius: radii.lg,
-    padding: spacing.lg,
-    marginBottom: spacing.xl,
-  },
-  bannerTitle: { color: colors.brand.gold, fontWeight: '800', fontSize: 18, marginBottom: 4 },
-  bannerSub: { color: colors.white, fontSize: 13 },
-  sectionTitle: {
-    fontSize: 18,
-    fontFamily: fontFamilies.heading,
-    fontWeight: '900',
-    marginBottom: spacing.md,
-    color: colors.text.primary,
-  },
-  services: {
+  scroll: { paddingHorizontal: spacing.lg, paddingBottom: spacing.xl, paddingTop: spacing.md },
+  searchWrap: {
     flexDirection: 'row',
+    alignItems: 'center',
     gap: spacing.sm,
-    marginBottom: spacing.xl,
+    backgroundColor: colors.white,
+    borderRadius: radii.lg,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    borderWidth: 1,
+    borderColor: colors.line,
+    marginBottom: spacing.md,
   },
+  searchInput: {
+    flex: 1,
+    fontSize: fontSizes.sm,
+    fontFamily: fontFamilies.body,
+    color: colors.text.primary,
+    textAlign: 'right',
+  },
+  banner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
+    borderRadius: radii.lg,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.md,
+    marginBottom: spacing.md,
+  },
+  bannerIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: radii.md,
+    backgroundColor: 'rgba(255,255,255,0.22)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  bannerTitle: {
+    color: colors.white,
+    fontSize: fontSizes.md,
+    fontFamily: fontFamilies.headingBold,
+  },
+  bannerSub: {
+    color: colors.white,
+    fontSize: fontSizes.xs,
+    opacity: 0.92,
+    marginTop: 2,
+    fontFamily: fontFamilies.body,
+  },
+  sectionTitle: {
+    fontSize: fontSizes.md,
+    fontFamily: fontFamilies.headingBlack,
+    color: colors.ink,
+    marginTop: spacing.md,
+    marginBottom: spacing.sm,
+  },
+  services: { flexDirection: 'row', gap: spacing.sm, marginBottom: spacing.md },
   serviceCard: {
     flex: 1,
-    padding: spacing.lg,
+    backgroundColor: colors.white,
+    borderColor: colors.line,
+    borderWidth: 1,
     borderRadius: radii.lg,
+    padding: spacing.md,
     alignItems: 'center',
   },
-  cardPressed: { opacity: 0.85 },
-  serviceLabel: { color: colors.white, fontWeight: '900', fontSize: 16, marginBottom: 4 },
-  serviceSub: { color: colors.white, fontSize: 11, opacity: 0.9 },
-  placeholder: {
+  serviceIcon: {
+    width: 44,
+    height: 44,
+    borderRadius: radii.md,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: spacing.xs,
+  },
+  serviceLabel: {
+    fontSize: fontSizes.sm,
+    fontFamily: fontFamilies.headingBold,
+    color: colors.ink,
+  },
+  serviceSub: {
+    fontSize: 10,
     color: colors.text.muted,
-    fontSize: 12,
+    fontFamily: fontFamilies.body,
+    marginTop: 2,
+  },
+  pressed: { opacity: 0.85 },
+  empty: {
+    color: colors.text.muted,
     textAlign: 'center',
-    marginTop: spacing.xl,
+    padding: spacing.lg,
+    fontFamily: fontFamilies.body,
+    fontSize: fontSizes.sm,
+  },
+  merchantCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
+    backgroundColor: colors.white,
+    borderColor: colors.line,
+    borderWidth: 1,
+    borderRadius: radii.lg,
+    padding: spacing.md,
+    marginBottom: spacing.sm,
+  },
+  merchantIcon: {
+    width: 42,
+    height: 42,
+    borderRadius: radii.md,
+    backgroundColor: colors.soft,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  merchantName: {
+    fontSize: fontSizes.sm,
+    fontFamily: fontFamilies.bodyExtraBold,
+    color: colors.ink,
+  },
+  merchantSub: {
+    fontSize: fontSizes.xs,
+    color: colors.text.muted,
+    fontFamily: fontFamilies.body,
+    marginTop: 2,
+  },
+  tagOpen: {
+    backgroundColor: colors.successLight,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 3,
+    borderRadius: radii.pill,
+  },
+  tagOpenText: {
+    color: colors.success,
+    fontSize: 10,
+    fontFamily: fontFamilies.bodyExtraBold,
+  },
+  tagClosed: {
+    backgroundColor: '#F3F3F3',
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 3,
+    borderRadius: radii.pill,
+  },
+  tagClosedText: {
+    color: colors.text.muted,
+    fontSize: 10,
+    fontFamily: fontFamilies.bodyExtraBold,
+  },
+  darkStrip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
+    backgroundColor: colors.brand.dark,
+    borderRadius: radii.lg,
+    padding: spacing.md,
+    marginTop: spacing.md,
+  },
+  darkStripIcon: {
+    width: 36,
+    height: 36,
+    borderRadius: radii.md,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  darkStripTitle: {
+    color: colors.white,
+    fontSize: fontSizes.sm,
+    fontFamily: fontFamilies.bodyExtraBold,
+  },
+  darkStripSub: {
+    color: colors.white,
+    opacity: 0.7,
+    fontSize: fontSizes.xs,
+    fontFamily: fontFamilies.body,
+    marginTop: 2,
   },
 });

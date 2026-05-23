@@ -1,6 +1,7 @@
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
+import { Home, Lock, MapPin, Phone, User } from 'lucide-react-native';
 import { useState } from 'react';
 import { Controller, useForm } from 'react-hook-form';
 import {
@@ -11,46 +12,19 @@ import {
   ScrollView,
   StyleSheet,
   Text,
-  TextInput,
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { type RegisterInput, registerSchema } from '@tamem/validators';
 
+import { GradientButton } from '../components/GradientButton';
+import { IconField } from '../components/IconField';
 import { api } from '../lib/api';
 import type { AuthStackParamList } from '../navigation/AuthStack';
-import { colors, fontFamilies, fontSizes, radii, spacing } from '../theme/tokens';
+import { colors, fontFamilies, fontSizes, spacing } from '../theme/tokens';
 
 type NavProp = NativeStackNavigationProp<AuthStackParamList, 'Register'>;
-
-interface FieldProps {
-  label: string;
-  placeholder?: string;
-  error?: string;
-  keyboardType?: 'default' | 'phone-pad' | 'email-address';
-  secureTextEntry?: boolean;
-  value: string;
-  onChange: (v: string) => void;
-  onBlur: () => void;
-}
-
-function Field({ label, error, value, onChange, onBlur, ...rest }: FieldProps) {
-  return (
-    <View style={styles.field}>
-      <Text style={styles.label}>{label}</Text>
-      <TextInput
-        value={value}
-        onChangeText={onChange}
-        onBlur={onBlur}
-        placeholderTextColor={colors.text.muted}
-        style={[styles.input, error && styles.inputError]}
-        {...rest}
-      />
-      {error && <Text style={styles.errorText}>{error}</Text>}
-    </View>
-  );
-}
 
 export function RegisterScreen() {
   const navigation = useNavigation<NavProp>();
@@ -96,96 +70,85 @@ export function RegisterScreen() {
             control={control}
             name="name"
             render={({ field: { value, onChange, onBlur } }) => (
-              <Field
-                label="الاسم بالكامل"
-                placeholder="محمد أحمد"
+              <IconField
+                Icon={User}
+                placeholder="الاسم بالكامل"
                 value={value}
-                onChange={onChange}
+                onChangeText={onChange}
                 onBlur={onBlur}
                 error={errors.name?.message}
               />
             )}
           />
-
           <Controller
             control={control}
             name="phone"
             render={({ field: { value, onChange, onBlur } }) => (
-              <Field
-                label="رقم الهاتف"
-                placeholder="+201XXXXXXXXX"
+              <IconField
+                Icon={Phone}
+                placeholder="رقم الهاتف +201XXXXXXXXX"
                 keyboardType="phone-pad"
                 value={value}
-                onChange={onChange}
+                onChangeText={onChange}
                 onBlur={onBlur}
                 error={errors.phone?.message}
               />
             )}
           />
-
           <Controller
             control={control}
             name="city"
             render={({ field: { value, onChange, onBlur } }) => (
-              <Field
-                label="المدينة"
-                placeholder="قفط"
+              <IconField
+                Icon={MapPin}
+                placeholder="المدينة (مثل: قفط)"
                 value={value}
-                onChange={onChange}
+                onChangeText={onChange}
                 onBlur={onBlur}
                 error={errors.city?.message}
               />
             )}
           />
-
           <Controller
             control={control}
             name="address"
             render={({ field: { value, onChange, onBlur } }) => (
-              <Field
-                label="العنوان (اختياري)"
-                placeholder="مثال: شارع الجمهورية، بجوار المسجد"
+              <IconField
+                Icon={Home}
+                placeholder="العنوان (اختياري)"
                 value={value ?? ''}
-                onChange={onChange}
+                onChangeText={onChange}
                 onBlur={onBlur}
                 error={errors.address?.message}
               />
             )}
           />
-
           <Controller
             control={control}
             name="password"
             render={({ field: { value, onChange, onBlur } }) => (
-              <Field
-                label="كلمة المرور"
-                placeholder="على الأقل 8 أحرف"
+              <IconField
+                Icon={Lock}
+                placeholder="كلمة المرور (8 أحرف على الأقل)"
                 secureTextEntry
                 value={value}
-                onChange={onChange}
+                onChangeText={onChange}
                 onBlur={onBlur}
                 error={errors.password?.message}
               />
             )}
           />
 
-          <View style={styles.hint}>
-            <Text style={styles.hintText}>
-              التسجيل متاح للعملاء — السائقون والتجار يُضافون من إدارة تميم بعد المراجعة.
-            </Text>
-          </View>
-
-          <Pressable
+          <View style={styles.spacer} />
+          <GradientButton
+            label={loading ? 'جاري الإنشاء…' : 'إنشاء الحساب'}
             onPress={handleSubmit(onSubmit)}
-            disabled={loading}
-            style={({ pressed }) => [
-              styles.button,
-              pressed && styles.buttonPressed,
-              loading && styles.buttonDisabled,
-            ]}
-          >
-            <Text style={styles.buttonText}>{loading ? 'جاري الإنشاء…' : 'إنشاء الحساب'}</Text>
-          </Pressable>
+            loading={loading}
+          />
+
+          <Text style={styles.hint}>
+            التسجيل متاح للعملاء — التجار والسائقون يُضافون من لوحة التحكم بعد المراجعة
+          </Text>
 
           <Pressable onPress={() => navigation.goBack()} style={styles.loginLink}>
             <Text style={styles.loginText}>
@@ -199,72 +162,31 @@ export function RegisterScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: colors.white },
+  container: { flex: 1, backgroundColor: colors.surface },
   flex: { flex: 1 },
   content: { flexGrow: 1, padding: spacing.xl, paddingTop: spacing.xxl },
   title: {
-    fontSize: fontSizes.xxl,
+    fontSize: fontSizes.xl,
     fontFamily: fontFamilies.headingBlack,
-    color: colors.text.primary,
+    color: colors.ink,
     textAlign: 'center',
   },
   subtitle: {
     fontSize: fontSizes.sm,
     color: colors.text.muted,
-    marginTop: spacing.sm,
+    marginTop: spacing.xs,
     marginBottom: spacing.xl,
     textAlign: 'center',
     fontFamily: fontFamilies.body,
   },
-  field: { marginBottom: spacing.md },
-  label: {
-    fontSize: fontSizes.sm,
-    fontFamily: fontFamilies.bodyBold,
-    color: colors.text.primary,
-    marginBottom: spacing.xs,
-  },
-  input: {
-    backgroundColor: colors.surface,
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: radii.md,
-    padding: spacing.md,
-    fontSize: fontSizes.md,
-    color: colors.text.primary,
-    textAlign: 'right',
-    fontFamily: fontFamilies.body,
-  },
-  inputError: { borderColor: colors.danger },
-  errorText: {
-    color: colors.danger,
-    fontSize: fontSizes.xs,
-    marginTop: spacing.xs,
-    fontFamily: fontFamilies.body,
-  },
+  spacer: { height: spacing.sm },
   hint: {
-    backgroundColor: colors.brand.gold + '20',
-    padding: spacing.md,
-    borderRadius: radii.md,
-    marginVertical: spacing.lg,
-  },
-  hintText: {
     fontSize: fontSizes.xs,
-    color: colors.text.secondary,
-    fontFamily: fontFamilies.body,
+    color: colors.text.muted,
+    textAlign: 'center',
+    marginTop: spacing.lg,
     lineHeight: 18,
-  },
-  button: {
-    backgroundColor: colors.brand.red,
-    paddingVertical: spacing.md,
-    borderRadius: radii.md,
-    alignItems: 'center',
-  },
-  buttonPressed: { opacity: 0.85 },
-  buttonDisabled: { opacity: 0.5 },
-  buttonText: {
-    color: colors.white,
-    fontFamily: fontFamilies.bodyBold,
-    fontSize: fontSizes.md,
+    fontFamily: fontFamilies.body,
   },
   loginLink: { alignItems: 'center', marginTop: spacing.xl },
   loginText: {
@@ -272,8 +194,5 @@ const styles = StyleSheet.create({
     fontSize: fontSizes.sm,
     fontFamily: fontFamilies.body,
   },
-  loginCta: {
-    color: colors.brand.red,
-    fontFamily: fontFamilies.bodyBold,
-  },
+  loginCta: { color: colors.brand.red, fontFamily: fontFamilies.bodyBold },
 });

@@ -9,6 +9,11 @@ import { corsOrigins, env } from './config/env.js';
 import { requireAuth, requireRole } from './middleware/auth.js';
 import { errorHandler } from './middleware/errorHandler.js';
 import { authRouter } from './modules/auth/auth.routes.js';
+import {
+  categoriesRouter,
+  merchantsRouter,
+  offersRouter,
+} from './modules/catalog/catalog.routes.js';
 import { adminServicesRouter, publicServicesRouter } from './modules/services/services.routes.js';
 import { meRouter } from './modules/users/users.routes.js';
 import { logger } from './utils/logger.js';
@@ -50,6 +55,9 @@ export function createApp(): Express {
 
   v1.use('/auth', authRouter);
   v1.use('/services', publicServicesRouter);
+  v1.use('/categories', categoriesRouter);
+  v1.use('/merchants', merchantsRouter);
+  v1.use('/offers', offersRouter);
   v1.use('/me', meRouter);
 
   // ----- Admin namespace -----
