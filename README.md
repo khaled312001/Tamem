@@ -10,12 +10,13 @@
 
 ## 📦 المكونات (Monorepo)
 
-| الجزء        | المسار                             | التقنية                         | المسؤول |
-| ------------ | ---------------------------------- | ------------------------------- | ------- |
-| تطبيق العميل | [apps/mobile/](apps/mobile/)       | React Native + Expo             | خالد    |
-| لوحة الإدارة | [apps/dashboard/](apps/dashboard/) | React + Vite + shadcn/ui        | خالد    |
-| Backend API  | [apps/backend/](apps/backend/)     | Node + Express + Prisma + MySQL | أحمد    |
-| اللاندنج بيج | [apps/landing/](apps/landing/)     | Astro                           | أحمد    |
+| الجزء                   | المسار                                                                  | التقنية                         | الـ Phase         |
+| ----------------------- | ----------------------------------------------------------------------- | ------------------------------- | ----------------- |
+| لوحة الإدارة            | [apps/dashboard/](apps/dashboard/)                                      | React + Vite + shadcn/ui        | Phase 1 (أحمد)    |
+| Backend - admin side    | [apps/backend/](apps/backend/) (admin/\* endpoints + schema)            | Node + Express + Prisma + MySQL | Phase 1 (أحمد)    |
+| تطبيق العميل            | [apps/mobile/](apps/mobile/)                                            | React Native + Expo             | Phase 2 (خالد)    |
+| Backend - customer side | [apps/backend/](apps/backend/) (auth + orders + uploads + integrations) | نفس السيرفر، endpoints مختلفة   | Phase 2 (خالد)    |
+| اللاندنج بيج            | [apps/landing/](apps/landing/)                                          | Astro                           | Phase 3 (الاثنان) |
 
 ### مكتبات مشتركة (packages)
 
@@ -94,27 +95,52 @@ pnpm --filter @tamem/landing dev      # Landing على :4321
 
 ---
 
-## 👥 آلية العمل (تجنّب التعارض)
+## 👥 آلية العمل — تقسيم بالنطاقات (Verticals) لتجنّب التعارض تماماً
 
-**ملكية المجلدات:**
+**التقسيم على 3 فيزات متتالية:**
 
-- `apps/mobile/**` + `apps/dashboard/**` + `packages/ui-kit/**` → **خالد**
-- `apps/backend/**` + `apps/landing/**` + `prisma/schema.prisma` + `openapi.yaml` → **أحمد**
-- `packages/shared-types/**` + `packages/validators/**` + `packages/api-client/**` → أحمد يكتب، الاثنان يستهلكون
-- `docs/**` → الاثنان (ملف لكل ميزة)
+| الفيز       | المطور             | المدة  | النطاق                                             |
+| ----------- | ------------------ | ------ | -------------------------------------------------- |
+| **Phase 1** | **أحمد كمال** سولو | 12 يوم | Dashboard + Admin Backend + Database + Admin APIs  |
+| **Phase 2** | **خالد أحمد** سولو | 12 يوم | Mobile App + Customer Backend + الربط مع الداشبورد |
+| **Phase 3** | **الاثنان معاً**   | 6 أيام | Landing + Production Deploy + UAT + Handoff        |
 
-**Git:**
+**لماذا هذا التقسيم؟**
 
-- أسماء الفروع: `be/<topic>` (أحمد) · `fe/<topic>` (خالد)
-- Trunk-based: الفرع يعيش ≤ 24 ساعة
-- كل PR يحتاج موافقة الآخر (لا self-merge)
-- Conventional Commits: `feat(orders): ...`
+- كل مطور يأخذ stack كامل (frontend + backend + DB + API) لنطاقه
+- لا dependencies بين المطورين في Phase 1 و Phase 2
+- في Phase 3 يلتقي الاثنان والنظام كله موّحد على نفس الـ DB ونفس الـ Backend codebase
+- التفاصيل الكاملة في [docs/PROMPTS.md](docs/PROMPTS.md)
 
-**العقد قبل الكود (Contract-First):**
+**ملكية المجلدات حسب الفيز:**
 
-1. أحمد يحدّث [apps/backend/openapi.yaml](apps/backend/openapi.yaml) **قبل** كتابة أي endpoint
-2. CI يولّد `packages/shared-types/src/api/`
-3. خالد يستهلك الـ types فوراً + يحاكي بـ MSW حتى يجهز التنفيذ
+| المجلد                                                                                                                                                       | Phase 1 (أحمد)                           | Phase 2 (خالد)                                | Phase 3 (مشترك) |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------- | --------------------------------------------- | --------------- |
+| `apps/dashboard/**`                                                                                                                                          | ✅ يبني                                  | يقرأ فقط                                      | تعديلات polish  |
+| `apps/backend/prisma/schema.prisma`                                                                                                                          | ✅ يبنيه                                 | يقرأ - تعديل عبر issue                        | -               |
+| `apps/backend/src/modules/admin/**`، `users/`، `drivers/`، `merchants/`، `services/` (admin)، `pricing/` (rules)، `payments/` (admin)، `alerts/`، `reports/` | ✅ يبني                                  | يقرأ ويستهلك                                  | -               |
+| `apps/backend/src/modules/orders/transitions.ts`                                                                                                             | ✅ يبنيه (state machine)                 | يستهلك                                        | -               |
+| `apps/backend/src/realtime/**`                                                                                                                               | ✅ يبني (Socket.IO server + admin rooms) | يضيف customer rooms                           | -               |
+| `apps/backend/openapi.yaml`                                                                                                                                  | ✅ admin endpoints                       | يضيف customer endpoints                       | -               |
+| `apps/mobile/**`                                                                                                                                             | -                                        | ✅ يبنيه كاملاً                               | تعديلات polish  |
+| `apps/backend/src/modules/auth/**`                                                                                                                           | admin login فقط                          | ✅ يكمل customer (register/OTP/Google)        | -               |
+| `apps/backend/src/modules/services/services.routes.ts` (public GET)                                                                                          | -                                        | ✅ يضيفه                                      | -               |
+| `apps/backend/src/modules/orders/` (customer endpoints)                                                                                                      | -                                        | ✅ يبنيه (create, mine, get, approve, cancel) | -               |
+| `apps/backend/src/modules/uploads/**`، `notifications/**`، `integrations/**`، `jobs/**`                                                                      | -                                        | ✅ يبني                                       | -               |
+| `apps/landing/**`                                                                                                                                            | -                                        | -                                             | ✅ الاثنان      |
+
+**Git workflow:**
+
+- أحمد ينتهي Phase 1 → PR `phase-1-admin-complete` → خالد يراجع → merge
+- خالد يبدأ Phase 2 من commit أحمد → يستهلك schema/state-machine كما هي
+- خالد ينتهي Phase 2 → PR `phase-2-mobile-complete` → أحمد يراجع → merge
+- Phase 3 = الاثنان يدمجان عملهما + يصلحان أي تعارضات (نادرة)
+
+**عند الـ blocker:**
+
+- خالد محتاج تعديل schema → issue → أحمد يجاوب خلال 24h
+- خالد محتاج endpoint admin → issue
+- داخل كل فيز: المطور سولو، لا انتظار
 
 ---
 
