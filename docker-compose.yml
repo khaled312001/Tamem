@@ -1,0 +1,39 @@
+# ============================================
+# Tamem Delivery — Local Development Stack
+# ============================================
+# Lightweight stack for running MySQL 8 locally without installing the server.
+# Usage:
+#   docker compose up -d         # start MySQL in background
+#   docker compose down          # stop and remove containers (data persists in volume)
+#   docker compose down -v       # stop AND wipe the database volume
+#
+# Connection string for apps/backend/.env (matches values below):
+#   DATABASE_URL="mysql://tamem:tamem_dev_pass@localhost:3306/tamem"
+
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: tamem-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: root_dev_pass
+      MYSQL_DATABASE: tamem
+      MYSQL_USER: tamem
+      MYSQL_PASSWORD: tamem_dev_pass
+    ports:
+      - '3306:3306'
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --default-authentication-plugin=caching_sha2_password
+    volumes:
+      - tamem_mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ['CMD', 'mysqladmin', 'ping', '-h', 'localhost', '-uroot', '-proot_dev_pass']
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  tamem_mysql_data:
+    name: tamem_mysql_data
