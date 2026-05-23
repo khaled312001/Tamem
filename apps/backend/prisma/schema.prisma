@@ -1,0 +1,613 @@
+// ============================================
+// Tamem Delivery — Prisma Schema (MySQL)
+// ============================================
+// نموذج البيانات الكامل للمشروع. أي تغيير هنا = migration جديد.
+// الملف يخص: أحمد كمال. تغييرات من خالد عبر issue.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================
+// Enums
+// ============================================
+
+enum UserRole {
+  CUSTOMER
+  DRIVER
+  MERCHANT
+  ADMIN
+}
+
+enum DriverStatus {
+  AVAILABLE
+  BUSY
+  OFFLINE
+}
+
+enum ServiceCategory {
+  DELIVERY
+  SHIPPING
+  MERCHANT
+}
+
+enum PricingMethod {
+  FIXED
+  DISTANCE
+  WEIGHT
+  DISTANCE_WEIGHT
+  QUOTE
+}
+
+enum ServiceFieldType {
+  TEXT
+  TEXTAREA
+  NUMBER
+  SELECT
+  MULTISELECT
+  IMAGE
+  LOCATION
+  DATE
+  TIME
+  BOOLEAN
+  PHONE
+}
+
+/// The 12 order states — single source of truth in the system.
+enum OrderStatus {
+  NEW
+  UNDER_REVIEW
+  PRICED
+  AWAITING_CUSTOMER_APPROVAL
+  ACCEPTED
+  DRIVER_ASSIGNED
+  PICKED_UP
+  IN_ROUTE
+  DELIVERED
+  COMPLETED
+  CANCELLED
+  REJECTED
+}
+
+enum SizeCategory {
+  SMALL
+  MEDIUM
+  LARGE
+}
+
+enum SpeedTier {
+  STANDARD
+  EXPRESS
+}
+
+enum PaymentMethod {
+  CASH
+  VODAFONE_CASH
+  INSTAPAY
+}
+
+enum PaymentStatus {
+  PENDING
+  PAID
+  FAILED
+  REFUNDED
+}
+
+enum NotificationChannel {
+  PUSH
+  WHATSAPP
+  IN_APP
+}
+
+enum NotificationType {
+  ORDER_STATUS
+  PROMO
+  SYSTEM
+  ALERT
+}
+
+enum AlertType {
+  PENDING_ORDER
+  DRIVER_NOT_RESPONDING
+  CASH_LIMIT_EXCEEDED
+  COMPLAINT
+  PAYMENT_PENDING
+}
+
+enum AlertSeverity {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum LinkType {
+  SERVICE
+  MERCHANT
+  EXTERNAL
+  NONE
+}
+
+// ============================================
+// Core Users
+// ============================================
+
+model User {
+  id              String   @id @default(cuid())
+  phone           String   @unique
+  passwordHash    String?
+  name            String
+  email           String?  @unique
+  avatarUrl       String?
+  role            UserRole @default(CUSTOMER)
+  googleId        String?  @unique
+  isPhoneVerified Boolean  @default(false)
+  isActive        Boolean  @default(true)
+  city            String?
+  governorate     String?
+  defaultAddress  String?  @db.VarChar(500)
+  fcmToken        String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  driverProfile   DriverProfile?
+  merchantProfile MerchantProfile?
+  customerOrders  Order[]          @relation("CustomerOrders")
+  driverOrders    Order[]          @relation("DriverOrders")
+  refreshTokens   RefreshToken[]
+  notifications   Notification[]
+  statusChanges   OrderStatusHistory[]
+  resolvedAlerts  Alert[]          @relation("AlertResolver")
+  confirmedPays   Payment[]        @relation("PaymentConfirmer")
+  servicesCreated Service[]        @relation("ServiceCreator")
+
+  @@index([role])
+  @@index([phone])
+}
+
+model DriverProfile {
+  id              String       @id @default(cuid())
+  userId          String       @unique
+  user            User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  status          DriverStatus @default(OFFLINE)
+  vehicleType     String
+  vehiclePlate    String
+  nationalId      String?
+  licenseImageUrl String?
+  currentLat      Decimal?     @db.Decimal(10, 7)
+  currentLng      Decimal?     @db.Decimal(10, 7)
+  lastLocationAt  DateTime?
+  totalDeliveries Int          @default(0)
+  totalEarnings   Decimal      @default(0) @db.Decimal(10, 2)
+  cashOnHand      Decimal      @default(0) @db.Decimal(10, 2)
+  rating          Decimal?     @db.Decimal(3, 2)
+  governorate     String
+  notes           String?      @db.Text
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+
+  @@index([status])
+  @@index([governorate])
+}
+
+model MerchantProfile {
+  id           String   @id @default(cuid())
+  userId       String   @unique
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  storeName    String
+  storeNameAr  String
+  categoryId   String
+  category     Category @relation(fields: [categoryId], references: [id])
+  description  String?  @db.Text
+  logoUrl      String?
+  coverUrl     String?
+  addressLine  String   @db.VarChar(500)
+  lat          Decimal  @db.Decimal(10, 7)
+  lng          Decimal  @db.Decimal(10, 7)
+  governorate  String
+  city         String
+  openHours    Json?
+  isOpen       Boolean  @default(true)
+  rating       Decimal? @db.Decimal(3, 2)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  products     Product[]
+
+  @@index([categoryId])
+  @@index([governorate])
+  @@index([isOpen])
+}
+
+model Category {
+  id        String   @id @default(cuid())
+  name      String
+  nameAr    String
+  iconUrl   String?
+  sortOrder Int      @default(0)
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  merchants MerchantProfile[]
+}
+
+// ============================================
+// Dynamic Services — the centerpiece
+// ============================================
+
+model Service {
+  id                         String          @id @default(cuid())
+  key                        String          @unique
+  name                       String
+  nameAr                     String
+  category                   ServiceCategory
+  imageUrl                   String?
+  iconUrl                    String?
+  description                String?         @db.Text
+  descriptionAr              String?         @db.Text
+  pricingMethod              PricingMethod
+  basePrice                  Decimal?        @db.Decimal(10, 2)
+  pricePerKm                 Decimal?        @db.Decimal(10, 2)
+  pricePerKg                 Decimal?        @db.Decimal(10, 2)
+  requiresPickupLocation     Boolean         @default(false)
+  requiresDeliveryLocation   Boolean         @default(true)
+  requiresImageUpload        Boolean         @default(false)
+  allowsTextNote             Boolean         @default(true)
+  supportsMultiplePickups    Boolean         @default(false)
+  supportsMultipleDeliveries Boolean         @default(false)
+  sortOrder                  Int             @default(0)
+  isActive                   Boolean         @default(true)
+  createdById                String?
+  createdBy                  User?           @relation("ServiceCreator", fields: [createdById], references: [id])
+  createdAt                  DateTime        @default(now())
+  updatedAt                  DateTime        @updatedAt
+
+  fields ServiceField[]
+  orders Order[]
+  rules  PricingRule[]
+
+  @@index([category, isActive])
+}
+
+model ServiceField {
+  id            String           @id @default(cuid())
+  serviceId     String
+  service       Service          @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+  key           String
+  label         String
+  labelAr       String
+  type          ServiceFieldType
+  isRequired    Boolean          @default(false)
+  sortOrder     Int              @default(0)
+  options       Json?
+  validation    Json?
+  placeholder   String?
+  placeholderAr String?
+  helpText      String?          @db.Text
+  helpTextAr    String?          @db.Text
+  createdAt     DateTime         @default(now())
+  updatedAt     DateTime         @updatedAt
+
+  @@unique([serviceId, key])
+  @@index([serviceId, sortOrder])
+}
+
+// ============================================
+// Orders — heart of the system
+// ============================================
+
+model Order {
+  id                  String          @id @default(cuid())
+  orderNumber         String          @unique
+  serviceId           String
+  service             Service         @relation(fields: [serviceId], references: [id])
+  customerId          String
+  customer            User            @relation("CustomerOrders", fields: [customerId], references: [id])
+  category            ServiceCategory
+  status              OrderStatus     @default(NEW)
+  merchantId          String?
+  assignedDriverId    String?
+  assignedDriver      User?           @relation("DriverOrders", fields: [assignedDriverId], references: [id])
+  customData          Json?
+  notes               String?         @db.Text
+  imageUrls           Json?
+
+  // single-point fields (DELIVERY + SHIPPING)
+  pickupLat           Decimal?        @db.Decimal(10, 7)
+  pickupLng           Decimal?        @db.Decimal(10, 7)
+  pickupAddress       String?         @db.VarChar(500)
+  deliveryLat         Decimal?        @db.Decimal(10, 7)
+  deliveryLng         Decimal?        @db.Decimal(10, 7)
+  deliveryAddress     String?         @db.VarChar(500)
+
+  // shipping-specific
+  weightKg            Decimal?        @db.Decimal(8, 2)
+  sizeCategory        SizeCategory?
+  isFragile           Boolean?        @default(false)
+  speedTier           SpeedTier?      @default(STANDARD)
+  estimatedDistanceKm Decimal?        @db.Decimal(8, 2)
+
+  // pricing
+  quotedPrice         Decimal?        @db.Decimal(10, 2)
+  finalPrice          Decimal?        @db.Decimal(10, 2)
+  currency            String          @default("EGP")
+
+  // payment
+  paymentMethod       PaymentMethod?
+  paymentStatus       PaymentStatus   @default(PENDING)
+
+  // timestamps for lifecycle
+  customerApprovedAt  DateTime?
+  pickedUpAt          DateTime?
+  deliveredAt         DateTime?
+  completedAt         DateTime?
+  cancelledAt         DateTime?
+  cancellationReason  String?         @db.VarChar(500)
+  whatsappSentAt      DateTime?
+
+  createdAt           DateTime        @default(now())
+  updatedAt           DateTime        @updatedAt
+
+  items               OrderItem[]
+  pickupPoints        OrderPickupPoint[]
+  deliveryPoints      OrderDeliveryPoint[]
+  statusHistory       OrderStatusHistory[]
+  payments            Payment[]
+  alerts              Alert[]
+
+  @@index([status, createdAt(sort: Desc)])
+  @@index([customerId, createdAt(sort: Desc)])
+  @@index([assignedDriverId, status])
+  @@index([category])
+  @@index([serviceId])
+}
+
+model OrderItem {
+  id                  String   @id @default(cuid())
+  orderId             String
+  order               Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  productId           String?
+  product             Product? @relation(fields: [productId], references: [id])
+  productNameSnapshot String
+  unitPriceSnapshot   Decimal? @db.Decimal(10, 2)
+  quantity            Int
+  merchantId          String?
+  pickupPointId       String?
+  pickupPoint         OrderPickupPoint? @relation(fields: [pickupPointId], references: [id])
+  notes               String?  @db.VarChar(500)
+
+  @@index([orderId])
+  @@index([productId])
+}
+
+model OrderPickupPoint {
+  id            String    @id @default(cuid())
+  orderId       String
+  order         Order     @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  sortOrder     Int       @default(0)
+  merchantId    String?
+  label         String?
+  address       String    @db.VarChar(500)
+  lat           Decimal   @db.Decimal(10, 7)
+  lng           Decimal   @db.Decimal(10, 7)
+  contactName   String?
+  contactPhone  String?
+  notes         String?   @db.VarChar(500)
+  arrivedAt     DateTime?
+  pickedUpAt    DateTime?
+  items         OrderItem[]
+
+  @@index([orderId])
+}
+
+model OrderDeliveryPoint {
+  id             String    @id @default(cuid())
+  orderId        String
+  order          Order     @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  sortOrder      Int       @default(0)
+  recipientName  String
+  recipientPhone String
+  address        String    @db.VarChar(500)
+  lat            Decimal   @db.Decimal(10, 7)
+  lng            Decimal   @db.Decimal(10, 7)
+  notes          String?   @db.VarChar(500)
+  deliveredAt    DateTime?
+  proofImageUrl  String?
+
+  @@index([orderId])
+}
+
+model OrderStatusHistory {
+  id            String      @id @default(cuid())
+  orderId       String
+  order         Order       @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  fromStatus    OrderStatus?
+  toStatus      OrderStatus
+  changedById   String
+  changedBy     User        @relation(fields: [changedById], references: [id])
+  changedByRole UserRole
+  reason        String?     @db.VarChar(500)
+  metadata      Json?
+  createdAt     DateTime    @default(now())
+
+  @@index([orderId, createdAt])
+}
+
+// ============================================
+// Products (merchant catalogs)
+// ============================================
+
+model Product {
+  id          String          @id @default(cuid())
+  merchantId  String
+  merchant    MerchantProfile @relation(fields: [merchantId], references: [id], onDelete: Cascade)
+  name        String
+  nameAr      String
+  description String?         @db.Text
+  imageUrl    String?
+  price       Decimal         @db.Decimal(10, 2)
+  unit        String?
+  isAvailable Boolean         @default(true)
+  stock       Int?
+  sortOrder   Int             @default(0)
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+
+  orderItems  OrderItem[]
+
+  @@index([merchantId, isAvailable])
+}
+
+// ============================================
+// Pricing rules (admin-tunable)
+// ============================================
+
+model PricingRule {
+  id                 String   @id @default(cuid())
+  serviceId          String
+  service            Service  @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+  governorate        String?
+  city               String?
+  basePrice          Decimal  @default(0) @db.Decimal(10, 2)
+  pricePerKm         Decimal  @default(0) @db.Decimal(10, 2)
+  pricePerKg         Decimal  @default(0) @db.Decimal(10, 2)
+  minPrice           Decimal  @default(0) @db.Decimal(10, 2)
+  maxPrice           Decimal? @db.Decimal(10, 2)
+  fragileSurcharge   Decimal  @default(0) @db.Decimal(10, 2)
+  expressSurcharge   Decimal  @default(0) @db.Decimal(10, 2)
+  weekendMultiplier  Decimal? @db.Decimal(5, 2)
+  nightMultiplier    Decimal? @db.Decimal(5, 2)
+  nightStartHour     Int?
+  nightEndHour       Int?
+  isActive           Boolean  @default(true)
+  effectiveFrom      DateTime?
+  effectiveTo        DateTime?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  @@index([serviceId, isActive])
+  @@index([governorate])
+}
+
+// ============================================
+// Payments
+// ============================================
+
+model Payment {
+  id              String        @id @default(cuid())
+  orderId         String
+  order           Order         @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  amount          Decimal       @db.Decimal(10, 2)
+  method          PaymentMethod
+  status          PaymentStatus @default(PENDING)
+  referenceNumber String?
+  proofImageUrl   String?
+  confirmedById   String?
+  confirmedBy     User?         @relation("PaymentConfirmer", fields: [confirmedById], references: [id])
+  confirmedAt     DateTime?
+  notes           String?       @db.VarChar(500)
+  createdAt       DateTime      @default(now())
+
+  @@index([orderId])
+  @@index([status])
+}
+
+// ============================================
+// Notifications & Alerts
+// ============================================
+
+model Notification {
+  id        String              @id @default(cuid())
+  userId    String
+  user      User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type      NotificationType
+  title     String
+  titleAr   String
+  body      String              @db.Text
+  bodyAr    String              @db.Text
+  data      Json?
+  channel   NotificationChannel @default(IN_APP)
+  isRead    Boolean             @default(false)
+  sentAt    DateTime            @default(now())
+  readAt    DateTime?
+
+  @@index([userId, isRead, sentAt(sort: Desc)])
+}
+
+model Alert {
+  id               String        @id @default(cuid())
+  type             AlertType
+  severity         AlertSeverity @default(MEDIUM)
+  title            String
+  titleAr          String
+  description      String        @db.Text
+  descriptionAr    String        @db.Text
+  relatedOrderId   String?
+  relatedOrder     Order?        @relation(fields: [relatedOrderId], references: [id], onDelete: SetNull)
+  relatedUserId    String?
+  isResolved       Boolean       @default(false)
+  resolvedById     String?
+  resolvedBy       User?         @relation("AlertResolver", fields: [resolvedById], references: [id])
+  resolvedAt       DateTime?
+  resolutionNotes  String?       @db.VarChar(500)
+  createdAt        DateTime      @default(now())
+
+  @@index([isResolved, severity, createdAt(sort: Desc)])
+  @@index([type])
+}
+
+// ============================================
+// Promotional banners / offers
+// ============================================
+
+model Offer {
+  id        String   @id @default(cuid())
+  title     String
+  titleAr   String
+  imageUrl  String
+  linkType  LinkType @default(NONE)
+  linkValue String?
+  sortOrder Int      @default(0)
+  isActive  Boolean  @default(true)
+  startsAt  DateTime?
+  endsAt    DateTime?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([isActive, sortOrder])
+}
+
+// ============================================
+// Settings (admin-tunable key/value)
+// ============================================
+
+model Setting {
+  key         String   @id
+  value       Json
+  description String?  @db.VarChar(500)
+  updatedAt   DateTime @updatedAt
+  updatedById String?
+}
+
+// ============================================
+// Auth tokens
+// ============================================
+
+model RefreshToken {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String   @unique
+  userAgent String?  @db.VarChar(500)
+  ip        String?
+  expiresAt DateTime
+  revokedAt DateTime?
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+}

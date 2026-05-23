@@ -1,0 +1,14 @@
+{
+  "extends": "@tamem/tsconfig/node.json",
+  "compilerOptions": {
+    "rootDir": ".",
+    "outDir": "dist",
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["src/*"]
+    },
+    "resolveJsonModule": true
+  },
+  "include": ["src/**/*", "prisma/seed.ts", "tests/**/*"],
+  "exclude": ["node_modules", "dist"]
+}

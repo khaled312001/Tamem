@@ -1,0 +1,50 @@
+{
+  "expo": {
+    "name": "تميم للتوصيل",
+    "slug": "tamem-delivery",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "icon": "./src/assets/icon.png",
+    "scheme": "tamem",
+    "userInterfaceStyle": "light",
+    "splash": {
+      "image": "./src/assets/splash.png",
+      "resizeMode": "cover",
+      "backgroundColor": "#241310"
+    },
+    "assetBundlePatterns": ["**/*"],
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "com.tamem.delivery"
+    },
+    "android": {
+      "package": "com.tamem.delivery",
+      "versionCode": 1,
+      "adaptiveIcon": {
+        "foregroundImage": "./src/assets/icon.png",
+        "backgroundColor": "#E0301E"
+      },
+      "permissions": [
+        "ACCESS_FINE_LOCATION",
+        "ACCESS_COARSE_LOCATION",
+        "CAMERA",
+        "READ_EXTERNAL_STORAGE"
+      ],
+      "config": {
+        "googleMaps": {
+          "apiKey": ""
+        }
+      }
+    },
+    "plugins": ["expo-secure-store", "expo-location", "expo-image-picker", "expo-notifications"],
+    "extra": {
+      "forceRTL": true,
+      "eas": {
+        "projectId": ""
+      }
+    },
+    "experiments": {
+      "typedRoutes": false
+    }
+  }
+}

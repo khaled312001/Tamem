@@ -1,0 +1,11 @@
+{
+  "extends": "@tamem/tsconfig/rn.json",
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["src/*"]
+    }
+  },
+  "include": ["src/**/*", "App.tsx", "app.json"],
+  "exclude": ["node_modules", ".expo", "dist"]
+}

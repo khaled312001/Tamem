@@ -1,0 +1,201 @@
+openapi: 3.1.0
+info:
+  title: Tamem Delivery API
+  version: 0.1.0
+  description: |
+    Tamem Delivery REST API — single source of truth for backend contract.
+    Frontend types are generated from this file via `pnpm gen:types`.
+  contact:
+    name: Tamem Dev Team
+    email: dev@tamem-delivery.com
+
+servers:
+  - url: http://localhost:4000/api/v1
+    description: Local dev
+  - url: https://api.tamem-delivery.com/api/v1
+    description: Production
+
+tags:
+  - name: Auth
+  - name: Services
+  - name: Orders
+  - name: Admin
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  schemas:
+    ApiError:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code: { type: string, example: VALIDATION_ERROR }
+            message: { type: string }
+            messageAr: { type: string }
+            details: { type: object, additionalProperties: true }
+
+    AuthTokens:
+      type: object
+      required: [accessToken, refreshToken]
+      properties:
+        accessToken: { type: string }
+        refreshToken: { type: string }
+
+    UserRole:
+      type: string
+      enum: [CUSTOMER, DRIVER, MERCHANT, ADMIN]
+
+    User:
+      type: object
+      required: [id, phone, name, role]
+      properties:
+        id: { type: string }
+        phone: { type: string }
+        name: { type: string }
+        email: { type: string, nullable: true }
+        avatarUrl: { type: string, nullable: true }
+        role: { $ref: '#/components/schemas/UserRole' }
+        isPhoneVerified: { type: boolean }
+
+    ServiceCategory:
+      type: string
+      enum: [DELIVERY, SHIPPING, MERCHANT]
+
+    PricingMethod:
+      type: string
+      enum: [FIXED, DISTANCE, WEIGHT, DISTANCE_WEIGHT, QUOTE]
+
+    OrderStatus:
+      type: string
+      enum:
+        - NEW
+        - UNDER_REVIEW
+        - PRICED
+        - AWAITING_CUSTOMER_APPROVAL
+        - ACCEPTED
+        - DRIVER_ASSIGNED
+        - PICKED_UP
+        - IN_ROUTE
+        - DELIVERED
+        - COMPLETED
+        - CANCELLED
+        - REJECTED
+
+    Service:
+      type: object
+      required: [id, key, name, nameAr, category, pricingMethod]
+      properties:
+        id: { type: string }
+        key: { type: string }
+        name: { type: string }
+        nameAr: { type: string }
+        category: { $ref: '#/components/schemas/ServiceCategory' }
+        imageUrl: { type: string, nullable: true }
+        pricingMethod: { $ref: '#/components/schemas/PricingMethod' }
+        basePrice: { type: number, nullable: true }
+        supportsMultiplePickups: { type: boolean }
+        supportsMultipleDeliveries: { type: boolean }
+        isActive: { type: boolean }
+
+paths:
+  /auth/register:
+    post:
+      tags: [Auth]
+      summary: Register a new customer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, phone, password, city]
+              properties:
+                name: { type: string }
+                phone: { type: string }
+                password: { type: string, minLength: 8 }
+                city: { type: string }
+                address: { type: string }
+      responses:
+        '201': { description: Created }
+        '409':
+          {
+            description: Phone already registered,
+            content: { application/json: { schema: { $ref: '#/components/schemas/ApiError' } } },
+          }
+
+  /auth/login:
+    post:
+      tags: [Auth]
+      summary: Login with phone + password
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [phone, password]
+              properties:
+                phone: { type: string }
+                password: { type: string }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      user: { $ref: '#/components/schemas/User' }
+                      tokens: { $ref: '#/components/schemas/AuthTokens' }
+
+  /services:
+    get:
+      tags: [Services]
+      summary: List active services for the mobile home screen
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/Service' }
+
+  /services/{id}:
+    get:
+      tags: [Services]
+      summary: Get a single service with its dynamic fields
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: OK }
+        '404': { description: Not found }
+
+  /me:
+    get:
+      tags: [Auth]
+      summary: Current user
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { description: OK }
+        '401': { description: Unauthorized }
+
+security:
+  - bearerAuth: []

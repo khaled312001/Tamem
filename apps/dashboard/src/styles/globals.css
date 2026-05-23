@@ -1,0 +1,74 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 0 0% 100%;
+    --foreground: 16 67% 11%;
+
+    --card: 0 0% 100%;
+    --card-foreground: 16 67% 11%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 16 67% 11%;
+
+    /* Brand primary = Tamem red */
+    --primary: 6 75% 50%;
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 30 80% 55%;
+    --secondary-foreground: 0 0% 100%;
+
+    --muted: 30 6% 95%;
+    --muted-foreground: 30 6% 40%;
+
+    --accent: 40 88% 59%;
+    --accent-foreground: 16 67% 11%;
+
+    --destructive: 0 75% 50%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 30 6% 88%;
+    --input: 30 6% 88%;
+    --ring: 6 75% 50%;
+
+    --radius: 0.5rem;
+  }
+
+  .dark {
+    --background: 16 67% 8%;
+    --foreground: 0 0% 98%;
+    --card: 16 50% 12%;
+    --card-foreground: 0 0% 98%;
+    --popover: 16 50% 12%;
+    --popover-foreground: 0 0% 98%;
+    --primary: 6 75% 55%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 30 80% 55%;
+    --secondary-foreground: 0 0% 100%;
+    --muted: 16 30% 20%;
+    --muted-foreground: 30 6% 70%;
+    --accent: 40 88% 59%;
+    --accent-foreground: 16 67% 11%;
+    --destructive: 0 75% 50%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 16 30% 25%;
+    --input: 16 30% 25%;
+    --ring: 6 75% 55%;
+  }
+
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground font-body antialiased;
+    font-family: 'Tajawal', system-ui, sans-serif;
+  }
+
+  h1, h2, h3, h4, h5, h6 {
+    font-family: 'Cairo', system-ui, sans-serif;
+    font-weight: 900;
+  }
+}

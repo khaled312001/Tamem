@@ -1,0 +1,44 @@
+---
+interface Props {
+  title?: string;
+  description?: string;
+}
+const {
+  title = 'تميم للتوصيل · توصيلك في أمان معانا',
+  description = 'منصة توصيل وشحن متكاملة تخدم قفط وقنا والصعيد. دليفري، شحن بين المناطق، وطلبات تجار.',
+} = Astro.props;
+---
+
+<!doctype html>
+<html lang="ar" dir="rtl">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#E0301E" />
+    <title>{title}</title>
+    <meta name="description" content={description} />
+    <meta property="og:title" content={title} />
+    <meta property="og:description" content={description} />
+    <meta property="og:type" content="website" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;700;800;900&family=Tajawal:wght@400;500;700;800&display=swap"
+      rel="stylesheet"
+    />
+  </head>
+  <body class="bg-white text-brand-dark font-body antialiased">
+    <slot />
+  </body>
+</html>
+
+<style is:global>
+  body {
+    font-family: 'Tajawal', system-ui, sans-serif;
+  }
+  h1, h2, h3, h4 {
+    font-family: 'Cairo', system-ui, sans-serif;
+    font-weight: 900;
+  }
+</style>
