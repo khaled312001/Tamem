@@ -19,8 +19,10 @@ adminServicesRouter.get('/', ctrl.adminList);
 adminServicesRouter.post('/', ctrl.adminCreate);
 adminServicesRouter.patch('/:id', ctrl.adminUpdate);
 adminServicesRouter.delete('/:id', ctrl.adminDelete);
+adminServicesRouter.post('/:id/duplicate', ctrl.adminDuplicate);
 
 adminServicesRouter.post('/:id/fields', ctrl.adminAddField);
+// Reorder must come BEFORE :fieldId to prevent 'reorder' being captured as fieldId
+adminServicesRouter.patch('/:id/fields/reorder', ctrl.adminReorderFields);
 adminServicesRouter.patch('/:id/fields/:fieldId', ctrl.adminUpdateField);
 adminServicesRouter.delete('/:id/fields/:fieldId', ctrl.adminDeleteField);
-adminServicesRouter.patch('/:id/fields/reorder', ctrl.adminReorderFields);
