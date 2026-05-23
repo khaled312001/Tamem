@@ -1,3 +1,6 @@
+// Fast-refresh runtime for web (no-op on native)
+import '@expo/metro-runtime';
+
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';

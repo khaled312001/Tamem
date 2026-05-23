@@ -5,7 +5,7 @@ import { Animated, Image, StyleSheet, Text, View } from 'react-native';
 import { colors, fontFamilies, fontSizes, gradients, radii, spacing } from '../theme/tokens';
 
 export function SplashScreen() {
-  const pulse = useRef(new Animated.Value(0.8)).current;
+  const pulse = useRef(new Animated.Value(0.85)).current;
   const dot1 = useRef(new Animated.Value(0.4)).current;
   const dot2 = useRef(new Animated.Value(0.4)).current;
   const dot3 = useRef(new Animated.Value(0.4)).current;
@@ -41,17 +41,38 @@ export function SplashScreen() {
         style={StyleSheet.absoluteFill}
       />
 
+      {/* Top gold accent line */}
+      <LinearGradient
+        colors={['transparent', '#F2A93B', 'transparent']}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 0 }}
+        style={styles.accentLine}
+      />
+
+      {/* Decorative circles */}
       <View style={[styles.circle, styles.circle1]} />
       <View style={[styles.circle, styles.circle2]} />
       <View style={[styles.circle, styles.circle3]} />
 
       <View style={styles.center}>
-        <View style={styles.logoBlock}>
+        {/* Rider photo + logo badge composition */}
+        <View style={styles.riderBlock}>
           <Animated.View style={[styles.glow, { transform: [{ scale: pulse }] }]} />
-          <View style={styles.logoFrame}>
+          <View style={styles.goldRing} />
+
+          <View style={styles.riderFrame}>
+            <Image
+              source={require('../assets/delivery-rider.png')}
+              style={styles.riderImage}
+              resizeMode="cover"
+            />
+          </View>
+
+          {/* Tamem logo badge — overlapping bottom-right, slight tilt */}
+          <View style={styles.logoBadge}>
             <Image
               source={require('../assets/logo.jpg')}
-              style={styles.logo}
+              style={styles.logoBadgeImg}
               resizeMode="contain"
             />
           </View>
@@ -67,6 +88,7 @@ export function SplashScreen() {
         </View>
 
         <View style={styles.tagline}>
+          <Text style={styles.taglineIcon}>🛵</Text>
           <Text style={styles.taglineText}>تميم… التوصيل لعبتنا</Text>
         </View>
       </View>
@@ -80,8 +102,12 @@ export function SplashScreen() {
   );
 }
 
+const RIDER_SIZE = 220;
+const BADGE_SIZE = 76;
+
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.brand.redDark, justifyContent: 'center' },
+  accentLine: { position: 'absolute', top: 0, left: 0, right: 0, height: 3 },
   circle: { position: 'absolute', borderRadius: 999 },
   circle1: {
     top: -40,
@@ -105,33 +131,63 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(236,122,44,0.08)',
   },
   center: { alignItems: 'center', paddingHorizontal: spacing.xl },
-  logoBlock: {
-    width: 220,
-    height: 220,
+
+  riderBlock: {
+    width: RIDER_SIZE + 30,
+    height: RIDER_SIZE + 30,
     alignItems: 'center',
     justifyContent: 'center',
     marginBottom: spacing.lg,
+    position: 'relative',
   },
   glow: {
     position: 'absolute',
-    width: 240,
-    height: 240,
+    width: RIDER_SIZE + 60,
+    height: RIDER_SIZE + 60,
     borderRadius: 999,
-    backgroundColor: 'rgba(242,169,59,0.15)',
+    backgroundColor: 'rgba(242,169,59,0.18)',
   },
-  logoFrame: {
-    width: 200,
-    height: 200,
-    borderRadius: radii.xl,
-    backgroundColor: colors.white,
-    padding: spacing.lg,
+  goldRing: {
+    position: 'absolute',
+    width: RIDER_SIZE + 12,
+    height: RIDER_SIZE + 12,
+    borderRadius: 999,
+    borderWidth: 1.5,
+    borderColor: 'rgba(242,169,59,0.4)',
+  },
+  riderFrame: {
+    width: RIDER_SIZE,
+    height: RIDER_SIZE,
+    borderRadius: RIDER_SIZE / 2,
+    overflow: 'hidden',
+    borderWidth: 3,
+    borderColor: 'rgba(255,255,255,0.18)',
     shadowColor: '#000',
-    shadowOpacity: 0.35,
+    shadowOpacity: 0.4,
     shadowRadius: 24,
     shadowOffset: { width: 0, height: 14 },
-    elevation: 18,
+    elevation: 14,
   },
-  logo: { width: '100%', height: '100%' },
+  riderImage: { width: '100%', height: '100%' },
+  logoBadge: {
+    position: 'absolute',
+    bottom: 0,
+    right: 0,
+    width: BADGE_SIZE,
+    height: BADGE_SIZE,
+    borderRadius: radii.lg,
+    backgroundColor: colors.white,
+    padding: 6,
+    transform: [{ rotate: '-6deg' }],
+    shadowColor: '#000',
+    shadowOpacity: 0.35,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 8 },
+    elevation: 12,
+    zIndex: 3,
+  },
+  logoBadgeImg: { width: '100%', height: '100%' },
+
   brandWrap: { alignItems: 'center', marginTop: spacing.md },
   brand: {
     color: colors.white,
@@ -155,7 +211,11 @@ const styles = StyleSheet.create({
     borderRadius: radii.pill,
     paddingHorizontal: spacing.lg,
     paddingVertical: spacing.sm,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
   },
+  taglineIcon: { fontSize: 14 },
   taglineText: {
     color: colors.white,
     fontSize: fontSizes.sm,
