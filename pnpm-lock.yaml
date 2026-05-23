@@ -338,6 +338,12 @@ importers:
 
   apps/mobile:
     dependencies:
+      '@expo-google-fonts/cairo':
+        specifier: ^0.2.3
+        version: 0.2.3
+      '@expo-google-fonts/tajawal':
+        specifier: ^0.2.3
+        version: 0.2.3
       '@hookform/resolvers':
         specifier: ^3.9.1
         version: 3.10.0(react-hook-form@7.76.0(react@18.3.1))
@@ -371,6 +377,9 @@ importers:
       expo:
         specifier: ~52.0.20
         version: 52.0.49(@babel/core@7.29.0)(@babel/preset-env@7.29.5(@babel/core@7.29.0))(graphql@16.14.0)(react-native@0.76.5(@babel/core@7.29.0)(@babel/preset-env@7.29.5(@babel/core@7.29.0))(@types/react@18.3.29)(react@18.3.1))(react@18.3.1)
+      expo-font:
+        specifier: ~13.0.4
+        version: 13.0.4(expo@52.0.49(@babel/core@7.29.0)(@babel/preset-env@7.29.5(@babel/core@7.29.0))(graphql@16.14.0)(react-native@0.76.5(@babel/core@7.29.0)(@babel/preset-env@7.29.5(@babel/core@7.29.0))(@types/react@18.3.29)(react@18.3.1))(react@18.3.1))(react@18.3.1)
       expo-image-manipulator:
         specifier: ~13.0.5
         version: 13.0.6(expo@52.0.49(@babel/core@7.29.0)(@babel/preset-env@7.29.5(@babel/core@7.29.0))(graphql@16.14.0)(react-native@0.76.5(@babel/core@7.29.0)(@babel/preset-env@7.29.5(@babel/core@7.29.0))(@types/react@18.3.29)(react@18.3.1))(react@18.3.1))
@@ -2029,6 +2038,12 @@ packages:
   '@eslint/plugin-kit@0.4.1':
     resolution: {integrity: sha512-43/qtrDUokr7LJqoF2c3+RInu/t4zfrpYdoSDfYyhg52rwLV6TnOvdG4fXm7IkSB3wErkcmJS9iEhjVtOSEjjA==}
     engines: {node: ^18.18.0 || ^20.9.0 || >=21.1.0}
+
+  '@expo-google-fonts/cairo@0.2.3':
+    resolution: {integrity: sha512-z4FoaGpwudrPbFTbA/QgZTn7kHXhlI7QhLLEZqeG8PkMGeHbaqufJ6W6uvsp6yK1DVCILM0o2s8JGf/I2RFwnw==}
+
+  '@expo-google-fonts/tajawal@0.2.3':
+    resolution: {integrity: sha512-FQZsqIBEQcWwy+33pCMaB071k8vl5ZacBfhkwN5Eopxn/22iTHt0LhQv4g9NNM6gUerZCrU6qk7N60ihFKWyHw==}
 
   '@expo/bunyan@4.0.1':
     resolution: {integrity: sha512-+Lla7nYSiHZirgK+U/uYzsLv/X+HaJienbD5AKX1UQZHYfWaP+9uuQluRB4GrEVWF0GZ7vEVp/jzaOT9k/SQlg==}
@@ -10415,6 +10430,10 @@ snapshots:
     dependencies:
       '@eslint/core': 0.17.0
       levn: 0.4.1
+
+  '@expo-google-fonts/cairo@0.2.3': {}
+
+  '@expo-google-fonts/tajawal@0.2.3': {}
 
   '@expo/bunyan@4.0.1':
     dependencies:

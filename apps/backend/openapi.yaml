@@ -17,6 +17,7 @@ servers:
 
 tags:
   - name: Auth
+  - name: Me
   - name: Services
   - name: Orders
   - name: Admin
@@ -188,14 +189,170 @@ paths:
         '200': { description: OK }
         '404': { description: Not found }
 
+  /auth/refresh:
+    post:
+      tags: [Auth]
+      summary: Rotate tokens using a refresh token
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [refreshToken]
+              properties:
+                refreshToken: { type: string }
+      responses:
+        '200':
+          description: New tokens
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: '#/components/schemas/AuthTokens' }
+        '401': { description: Invalid or revoked refresh token }
+
+  /auth/logout:
+    post:
+      tags: [Auth]
+      summary: Revoke a refresh token
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [refreshToken]
+              properties:
+                refreshToken: { type: string }
+      responses:
+        '204': { description: Logged out }
+
+  /auth/google:
+    post:
+      tags: [Auth]
+      summary: Sign in with a Google ID token (mobile + web SSO)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [idToken]
+              properties:
+                idToken: { type: string, minLength: 10 }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      user: { $ref: '#/components/schemas/User' }
+                      tokens: { $ref: '#/components/schemas/AuthTokens' }
+        '401': { description: Invalid Google token or Google login disabled }
+
+  /auth/otp/request:
+    post:
+      tags: [Auth]
+      summary: Request an OTP code for a phone number (stubbed in Phase 1)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [phone]
+              properties:
+                phone: { type: string }
+      responses:
+        '200': { description: OTP queued for delivery }
+
+  /auth/otp/verify:
+    post:
+      tags: [Auth]
+      summary: Verify an OTP code and obtain tokens
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [phone, code]
+              properties:
+                phone: { type: string }
+                code: { type: string, pattern: '^\d{4,6}$' }
+      responses:
+        '200':
+          description: Tokens
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      user: { $ref: '#/components/schemas/User' }
+                      tokens: { $ref: '#/components/schemas/AuthTokens' }
+        '401': { description: Invalid code }
+
   /me:
     get:
-      tags: [Auth]
-      summary: Current user
+      tags: [Me]
+      summary: Current user profile
       security: [{ bearerAuth: [] }]
       responses:
-        '200': { description: OK }
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: '#/components/schemas/User' }
         '401': { description: Unauthorized }
+    patch:
+      tags: [Me]
+      summary: Update current user profile
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string }
+                email: { type: string }
+                city: { type: string }
+                governorate: { type: string }
+                defaultAddress: { type: string }
+                avatarUrl: { type: string }
+      responses:
+        '200': { description: Updated }
+
+  /me/fcm-token:
+    post:
+      tags: [Me]
+      summary: Register an FCM push token for the current device
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [fcmToken]
+              properties:
+                fcmToken: { type: string, minLength: 10 }
+      responses:
+        '200': { description: Token saved }
 
 security:
   - bearerAuth: []

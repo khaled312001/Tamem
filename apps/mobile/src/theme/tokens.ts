@@ -16,6 +16,7 @@ export const colors = {
   black: '#000000',
   surface: '#FAFAF9',
   border: '#E7E5E4',
+  danger: '#DC2626',
   text: {
     primary: '#241310',
     secondary: '#57534E',
@@ -65,9 +66,16 @@ export const fontSizes = {
   display: 34,
 } as const;
 
+// Match font names registered by expo-font (see lib/fonts.ts)
 export const fontFamilies = {
-  heading: 'Cairo',
-  body: 'Tajawal',
+  headingBlack: 'Cairo_900Black',
+  headingBold: 'Cairo_800ExtraBold',
+  body: 'Tajawal_400Regular',
+  bodyMedium: 'Tajawal_500Medium',
+  bodyBold: 'Tajawal_700Bold',
+  bodyExtraBold: 'Tajawal_800ExtraBold',
+  // Legacy alias
+  heading: 'Cairo_900Black',
 } as const;
 
 export const fontWeights = {
