@@ -19,9 +19,13 @@ function runSeed() {
   });
 }
 
+// Only count entities the seed owns. Other tests may add/remove their own users
+// (e.g. auth.test creates a temporary CUSTOMER), so we filter to seeded phones.
+const SEEDED_PHONES = ['+201010254819', '+201000000001', '+201000000002'];
+
 async function snapshot() {
   const [users, categories, services, fields, settings, mockOrders] = await Promise.all([
-    prisma.user.count(),
+    prisma.user.count({ where: { phone: { in: SEEDED_PHONES } } }),
     prisma.category.count(),
     prisma.service.count(),
     prisma.serviceField.count(),
@@ -42,7 +46,7 @@ describe('seed', () => {
 
   it('produces the expected baseline counts', async () => {
     const s = await snapshot();
-    expect(s.users).toBeGreaterThanOrEqual(3); // admin + mock customer + mock driver
+    expect(s.users).toBe(3); // admin + mock customer + mock driver
     expect(s.categories).toBe(9);
     expect(s.services).toBe(5);
     expect(s.fields).toBeGreaterThanOrEqual(5);
@@ -65,13 +69,13 @@ describe('seed', () => {
 
   it('settings keys are unique', async () => {
     const settings = await prisma.setting.findMany();
-    const keys = settings.map((s) => s.key);
+    const keys = settings.map((s: { key: string }) => s.key);
     expect(new Set(keys).size).toBe(keys.length);
   });
 
   it('service keys are unique', async () => {
     const services = await prisma.service.findMany();
-    const keys = services.map((s) => s.key);
+    const keys = services.map((s: { key: string }) => s.key);
     expect(new Set(keys).size).toBe(keys.length);
   });
 });

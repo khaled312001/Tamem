@@ -10,6 +10,7 @@ import { requireAuth, requireRole } from './middleware/auth.js';
 import { errorHandler } from './middleware/errorHandler.js';
 import { authRouter } from './modules/auth/auth.routes.js';
 import { adminServicesRouter, publicServicesRouter } from './modules/services/services.routes.js';
+import { meRouter } from './modules/users/users.routes.js';
 import { logger } from './utils/logger.js';
 import { ok } from './utils/response.js';
 
@@ -49,9 +50,7 @@ export function createApp(): Express {
 
   v1.use('/auth', authRouter);
   v1.use('/services', publicServicesRouter);
-
-  // example protected route — replace with real /me controller once users module exists
-  v1.get('/me', requireAuth, (req, res) => ok(res, { id: req.user!.id, role: req.user!.role }));
+  v1.use('/me', meRouter);
 
   // ----- Admin namespace -----
   const adminRouter = express.Router();

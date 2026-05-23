@@ -1,8 +1,9 @@
-import { compare, hash } from 'bcryptjs';
+import bcrypt from 'bcryptjs';
 import type { RequestHandler } from 'express';
 
 import { UserRole } from '@tamem/types';
 import {
+  googleLoginSchema,
   loginSchema,
   otpRequestSchema,
   otpVerifySchema,
@@ -28,7 +29,7 @@ export const register: RequestHandler = async (req, res, next) => {
     const existing = await prisma.user.findUnique({ where: { phone: input.phone } });
     if (existing) throw new ConflictError('Phone already registered', 'هذا الرقم مسجل بالفعل');
 
-    const passwordHash = await hash(input.password, 12);
+    const passwordHash = await bcrypt.hash(input.password, 12);
     const user = await prisma.user.create({
       data: {
         phone: input.phone,
@@ -58,7 +59,7 @@ export const login: RequestHandler = async (req, res, next) => {
     const user = await prisma.user.findUnique({ where: { phone: input.phone } });
     if (!user || !user.passwordHash) throw new UnauthorizedError('بيانات الدخول غير صحيحة');
 
-    const ok2 = await compare(input.password, user.passwordHash);
+    const ok2 = await bcrypt.compare(input.password, user.passwordHash);
     if (!ok2) throw new UnauthorizedError('بيانات الدخول غير صحيحة');
     if (!user.isActive) throw new UnauthorizedError('الحساب غير مفعّل');
 
@@ -105,6 +106,65 @@ export const logout: RequestHandler = async (req, res, next) => {
       data: { revokedAt: new Date() },
     });
     res.status(204).send();
+  } catch (err) {
+    next(err);
+  }
+};
+
+// Google OAuth — verifies the Google ID token from mobile app and signs in or upserts the user.
+// Returns null gracefully if GOOGLE_CLIENT_ID is not configured.
+export const googleLogin: RequestHandler = async (req, res, next) => {
+  try {
+    const input = googleLoginSchema.parse(req.body);
+    const { env } = await import('../../config/env.js');
+    if (!env.GOOGLE_CLIENT_ID) {
+      throw new UnauthorizedError('Google login غير مفعّل على السيرفر');
+    }
+    const { OAuth2Client } = await import('google-auth-library');
+    const client = new OAuth2Client(env.GOOGLE_CLIENT_ID);
+    const ticket = await client.verifyIdToken({
+      idToken: input.idToken,
+      audience: env.GOOGLE_CLIENT_ID,
+    });
+    const payload = ticket.getPayload();
+    if (!payload?.sub || !payload.email) {
+      throw new UnauthorizedError('Google token غير صالح');
+    }
+
+    // Upsert by googleId (preferred) or email
+    let user = await prisma.user.findUnique({ where: { googleId: payload.sub } });
+    if (!user && payload.email) {
+      user = await prisma.user.findUnique({ where: { email: payload.email } });
+    }
+
+    if (user) {
+      // Link googleId if missing
+      if (!user.googleId) {
+        user = await prisma.user.update({
+          where: { id: user.id },
+          data: { googleId: payload.sub, isPhoneVerified: true },
+        });
+      }
+    } else {
+      // First-time Google login — create a customer record. Phone collected later.
+      user = await prisma.user.create({
+        data: {
+          phone: `g_${payload.sub}`, // placeholder; user updates real phone after via /me
+          name: payload.name ?? payload.email.split('@')[0]!,
+          email: payload.email,
+          avatarUrl: payload.picture,
+          googleId: payload.sub,
+          role: UserRole.CUSTOMER,
+          isPhoneVerified: false,
+        },
+      });
+    }
+
+    const tokens = await issueTokens(user.id, user.role as UserRole, req);
+    ok(res, {
+      user: { id: user.id, name: user.name, phone: user.phone, email: user.email, role: user.role },
+      tokens,
+    });
   } catch (err) {
     next(err);
   }
