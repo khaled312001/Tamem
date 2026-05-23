@@ -1,3 +1,5 @@
+import { useNavigation } from '@react-navigation/native';
+import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useQuery } from '@tanstack/react-query';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Gift, Package, Search, ShoppingBag, Store, Truck } from 'lucide-react-native';
@@ -14,8 +16,11 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { GradientHeader } from '../components/GradientHeader';
 import { api } from '../lib/api';
+import type { HomeStackParamList } from '../navigation/HomeStack';
 import { useAuth } from '../stores/auth';
 import { colors, fontFamilies, fontSizes, gradients, radii, spacing } from '../theme/tokens';
+
+type NavProp = NativeStackNavigationProp<HomeStackParamList, 'Home'>;
 
 interface Offer {
   id: string;
@@ -39,6 +44,7 @@ const SERVICES = [
     sub: 'داخل المدينة',
     Icon: ShoppingBag,
     color: gradients.brand,
+    route: 'DeliveryServices' as const,
   },
   {
     key: 'shipping',
@@ -46,6 +52,7 @@ const SERVICES = [
     sub: 'بين المناطق',
     Icon: Package,
     color: gradients.brandGold,
+    route: 'ShippingFlow' as const,
   },
   {
     key: 'merchant',
@@ -53,10 +60,12 @@ const SERVICES = [
     sub: 'طلبات جملة',
     Icon: Store,
     color: gradients.brandGold,
+    route: 'MerchantFlow' as const,
   },
 ] as const;
 
 export function HomeScreen() {
+  const navigation = useNavigation<NavProp>();
   const user = useAuth((s) => s.user);
 
   const { data: offers } = useQuery<Offer[]>({
@@ -109,9 +118,10 @@ export function HomeScreen() {
 
         <Text style={styles.sectionTitle}>خدماتنا</Text>
         <View style={styles.services}>
-          {SERVICES.map(({ key, label, sub, Icon, color }) => (
+          {SERVICES.map(({ key, label, sub, Icon, color, route }) => (
             <Pressable
               key={key}
+              onPress={() => navigation.navigate(route)}
               style={({ pressed }) => [styles.serviceCard, pressed && styles.pressed]}
             >
               <LinearGradient
@@ -137,6 +147,7 @@ export function HomeScreen() {
           topMerchants.map((m) => (
             <Pressable
               key={m.id}
+              onPress={() => navigation.navigate('MerchantDetail', { merchantId: m.id })}
               style={({ pressed }) => [styles.merchantCard, pressed && styles.pressed]}
             >
               <View style={styles.merchantIcon}>

@@ -1,9 +1,12 @@
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 
+import { DeliveryServicesScreen } from '../screens/DeliveryServicesScreen';
 import { DynamicServiceFlowScreen } from '../screens/DynamicServiceFlowScreen';
 import { HomeScreen } from '../screens/HomeScreen';
 import { MerchantDetailScreen } from '../screens/MerchantDetailScreen';
+import { MerchantFlowScreen } from '../screens/MerchantFlowScreen';
 import { NearbyMapScreen } from '../screens/NearbyMapScreen';
+import { ShippingFlowScreen } from '../screens/ShippingFlowScreen';
 import { StoresListScreen } from '../screens/StoresListScreen';
 
 export type HomeStackParamList = {
@@ -12,6 +15,9 @@ export type HomeStackParamList = {
   NearbyMap: undefined;
   MerchantDetail: { merchantId: string };
   DynamicServiceFlow: { serviceKey?: string; serviceId?: string; merchantId?: string };
+  DeliveryServices: undefined;
+  ShippingFlow: undefined;
+  MerchantFlow: undefined;
 };
 
 const Stack = createNativeStackNavigator<HomeStackParamList>();
@@ -24,6 +30,9 @@ export function HomeStack() {
       <Stack.Screen name="NearbyMap" component={NearbyMapScreen} />
       <Stack.Screen name="MerchantDetail" component={MerchantDetailScreen} />
       <Stack.Screen name="DynamicServiceFlow" component={DynamicServiceFlowScreen} />
+      <Stack.Screen name="DeliveryServices" component={DeliveryServicesScreen} />
+      <Stack.Screen name="ShippingFlow" component={ShippingFlowScreen} />
+      <Stack.Screen name="MerchantFlow" component={MerchantFlowScreen} />
     </Stack.Navigator>
   );
 }

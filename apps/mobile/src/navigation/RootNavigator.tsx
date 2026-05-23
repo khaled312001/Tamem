@@ -1,14 +1,13 @@
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 
 import { registerForPushNotifications } from '../lib/push';
 import { SplashScreen } from '../screens/SplashScreen';
+import { useAuth } from '../stores/auth';
 
 import { AppTabs } from './AppTabs';
 import { AuthStack } from './AuthStack';
-
-import { useAuth } from '../stores/auth';
 
 export type RootStackParamList = {
   Splash: undefined;
@@ -20,6 +19,7 @@ const Stack = createNativeStackNavigator<RootStackParamList>();
 
 export function RootNavigator() {
   const { user, hydrated, hydrate } = useAuth();
+  const [introDismissed, setIntroDismissed] = useState(false);
 
   useEffect(() => {
     void hydrate();
@@ -31,7 +31,14 @@ export function RootNavigator() {
     }
   }, [user]);
 
+  // 1) Auth is still loading from storage — show splash without CTA
   if (!hydrated) return <SplashScreen />;
+
+  // 2) First-time visitor (no session) — show intro splash with "ابدأ الآن" CTA
+  //    until they tap it. Then we fall through to AuthStack.
+  if (!user && !introDismissed) {
+    return <SplashScreen onStart={() => setIntroDismissed(true)} />;
+  }
 
   return (
     <NavigationContainer>

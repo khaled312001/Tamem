@@ -19,16 +19,16 @@ export const paymentMethodSchema = z.enum([
 ]);
 
 export const orderItemInputSchema = z.object({
-  productId: z.string().uuid().optional(),
+  productId: z.string().min(1).optional(),
   productNameSnapshot: z.string().trim().min(1).max(255),
   quantity: z.number().int().positive(),
-  merchantId: z.string().uuid().optional(),
+  merchantId: z.string().min(1).optional(),
   pickupPointIndex: z.number().int().nonnegative().optional(),
   notes: z.string().max(500).optional(),
 });
 
 export const orderPickupPointInputSchema = z.object({
-  merchantId: z.string().uuid().optional(),
+  merchantId: z.string().min(1).optional(),
   label: z.string().max(120).optional(),
   address: z.string().trim().min(2).max(500),
   lat: z.number(),
@@ -56,8 +56,8 @@ export const orderDeliveryPointInputSchema = z.object({
 export const createOrderSchema = z.discriminatedUnion('category', [
   z.object({
     category: z.literal(serviceCategorySchema.enum.DELIVERY),
-    serviceId: z.string().uuid(),
-    merchantId: z.string().uuid().optional(),
+    serviceId: z.string().min(1),
+    merchantId: z.string().min(1).optional(),
     notes: z.string().max(2000).optional(),
     imageUrls: z.array(z.string().url()).max(10).optional(),
     deliveryAddress: z.string().trim().min(2).max(500),
@@ -68,7 +68,7 @@ export const createOrderSchema = z.discriminatedUnion('category', [
   }),
   z.object({
     category: z.literal(serviceCategorySchema.enum.SHIPPING),
-    serviceId: z.string().uuid(),
+    serviceId: z.string().min(1),
     pickupAddress: z.string().trim().min(2).max(500),
     pickupLat: z.number(),
     pickupLng: z.number(),
@@ -85,7 +85,7 @@ export const createOrderSchema = z.discriminatedUnion('category', [
   }),
   z.object({
     category: z.literal(serviceCategorySchema.enum.MERCHANT),
-    serviceId: z.string().uuid(),
+    serviceId: z.string().min(1),
     items: z.array(orderItemInputSchema).min(1),
     pickupPoints: z.array(orderPickupPointInputSchema).min(1).max(20),
     deliveryPoints: z.array(orderDeliveryPointInputSchema).min(1).max(20),
@@ -96,7 +96,7 @@ export const createOrderSchema = z.discriminatedUnion('category', [
 ]);
 
 export const pricingEstimateSchema = z.object({
-  serviceId: z.string().uuid(),
+  serviceId: z.string().min(1),
   pickupLat: z.number().optional(),
   pickupLng: z.number().optional(),
   deliveryLat: z.number().optional(),
@@ -113,7 +113,7 @@ export const setPriceSchema = z.object({
 });
 
 export const assignDriverSchema = z.object({
-  driverId: z.string().uuid(),
+  driverId: z.string().min(1),
 });
 
 export const cancelOrderSchema = z.object({

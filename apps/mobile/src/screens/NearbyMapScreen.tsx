@@ -116,10 +116,7 @@ const styles = StyleSheet.create({
     padding: spacing.md,
     paddingBottom: spacing.lg,
     maxHeight: '40%',
-    shadowColor: '#000',
-    shadowOpacity: 0.1,
-    shadowRadius: 16,
-    shadowOffset: { width: 0, height: -4 },
+    boxShadow: '0 -4px 16px rgba(0,0,0,0.1)',
     elevation: 6,
   },
   handle: {

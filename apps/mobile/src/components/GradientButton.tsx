@@ -73,10 +73,7 @@ export function GradientButton({
 const styles = StyleSheet.create({
   shadow: {
     borderRadius: radii.lg,
-    shadowColor: colors.brand.red,
-    shadowOpacity: 0.25,
-    shadowRadius: 12,
-    shadowOffset: { width: 0, height: 6 },
+    boxShadow: '0 6px 12px rgba(224,48,30,0.25)',
     elevation: 5,
   },
   btn: {
