@@ -15,6 +15,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { GradientHeader } from '../components/GradientHeader';
+import { QuickOrderFAB } from '../components/QuickOrderFAB';
 import { api } from '../lib/api';
 import type { HomeStackParamList } from '../navigation/HomeStack';
 import { useAuth } from '../stores/auth';
@@ -183,6 +184,8 @@ export function HomeScreen() {
           </View>
         </View>
       </ScrollView>
+
+      <QuickOrderFAB />
     </SafeAreaView>
   );
 }

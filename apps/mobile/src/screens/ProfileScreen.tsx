@@ -1,3 +1,6 @@
+import { useNavigation } from '@react-navigation/native';
+import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
+import { useQuery } from '@tanstack/react-query';
 import {
   Bell,
   ChevronLeft,
@@ -8,12 +11,17 @@ import {
   User,
   Wallet,
 } from 'lucide-react-native';
+import { useState } from 'react';
 import { Alert, Pressable, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { GradientHeader } from '../components/GradientHeader';
+import { api } from '../lib/api';
+import type { ProfileStackParamList } from '../navigation/ProfileStack';
 import { useAuth } from '../stores/auth';
 import { colors, fontFamilies, fontSizes, radii, spacing } from '../theme/tokens';
+
+type Nav = NativeStackNavigationProp<ProfileStackParamList, 'Profile'>;
 
 interface RowProps {
   label: string;
@@ -37,9 +45,23 @@ function Row({ label, Icon, onPress, trailing }: RowProps) {
   );
 }
 
+interface OrdersCountResponse {
+  total: number;
+}
+
 export function ProfileScreen() {
+  const navigation = useNavigation<Nav>();
   const user = useAuth((s) => s.user);
   const clear = useAuth((s) => s.clear);
+  const [notificationsOn, setNotificationsOn] = useState(true);
+
+  const { data: orderCount } = useQuery<OrdersCountResponse>({
+    queryKey: ['my-orders-count'],
+    queryFn: async () => {
+      const res = await api.raw.get('/orders/mine', { params: { pageSize: 1 } });
+      return { total: res.data.meta?.total ?? res.data.data?.length ?? 0 };
+    },
+  });
 
   const onLogout = () => {
     Alert.alert('تأكيد', 'هل تريد تسجيل الخروج؟', [
@@ -66,7 +88,7 @@ export function ProfileScreen() {
           </View>
           <View style={styles.statsRow}>
             <View style={styles.statItem}>
-              <Text style={styles.statValue}>0</Text>
+              <Text style={styles.statValue}>{orderCount?.total ?? 0}</Text>
               <Text style={styles.statLabel}>طلباتي</Text>
             </View>
             <View style={styles.statDivider} />
@@ -86,9 +108,21 @@ export function ProfileScreen() {
         {/* Account */}
         <Text style={styles.sectionTitle}>الحساب</Text>
         <View style={styles.group}>
-          <Row label="تعديل البيانات الشخصية" Icon={User} />
-          <Row label="عناويني المحفوظة" Icon={MapPin} />
-          <Row label="طرق الدفع" Icon={Wallet} />
+          <Row
+            label="تعديل البيانات الشخصية"
+            Icon={User}
+            onPress={() => navigation.navigate('EditProfile')}
+          />
+          <Row
+            label="عناويني المحفوظة"
+            Icon={MapPin}
+            onPress={() => navigation.navigate('SavedAddresses')}
+          />
+          <Row
+            label="طرق الدفع"
+            Icon={Wallet}
+            onPress={() => navigation.navigate('PaymentMethods')}
+          />
         </View>
 
         {/* Preferences */}
@@ -101,11 +135,16 @@ export function ProfileScreen() {
               <Switch
                 trackColor={{ false: colors.line2, true: colors.brand.red }}
                 thumbColor={colors.white}
-                value
+                value={notificationsOn}
+                onValueChange={setNotificationsOn}
               />
             }
           />
-          <Row label="الدعم والمساعدة" Icon={HeadphonesIcon} />
+          <Row
+            label="الدعم والمساعدة"
+            Icon={HeadphonesIcon}
+            onPress={() => navigation.navigate('Support')}
+          />
         </View>
 
         {/* Logout */}

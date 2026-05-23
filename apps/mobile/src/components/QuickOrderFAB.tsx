@@ -5,7 +5,9 @@ import { Animated, Platform, Pressable, StyleSheet, View } from 'react-native';
 
 import { QuickOrderSheet } from './QuickOrderSheet';
 
-import { colors, gradients } from '../theme/tokens';
+import { colors, gradients, spacing } from '../theme/tokens';
+
+const spacingMd = spacing.md;
 
 /**
  * Floating Action Button — visible on every screen (HomeStack root level).
@@ -81,16 +83,14 @@ export function QuickOrderFAB() {
 const styles = StyleSheet.create({
   layer: {
     position: 'absolute',
-    bottom: 80, // sits above the bottom tab bar (height ~64)
-    left: 0,
-    right: 0,
-    alignItems: 'center',
+    bottom: 24,
+    insetInlineStart: spacingMd, // RTL-aware: hugs the right side in Arabic
     zIndex: 50,
   },
   fabWrap: {
-    width: 64,
-    height: 64,
-    borderRadius: 32,
+    width: 60,
+    height: 60,
+    borderRadius: 30,
     ...(Platform.OS === 'web'
       ? { boxShadow: '0 8px 24px rgba(224,48,30,0.45)' }
       : { elevation: 12 }),

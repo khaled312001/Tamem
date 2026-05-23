@@ -14,6 +14,7 @@ interface AuthState {
   hydrated: boolean;
   setSession: (user: User, tokens: AuthTokens) => Promise<void>;
   setTokens: (tokens: AuthTokens) => Promise<void>;
+  setUser: (user: User) => Promise<void>;
   clear: () => Promise<void>;
   hydrate: () => Promise<void>;
 }
@@ -38,6 +39,11 @@ export const useAuth = create<AuthState>((set) => ({
       secureStorage.setItem(REFRESH_KEY, tokens.refreshToken),
     ]);
     set({ tokens });
+  },
+
+  setUser: async (user) => {
+    await secureStorage.setItem(USER_KEY, JSON.stringify(user));
+    set({ user });
   },
 
   clear: async () => {
