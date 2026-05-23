@@ -1,10 +1,10 @@
 import { createServer } from 'http';
 
-import { Server as SocketServer } from 'socket.io';
-
 import { createApp } from './app.js';
-import { corsOrigins, env } from './config/env.js';
+import { env } from './config/env.js';
 import { prisma } from './db/prisma.js';
+import { startAlertsCron } from './jobs/alerts.js';
+import { bootstrapWs } from './realtime/ws.js';
 import { logger } from './utils/logger.js';
 
 async function main() {
@@ -14,17 +14,10 @@ async function main() {
   const app = createApp();
   const httpServer = createServer(app);
 
-  const io = new SocketServer(httpServer, {
-    cors: { origin: corsOrigins, credentials: true },
-  });
-
-  io.on('connection', (socket) => {
-    logger.debug({ id: socket.id }, 'socket connected');
-    socket.on('disconnect', () => logger.debug({ id: socket.id }, 'socket disconnected'));
-  });
-
-  // expose io to controllers via app locals if needed
+  const io = bootstrapWs(httpServer);
   app.locals.io = io;
+
+  startAlertsCron(io);
 
   httpServer.listen(env.PORT, () => {
     logger.info(`🚀 Tamem API listening on http://localhost:${env.PORT}`);
