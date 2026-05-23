@@ -26,6 +26,11 @@ export class TamemApiError extends Error {
   }
 }
 
+export interface Paginated<T> {
+  items: T[];
+  pagination: { page: number; pageSize: number; total: number; totalPages: number };
+}
+
 export class TamemClient {
   private readonly http: AxiosInstance;
   private readonly config: TamemClientConfig;
@@ -85,6 +90,14 @@ export class TamemClient {
     return res.data.data;
   }
 
+  private async requestPaginated<T>(config: AxiosRequestConfig): Promise<Paginated<T>> {
+    const res = await this.http.request<{
+      data: T[];
+      meta: { pagination: { page: number; pageSize: number; total: number; totalPages: number } };
+    }>(config);
+    return { items: res.data.data, pagination: res.data.meta.pagination };
+  }
+
   // ===== Auth =====
   async login(phone: string, password: string): Promise<{ user: User; tokens: AuthTokens }> {
     return this.request({ method: 'POST', url: '/auth/login', data: { phone, password } });
@@ -94,11 +107,15 @@ export class TamemClient {
     return this.request({ method: 'POST', url: '/auth/refresh', data: { refreshToken } });
   }
 
+  async logout(refreshToken: string): Promise<void> {
+    await this.http.request({ method: 'POST', url: '/auth/logout', data: { refreshToken } });
+  }
+
   async me(): Promise<User> {
     return this.request({ method: 'GET', url: '/me' });
   }
 
-  // ===== Services =====
+  // ===== Services (public) =====
   async listServices(): Promise<Service[]> {
     return this.request({ method: 'GET', url: '/services' });
   }
@@ -107,7 +124,17 @@ export class TamemClient {
     return this.request({ method: 'GET', url: `/services/${id}` });
   }
 
-  // ===== Orders =====
+  // ===== Categories (public) =====
+  async listCategories(): Promise<unknown[]> {
+    return this.request({ method: 'GET', url: '/categories' });
+  }
+
+  // ===== Merchants (public) =====
+  async listMerchants(params?: Record<string, unknown>): Promise<unknown[]> {
+    return this.request({ method: 'GET', url: '/merchants', params });
+  }
+
+  // ===== Customer Orders =====
   async listMyOrders(params?: { status?: string; page?: number }): Promise<Order[]> {
     return this.request({ method: 'GET', url: '/orders/mine', params });
   }
@@ -120,18 +147,33 @@ export class TamemClient {
     return this.request({ method: 'POST', url: '/orders', data: payload });
   }
 
-  // ===== Admin =====
-  async adminListOrders(
-    params?: Record<string, unknown>,
-  ): Promise<{ orders: Order[]; total: number }> {
-    return this.request({ method: 'GET', url: '/admin/orders', params });
+  // ===== Admin Overview =====
+  async adminOverview(range: 'today' | 'week' | 'month' = 'week'): Promise<unknown> {
+    return this.request({ method: 'GET', url: '/admin/overview', params: { range } });
   }
 
-  async adminSetPrice(orderId: string, quotedPrice: number): Promise<Order> {
+  // ===== Admin Orders =====
+  async adminListOrders(params?: Record<string, unknown>): Promise<Paginated<Order>> {
+    return this.requestPaginated({ method: 'GET', url: '/admin/orders', params });
+  }
+
+  async adminGetOrder(id: string): Promise<Order> {
+    return this.request({ method: 'GET', url: `/admin/orders/${id}` });
+  }
+
+  async adminUpdateOrderStatus(id: string, status: string, reason?: string): Promise<Order> {
+    return this.request({
+      method: 'PATCH',
+      url: `/admin/orders/${id}/status`,
+      data: { status, reason },
+    });
+  }
+
+  async adminSetPrice(orderId: string, quotedPrice: number, note?: string): Promise<Order> {
     return this.request({
       method: 'PATCH',
       url: `/admin/orders/${orderId}/price`,
-      data: { quotedPrice },
+      data: { quotedPrice, note },
     });
   }
 
@@ -141,6 +183,235 @@ export class TamemClient {
       url: `/admin/orders/${orderId}/assign-driver`,
       data: { driverId },
     });
+  }
+
+  async adminAddOrderNote(orderId: string, note: string): Promise<unknown> {
+    return this.request({
+      method: 'POST',
+      url: `/admin/orders/${orderId}/note`,
+      data: { note },
+    });
+  }
+
+  async adminCancelOrder(orderId: string, reason: string): Promise<Order> {
+    return this.request({
+      method: 'POST',
+      url: `/admin/orders/${orderId}/cancel`,
+      data: { reason },
+    });
+  }
+
+  // ===== Admin Services =====
+  async adminListServices(): Promise<unknown[]> {
+    return this.request({ method: 'GET', url: '/admin/services' });
+  }
+  async adminCreateService(data: unknown): Promise<unknown> {
+    return this.request({ method: 'POST', url: '/admin/services', data });
+  }
+  async adminUpdateService(id: string, data: unknown): Promise<unknown> {
+    return this.request({ method: 'PATCH', url: `/admin/services/${id}`, data });
+  }
+  async adminDeleteService(id: string): Promise<void> {
+    await this.http.request({
+      method: 'DELETE',
+      url: `/admin/services/${id}`,
+    });
+  }
+  async adminDuplicateService(id: string): Promise<unknown> {
+    return this.request({ method: 'POST', url: `/admin/services/${id}/duplicate` });
+  }
+  async adminAddServiceField(id: string, data: unknown): Promise<unknown> {
+    return this.request({ method: 'POST', url: `/admin/services/${id}/fields`, data });
+  }
+  async adminUpdateServiceField(id: string, fieldId: string, data: unknown): Promise<unknown> {
+    return this.request({
+      method: 'PATCH',
+      url: `/admin/services/${id}/fields/${fieldId}`,
+      data,
+    });
+  }
+  async adminDeleteServiceField(id: string, fieldId: string): Promise<void> {
+    await this.http.request({
+      method: 'DELETE',
+      url: `/admin/services/${id}/fields/${fieldId}`,
+    });
+  }
+  async adminReorderServiceFields(id: string, fieldIds: string[]): Promise<unknown> {
+    return this.request({
+      method: 'PATCH',
+      url: `/admin/services/${id}/fields/reorder`,
+      data: { fieldIds },
+    });
+  }
+
+  // ===== Admin Drivers =====
+  async adminListDrivers(params?: Record<string, unknown>): Promise<Paginated<unknown>> {
+    return this.requestPaginated({ method: 'GET', url: '/admin/drivers', params });
+  }
+  async adminCreateDriver(data: unknown): Promise<unknown> {
+    return this.request({ method: 'POST', url: '/admin/drivers', data });
+  }
+  async adminUpdateDriver(id: string, data: unknown): Promise<unknown> {
+    return this.request({ method: 'PATCH', url: `/admin/drivers/${id}`, data });
+  }
+  async adminUpdateDriverStatus(
+    id: string,
+    status: 'AVAILABLE' | 'BUSY' | 'OFFLINE',
+  ): Promise<unknown> {
+    return this.request({
+      method: 'PATCH',
+      url: `/admin/drivers/${id}/status`,
+      data: { status },
+    });
+  }
+  async adminDeleteDriver(id: string): Promise<void> {
+    await this.http.request({ method: 'DELETE', url: `/admin/drivers/${id}` });
+  }
+
+  // ===== Admin Merchants =====
+  async adminListMerchants(params?: Record<string, unknown>): Promise<Paginated<unknown>> {
+    return this.requestPaginated({ method: 'GET', url: '/admin/merchants', params });
+  }
+  async adminCreateMerchant(data: unknown): Promise<unknown> {
+    return this.request({ method: 'POST', url: '/admin/merchants', data });
+  }
+  async adminUpdateMerchant(id: string, data: unknown): Promise<unknown> {
+    return this.request({ method: 'PATCH', url: `/admin/merchants/${id}`, data });
+  }
+  async adminDeleteMerchant(id: string): Promise<void> {
+    await this.http.request({ method: 'DELETE', url: `/admin/merchants/${id}` });
+  }
+
+  // ===== Admin Customers =====
+  async adminListCustomers(params?: Record<string, unknown>): Promise<Paginated<unknown>> {
+    return this.requestPaginated({ method: 'GET', url: '/admin/customers', params });
+  }
+  async adminGetCustomer(id: string): Promise<unknown> {
+    return this.request({ method: 'GET', url: `/admin/customers/${id}` });
+  }
+
+  // ===== Admin Products =====
+  async adminListProducts(params?: Record<string, unknown>): Promise<Paginated<unknown>> {
+    return this.requestPaginated({ method: 'GET', url: '/admin/products', params });
+  }
+  async adminCreateProduct(data: unknown): Promise<unknown> {
+    return this.request({ method: 'POST', url: '/admin/products', data });
+  }
+  async adminUpdateProduct(id: string, data: unknown): Promise<unknown> {
+    return this.request({ method: 'PATCH', url: `/admin/products/${id}`, data });
+  }
+  async adminDeleteProduct(id: string): Promise<void> {
+    await this.http.request({ method: 'DELETE', url: `/admin/products/${id}` });
+  }
+  async adminBulkProductAvailability(ids: string[], isAvailable: boolean): Promise<unknown> {
+    return this.request({
+      method: 'POST',
+      url: '/admin/products/bulk-availability',
+      data: { ids, isAvailable },
+    });
+  }
+
+  // ===== Admin Pricing Rules =====
+  async adminListPricingRules(params?: Record<string, unknown>): Promise<unknown[]> {
+    return this.request({ method: 'GET', url: '/admin/pricing-rules', params });
+  }
+  async adminCreatePricingRule(data: unknown): Promise<unknown> {
+    return this.request({ method: 'POST', url: '/admin/pricing-rules', data });
+  }
+  async adminUpdatePricingRule(id: string, data: unknown): Promise<unknown> {
+    return this.request({ method: 'PATCH', url: `/admin/pricing-rules/${id}`, data });
+  }
+  async adminDeletePricingRule(id: string): Promise<void> {
+    await this.http.request({ method: 'DELETE', url: `/admin/pricing-rules/${id}` });
+  }
+
+  // ===== Admin Payments =====
+  async adminListPayments(params?: Record<string, unknown>): Promise<Paginated<unknown>> {
+    return this.requestPaginated({ method: 'GET', url: '/admin/payments', params });
+  }
+  async adminConfirmPayment(id: string): Promise<unknown> {
+    return this.request({ method: 'PATCH', url: `/admin/payments/${id}/confirm` });
+  }
+  async adminRejectPayment(id: string, reason: string): Promise<unknown> {
+    return this.request({
+      method: 'PATCH',
+      url: `/admin/payments/${id}/reject`,
+      data: { reason },
+    });
+  }
+
+  // ===== Admin Alerts =====
+  async adminListAlerts(params?: Record<string, unknown>): Promise<unknown> {
+    return this.request({ method: 'GET', url: '/admin/alerts', params });
+  }
+  async adminResolveAlert(id: string, note: string): Promise<unknown> {
+    return this.request({
+      method: 'PATCH',
+      url: `/admin/alerts/${id}/resolve`,
+      data: { note },
+    });
+  }
+
+  // ===== Admin Reports =====
+  async adminReportRevenue(params?: Record<string, unknown>): Promise<unknown> {
+    return this.request({ method: 'GET', url: '/admin/reports/revenue', params });
+  }
+  async adminReportServices(): Promise<unknown[]> {
+    return this.request({ method: 'GET', url: '/admin/reports/services' });
+  }
+  async adminReportDrivers(): Promise<unknown[]> {
+    return this.request({ method: 'GET', url: '/admin/reports/drivers' });
+  }
+  async adminReportCustomers(): Promise<unknown[]> {
+    return this.request({ method: 'GET', url: '/admin/reports/customers' });
+  }
+
+  // ===== Admin Settings =====
+  async adminListSettings(): Promise<unknown[]> {
+    return this.request({ method: 'GET', url: '/admin/settings' });
+  }
+  async adminGetSetting(key: string): Promise<unknown> {
+    return this.request({ method: 'GET', url: `/admin/settings/${key}` });
+  }
+  async adminUpsertSetting(key: string, value: unknown, description?: string): Promise<unknown> {
+    return this.request({
+      method: 'PUT',
+      url: `/admin/settings/${key}`,
+      data: { value, description },
+    });
+  }
+  async adminBulkUpsertSettings(
+    items: Array<{ key: string; value: unknown; description?: string }>,
+  ): Promise<unknown> {
+    return this.request({ method: 'POST', url: '/admin/settings/bulk', data: { items } });
+  }
+
+  // ===== Admin Categories =====
+  async adminListCategories(): Promise<unknown[]> {
+    return this.request({ method: 'GET', url: '/admin/categories' });
+  }
+  async adminCreateCategory(data: unknown): Promise<unknown> {
+    return this.request({ method: 'POST', url: '/admin/categories', data });
+  }
+  async adminUpdateCategory(id: string, data: unknown): Promise<unknown> {
+    return this.request({ method: 'PATCH', url: `/admin/categories/${id}`, data });
+  }
+  async adminDeleteCategory(id: string): Promise<void> {
+    await this.http.request({ method: 'DELETE', url: `/admin/categories/${id}` });
+  }
+
+  // ===== Admin Offers =====
+  async adminListOffers(): Promise<unknown[]> {
+    return this.request({ method: 'GET', url: '/admin/offers' });
+  }
+  async adminCreateOffer(data: unknown): Promise<unknown> {
+    return this.request({ method: 'POST', url: '/admin/offers', data });
+  }
+  async adminUpdateOffer(id: string, data: unknown): Promise<unknown> {
+    return this.request({ method: 'PATCH', url: `/admin/offers/${id}`, data });
+  }
+  async adminDeleteOffer(id: string): Promise<void> {
+    await this.http.request({ method: 'DELETE', url: `/admin/offers/${id}` });
   }
 
   // Raw escape hatch
