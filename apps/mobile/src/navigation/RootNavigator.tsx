@@ -2,6 +2,7 @@ import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { useEffect } from 'react';
 
+import { registerForPushNotifications } from '../lib/push';
 import { SplashScreen } from '../screens/SplashScreen';
 
 import { AppTabs } from './AppTabs';
@@ -23,6 +24,12 @@ export function RootNavigator() {
   useEffect(() => {
     void hydrate();
   }, [hydrate]);
+
+  useEffect(() => {
+    if (user) {
+      void registerForPushNotifications();
+    }
+  }, [user]);
 
   if (!hydrated) return <SplashScreen />;
 
