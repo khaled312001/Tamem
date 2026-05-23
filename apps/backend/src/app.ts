@@ -14,7 +14,9 @@ import {
   merchantsRouter,
   offersRouter,
 } from './modules/catalog/catalog.routes.js';
+import { ordersRouter, pricingRouter } from './modules/orders/orders.routes.js';
 import { adminServicesRouter, publicServicesRouter } from './modules/services/services.routes.js';
+import { uploadsRouter } from './modules/uploads/uploads.routes.js';
 import { meRouter } from './modules/users/users.routes.js';
 import { logger } from './utils/logger.js';
 import { ok } from './utils/response.js';
@@ -44,6 +46,9 @@ export function createApp(): Express {
     }),
   );
 
+  // ----- static uploads -----
+  app.use('/uploads', express.static(env.UPLOAD_DIR));
+
   // ----- health & info -----
   app.get('/health', (_req, res) => ok(res, { status: 'ok', env: env.NODE_ENV, ts: Date.now() }));
   app.get('/', (_req, res) =>
@@ -59,6 +64,9 @@ export function createApp(): Express {
   v1.use('/merchants', merchantsRouter);
   v1.use('/offers', offersRouter);
   v1.use('/me', meRouter);
+  v1.use('/orders', ordersRouter);
+  v1.use('/pricing', pricingRouter);
+  v1.use('/uploads', uploadsRouter);
 
   // ----- Admin namespace -----
   const adminRouter = express.Router();

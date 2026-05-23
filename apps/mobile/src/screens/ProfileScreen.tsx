@@ -1,54 +1,223 @@
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import {
+  Bell,
+  ChevronLeft,
+  HeadphonesIcon,
+  LogOut,
+  MapPin,
+  Star,
+  User,
+  Wallet,
+} from 'lucide-react-native';
+import { Alert, Pressable, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { GradientHeader } from '../components/GradientHeader';
 import { useAuth } from '../stores/auth';
-import { colors, fontFamilies, radii, spacing } from '../theme/tokens';
+import { colors, fontFamilies, fontSizes, radii, spacing } from '../theme/tokens';
+
+interface RowProps {
+  label: string;
+  Icon: typeof User;
+  onPress?: () => void;
+  trailing?: React.ReactNode;
+}
+
+function Row({ label, Icon, onPress, trailing }: RowProps) {
+  return (
+    <Pressable
+      onPress={onPress}
+      style={({ pressed }) => [styles.row, pressed && { opacity: 0.85 }]}
+    >
+      <View style={styles.rowIcon}>
+        <Icon size={18} color={colors.brand.red} />
+      </View>
+      <Text style={styles.rowLabel}>{label}</Text>
+      {trailing ?? <ChevronLeft size={16} color={colors.text.muted} />}
+    </Pressable>
+  );
+}
 
 export function ProfileScreen() {
   const user = useAuth((s) => s.user);
   const clear = useAuth((s) => s.clear);
 
+  const onLogout = () => {
+    Alert.alert('تأكيد', 'هل تريد تسجيل الخروج؟', [
+      { text: 'إلغاء', style: 'cancel' },
+      { text: 'خروج', style: 'destructive', onPress: () => void clear() },
+    ]);
+  };
+
   return (
-    <SafeAreaView style={styles.container}>
-      <View style={styles.content}>
-        <Text style={styles.title}>حسابي</Text>
-        {user && (
-          <View style={styles.card}>
-            <Text style={styles.name}>{user.name}</Text>
-            <Text style={styles.phone}>{user.phone}</Text>
+    <SafeAreaView edges={['top']} style={styles.container}>
+      <GradientHeader greeting="حسابي" location={user?.phone ?? ''} />
+
+      <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
+        {/* Profile card */}
+        <View style={styles.profileCard}>
+          <View style={styles.avatar}>
+            <Text style={styles.avatarText}>{user?.name?.charAt(0).toUpperCase() ?? 'ت'}</Text>
           </View>
-        )}
-        <Pressable onPress={() => void clear()} style={styles.logoutBtn}>
+          <Text style={styles.userName}>{user?.name ?? 'مستخدم'}</Text>
+          <View style={styles.badgeRow}>
+            <View style={styles.badge}>
+              <Text style={styles.badgeText}>عميل مميز</Text>
+            </View>
+          </View>
+          <View style={styles.statsRow}>
+            <View style={styles.statItem}>
+              <Text style={styles.statValue}>0</Text>
+              <Text style={styles.statLabel}>طلباتي</Text>
+            </View>
+            <View style={styles.statDivider} />
+            <View style={styles.statItem}>
+              <Star size={14} color={colors.brand.gold} fill={colors.brand.gold} />
+              <Text style={styles.statValue}>5.0</Text>
+              <Text style={styles.statLabel}>التقييم</Text>
+            </View>
+            <View style={styles.statDivider} />
+            <View style={styles.statItem}>
+              <Text style={styles.statValue}>1</Text>
+              <Text style={styles.statLabel}>عناوين</Text>
+            </View>
+          </View>
+        </View>
+
+        {/* Account */}
+        <Text style={styles.sectionTitle}>الحساب</Text>
+        <View style={styles.group}>
+          <Row label="تعديل البيانات الشخصية" Icon={User} />
+          <Row label="عناويني المحفوظة" Icon={MapPin} />
+          <Row label="طرق الدفع" Icon={Wallet} />
+        </View>
+
+        {/* Preferences */}
+        <Text style={styles.sectionTitle}>الإعدادات</Text>
+        <View style={styles.group}>
+          <Row
+            label="الإشعارات"
+            Icon={Bell}
+            trailing={
+              <Switch
+                trackColor={{ false: colors.line2, true: colors.brand.red }}
+                thumbColor={colors.white}
+                value
+              />
+            }
+          />
+          <Row label="الدعم والمساعدة" Icon={HeadphonesIcon} />
+        </View>
+
+        {/* Logout */}
+        <Pressable
+          onPress={onLogout}
+          style={({ pressed }) => [styles.logoutBtn, pressed && { opacity: 0.85 }]}
+        >
+          <LogOut size={18} color={colors.brand.red} />
           <Text style={styles.logoutText}>تسجيل الخروج</Text>
         </Pressable>
-      </View>
+      </ScrollView>
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.surface },
-  content: { flex: 1, padding: spacing.xl },
-  title: {
-    fontSize: 24,
-    fontFamily: fontFamilies.heading,
-    fontWeight: '900',
-    marginBottom: spacing.xl,
-  },
-  card: {
+  scroll: { padding: spacing.lg, paddingBottom: spacing.xl },
+  profileCard: {
     backgroundColor: colors.white,
-    borderRadius: radii.lg,
+    borderRadius: radii.xl,
     padding: spacing.lg,
-    marginBottom: spacing.xl,
-  },
-  name: { fontSize: 18, fontWeight: '900', marginBottom: spacing.xs },
-  phone: { fontSize: 14, color: colors.text.muted },
-  logoutBtn: {
-    padding: spacing.md,
-    borderRadius: radii.md,
-    borderWidth: 1,
-    borderColor: colors.brand.red,
     alignItems: 'center',
+    borderColor: colors.line,
+    borderWidth: 1,
+    marginBottom: spacing.lg,
   },
-  logoutText: { color: colors.brand.red, fontWeight: '700' },
+  avatar: {
+    width: 76,
+    height: 76,
+    borderRadius: 38,
+    backgroundColor: colors.brand.red,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: spacing.sm,
+  },
+  avatarText: {
+    color: colors.white,
+    fontSize: 30,
+    fontFamily: fontFamilies.headingBlack,
+  },
+  userName: { fontSize: fontSizes.lg, fontFamily: fontFamilies.headingBlack, color: colors.ink },
+  badgeRow: { marginTop: spacing.xs, marginBottom: spacing.md },
+  badge: {
+    backgroundColor: colors.brand.gold + '30',
+    paddingHorizontal: spacing.md,
+    paddingVertical: 4,
+    borderRadius: radii.pill,
+  },
+  badgeText: { color: '#9A6B16', fontSize: fontSizes.xs, fontFamily: fontFamilies.bodyExtraBold },
+  statsRow: {
+    flexDirection: 'row',
+    width: '100%',
+    paddingTop: spacing.md,
+    borderTopWidth: 1,
+    borderTopColor: colors.line,
+  },
+  statItem: { flex: 1, alignItems: 'center', gap: 2 },
+  statValue: { fontSize: fontSizes.lg, fontFamily: fontFamilies.headingBlack, color: colors.ink },
+  statLabel: { fontSize: fontSizes.xs, color: colors.text.muted, fontFamily: fontFamilies.body },
+  statDivider: { width: 1, backgroundColor: colors.line },
+  sectionTitle: {
+    fontSize: fontSizes.sm,
+    fontFamily: fontFamilies.headingBlack,
+    color: colors.text.secondary,
+    marginBottom: spacing.sm,
+    marginTop: spacing.md,
+  },
+  group: {
+    backgroundColor: colors.white,
+    borderColor: colors.line,
+    borderWidth: 1,
+    borderRadius: radii.lg,
+    overflow: 'hidden',
+  },
+  row: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
+    padding: spacing.md,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.line,
+  },
+  rowIcon: {
+    width: 36,
+    height: 36,
+    borderRadius: radii.md,
+    backgroundColor: colors.soft,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  rowLabel: {
+    flex: 1,
+    fontSize: fontSizes.sm,
+    fontFamily: fontFamilies.bodyBold,
+    color: colors.ink,
+  },
+  logoutBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing.sm,
+    backgroundColor: colors.white,
+    borderColor: colors.brand.red,
+    borderWidth: 1,
+    borderRadius: radii.lg,
+    padding: spacing.md,
+    marginTop: spacing.xl,
+  },
+  logoutText: {
+    color: colors.brand.red,
+    fontFamily: fontFamilies.bodyExtraBold,
+    fontSize: fontSizes.sm,
+  },
 });

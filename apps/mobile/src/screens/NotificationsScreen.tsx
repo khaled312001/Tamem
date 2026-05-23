@@ -1,13 +1,21 @@
+import { Bell } from 'lucide-react-native';
 import { StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { colors, fontFamilies, spacing } from '../theme/tokens';
+import { GradientHeader } from '../components/GradientHeader';
+import { colors, fontFamilies, fontSizes, spacing } from '../theme/tokens';
 
 export function NotificationsScreen() {
   return (
-    <SafeAreaView style={styles.container}>
-      <View style={styles.content}>
-        <Text style={styles.title}>الإشعارات</Text>
+    <SafeAreaView edges={['top']} style={styles.container}>
+      <GradientHeader greeting="الإشعارات" location="تنبيهات طلباتك والعروض" />
+
+      <View style={styles.empty}>
+        <Bell size={48} color={colors.text.muted} />
+        <Text style={styles.emptyTitle}>لا توجد إشعارات بعد</Text>
+        <Text style={styles.emptySub}>
+          ستظهر هنا تنبيهات الطلبات الجديدة، تحديثات الحالة، والعروض.
+        </Text>
       </View>
     </SafeAreaView>
   );
@@ -15,6 +23,19 @@ export function NotificationsScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.surface },
-  content: { flex: 1, padding: spacing.xl, alignItems: 'center', justifyContent: 'center' },
-  title: { fontSize: 24, fontFamily: fontFamilies.heading, fontWeight: '900' },
+  empty: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: spacing.xl,
+    gap: spacing.md,
+  },
+  emptyTitle: { fontSize: fontSizes.md, fontFamily: fontFamilies.bodyExtraBold, color: colors.ink },
+  emptySub: {
+    fontSize: fontSizes.sm,
+    color: colors.text.muted,
+    fontFamily: fontFamilies.body,
+    textAlign: 'center',
+    lineHeight: 22,
+  },
 });

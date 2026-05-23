@@ -1,15 +1,16 @@
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
-import { Text } from 'react-native';
+import { Bell, Home, Package, User } from 'lucide-react-native';
 
-import { HomeScreen } from '../screens/HomeScreen';
-import { OrdersScreen } from '../screens/OrdersScreen';
 import { NotificationsScreen } from '../screens/NotificationsScreen';
+import { OrdersScreen } from '../screens/OrdersScreen';
 import { ProfileScreen } from '../screens/ProfileScreen';
 
-import { colors } from '../theme/tokens';
+import { HomeStack } from './HomeStack';
+
+import { colors, fontFamilies, fontSizes } from '../theme/tokens';
 
 export type AppTabsParamList = {
-  Home: undefined;
+  HomeTab: undefined;
   Orders: undefined;
   Notifications: undefined;
   Profile: undefined;
@@ -24,28 +25,50 @@ export function AppTabs() {
         headerShown: false,
         tabBarActiveTintColor: colors.brand.red,
         tabBarInactiveTintColor: colors.text.muted,
-        tabBarStyle: { borderTopColor: colors.border, height: 60, paddingBottom: 8 },
+        tabBarStyle: {
+          borderTopColor: colors.line,
+          backgroundColor: colors.white,
+          height: 64,
+          paddingBottom: 10,
+          paddingTop: 8,
+        },
+        tabBarLabelStyle: {
+          fontFamily: fontFamilies.bodyBold,
+          fontSize: fontSizes.xs,
+        },
       }}
     >
       <Tabs.Screen
-        name="Home"
-        component={HomeScreen}
-        options={{ title: 'الرئيسية', tabBarIcon: () => <Text>🏠</Text> }}
+        name="HomeTab"
+        component={HomeStack}
+        options={{
+          title: 'الرئيسية',
+          tabBarIcon: ({ color, size }) => <Home size={size} color={color} />,
+        }}
       />
       <Tabs.Screen
         name="Orders"
         component={OrdersScreen}
-        options={{ title: 'طلباتي', tabBarIcon: () => <Text>📦</Text> }}
+        options={{
+          title: 'طلباتي',
+          tabBarIcon: ({ color, size }) => <Package size={size} color={color} />,
+        }}
       />
       <Tabs.Screen
         name="Notifications"
         component={NotificationsScreen}
-        options={{ title: 'الإشعارات', tabBarIcon: () => <Text>🔔</Text> }}
+        options={{
+          title: 'الإشعارات',
+          tabBarIcon: ({ color, size }) => <Bell size={size} color={color} />,
+        }}
       />
       <Tabs.Screen
         name="Profile"
         component={ProfileScreen}
-        options={{ title: 'حسابي', tabBarIcon: () => <Text>👤</Text> }}
+        options={{
+          title: 'حسابي',
+          tabBarIcon: ({ color, size }) => <User size={size} color={color} />,
+        }}
       />
     </Tabs.Navigator>
   );
