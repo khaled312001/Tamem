@@ -1,8 +1,16 @@
-import { useNavigation, useRoute, type RouteProp } from '@react-navigation/native';
+import { useRoute, type RouteProp } from '@react-navigation/native';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Linking, Phone } from 'lucide-react-native';
+import { Phone } from 'lucide-react-native';
 import { useEffect } from 'react';
-import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import {
+  ActivityIndicator,
+  Linking,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
+} from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { ORDER_STATUS_AR, type OrderStatus } from '@tamem/types';
@@ -42,7 +50,6 @@ interface OrderDetail {
 
 export function OrderTrackingScreen() {
   const route = useRoute<Route>();
-  const navigation = useNavigation();
   const qc = useQueryClient();
   const { orderId } = route.params;
 
@@ -184,9 +191,6 @@ export function OrderTrackingScreen() {
 
         <View style={{ height: spacing.xl }} />
       </ScrollView>
-
-      {/* hidden navigation hook to silence lint for unused import */}
-      {false && <Text>{String(navigation === undefined)}</Text>}
     </SafeAreaView>
   );
 }

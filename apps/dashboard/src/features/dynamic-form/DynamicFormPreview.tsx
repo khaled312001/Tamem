@@ -95,7 +95,7 @@ function FieldInput({ field }: { field: PreviewField }) {
     case 'IMAGE':
       return (
         <div className="p-4 border-2 border-dashed border-border rounded-lg text-center text-xs text-muted-foreground">
-          📷 رفع صورة (حتى {field.validation?.maxImages ?? 5})
+          📷 رفع صورة (حتى {(field.validation?.maxImages as number | undefined) ?? 5})
         </div>
       );
     case 'LOCATION':

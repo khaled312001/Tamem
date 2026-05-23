@@ -42,7 +42,15 @@ export const adminList: RequestHandler = async (req, res, next) => {
   try {
     const q = listQuerySchema.parse(req.query);
     const where: Record<string, unknown> = {};
-    if (q.status) where.status = q.status as OrderStatus;
+    if (q.status) {
+      // Accept either a single status or a comma-separated list (used by tabs that
+      // group multiple statuses, e.g. "PRICED,AWAITING_CUSTOMER_APPROVAL").
+      const list = q.status
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean);
+      where.status = list.length === 1 ? (list[0] as OrderStatus) : { in: list as OrderStatus[] };
+    }
     if (q.category) where.category = q.category;
     if (q.customerId) where.customerId = q.customerId;
     if (q.driverId) where.assignedDriverId = q.driverId;

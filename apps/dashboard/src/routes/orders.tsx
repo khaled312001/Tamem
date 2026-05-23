@@ -43,7 +43,7 @@ export function OrdersPage() {
 
   const params = useMemo(() => {
     const p: Record<string, unknown> = { page, pageSize };
-    if (statusFilter) p.status = statusFilter.split(',')[0]; // simple version — single status filter
+    if (statusFilter) p.status = statusFilter; // backend accepts CSV for grouped tabs
     if (debouncedSearch) p.search = debouncedSearch;
     return p;
   }, [page, pageSize, statusFilter, debouncedSearch]);

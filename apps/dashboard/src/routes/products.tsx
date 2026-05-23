@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Box, Plus, Trash2 } from 'lucide-react';
+import { Box, Plus } from 'lucide-react';
 import { useState } from 'react';
 import { toast } from 'sonner';
 

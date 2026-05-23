@@ -52,6 +52,21 @@ export const adminList: RequestHandler = async (_req, res, next) => {
   }
 };
 
+// Admin-only single fetch — unlike the public GET, this returns inactive
+// services too (the Service Builder must be able to edit them).
+export const adminGet: RequestHandler = async (req, res, next) => {
+  try {
+    const service = await prisma.service.findUnique({
+      where: { id: param(req.params.id) },
+      include: { fields: { orderBy: { sortOrder: 'asc' } } },
+    });
+    if (!service) throw new NotFoundError('Service', 'الخدمة غير موجودة');
+    ok(res, service);
+  } catch (err) {
+    next(err);
+  }
+};
+
 export const adminCreate: RequestHandler = async (req, res, next) => {
   try {
     const input = serviceInputSchema.parse(req.body);
