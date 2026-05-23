@@ -1,6 +1,7 @@
 // Learn more https://docs.expo.dev/guides/monorepos/
 const { getDefaultConfig } = require('expo/metro-config');
 const path = require('path');
+const fs = require('fs');
 
 const projectRoot = __dirname;
 const monorepoRoot = path.resolve(projectRoot, '../..');
@@ -18,5 +19,27 @@ config.resolver.nodeModulesPaths = [
 
 // Force Metro to pick the first node_modules instance it finds for each package
 config.resolver.disableHierarchicalLookup = true;
+
+// Strip the `.js` suffix when @tamem/* packages import sibling modules with the ESM
+// extension (`./foo.js`) — Metro should resolve to the TypeScript source instead.
+const originalResolver = config.resolver.resolveRequest;
+config.resolver.resolveRequest = (context, moduleName, platform) => {
+  // Only intervene for relative imports ending in `.js`
+  if ((moduleName.startsWith('./') || moduleName.startsWith('../')) && moduleName.endsWith('.js')) {
+    const candidates = [moduleName.replace(/\.js$/, '.ts'), moduleName.replace(/\.js$/, '.tsx')];
+    for (const candidate of candidates) {
+      try {
+        const resolved = (originalResolver ?? context.resolveRequest)(context, candidate, platform);
+        return resolved;
+      } catch {
+        // fall through to next candidate
+      }
+    }
+  }
+  return (originalResolver ?? context.resolveRequest)(context, moduleName, platform);
+};
+
+// Keep this last so `fs` reference doesn't get tree-shaken / linted out
+void fs;
 
 module.exports = config;

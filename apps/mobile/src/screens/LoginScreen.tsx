@@ -19,6 +19,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { type LoginInput, loginSchema } from '@tamem/validators';
 
+import { GoogleSignInButton } from '../components/GoogleSignInButton';
 import { GradientButton } from '../components/GradientButton';
 import { IconField } from '../components/IconField';
 import { api } from '../lib/api';
@@ -133,13 +134,8 @@ export function LoginScreen() {
             <View style={styles.dividerLine} />
           </View>
 
-          {/* Google (placeholder for now) */}
-          <Pressable
-            style={({ pressed }) => [styles.googleBtn, pressed && styles.pressed]}
-            onPress={() => Alert.alert('قريباً', 'تسجيل الدخول بحساب جوجل قيد التفعيل')}
-          >
-            <Text style={styles.googleText}>الدخول بحساب جوجل</Text>
-          </Pressable>
+          {/* Official Google Sign-In button (Google branding guidelines) */}
+          <GoogleSignInButton onError={(msg) => Alert.alert('خطأ', msg)} />
 
           <Pressable onPress={() => navigation.navigate('Register')} style={styles.registerLink}>
             <Text style={styles.registerText}>
@@ -170,15 +166,17 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   title: {
-    fontSize: fontSizes.lg,
-    fontFamily: fontFamilies.headingBlack,
+    fontSize: fontSizes.xl,
+    fontFamily: fontFamilies.headingBold,
     color: colors.ink,
+    lineHeight: 34,
   },
   subtitle: {
-    fontSize: fontSizes.xs,
+    fontSize: fontSizes.sm,
     color: colors.text.muted,
     fontFamily: fontFamilies.body,
-    marginTop: 2,
+    marginTop: 4,
+    lineHeight: 20,
   },
   forgotLink: { alignSelf: 'flex-start', marginVertical: spacing.sm },
   forgotText: {
@@ -194,17 +192,6 @@ const styles = StyleSheet.create({
     fontSize: fontSizes.xs,
     fontFamily: fontFamilies.body,
   },
-  googleBtn: {
-    backgroundColor: colors.white,
-    borderRadius: radii.lg,
-    paddingVertical: spacing.md,
-    alignItems: 'center',
-    borderWidth: 1.5,
-    borderColor: colors.line2,
-    minHeight: 50,
-    justifyContent: 'center',
-  },
-  googleText: { color: colors.ink, fontFamily: fontFamilies.bodyBold, fontSize: fontSizes.md },
   pressed: { opacity: 0.85 },
   registerLink: { alignItems: 'center', marginTop: spacing.xl },
   registerText: {

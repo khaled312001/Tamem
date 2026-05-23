@@ -81,14 +81,18 @@ export const fontSizes = {
   display: 34,
 } as const;
 
-// Match font names registered by expo-font (see lib/fonts.ts)
+// Match font names registered by expo-font (see lib/fonts.ts).
+// NOTE: Cairo 900 Black overlaps Arabic glyphs at sizes < 28px on web — we use
+// Cairo 800 ExtraBold as the default heavy heading face to keep letters legible.
 export const fontFamilies = {
-  headingBlack: 'Cairo_900Black',
-  headingBold: 'Cairo_800ExtraBold',
+  headingBlack: 'Cairo_800ExtraBold',
+  headingBold: 'Cairo_700Bold',
+  // True 900 for very large display headings only (size >= 32)
+  headingDisplay: 'Cairo_900Black',
   body: 'Tajawal_400Regular',
   bodyMedium: 'Tajawal_500Medium',
   bodyBold: 'Tajawal_700Bold',
   bodyExtraBold: 'Tajawal_800ExtraBold',
   // Legacy alias
-  heading: 'Cairo_900Black',
+  heading: 'Cairo_800ExtraBold',
 } as const;
