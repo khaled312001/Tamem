@@ -5,10 +5,10 @@ import { OrderStatus, UserRole } from '@tamem/types';
 import { assignDriverSchema, cancelOrderSchema, setPriceSchema } from '@tamem/validators';
 
 import { prisma } from '../../db/prisma.js';
-import { emitOrderStatusChange } from '../../realtime/channels.js';
 import { ConflictError, NotFoundError } from '../../utils/errors.js';
 import { ok, paginated } from '../../utils/response.js';
 
+import { dispatchOrderStatusChanged } from './orderEvents.js';
 import { assertTransition } from './transitions.js';
 
 const param = (v: unknown): string => {
@@ -42,7 +42,15 @@ export const adminList: RequestHandler = async (req, res, next) => {
   try {
     const q = listQuerySchema.parse(req.query);
     const where: Record<string, unknown> = {};
-    if (q.status) where.status = q.status as OrderStatus;
+    if (q.status) {
+      // Accept either a single status or a comma-separated list (used by tabs that
+      // group multiple statuses, e.g. "PRICED,AWAITING_CUSTOMER_APPROVAL").
+      const list = q.status
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean);
+      where.status = list.length === 1 ? (list[0] as OrderStatus) : { in: list as OrderStatus[] };
+    }
     if (q.category) where.category = q.category;
     if (q.customerId) where.customerId = q.customerId;
     if (q.driverId) where.assignedDriverId = q.driverId;
@@ -159,7 +167,7 @@ export const adminUpdateStatus: RequestHandler = async (req, res, next) => {
       },
     });
 
-    emitOrderStatusChange(req.app.locals.io, updated);
+    await dispatchOrderStatusChanged(req.app, updated, updated.status);
     ok(res, updated);
   } catch (err) {
     next(err);
@@ -198,7 +206,7 @@ export const adminSetPrice: RequestHandler = async (req, res, next) => {
           metadata: { quotedPrice: input.quotedPrice },
         },
       });
-      emitOrderStatusChange(req.app.locals.io, updated);
+      await dispatchOrderStatusChanged(req.app, updated, OrderStatus.PRICED);
     }
     ok(res, updated);
   } catch (err) {
@@ -245,7 +253,7 @@ export const adminAssignDriver: RequestHandler = async (req, res, next) => {
           metadata: { driverId: driver.id },
         },
       });
-      emitOrderStatusChange(req.app.locals.io, updated);
+      await dispatchOrderStatusChanged(req.app, updated, OrderStatus.DRIVER_ASSIGNED);
     }
     ok(res, updated);
   } catch (err) {
@@ -304,7 +312,7 @@ export const adminCancel: RequestHandler = async (req, res, next) => {
         reason: input.reason,
       },
     });
-    emitOrderStatusChange(req.app.locals.io, updated);
+    await dispatchOrderStatusChanged(req.app, updated, updated.status);
     ok(res, updated);
   } catch (err) {
     next(err);

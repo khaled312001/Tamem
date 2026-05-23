@@ -17,6 +17,7 @@ adminServicesRouter.use(requireAuth, requireRole(UserRole.ADMIN));
 
 adminServicesRouter.get('/', ctrl.adminList);
 adminServicesRouter.post('/', ctrl.adminCreate);
+adminServicesRouter.get('/:id', ctrl.adminGet);
 adminServicesRouter.patch('/:id', ctrl.adminUpdate);
 adminServicesRouter.delete('/:id', ctrl.adminDelete);
 adminServicesRouter.post('/:id/duplicate', ctrl.adminDuplicate);

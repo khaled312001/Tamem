@@ -2,10 +2,10 @@ import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { Bell, Home, Package, User } from 'lucide-react-native';
 
 import { NotificationsScreen } from '../screens/NotificationsScreen';
-import { OrdersScreen } from '../screens/OrdersScreen';
-import { ProfileStack } from './ProfileStack';
 
 import { HomeStack } from './HomeStack';
+import { OrdersStack } from './OrdersStack';
+import { ProfileStack } from './ProfileStack';
 
 import { colors, fontFamilies, fontSizes } from '../theme/tokens';
 
@@ -48,7 +48,7 @@ export function AppTabs() {
       />
       <Tabs.Screen
         name="Orders"
-        component={OrdersScreen}
+        component={OrdersStack}
         options={{
           title: 'طلباتي',
           tabBarIcon: ({ color, size }) => <Package size={size} color={color} />,

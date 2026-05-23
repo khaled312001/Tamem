@@ -94,7 +94,7 @@ export async function notify(
       titleAr,
       body: options.body ?? bodyAr,
       bodyAr,
-      data: options.data,
+      data: (options.data ?? undefined) as object | undefined,
       channel: options.channel ?? 'IN_APP',
     },
   });

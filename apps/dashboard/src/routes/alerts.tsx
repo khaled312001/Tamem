@@ -50,13 +50,11 @@ export function AlertsPage() {
 
   const { data, isLoading } = useQuery({
     queryKey: ['admin', 'alerts', severity],
-    queryFn: async () => {
-      const res = await api.adminListAlerts({
+    queryFn: () =>
+      api.adminListAlerts({
         resolved: 'false',
         ...(severity ? { severity } : {}),
-      });
-      return res as { data: Row[]; meta?: { stats: Row } } | Row[];
-    },
+      }),
   });
 
   // Realtime: refresh on new alert
@@ -72,9 +70,8 @@ export function AlertsPage() {
     };
   }, [qc]);
 
-  // The /alerts response packs stats into `meta`. The api client returns only `.data`,
-  // so we re-fetch via raw for stats.
-  const items = Array.isArray(data) ? data : ((data as { data?: Row[] })?.data ?? []);
+  const items: Row[] = (data?.alerts as Row[]) ?? [];
+  const stats = data?.stats;
 
   return (
     <div className="space-y-4">
@@ -84,6 +81,20 @@ export function AlertsPage() {
           <p className="text-sm text-muted-foreground mt-1">{items.length} تنبيه نشط</p>
         </div>
       </div>
+
+      {stats && (
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+          <StatCard label="حرج" value={stats.critical} color="bg-red-100 text-red-700" />
+          <StatCard label="عالي" value={stats.high} color="bg-orange-100 text-orange-700" />
+          <StatCard label="متوسط" value={stats.medium} color="bg-yellow-100 text-yellow-700" />
+          <StatCard label="منخفض" value={stats.low} color="bg-blue-100 text-blue-700" />
+          <StatCard
+            label="حُلّت اليوم"
+            value={stats.resolvedToday}
+            color="bg-green-100 text-green-700"
+          />
+        </div>
+      )}
 
       <div className="bg-white rounded-xl border border-border p-3 flex gap-1">
         {FILTERS.map((f) => (
@@ -140,6 +151,15 @@ export function AlertsPage() {
       )}
 
       {resolveFor && <ResolveDialog alert={resolveFor} onClose={() => setResolveFor(null)} />}
+    </div>
+  );
+}
+
+function StatCard({ label, value, color }: { label: string; value: number; color: string }) {
+  return (
+    <div className={`rounded-xl p-3 ${color}`}>
+      <div className="text-xs font-bold">{label}</div>
+      <div className="text-2xl font-black mt-1">{value}</div>
     </div>
   );
 }

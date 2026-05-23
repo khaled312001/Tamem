@@ -205,6 +205,9 @@ export class TamemClient {
   async adminListServices(): Promise<unknown[]> {
     return this.request({ method: 'GET', url: '/admin/services' });
   }
+  async adminGetService(id: string): Promise<unknown> {
+    return this.request({ method: 'GET', url: `/admin/services/${id}` });
+  }
   async adminCreateService(data: unknown): Promise<unknown> {
     return this.request({ method: 'POST', url: '/admin/services', data });
   }
@@ -341,8 +344,24 @@ export class TamemClient {
   }
 
   // ===== Admin Alerts =====
-  async adminListAlerts(params?: Record<string, unknown>): Promise<unknown> {
-    return this.request({ method: 'GET', url: '/admin/alerts', params });
+  // Returns BOTH the alerts array and the meta.stats object the alerts center uses.
+  async adminListAlerts(params?: Record<string, unknown>): Promise<{
+    alerts: unknown[];
+    stats?: { critical: number; high: number; medium: number; low: number; resolvedToday: number };
+  }> {
+    const res = await this.http.request<{
+      data: unknown[];
+      meta?: {
+        stats: {
+          critical: number;
+          high: number;
+          medium: number;
+          low: number;
+          resolvedToday: number;
+        };
+      };
+    }>({ method: 'GET', url: '/admin/alerts', params });
+    return { alerts: res.data.data, stats: res.data.meta?.stats };
   }
   async adminResolveAlert(id: string, note: string): Promise<unknown> {
     return this.request({

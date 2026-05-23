@@ -7,7 +7,7 @@ import { toast } from 'sonner';
 import { Badge } from '../components/ui/Badge.js';
 import { Button } from '../components/ui/Button.js';
 import { Dialog } from '../components/ui/Dialog.js';
-import { Field, Input, Textarea } from '../components/ui/Input.js';
+import { Field, Input } from '../components/ui/Input.js';
 import { TableSkeleton } from '../components/ui/Skeleton.js';
 import {
   DynamicFormPreview,
@@ -88,7 +88,7 @@ export function ServiceEditPage() {
 
   const { data: service, isLoading } = useQuery({
     queryKey: ['admin', 'service', id],
-    queryFn: () => api.getService(id!) as Promise<ServiceRow>,
+    queryFn: () => api.adminGetService(id!) as Promise<ServiceRow>,
     enabled: !!id,
   });
 
