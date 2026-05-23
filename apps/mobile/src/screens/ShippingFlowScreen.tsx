@@ -25,7 +25,7 @@ import { api } from '../lib/api';
 import { openWhatsAppConfirmation } from '../lib/whatsapp';
 import type { HomeStackParamList } from '../navigation/HomeStack';
 import { useAuth } from '../stores/auth';
-import { colors, fontFamilies, fontSizes, gradients, radii, spacing } from '../theme/tokens';
+import { colors, fontFamilies, fontSizes, radii, spacing } from '../theme/tokens';
 
 type Nav = NativeStackNavigationProp<HomeStackParamList, 'ShippingFlow'>;
 

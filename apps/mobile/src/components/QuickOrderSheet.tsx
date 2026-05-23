@@ -74,7 +74,7 @@ export function QuickOrderSheet({ visible, onClose }: QuickOrderSheetProps) {
       const res = await api.raw.post('/orders', {
         category: 'DELIVERY',
         serviceId: fallback.id,
-        deliveryAddress: user?.defaultAddress ?? 'الرجاء تأكيد العنوان مع الإدارة',
+        deliveryAddress: 'الرجاء تأكيد العنوان مع الإدارة',
         deliveryLat: 26.0297,
         deliveryLng: 32.8146,
         paymentMethod: 'CASH',
