@@ -2,6 +2,7 @@ import { useState, type FormEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 
+import { Logo } from '../components/Logo.js';
 import { api } from '../lib/api.js';
 import { useAuth } from '../lib/auth.js';
 
@@ -32,10 +33,8 @@ export function LoginPage() {
     <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-brand-red to-brand-dark p-4">
       <div className="bg-white rounded-2xl shadow-2xl p-8 w-full max-w-md">
         <div className="text-center mb-8">
-          <div className="inline-flex w-20 h-20 rounded-2xl bg-brand-red items-center justify-center mb-4">
-            <span className="text-white font-black text-3xl">ت</span>
-          </div>
-          <h1 className="text-3xl font-black text-brand-dark">لوحة تحكم تميم</h1>
+          <Logo className="mx-auto h-28 w-auto mb-2" />
+          <h1 className="text-2xl font-black text-brand-dark">لوحة التحكم</h1>
           <p className="text-sm text-muted-foreground mt-1">سجّل دخولك للمتابعة</p>
         </div>
 

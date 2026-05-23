@@ -1,0 +1,1221 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<title>التصميم المبدئي | تطبيق تميم للتوصيل — تنفيذ Barmagly</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;500;600;700;800;900&family=Tajawal:wght@400;500;700;800;900&display=swap" rel="stylesheet">
+<style>
+  :root{
+    /* Barmagly — document theme */
+    --navy:#0B2B5C; --primary:#0F5AA8; --cyan:#1FC4D8; --teal:#27D6E8; --b-gold:#F2B544;
+    --b-bg:#F4F8FC; --b-line:#E1E9F2; --b-line2:#D7E3F0; --b-muted:#5A6B85; --b-ink:#0E1A2F;
+    --b-grad:linear-gradient(135deg,#0F5AA8 0%,#1FC4D8 100%);
+    /* Tamem — app identity (mockups only) */
+    --red:#E0301E; --red-d:#B82414; --red-l:#FDEAE2;
+    --orange:#EC7A2C; --gold:#F2A93B;
+    --dark:#241310; --ink:#2B2622; --gray:#58595B; --muted:#9A9088;
+    --bg:#FCF8F4; --soft:#F7EFE7; --line:#F0E4DA; --line2:#E8D8C9;
+    --green:#1A9F6E; --green-l:#E5F6EE;
+    --grad:linear-gradient(135deg,#E0301E 0%,#EC7A2C 100%);
+    --grad-gold:linear-gradient(135deg,#EC7A2C 0%,#F2A93B 100%);
+  }
+  @page{size:A4;margin:0}
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{font-family:'Tajawal','Cairo',sans-serif;color:var(--b-ink);background:#E7EEF6;line-height:1.6;-webkit-font-smoothing:antialiased}
+  svg{display:block}
+
+  .page{width:210mm;height:297mm;margin:0 auto 18px;background:#fff;
+    page-break-after:always;position:relative;overflow:hidden;padding:13mm 12mm;display:flex;flex-direction:column}
+  .page:last-child{page-break-after:auto}
+
+  /* ===== Barmagly chrome ===== */
+  .ph{display:flex;align-items:center;justify-content:space-between;
+    padding-bottom:10px;border-bottom:2px solid var(--b-line);margin-bottom:14px;flex-shrink:0}
+  .ph .brand{display:flex;align-items:center;gap:10px}
+  .ph .brand img{width:38px;height:38px;border-radius:9px;object-fit:contain;border:1px solid var(--b-line2)}
+  .ph .brand b{color:var(--navy);font-weight:900;font-size:15px;letter-spacing:.5px}
+  .ph .brand b span{color:var(--cyan)}
+  .ph .crumb{color:var(--b-muted);font-size:11.5px;font-weight:700;letter-spacing:.5px;display:flex;align-items:center;gap:8px}
+  .ph .crumb .ch{background:var(--red-l);color:var(--red-d);padding:3px 9px;border-radius:99px;font-size:10px;display:flex;align-items:center;gap:5px}
+  .ph .crumb .ch img{width:14px;height:14px;border-radius:3px;object-fit:contain}
+  .pf{margin-top:auto;padding-top:10px;border-top:1px solid var(--b-line);
+    display:flex;justify-content:space-between;color:var(--b-muted);font-size:11px;align-items:center;flex-shrink:0}
+  .pf .num{background:var(--b-grad);color:#fff;width:26px;height:26px;border-radius:50%;
+    display:inline-flex;align-items:center;justify-content:center;font-weight:800;font-size:12px}
+
+  h2.section{font-family:'Cairo';font-size:24px;font-weight:900;color:var(--b-ink);
+    display:flex;align-items:center;gap:12px;margin-bottom:5px;letter-spacing:-.5px}
+  h2.section::before{content:"";width:6px;height:26px;background:linear-gradient(180deg,var(--primary),var(--cyan));border-radius:3px}
+  .lead{color:var(--b-muted);font-size:13px;margin-bottom:14px;line-height:1.8;max-width:820px;font-weight:500}
+
+  /* ===== single-screen layout ===== */
+  .spage{flex:1;display:grid;grid-template-columns:340px 1fr;gap:26px;align-items:center}
+  .phone-stage{height:780px;display:flex;align-items:center;justify-content:center}
+  .phone-stage .phone{transform:scale(1.46);transform-origin:center}
+  .annot{padding:6px 4px}
+  .annot .knum{display:inline-flex;align-items:center;gap:8px;background:var(--b-bg);border:1px solid var(--b-line2);border-radius:99px;padding:5px 13px;font-size:11px;font-weight:800;color:var(--primary);margin-bottom:12px}
+  .annot .knum b{font-family:'Cairo'}
+  .annot h3{font-family:'Cairo';font-size:24px;font-weight:900;color:var(--b-ink);margin-bottom:6px;line-height:1.2}
+  .annot .ad{font-size:13px;color:var(--b-muted);line-height:1.85;margin-bottom:18px}
+  .afeat{display:flex;gap:12px;margin-bottom:15px}
+  .afeat .n{width:28px;height:28px;border-radius:9px;background:var(--b-grad);color:#fff;font-weight:800;font-size:13px;display:flex;align-items:center;justify-content:center;flex-shrink:0;box-shadow:0 4px 10px rgba(15,90,168,.22)}
+  .afeat .tx b{font-size:13.5px;color:var(--b-ink);display:block;font-family:'Cairo';margin-bottom:2px}
+  .afeat .tx span{font-size:11.5px;color:var(--b-muted);line-height:1.6}
+
+  /* dashboard single page */
+  .dpage{flex:1;display:flex;flex-direction:column;justify-content:center}
+  .dfeats{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-top:14px}
+  .dfeat{background:var(--b-bg);border:1px solid var(--b-line2);border-radius:12px;padding:12px 13px}
+  .dfeat .ic{width:30px;height:30px;border-radius:8px;background:var(--b-grad);color:#fff;display:flex;align-items:center;justify-content:center;margin-bottom:8px}
+  .dfeat b{font-size:12px;color:var(--b-ink);font-family:'Cairo';display:block;margin-bottom:3px}
+  .dfeat span{font-size:10.5px;color:var(--b-muted);line-height:1.55}
+
+  /* ---------- COVER (Barmagly) ---------- */
+  .cover{height:297mm;background:radial-gradient(120% 80% at 80% 0%,#0F5AA8 0%,#0B2B5C 42%,#071F45 72%,#04132E 100%);
+    color:#fff;display:flex;flex-direction:column;justify-content:center;align-items:center;text-align:center;padding:0 18mm;border:none}
+  .cover .accent{position:absolute;top:0;right:0;width:8px;height:100%;background:linear-gradient(180deg,var(--teal),var(--cyan),var(--primary))}
+  .cover .glow{position:absolute;width:520px;height:520px;border-radius:50%;background:radial-gradient(circle,rgba(39,214,232,.20),transparent 65%);top:-120px;left:-120px}
+  .cover .logo-wrap{width:150px;height:150px;border-radius:30px;background:#fff;padding:16px;margin-bottom:26px;box-shadow:0 20px 50px rgba(0,0,0,.4);position:relative;z-index:2}
+  .cover .logo-wrap img{width:100%;height:100%;object-fit:contain}
+  .cover .kicker{position:relative;z-index:2;background:linear-gradient(135deg,var(--cyan),var(--teal));color:#06183A;padding:8px 20px;border-radius:99px;font-weight:800;font-size:13px;letter-spacing:1px;margin-bottom:24px}
+  .cover h1{position:relative;z-index:2;font-family:'Cairo';font-size:50px;font-weight:900;line-height:1.16;margin-bottom:14px;letter-spacing:-1px}
+  .cover h1 em{font-style:normal;color:var(--teal)}
+  .cover .en{position:relative;z-index:2;font-size:17px;color:#9EC0E6;letter-spacing:4px;direction:ltr;margin-bottom:20px;font-weight:700}
+  .cover p{position:relative;z-index:2;font-size:16px;color:#CFE5FB;max-width:580px;line-height:1.85;font-weight:500}
+  .cover .scope{position:relative;z-index:2;display:flex;gap:10px;margin-top:30px}
+  .cover .scope span{background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.25);border-radius:99px;padding:9px 20px;font-size:13px;font-weight:700;display:inline-flex;align-items:center;gap:7px}
+  .cover .foot{position:absolute;bottom:16mm;font-size:13px;color:#9EC0E6;z-index:2}
+  .cover .client{position:relative;z-index:2;display:flex;align-items:center;gap:10px;margin-bottom:22px;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.2);border-radius:14px;padding:9px 16px}
+  .cover .client img{width:34px;height:34px;border-radius:8px;background:#fff;padding:3px;object-fit:contain}
+  .cover .client .t{text-align:right;font-size:10px;color:#9EC0E6}
+  .cover .client .t b{display:block;font-size:13px;color:#fff}
+
+  /* ---------- DESIGN SYSTEM (Tamem identity) ---------- */
+  .idtag{display:inline-flex;align-items:center;gap:7px;background:var(--red-l);color:var(--red-d);font-size:11px;font-weight:800;padding:6px 13px;border-radius:99px;margin-bottom:12px}
+  .idtag img{width:18px;height:18px;border-radius:4px;object-fit:contain}
+  .sw-row{display:flex;gap:11px;flex-wrap:wrap;margin:8px 0 16px}
+  .sw{border-radius:16px;width:108px;height:112px;display:flex;flex-direction:column;justify-content:flex-end;padding:12px;color:#fff;font-size:11px;box-shadow:0 6px 16px rgba(36,19,16,.1);position:relative;overflow:hidden}
+  .sw::after{content:"";position:absolute;top:10px;right:10px;width:22px;height:22px;border-radius:7px;background:rgba(255,255,255,.25)}
+  .sw b{font-size:13px;font-family:'Cairo';font-weight:800}
+  .sw small{opacity:.92;direction:ltr;display:block;font-weight:600;letter-spacing:.5px}
+  .type-card{display:flex;gap:26px;align-items:flex-end;flex-wrap:wrap;background:var(--bg);border:1px solid var(--line2);border-radius:18px;padding:18px 22px;margin-bottom:14px}
+  .ui-kit{display:grid;grid-template-columns:repeat(3,1fr);gap:13px}
+  .ui-box{background:var(--bg);border:1px solid var(--line2);border-radius:16px;padding:16px}
+  .ui-box h4{font-family:'Cairo';font-size:12.5px;color:var(--red-d);margin-bottom:12px;font-weight:800}
+  .btn{display:inline-flex;align-items:center;gap:6px;border-radius:12px;padding:10px 18px;font-weight:800;font-size:12px;font-family:'Cairo';margin:0 0 9px 7px;box-shadow:0 4px 12px rgba(224,48,30,.18)}
+  .btn.pr{background:var(--grad);color:#fff} .btn.sec{background:#fff;color:var(--red);border:1.5px solid var(--red);box-shadow:none}
+  .btn.gold{background:var(--grad-gold);color:#2B1206} .btn.dk{background:var(--dark);color:#fff;box-shadow:none}
+  .chip{display:inline-flex;align-items:center;gap:5px;font-size:10.5px;font-weight:800;padding:6px 12px;border-radius:99px;margin:0 0 7px 6px}
+  .chip.a{background:var(--red-l);color:var(--red-d)} .chip.b{background:#FCEFD9;color:#9A6B16} .chip.c{background:var(--green-l);color:#157A52}
+  .chip .d{width:7px;height:7px;border-radius:50%;background:currentColor}
+
+  /* ---------- PHONE (Tamem) ---------- */
+  .phone{background:#1A1A1C;border-radius:30px;padding:7px;width:212px;
+    box-shadow:0 16px 40px rgba(11,43,92,.22),inset 0 0 0 2px #333;position:relative}
+  .phone .notch{position:absolute;top:9px;left:50%;transform:translateX(-50%);width:74px;height:18px;background:#1A1A1C;border-radius:0 0 14px 14px;z-index:10}
+  .phone .notch::after{content:"";position:absolute;top:6px;left:50%;transform:translateX(-50%);width:30px;height:4px;background:#333;border-radius:99px}
+  .screen{background:var(--bg);border-radius:24px;overflow:hidden;height:500px;display:flex;flex-direction:column;position:relative}
+  .ios{display:flex;justify-content:space-between;align-items:center;padding:11px 14px 4px;font-size:10px;font-weight:800;color:var(--ink)}
+  .ios.on-dark{color:#fff} .ios .sig{display:flex;align-items:center;gap:5px}
+  .ah{padding:7px 14px 14px;color:#fff}
+  .ah.grad{background:var(--grad)} .ah.orange{background:var(--grad-gold)} .ah.dk{background:var(--dark)}
+  .ah .top{display:flex;justify-content:space-between;align-items:center}
+  .ah h3{font-size:13.5px;font-weight:800;font-family:'Cairo';margin-bottom:2px}
+  .ah p{font-size:9px;opacity:.92;display:flex;align-items:center;gap:4px}
+  .ab{flex:1;overflow:hidden;padding:11px;font-size:9px}
+  .pc{background:#fff;border:1px solid var(--line);border-radius:12px;padding:9px;margin-bottom:7px;box-shadow:0 2px 6px rgba(36,19,16,.04)}
+  .pc .row{display:flex;align-items:center;gap:8px}
+  .pc .nm{font-weight:800;color:var(--ink);font-size:9.5px}
+  .pc .sub{font-size:8px;color:var(--muted);margin-top:2px;font-weight:500;display:flex;align-items:center;gap:3px}
+  .ptag{font-size:7.5px;padding:3px 8px;border-radius:99px;font-weight:800;white-space:nowrap}
+  .ptag.new{background:var(--red-l);color:var(--red-d)} .ptag.way{background:#FCEFD9;color:#9A6B16} .ptag.done{background:var(--green-l);color:#157A52} .ptag.rev{background:#EDE7F6;color:#5E35B1}
+  .picon{width:34px;height:34px;border-radius:10px;display:flex;align-items:center;justify-content:center;flex-shrink:0;color:#fff}
+  .picon.red{background:var(--grad)} .picon.org{background:var(--grad-gold)} .picon.soft{background:var(--soft);color:var(--red)} .picon.k{background:#F0E8E0;color:var(--gray)}
+  .pfield{background:#fff;border:1px solid var(--line2);border-radius:11px;padding:10px 11px;margin-bottom:8px;font-size:9px;color:var(--muted);display:flex;align-items:center;gap:8px;font-weight:600}
+  .pfield .lab{color:var(--ink);font-weight:700}
+  .pbtn{background:var(--grad);color:#fff;text-align:center;border-radius:12px;padding:11px;font-size:10px;font-weight:800;font-family:'Cairo';box-shadow:0 6px 14px rgba(224,48,30,.22)}
+  .pbtn.line{background:#fff;color:var(--red);border:1.5px solid var(--red);box-shadow:none}
+  .pserv{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-top:5px}
+  .pserv .it{background:#fff;border:1px solid var(--line);border-radius:13px;padding:11px 5px;text-align:center;box-shadow:0 2px 6px rgba(36,19,16,.04)}
+  .pserv .it .ic{width:32px;height:32px;border-radius:10px;margin:0 auto 6px;display:flex;align-items:center;justify-content:center;color:#fff}
+  .pserv .it span{font-size:8px;font-weight:800;color:var(--ink);display:block}
+  .pserv .it small{font-size:6.5px;color:var(--muted);display:block;margin-top:1px}
+  .pbnav{position:absolute;bottom:8px;left:8px;right:8px;background:#fff;border-radius:18px;padding:9px 6px;
+    display:flex;justify-content:space-around;box-shadow:0 4px 16px rgba(36,19,16,.1);border:1px solid var(--line)}
+  .pbnav .it{display:flex;flex-direction:column;align-items:center;gap:3px;color:#B8AEA4;font-size:7px;font-weight:700}
+  .pbnav .it.on{color:var(--red)}
+  .seg{display:flex;gap:5px;background:var(--soft);border-radius:11px;padding:3px;margin-bottom:9px}
+  .seg span{flex:1;text-align:center;padding:6px 0;font-size:8.5px;font-weight:800;color:var(--muted);border-radius:9px}
+  .seg span.on{background:#fff;color:var(--red);box-shadow:0 2px 6px rgba(36,19,16,.08)}
+  .ptrack{position:relative;padding-right:18px;margin-top:6px}
+  .ptrack::before{content:"";position:absolute;right:6px;top:6px;bottom:6px;width:2px;background:var(--line2)}
+  .ptrack .s{position:relative;padding:0 0 11px 0;font-size:9px;color:var(--muted);font-weight:600}
+  .ptrack .s small{display:block;font-size:7px;opacity:.8}
+  .ptrack .s::before{content:"";position:absolute;right:-16px;top:1px;width:11px;height:11px;border-radius:50%;background:#fff;border:2.5px solid var(--line2)}
+  .ptrack .s.on{color:var(--ink);font-weight:800} .ptrack .s.on::before{border-color:var(--red);background:var(--red)}
+  .ptrack .s.cur::before{box-shadow:0 0 0 4px rgba(224,48,30,.15)}
+  .pmap{height:88px;border-radius:13px;margin-bottom:8px;position:relative;overflow:hidden;
+    background:linear-gradient(135deg,#FBEDE3,#FCF4E8);border:1px solid var(--line2)}
+  .pmap::after{content:"";position:absolute;inset:0;opacity:.6;
+    background-image:linear-gradient(90deg,transparent 49%,#EDD7C2 49.5%,#EDD7C2 50.5%,transparent 51%),linear-gradient(0deg,transparent 49%,#EDD7C2 49.5%,#EDD7C2 50.5%,transparent 51%);background-size:24px 24px}
+  .pmap .route{position:absolute;top:20px;right:30px;width:90px;height:44px;border:2.5px dashed var(--red);border-bottom:none;border-left:none;border-radius:0 40px 0 0;opacity:.7}
+  .pmap .pin{position:absolute;width:16px;height:16px;border-radius:50% 50% 50% 0;transform:rotate(45deg);z-index:2;box-shadow:0 2px 5px rgba(0,0,0,.2)}
+  .pmap .pin.a{background:var(--green);top:54px;right:26px} .pmap .pin.b{background:var(--red);top:18px;right:110px}
+  .pavatar{width:60px;height:60px;border-radius:50%;background:var(--grad);color:#fff;display:flex;align-items:center;justify-content:center;font-size:24px;font-weight:900;font-family:'Cairo';margin:0 auto 8px}
+  .prow{display:flex;align-items:center;gap:9px;padding:9px 4px;border-bottom:1px solid var(--line);font-size:9.5px;color:var(--ink);font-weight:700}
+  .prow .ic{width:28px;height:28px;border-radius:8px;background:var(--soft);color:var(--red);display:flex;align-items:center;justify-content:center;flex-shrink:0}
+  .prow .ar{margin-right:auto;color:var(--muted)}
+
+  /* ---------- DASHBOARD (Tamem) ---------- */
+  .browser{background:#fff;border:1px solid var(--line2);border-radius:14px;overflow:hidden;box-shadow:0 14px 36px rgba(11,43,92,.14)}
+  .bbar{background:#EFE2D6;padding:9px 13px;display:flex;align-items:center;gap:7px}
+  .bbar .dot{width:11px;height:11px;border-radius:50%}
+  .bbar .r{background:#E0301E}.bbar .y{background:#F2A93B}.bbar .g{background:#1A9F6E}
+  .bbar .url{flex:1;background:#fff;border-radius:7px;padding:6px 13px;font-size:11px;color:var(--muted);margin-right:12px;direction:ltr;text-align:left;display:flex;align-items:center;gap:6px}
+  .bbody{display:grid;grid-template-columns:166px 1fr;min-height:430px;direction:rtl}
+  .dtop{grid-column:1 / -1;background:var(--dark);color:#fff;padding:11px 16px;display:flex;justify-content:space-between;align-items:center}
+  .dtop .lg{display:flex;align-items:center;gap:9px;font-weight:900;font-size:14px;letter-spacing:.5px}
+  .dtop .lg span{color:var(--gold);font-weight:600;font-size:11px}
+  .dtop .rt{display:flex;align-items:center;gap:13px}
+  .dtop .sbox{background:rgba(255,255,255,.1);border-radius:8px;padding:7px 14px;font-size:11px;color:#D9C5B6;display:flex;align-items:center;gap:6px;width:180px}
+  .dtop .u{display:flex;align-items:center;gap:7px;font-size:11px}
+  .dtop .u .av{width:28px;height:28px;border-radius:50%;background:var(--grad-gold);color:#2B1206;display:flex;align-items:center;justify-content:center;font-weight:900;font-size:12px}
+  .dside{background:#fff;border-left:1px solid var(--line);padding:12px 10px}
+  .dside .gp{font-size:8.5px;color:#C3B7AB;font-weight:800;letter-spacing:1px;margin:9px 6px 5px}
+  .dside .it{padding:9px 11px;border-radius:9px;font-size:11px;color:var(--gray);font-weight:700;margin-bottom:3px;display:flex;align-items:center;gap:10px}
+  .dside .it.on{background:var(--grad);color:#fff;box-shadow:0 5px 12px rgba(224,48,30,.22)}
+  .dside .it .bdg{margin-right:auto;background:var(--red-l);color:var(--red-d);font-size:8.5px;padding:1px 7px;border-radius:99px;font-weight:800}
+  .dside .it.on .bdg{background:rgba(255,255,255,.25);color:#fff}
+  .dmain{padding:15px 17px;background:#FBF6F1}
+  .dhead{display:flex;justify-content:space-between;align-items:center;margin-bottom:13px}
+  .dhead h3{font-family:'Cairo';font-size:17px;font-weight:900;color:var(--ink)}
+  .dhead .sub{font-size:10.5px;color:var(--muted);margin-top:2px}
+  .dkpis{display:grid;grid-template-columns:repeat(4,1fr);gap:11px;margin-bottom:13px}
+  .dkpi{background:#fff;border:1px solid var(--line);border-radius:14px;padding:14px;position:relative;overflow:hidden}
+  .dkpi .ik{position:absolute;top:13px;left:13px;width:30px;height:30px;border-radius:9px;display:flex;align-items:center;justify-content:center;color:#fff}
+  .dkpi .l{font-size:10px;color:var(--muted);margin-bottom:6px;font-weight:600}
+  .dkpi .v{font-size:24px;font-weight:900;color:var(--ink);line-height:1;font-family:'Cairo'}
+  .dkpi .c{font-size:9px;font-weight:800;margin-top:6px;display:flex;align-items:center;gap:3px}.dkpi .c.up{color:var(--green)}.dkpi .c.dn{color:var(--red)}
+  .drow{display:grid;grid-template-columns:1.7fr 1fr;gap:12px}
+  .dcard{background:#fff;border:1px solid var(--line);border-radius:14px;padding:14px}
+  .dcard h4{font-size:12.5px;color:var(--ink);font-weight:900;margin-bottom:11px;display:flex;justify-content:space-between;align-items:center;font-family:'Cairo'}
+  .dcard h4 .mo{font-size:9px;color:var(--muted);font-weight:600}
+  .dtable{width:100%;font-size:10.5px;border-collapse:collapse}
+  .dtable th{color:var(--muted);padding:8px 7px;text-align:right;font-weight:800;font-size:9.5px;border-bottom:1.5px solid var(--line)}
+  .dtable td{padding:9px 7px;border-bottom:1px solid var(--line);color:#4A4138;font-weight:500}
+  .dtable tr:last-child td{border-bottom:none}
+  .dtable .oid{font-weight:900;color:var(--ink)}
+  .st{font-size:8.5px;padding:3px 10px;border-radius:99px;font-weight:800;display:inline-flex;align-items:center;gap:4px}
+  .st .d{width:5px;height:5px;border-radius:50%;background:currentColor}
+  .st.new{background:var(--red-l);color:var(--red-d)}.st.way{background:#FCEFD9;color:#9A6B16}.st.done{background:var(--green-l);color:#157A52}.st.rev{background:#EDE7F6;color:#5E35B1}
+  .lnk{color:var(--red);font-weight:800}
+  .dchart{height:120px;border-radius:10px;display:flex;align-items:flex-end;gap:8px;padding:10px 6px 6px}
+  .dchart .col{flex:1;display:flex;flex-direction:column;align-items:center;gap:5px}
+  .dchart .bar{width:100%;background:var(--grad-gold);border-radius:5px 5px 0 0}
+  .dchart .col.hi .bar{background:var(--grad)}
+  .dchart .col small{font-size:8px;color:var(--muted);font-weight:700}
+  .dbtn{background:var(--grad);color:#fff;border-radius:9px;padding:8px 16px;font-size:10.5px;font-weight:800;font-family:'Cairo';display:inline-flex;align-items:center;gap:6px;box-shadow:0 5px 12px rgba(224,48,30,.2)}
+  .dbtn.line{background:#fff;border:1.5px solid var(--red);color:var(--red);box-shadow:none}
+  .dbtn.ghost{background:#fff;border:1px solid var(--line2);color:var(--gray);box-shadow:none}
+  .filterbar{display:flex;gap:8px;margin-bottom:12px;align-items:center}
+  .fpill{background:#fff;border:1px solid var(--line2);border-radius:9px;padding:8px 14px;font-size:10.5px;color:var(--gray);font-weight:700}
+  .fpill.on{background:var(--grad);color:#fff;border:none}
+  .fsearch{background:#fff;border:1px solid var(--line2);border-radius:9px;padding:8px 13px;font-size:10.5px;color:var(--muted);flex:1;display:flex;align-items:center;gap:7px}
+  .ddrv{display:flex;align-items:center;gap:10px;padding:11px 0;border-bottom:1px solid var(--line);font-size:11px}
+  .ddrv .av{width:34px;height:34px;border-radius:50%;background:var(--soft);color:var(--red);display:flex;align-items:center;justify-content:center;font-weight:900;font-size:13px;font-family:'Cairo'}
+  .ddrv .dot{width:8px;height:8px;border-radius:50%}
+  .ddrv .dot.on{background:var(--green)}.ddrv .dot.busy{background:var(--gold)}.ddrv .dot.off{background:#C9BEB2}
+
+  .note{background:linear-gradient(135deg,#EFF6FF,#E3F0FB);border:1px solid #BBD9F5;border-right:5px solid var(--primary);
+    border-radius:13px;padding:13px 16px;font-size:12px;color:#243B58;line-height:1.8;display:flex;gap:11px;align-items:flex-start}
+  .note b{color:var(--navy)}
+  .note .ni{width:26px;height:26px;border-radius:8px;background:var(--b-grad);color:#fff;display:flex;align-items:center;justify-content:center;flex-shrink:0}
+</style>
+</head>
+<body>
+
+<!-- ============ COVER ============ -->
+<div class="page cover">
+  <span class="accent"></span><span class="glow"></span>
+  <div class="logo-wrap"><img src="barmagly-logo.jpg" alt="Barmagly"></div>
+  <span class="kicker">التصميم المبدئي · Initial UI / UX Concept</span>
+  <h1>تصميم تطبيق <em>تميم</em> للتوصيل</h1>
+  <div class="en">TAMEM DELIVERY · CUSTOMER APP &amp; ADMIN DASHBOARD</div>
+  <div class="client"><img src="485861377_1066070162226760_1188895592111948389_n.jpg" alt="Tamem"><div class="t">العميل / CLIENT<b>تميم للتوصيل</b></div></div>
+  <p>تصوّر بصري عالي الدقة — كل شاشة في صفحة مستقلة — لتطبيق العميل ولوحة تحكم الإدارة، مبني على هوية تميم وألوانها الرسمية، تصميم وتنفيذ شركة برمجلي.</p>
+  <div class="scope">
+    <span><svg width="15" height="15" stroke="#fff" fill="none" stroke-width="1.8" viewBox="0 0 24 24"><rect x="6" y="2" width="12" height="20" rx="3"/><path d="M10 19h4"/></svg>تطبيق العميل</span>
+    <span><svg width="15" height="15" stroke="#fff" fill="none" stroke-width="1.8" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8M12 17v4"/></svg>لوحة تحكم الإدارة</span>
+  </div>
+  <div class="foot">شركة برمجلي — barmagly.tech · مايو 2026</div>
+</div>
+
+<!-- ============ ABOUT BARMAGLY / INTRO ============ -->
+<div class="page">
+  <div class="ph"><div class="brand"><img src="barmagly-logo.jpg" alt=""><b>BAR<span>MAGLY</span></b></div><div class="crumb">مقدمة · من نحن</div></div>
+
+  <div style="display:flex;align-items:center;gap:18px;background:linear-gradient(135deg,#0B2B5C,#0F5AA8);border-radius:18px;padding:22px 24px;color:#fff;margin-bottom:18px">
+    <div style="width:84px;height:84px;border-radius:18px;background:#fff;padding:9px;flex-shrink:0;box-shadow:0 8px 20px rgba(0,0,0,.2)"><img src="barmagly-logo.jpg" style="width:100%;height:100%;object-fit:contain"></div>
+    <div>
+      <div style="font-family:'Cairo';font-weight:900;font-size:26px;letter-spacing:.5px">BARMAGLY</div>
+      <div style="font-size:13px;color:#9EC0E6;direction:ltr;text-align:right;letter-spacing:1px">Swiss Precision · Global Innovation</div>
+      <div style="font-size:12.5px;color:#CFE5FB;margin-top:6px">شركة هندسة برمجيات متخصصة في تطبيقات الموبايل وأنظمة الإدارة عالية الجودة والأمان.</div>
+    </div>
+  </div>
+
+  <h2 class="section">مقدمة</h2>
+  <p class="lead" style="max-width:none">يسعدنا في <b style="color:var(--navy)">شركة برمجلي</b> أن نقدّم لكم هذا الملف المبدئي لتصميم <b style="color:var(--navy)">تطبيق تميم للتوصيل</b> — تطبيق عميل احترافي مربوط بلوحة تحكم إدارية متكاملة. يعرض هذا المستند تصوّرنا البصري لكل شاشة على حدة بهوية تميم وألوانها، تمهيدًا لاعتماد التصميم النهائي قبل مرحلة البرمجة. هدفنا تسليم منتج يبدأ في قفط ويتوسّع بثقة إلى قوص وقنا ونقل المحافظات.</p>
+
+  <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:13px;margin-bottom:18px">
+    <div style="background:var(--b-bg);border:1px solid var(--b-line2);border-radius:14px;padding:16px">
+      <div style="width:40px;height:40px;border-radius:11px;background:var(--b-grad);color:#fff;display:flex;align-items:center;justify-content:center;margin-bottom:9px"><svg width="20" height="20" stroke="#fff" fill="none" stroke-width="1.8" viewBox="0 0 24 24"><path d="M12 3l8 4v6c0 4-3 7-8 8-5-1-8-4-8-8V7z"/><path d="M9 12l2 2 4-4"/></svg></div>
+      <b style="font-family:'Cairo';font-size:14px;color:var(--b-ink);display:block;margin-bottom:4px">جودة وأمان</b>
+      <span style="font-size:11.5px;color:var(--b-muted);line-height:1.7">معايير هندسة برمجيات احترافية وحماية كاملة للبيانات.</span>
+    </div>
+    <div style="background:var(--b-bg);border:1px solid var(--b-line2);border-radius:14px;padding:16px">
+      <div style="width:40px;height:40px;border-radius:11px;background:var(--b-grad);color:#fff;display:flex;align-items:center;justify-content:center;margin-bottom:9px"><svg width="20" height="20" stroke="#fff" fill="none" stroke-width="1.8" viewBox="0 0 24 24"><path d="M3 3v18h18"/><path d="M7 14l3-3 3 3 4-5"/></svg></div>
+      <b style="font-family:'Cairo';font-size:14px;color:var(--b-ink);display:block;margin-bottom:4px">قابلية النمو</b>
+      <span style="font-size:11.5px;color:var(--b-muted);line-height:1.7">بنية تدعم التوسّع في المدن والخدمات دون إعادة بناء.</span>
+    </div>
+    <div style="background:var(--b-bg);border:1px solid var(--b-line2);border-radius:14px;padding:16px">
+      <div style="width:40px;height:40px;border-radius:11px;background:var(--b-grad);color:#fff;display:flex;align-items:center;justify-content:center;margin-bottom:9px"><svg width="20" height="20" stroke="#fff" fill="none" stroke-width="1.8" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg></div>
+      <b style="font-family:'Cairo';font-size:14px;color:var(--b-ink);display:block;margin-bottom:4px">تسليم على مراحل</b>
+      <span style="font-size:11.5px;color:var(--b-muted);line-height:1.7">نبدأ بنسخة مضبوطة ثم نتوسّع حسب الطلب الفعلي.</span>
+    </div>
+  </div>
+
+  <h2 class="section">معلومات التواصل</h2>
+  <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-top:6px">
+    <div style="background:#fff;border:1px solid var(--b-line2);border-radius:14px;padding:16px;text-align:center">
+      <div style="width:44px;height:44px;border-radius:12px;background:var(--b-grad);color:#fff;display:flex;align-items:center;justify-content:center;margin:0 auto 10px"><svg width="22" height="22" fill="#fff" viewBox="0 0 24 24"><path d="M12 2a10 10 0 0 0-8.6 15l-1.3 4.7 4.8-1.3A10 10 0 1 0 12 2zm5.6 14.1c-.2.6-1.2 1.2-1.7 1.2-.4 0-1 .1-3-.8-2.5-1-4.1-3.6-4.2-3.8-.1-.2-1-1.3-1-2.5s.6-1.8.9-2c.2-.3.5-.3.7-.3h.5c.2 0 .4 0 .6.5l.8 2c.1.1.1.3 0 .5l-.4.5-.3.3c-.1.1-.3.3-.1.5.1.3.7 1.1 1.4 1.8 1 .8 1.7 1.1 2 1.2.2.1.4.1.5-.1l.6-.8c.2-.2.4-.2.6-.1l1.9.9c.2.1.4.2.4.3.1.2.1.7-.1 1.3z"/></svg></div>
+      <div style="font-size:10.5px;color:var(--b-muted);margin-bottom:3px">هاتف / واتساب</div>
+      <div style="font-size:14px;font-weight:800;color:var(--b-ink);direction:ltr">+201010254819</div>
+    </div>
+    <div style="background:#fff;border:1px solid var(--b-line2);border-radius:14px;padding:16px;text-align:center">
+      <div style="width:44px;height:44px;border-radius:12px;background:var(--b-grad);color:#fff;display:flex;align-items:center;justify-content:center;margin:0 auto 10px"><svg width="20" height="20" stroke="#fff" fill="none" stroke-width="1.8" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 7l9 6 9-6"/></svg></div>
+      <div style="font-size:10.5px;color:var(--b-muted);margin-bottom:3px">البريد الإلكتروني</div>
+      <div style="font-size:13px;font-weight:800;color:var(--b-ink);direction:ltr">info@barmagly.tech</div>
+    </div>
+    <div style="background:#fff;border:1px solid var(--b-line2);border-radius:14px;padding:16px;text-align:center">
+      <div style="width:44px;height:44px;border-radius:12px;background:var(--b-grad);color:#fff;display:flex;align-items:center;justify-content:center;margin:0 auto 10px"><svg width="20" height="20" stroke="#fff" fill="none" stroke-width="1.8" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M2 12h20M12 3a15 15 0 0 1 0 18M12 3a15 15 0 0 0 0 18"/></svg></div>
+      <div style="font-size:10.5px;color:var(--b-muted);margin-bottom:3px">الموقع الإلكتروني</div>
+      <div style="font-size:13px;font-weight:800;color:var(--b-ink);direction:ltr">www.barmagly.tech</div>
+    </div>
+  </div>
+  <div style="display:flex;align-items:center;gap:12px;background:var(--b-bg);border:1px solid var(--b-line2);border-radius:13px;padding:13px 16px;margin-top:12px">
+    <div style="width:36px;height:36px;border-radius:10px;background:#fff;color:var(--primary);display:flex;align-items:center;justify-content:center;flex-shrink:0;border:1px solid var(--b-line2)"><svg width="18" height="18" stroke="currentColor" fill="none" stroke-width="1.8" viewBox="0 0 24 24"><path d="M12 21s-7-5-7-11a7 7 0 0 1 14 0c0 6-7 11-7 11z"/><circle cx="12" cy="10" r="2.5"/></svg></div>
+    <div><span style="font-size:10px;color:var(--b-muted)">المقر — </span><span style="font-size:12.5px;font-weight:800;color:var(--b-ink);direction:ltr">Hardstrasse 201, 8005 Zürich, Switzerland</span></div>
+  </div>
+
+  <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:13px">
+    <span style="display:inline-flex;align-items:center;gap:6px;background:var(--b-bg);border:1px solid var(--b-line2);border-radius:99px;padding:7px 14px;font-size:11px;font-weight:800;color:var(--navy)"><svg width="13" height="13" stroke="var(--primary)" fill="none" stroke-width="2" viewBox="0 0 24 24"><path d="M12 3l8 4v6c0 4-3 7-8 8-5-1-8-4-8-8V7z"/><path d="M9 12l2 2 4-4"/></svg>شركة سويسرية مرخّصة · CHE-154.312.079</span>
+    <span style="display:inline-flex;align-items:center;gap:6px;background:var(--b-bg);border:1px solid var(--b-line2);border-radius:99px;padding:7px 14px;font-size:11px;font-weight:700;color:var(--b-muted)"><svg width="13" height="13" fill="var(--primary)" viewBox="0 0 24 24"><path d="M22 12a10 10 0 1 0-11.5 9.9v-7H8v-2.9h2.5V9.5c0-2.5 1.5-3.9 3.8-3.9 1.1 0 2.2.2 2.2.2v2.5h-1.3c-1.2 0-1.6.8-1.6 1.6v1.9h2.8L15.9 15h-2.4v7A10 10 0 0 0 22 12z"/></svg>facebook.com/BarmaglyOfficial</span>
+  </div>
+
+  <div class="note" style="margin-top:14px"><div class="ni"><svg width="15" height="15" stroke="#fff" fill="none" stroke-width="2" viewBox="0 0 24 24"><path d="M12 2l2.4 7.4H22l-6 4.6 2.3 7.4L12 17l-6.3 4.4L8 14 2 9.4h7.6z"/></svg></div>
+    <div>هذا الملف جزء من حزمة عرض <b>برمجلي</b> لمشروع <b>تميم للتوصيل</b> — يرافقه عرض المشروع (Proposal) الذي يشرح نطاق العمل والمراحل والجدول الزمني.</div></div>
+
+  <div class="pf"><span>barmagly.tech · التصميم المبدئي لتطبيق تميم · مايو 2026</span><span class="num">2</span></div>
+</div>
+
+<!-- ============ DESIGN SYSTEM ============ -->
+<div class="page">
+  <div class="ph"><div class="brand"><img src="barmagly-logo.jpg" alt=""><b>BAR<span>MAGLY</span></b></div><div class="crumb">نظام تصميم تطبيق تميم</div></div>
+  <h2 class="section">الهوية البصرية للتطبيق</h2>
+  <div class="idtag"><img src="485861377_1066070162226760_1188895592111948389_n.jpg" alt="">هوية تطبيق تميم — ثيم المستند بهوية برمجلي</div>
+  <p class="lead">واجهات التطبيق ولوحة التحكم مبنية على ألوان لوجو تميم: الأحمر والبرتقالي والذهبي المتدرّج مع الرمادي للنصوص — لإحساس متّسق وحيوي يعبّر عن السرعة والثقة.</p>
+
+  <div class="sw-row">
+    <div class="sw" style="background:#E0301E"><b>أحمر تميم</b><small>#E0301E</small></div>
+    <div class="sw" style="background:#EC7A2C"><b>برتقالي</b><small>#EC7A2C</small></div>
+    <div class="sw" style="background:#F2A93B;color:#3A2606"><b>ذهبي</b><small>#F2A93B</small></div>
+    <div class="sw" style="background:#58595B"><b>رمادي</b><small>#58595B</small></div>
+    <div class="sw" style="background:#241310"><b>داكن</b><small>#241310</small></div>
+    <div class="sw" style="background:linear-gradient(135deg,#E0301E,#F2A93B)"><b>التدرّج</b><small>Gradient</small></div>
+  </div>
+
+  <div class="type-card">
+    <div><div style="font-family:'Cairo';font-weight:900;font-size:34px;color:var(--red-d);line-height:1">تميم للتوصيل</div><small style="color:var(--muted);font-weight:600">Cairo Black 900 — العناوين</small></div>
+    <div><div style="font-family:'Tajawal';font-weight:800;font-size:21px;color:var(--ink)">توصيل سريع وآمن</div><small style="color:var(--muted);font-weight:600">Tajawal 800 — الفرعية</small></div>
+    <div><div style="font-family:'Tajawal';font-weight:400;font-size:14px;color:var(--gray)">نص توضيحي للفقرات داخل التطبيق</div><small style="color:var(--muted);font-weight:600">Tajawal 400 — النصوص</small></div>
+  </div>
+
+  <h2 class="section">عناصر الواجهة — UI Kit</h2>
+  <div class="ui-kit">
+    <div class="ui-box"><h4>الأزرار · Buttons</h4>
+      <span class="btn pr">اطلب الآن</span><span class="btn gold">تتبّع الطلب</span><span class="btn sec">إلغاء</span><span class="btn dk">تأكيد</span></div>
+    <div class="ui-box"><h4>حالات الطلب · Status</h4>
+      <span class="chip a"><span class="d"></span>طلب جديد</span><span class="chip b"><span class="d"></span>في الطريق</span><span class="chip c"><span class="d"></span>تم التسليم</span></div>
+    <div class="ui-box"><h4>أيقونات الخدمات</h4>
+      <div style="display:flex;gap:9px">
+        <div class="picon red"><svg width="19" height="19" stroke="#fff" fill="none" stroke-width="1.8" viewBox="0 0 24 24"><circle cx="9" cy="20" r="1.5"/><circle cx="18" cy="20" r="1.5"/><path d="M2 3h3l2.5 12.5a1.5 1.5 0 0 0 1.5 1.2h8a1.5 1.5 0 0 0 1.5-1.2L21 7H6"/></svg></div>
+        <div class="picon org"><svg width="19" height="19" stroke="#fff" fill="none" stroke-width="1.8" viewBox="0 0 24 24"><path d="M21 16V8l-9-5-9 5v8l9 5z"/><path d="M3 8l9 5 9-5"/><path d="M12 13v8"/></svg></div>
+        <div class="picon" style="background:var(--grad-gold)"><svg width="19" height="19" stroke="#2B1206" fill="none" stroke-width="1.9" viewBox="0 0 24 24"><path d="M4 9h16l-1 11H5z"/><path d="M9 9V6a3 3 0 0 1 6 0v3"/></svg></div>
+      </div></div>
+  </div>
+
+  <div class="note" style="margin-top:14px"><div class="ni"><svg width="15" height="15" stroke="#fff" fill="none" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 8v5M12 16h.01"/></svg></div>
+    <div>كل شاشة في الصفحات التالية معروضة بشكل مستقل وبتفصيل عالٍ، مع شرح لعناصرها — نظام تصميم موحّد بهوية <b>تميم</b>، تصميم وتنفيذ <b>برمجلي</b>.</div></div>
+
+  <div class="pf"><span>barmagly.tech · التصميم المبدئي لتطبيق تميم · مايو 2026</span><span class="num">3</span></div>
+</div>
+
+<!-- ============ SCREEN 01 — SPLASH ============ -->
+<div class="page">
+  <div class="ph"><div class="brand"><img src="barmagly-logo.jpg" alt=""><b>BAR<span>MAGLY</span></b></div><div class="crumb"><span class="ch"><img src="485861377_1066070162226760_1188895592111948389_n.jpg">تطبيق العميل</span>شاشة البداية</div></div>
+  <div class="spage">
+    <div class="phone-stage"><div class="phone"><span class="notch"></span><div class="screen" style="background:linear-gradient(170deg,#E0301E 0%,#C4280F 18%,#9A1A0A 40%,#241310 85%);justify-content:center;align-items:center;position:relative;overflow:hidden">
+      <!-- decorative circles -->
+      <div style="position:absolute;top:-30px;right:-30px;width:140px;height:140px;border-radius:50%;background:rgba(255,255,255,.04)"></div>
+      <div style="position:absolute;top:20px;right:20px;width:90px;height:90px;border-radius:50%;background:rgba(255,255,255,.03)"></div>
+      <div style="position:absolute;bottom:60px;left:-20px;width:100px;height:100px;border-radius:50%;background:rgba(236,122,44,.08)"></div>
+      <!-- thin accent lines -->
+      <div style="position:absolute;top:0;left:0;right:0;height:3px;background:linear-gradient(90deg,transparent,var(--gold),transparent)"></div>
+
+      <div style="text-align:center;position:relative;z-index:2;width:100%;padding:0 14px">
+        <!-- Delivery rider image with Tamem logo overlay -->
+        <div style="position:relative;width:180px;height:180px;margin:0 auto 8px">
+          <!-- Glow behind image -->
+          <div style="position:absolute;inset:-10px;border-radius:50%;background:radial-gradient(circle,rgba(242,169,59,.2),transparent 70%)"></div>
+          <!-- Delivery rider image -->
+          <div style="width:180px;height:180px;border-radius:50%;overflow:hidden;position:relative;border:3px solid rgba(255,255,255,.15);box-shadow:0 14px 34px rgba(0,0,0,.4)">
+            <img src="delivery-rider.png" style="width:100%;height:100%;object-fit:cover;filter:brightness(1.05)">
+          </div>
+          <!-- Tamem logo badge -->
+          <div style="position:absolute;bottom:-6px;right:-6px;width:62px;height:62px;border-radius:16px;background:#fff;padding:5px;box-shadow:0 8px 20px rgba(0,0,0,.35);transform:rotate(-6deg);z-index:3">
+            <img src="485861377_1066070162226760_1188895592111948389_n.jpg" style="width:100%;height:100%;object-fit:contain">
+          </div>
+          <!-- Subtle golden ring -->
+          <div style="position:absolute;top:-4px;left:-4px;width:calc(100% + 8px);height:calc(100% + 8px);border-radius:50%;border:1.5px solid rgba(242,169,59,.25);pointer-events:none"></div>
+        </div>
+
+        <!-- Brand text -->
+        <div style="margin-top:12px">
+          <div style="font-family:'Cairo';font-weight:900;font-size:30px;color:#fff;letter-spacing:4px;text-shadow:0 3px 12px rgba(0,0,0,.3)">TAMEM</div>
+          <div style="display:flex;align-items:center;justify-content:center;gap:8px;margin-top:3px">
+            <div style="width:20px;height:1.5px;background:linear-gradient(90deg,transparent,var(--gold))"></div>
+            <div style="font-size:10px;color:var(--gold);letter-spacing:7px;font-weight:800">DELIVERY</div>
+            <div style="width:20px;height:1.5px;background:linear-gradient(270deg,transparent,var(--gold))"></div>
+          </div>
+        </div>
+
+        <!-- Arabic tagline -->
+        <div style="margin-top:18px;background:rgba(255,255,255,.08);backdrop-filter:blur(4px);border:1px solid rgba(255,255,255,.1);border-radius:99px;padding:8px 18px;display:inline-flex;align-items:center;gap:6px">
+          <svg width="12" height="12" stroke="var(--gold)" fill="none" stroke-width="2" viewBox="0 0 24 24"><path d="M3 7h13v10H3z"/><path d="M16 10h3l2 3v4h-5"/><circle cx="7" cy="18" r="1.8"/><circle cx="18" cy="18" r="1.8"/></svg>
+          <span style="font-size:11.5px;color:#fff;font-weight:700">تميم… التوصيل لعبتنا</span>
+        </div>
+      </div>
+
+      <!-- Loading dots -->
+      <div style="position:absolute;bottom:26px;display:flex;gap:6px;align-items:center">
+        <span style="width:8px;height:8px;border-radius:50%;background:var(--gold);box-shadow:0 0 8px rgba(242,169,59,.5)"></span>
+        <span style="width:6px;height:6px;border-radius:50%;background:rgba(255,255,255,.3)"></span>
+        <span style="width:6px;height:6px;border-radius:50%;background:rgba(255,255,255,.2)"></span>
+      </div>
+    </div></div></div>
+    <div class="annot">
+      <div class="knum"><b>شاشة 01</b> · Splash Screen</div>
+      <h3>الشاشة الافتتاحية</h3>
+      <div class="ad">أول ما يراه المستخدم عند فتح التطبيق — شاشة احترافية تعزّز هوية تميم بصورة مندوب التوصيل الواقعية مع لوجو تميم، تعطي انطباعًا مميزًا من أول لحظة.</div>
+      <div class="afeat"><div class="n">1</div><div class="tx"><b>صورة مندوب التوصيل الواقعية</b><span>صورة دليفري احترافية تعكس طبيعة الخدمة مع لوجو تميم عليها.</span></div></div>
+      <div class="afeat"><div class="n">2</div><div class="tx"><b>لوجو تميم بارز</b><span>شعار تميم بحجم واضح فوق صورة المندوب على خلفية متدرّجة (أحمر ← داكن).</span></div></div>
+      <div class="afeat"><div class="n">3</div><div class="tx"><b>الشعار اللفظي والـ Tagline</b><span>«تميم… التوصيل لعبتنا» في شريحة أنيقة لترسيخ العلامة.</span></div></div>
+      <div class="afeat"><div class="n">4</div><div class="tx"><b>مؤشر تحميل</b><span>نقاط متوهّجة تدل على تجهيز التطبيق والاتصال بالخادم.</span></div></div>
+      <div class="afeat"><div class="n">5</div><div class="tx"><b>انتقال تلقائي</b><span>إلى تسجيل الدخول أو الرئيسية إن كان المستخدم مسجلًا.</span></div></div>
+    </div>
+  </div>
+  <div class="pf"><span>barmagly.tech · التصميم المبدئي لتطبيق تميم · مايو 2026</span><span class="num">4</span></div>
+</div>
+
+<!-- ============ SCREEN 02 — LOGIN ============ -->
+<div class="page">
+  <div class="ph"><div class="brand"><img src="barmagly-logo.jpg" alt=""><b>BAR<span>MAGLY</span></b></div><div class="crumb"><span class="ch"><img src="485861377_1066070162226760_1188895592111948389_n.jpg">تطبيق العميل</span>تسجيل الدخول</div></div>
+  <div class="spage">
+    <div class="phone-stage"><div class="phone"><span class="notch"></span><div class="screen">
+      <div class="ios"><span>9:41</span><span class="sig">
+        <svg width="15" height="11" viewBox="0 0 18 12" fill="currentColor"><rect x="0" y="8" width="3" height="4" rx="1"/><rect x="5" y="5" width="3" height="7" rx="1"/><rect x="10" y="2" width="3" height="10" rx="1"/><rect x="15" y="0" width="3" height="12" rx="1" opacity=".4"/></svg>
+        <svg width="13" height="11" viewBox="0 0 16 13" fill="currentColor"><path d="M8 3.5c2.2 0 4.2.9 5.7 2.3l1.4-1.4A10 10 0 0 0 8 1.5 10 10 0 0 0 .9 4.4l1.4 1.4A8 8 0 0 1 8 3.5z"/><path d="M8 7.2c1.2 0 2.3.5 3.1 1.3l1.4-1.4A6 6 0 0 0 8 5.3a6 6 0 0 0-4.5 1.8l1.4 1.4A4 4 0 0 1 8 7.2z"/><circle cx="8" cy="10.6" r="1.6"/></svg>
+        <svg width="22" height="11" viewBox="0 0 26 12" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="1" y="1" width="20" height="10" rx="3"/><rect x="3" y="3" width="14" height="6" rx="1.5" fill="currentColor" stroke="none"/><rect x="22.5" y="4" width="2" height="4" rx="1" fill="currentColor" stroke="none"/></svg>
+      </span></div>
+      <div class="ab" style="padding:18px 15px">
+        <div style="display:flex;align-items:center;gap:9px;margin-bottom:14px"><div style="width:40px;height:40px;border-radius:11px;background:var(--grad);display:flex;align-items:center;justify-content:center"><svg width="21" height="21" stroke="#fff" fill="none" stroke-width="1.8" viewBox="0 0 24 24"><path d="M3 7h13v10H3z"/><path d="M16 10h3l2 3v4h-5"/><circle cx="7" cy="18" r="1.8"/><circle cx="18" cy="18" r="1.8"/></svg></div><div><div style="font-family:'Cairo';font-weight:900;font-size:16px;color:var(--ink)">أهلاً بك من جديد</div><div style="font-size:9px;color:var(--muted);font-weight:500">سجّل دخولك لتبدأ الطلب</div></div></div>
+        <div class="pfield"><svg width="14" height="14" stroke="var(--red)" fill="none" stroke-width="1.8" viewBox="0 0 24 24"><path d="M5 4h4l2 5-3 2a11 11 0 0 0 5 5l2-3 5 2v4a2 2 0 0 1-2 2A16 16 0 0 1 3 6a2 2 0 0 1 2-2z"/></svg><span class="lab">رقم الهاتف</span></div>
+        <div class="pfield"><svg width="14" height="14" stroke="var(--red)" fill="none" stroke-width="1.8" viewBox="0 0 24 24"><rect x="4" y="10" width="16" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg><span class="lab">كلمة المرور</span></div>
+        <div style="text-align:left;font-size:8.5px;color:var(--red);font-weight:700;margin-bottom:9px">نسيت كلمة المرور؟</div>
+        <div class="pbtn" style="padding:10px">تسجيل الدخول</div>
+        <div style="display:flex;align-items:center;gap:8px;margin:9px 0"><div style="flex:1;height:1px;background:var(--line2)"></div><span style="font-size:8.5px;color:var(--muted)">أو سجّل بـ</span><div style="flex:1;height:1px;background:var(--line2)"></div></div>
+        <div class="pbtn line" style="padding:11px;display:flex;align-items:center;justify-content:center;gap:8px;color:var(--ink);border-color:var(--line2)"><svg width="16" height="16" viewBox="0 0 48 48"><path fill="#FFC107" d="M43.6 20.5H42V20H24v8h11.3c-1.6 4.7-6.1 8-11.3 8a12 12 0 1 1 0-24c3 0 5.8 1.1 7.9 3l5.7-5.7A20 20 0 1 0 24 44a20 20 0 0 0 19.6-23.5z"/><path fill="#FF3D00" d="M6.3 14.7l6.6 4.8A12 12 0 0 1 24 12c3 0 5.8 1.1 7.9 3l5.7-5.7A20 20 0 0 0 6.3 14.7z"/><path fill="#4CAF50" d="M24 44c5.2 0 9.9-2 13.4-5.2l-6.2-5.2A12 12 0 0 1 12.7 28l-6.5 5A20 20 0 0 0 24 44z"/><path fill="#1976D2" d="M43.6 20.5H42V20H24v8h11.3a12 12 0 0 1-4.1 5.6l6.2 5.2C39 36 44 30.7 44 24c0-1.2-.1-2.4-.4-3.5z"/></svg>الدخول بحساب جوجل</div>
+        <div style="text-align:center;font-size:9.5px;color:var(--muted);margin-top:14px;font-weight:600">ليس لديك حساب؟ <b style="color:var(--red)">أنشئ حساب</b></div>
+      </div>
+    </div></div></div>
+    <div class="annot">
+      <div class="knum"><b>شاشة 02</b> · Login</div>
+      <h3>تسجيل الدخول</h3>
+      <div class="ad">دخول سريع وآمن للعملاء، بثلاث طرق: كلمة المرور، أو حساب جوجل، أو رمز تحقق OTP.</div>
+      <div class="afeat"><div class="n">1</div><div class="tx"><b>الدخول بالهاتف وكلمة المرور</b><span>الطريقة الأساسية مع خيار «نسيت كلمة المرور».</span></div></div>
+      <div class="afeat"><div class="n">2</div><div class="tx"><b>الدخول بحساب جوجل</b><span>تسجيل دخول بضغطة واحدة عبر Google — سريع وآمن.</span></div></div>
+      <div class="afeat"><div class="n">3</div><div class="tx"><b>الدخول برمز OTP</b><span>رمز تحقق يصل كرسالة SMS على رقم الهاتف.</span></div></div>
+      <div class="afeat"><div class="n">4</div><div class="tx"><b>رابط إنشاء حساب</b><span>للمستخدمين الجدد للانتقال لشاشة التسجيل.</span></div></div>
+    </div>
+  </div>
+  <div class="pf"><span>barmagly.tech · التصميم المبدئي لتطبيق تميم · مايو 2026</span><span class="num">5</span></div>
+</div>
+
+<!-- ============ SCREEN 03 — REGISTER ============ -->
+<div class="page">
+  <div class="ph"><div class="brand"><img src="barmagly-logo.jpg" alt=""><b>BAR<span>MAGLY</span></b></div><div class="crumb"><span class="ch"><img src="485861377_1066070162226760_1188895592111948389_n.jpg">تطبيق العميل</span>إنشاء حساب</div></div>
+  <div class="spage">
+    <div class="phone-stage"><div class="phone"><span class="notch"></span><div class="screen">
+      <div class="ios"><span>9:41</span><span class="sig">
+        <svg width="15" height="11" viewBox="0 0 18 12" fill="currentColor"><rect x="0" y="8" width="3" height="4" rx="1"/><rect x="5" y="5" width="3" height="7" rx="1"/><rect x="10" y="2" width="3" height="10" rx="1"/><rect x="15" y="0" width="3" height="12" rx="1" opacity=".4"/></svg>
+        <svg width="13" height="11" viewBox="0 0 16 13" fill="currentColor"><path d="M8 3.5c2.2 0 4.2.9 5.7 2.3l1.4-1.4A10 10 0 0 0 8 1.5 10 10 0 0 0 .9 4.4l1.4 1.4A8 8 0 0 1 8 3.5z"/><path d="M8 7.2c1.2 0 2.3.5 3.1 1.3l1.4-1.4A6 6 0 0 0 8 5.3a6 6 0 0 0-4.5 1.8l1.4 1.4A4 4 0 0 1 8 7.2z"/><circle cx="8" cy="10.6" r="1.6"/></svg>
+        <svg width="22" height="11" viewBox="0 0 26 12" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="1" y="1" width="20" height="10" rx="3"/><rect x="3" y="3" width="14" height="6" rx="1.5" fill="currentColor" stroke="none"/><rect x="22.5" y="4" width="2" height="4" rx="1" fill="currentColor" stroke="none"/></svg>
+      </span></div>
+      <div class="ab" style="padding:16px 15px">
+        <div style="font-family:'Cairo';font-weight:900;font-size:17px;color:var(--ink);margin-bottom:3px">إنشاء حساب جديد</div>
+        <div style="font-size:9.5px;color:var(--muted);margin-bottom:15px;font-weight:500">دقيقة واحدة وتبدأ معنا</div>
+        <div class="pfield"><svg width="13" height="13" stroke="var(--red)" fill="none" stroke-width="1.8" viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 4-6 8-6s8 2 8 6"/></svg><span class="lab">الاسم بالكامل</span></div>
+        <div class="pfield"><svg width="13" height="13" stroke="var(--red)" fill="none" stroke-width="1.8" viewBox="0 0 24 24"><path d="M5 4h4l2 5-3 2a11 11 0 0 0 5 5l2-3 5 2v4a2 2 0 0 1-2 2A16 16 0 0 1 3 6a2 2 0 0 1 2-2z"/></svg><span class="lab">رقم الهاتف</span></div>
+        <div class="pfield"><svg width="13" height="13" stroke="var(--red)" fill="none" stroke-width="1.8" viewBox="0 0 24 24"><path d="M12 21s-7-5-7-11a7 7 0 0 1 14 0c0 6-7 11-7 11z"/><circle cx="12" cy="10" r="2.5"/></svg><span class="lab">المدينة — قفط</span></div>
+        <div class="pfield"><svg width="13" height="13" stroke="var(--muted)" fill="none" stroke-width="1.8" viewBox="0 0 24 24"><path d="M3 11l9-7 9 7v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/></svg>العنوان (اختياري)</div>
+        <div class="pfield"><svg width="13" height="13" stroke="var(--red)" fill="none" stroke-width="1.8" viewBox="0 0 24 24"><rect x="4" y="10" width="16" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg><span class="lab">كلمة المرور</span></div>
+        <div class="pbtn" style="margin-top:4px">إنشاء الحساب</div>
+        <div style="font-size:8px;color:var(--muted);text-align:center;margin-top:12px;line-height:1.55;font-weight:500">التسجيل متاح للعملاء — التجار والسائقون يُضافون من لوحة التحكم بعد المراجعة</div>
+      </div>
+    </div></div></div>
+    <div class="annot">
+      <div class="knum"><b>شاشة 03</b> · Register</div>
+      <h3>إنشاء حساب</h3>
+      <div class="ad">تسجيل سريع للعملاء الجدد ببيانات أساسية فقط لتقليل أي عائق أمام أول طلب.</div>
+      <div class="afeat"><div class="n">1</div><div class="tx"><b>بيانات أساسية</b><span>الاسم، الهاتف، المدينة، وكلمة المرور — العنوان اختياري.</span></div></div>
+      <div class="afeat"><div class="n">2</div><div class="tx"><b>تأكيد برمز OTP</b><span>التحقق من رقم الهاتف قبل تفعيل الحساب.</span></div></div>
+      <div class="afeat"><div class="n">3</div><div class="tx"><b>للعملاء فقط</b><span>حسابات التجار والسائقين تُنشأ وتُراجَع من لوحة التحكم.</span></div></div>
+      <div class="afeat"><div class="n">4</div><div class="tx"><b>الموافقة على الشروط</b><span>قبول سياسة الخصوصية وشروط الاستخدام.</span></div></div>
+    </div>
+  </div>
+  <div class="pf"><span>barmagly.tech · التصميم المبدئي لتطبيق تميم · مايو 2026</span><span class="num">6</span></div>
+</div>
+
+<!-- ============ SCREEN 04A — HOME (Page 1: Services) ============ -->
+<div class="page">
+  <div class="ph"><div class="brand"><img src="barmagly-logo.jpg" alt=""><b>BAR<span>MAGLY</span></b></div><div class="crumb"><span class="ch"><img src="485861377_1066070162226760_1188895592111948389_n.jpg">تطبيق العميل</span>الرئيسية — الخدمات</div></div>
+  <div class="spage">
+    <div class="phone-stage"><div class="phone"><span class="notch"></span><div class="screen">
+      <div class="ah grad" style="padding-top:13px">
+        <div class="ios on-dark" style="padding:0 0 8px"><span>9:41</span><span class="sig">
+          <svg width="15" height="11" viewBox="0 0 18 12" fill="#fff"><rect x="0" y="8" width="3" height="4" rx="1"/><rect x="5" y="5" width="3" height="7" rx="1"/><rect x="10" y="2" width="3" height="10" rx="1"/><rect x="15" y="0" width="3" height="12" rx="1" opacity=".4"/></svg>
+          <svg width="13" height="11" viewBox="0 0 16 13" fill="#fff"><path d="M8 3.5c2.2 0 4.2.9 5.7 2.3l1.4-1.4A10 10 0 0 0 8 1.5 10 10 0 0 0 .9 4.4l1.4 1.4A8 8 0 0 1 8 3.5z"/><circle cx="8" cy="10.6" r="1.6"/></svg>
+          <svg width="22" height="11" viewBox="0 0 26 12" fill="none" stroke="#fff" stroke-width="1.5"><rect x="1" y="1" width="20" height="10" rx="3"/><rect x="3" y="3" width="14" height="6" rx="1.5" fill="#fff" stroke="none"/></svg>
+        </span></div>
+        <div class="top"><div><h3>أهلاً محمد</h3><p><svg width="10" height="10" stroke="#fff" fill="none" stroke-width="2" viewBox="0 0 24 24"><path d="M12 21s-7-5-7-11a7 7 0 0 1 14 0c0 6-7 11-7 11z"/><circle cx="12" cy="10" r="2.5"/></svg> قفط — قنا</p></div>
+        <div style="width:30px;height:30px;border-radius:9px;background:rgba(255,255,255,.18);display:flex;align-items:center;justify-content:center;position:relative"><svg width="15" height="15" stroke="#fff" fill="none" stroke-width="1.8" viewBox="0 0 24 24"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10 21a2 2 0 0 0 4 0"/></svg><span style="position:absolute;top:5px;right:6px;width:6px;height:6px;border-radius:50%;background:var(--gold)"></span></div></div>
+      </div>
+      <div class="ab" style="padding-bottom:44px">
+        <div class="pfield" style="margin-top:2px"><svg width="13" height="13" stroke="var(--muted)" fill="none" stroke-width="2" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4-4"/></svg>ابحث عن مطعم، محل، أو منتج…</div>
+
+        <!-- Offers banner -->
+        <div style="background:linear-gradient(120deg,var(--red),var(--orange));border-radius:14px;padding:11px 13px;display:flex;align-items:center;gap:10px;color:#fff;margin-bottom:9px;position:relative;overflow:hidden">
+          <div style="position:absolute;left:-10px;top:-10px;width:60px;height:60px;border-radius:50%;background:rgba(255,255,255,.12)"></div>
+          <div style="width:36px;height:36px;border-radius:10px;background:rgba(255,255,255,.2);display:flex;align-items:center;justify-content:center;flex-shrink:0"><svg width="20" height="20" stroke="#fff" fill="none" stroke-width="1.7" viewBox="0 0 24 24"><path d="M20 12v8H4v-8M2 7h20v5H2zM12 7v13M12 7C12 4 9 3 8 5s1 2 4 2zM12 7c0-3 3-4 4-2s-1 2-4 2z"/></svg></div>
+          <div style="flex:1"><div style="font-family:'Cairo';font-weight:900;font-size:12px">خصم 20% على أول طلب</div><div style="font-size:8px;opacity:.92">استخدم كود <b>TAMEM20</b> — لفترة محدودة</div></div>
+        </div>
+
+        <div style="font-size:10px;font-weight:900;color:var(--ink);margin:0 0 6px;font-family:'Cairo'">خدماتنا</div>
+        <div class="pserv">
+          <div class="it"><div class="ic" style="background:var(--grad)"><svg width="17" height="17" stroke="#fff" fill="none" stroke-width="1.7" viewBox="0 0 24 24"><circle cx="9" cy="20" r="1.5"/><circle cx="18" cy="20" r="1.5"/><path d="M2 3h3l2.5 12.5a1.5 1.5 0 0 0 1.5 1.2h8a1.5 1.5 0 0 0 1.5-1.2L21 7H6"/></svg></div><span>دليفري</span><small>داخل المدينة</small></div>
+          <div class="it"><div class="ic" style="background:var(--grad-gold)"><svg width="17" height="17" stroke="#fff" fill="none" stroke-width="1.7" viewBox="0 0 24 24"><path d="M21 16V8l-9-5-9 5v8l9 5z"/><path d="M3 8l9 5 9-5"/></svg></div><span>شحن</span><small>بين المناطق</small></div>
+          <div class="it"><div class="ic" style="background:linear-gradient(135deg,#F2A93B,#EC7A2C)"><svg width="17" height="17" stroke="#2B1206" fill="none" stroke-width="1.8" viewBox="0 0 24 24"><path d="M4 9h16l-1 11H5z"/><path d="M9 9V6a3 3 0 0 1 6 0v3"/></svg></div><span>تاجر</span><small>طلبات جملة</small></div>
+        </div>
+
+        <!-- Most ordered -->
+        <div style="font-size:10px;font-weight:900;color:var(--ink);margin:11px 0 6px;font-family:'Cairo'">الأكثر طلبًا</div>
+        <div class="pc"><div class="row"><div class="picon red"><svg width="16" height="16" stroke="#fff" fill="none" stroke-width="1.7" viewBox="0 0 24 24"><path d="M3 8l9-5 9 5-9 5z"/><path d="M3 8v8l9 5 9-5V8"/></svg></div><div style="flex:1"><div class="nm">مطعم اسكندراني</div><div class="sub"><svg width="9" height="9" fill="var(--gold)" viewBox="0 0 24 24"><path d="M12 2l3 6 7 .8-5 4.5L18.5 21 12 17.5 5.5 21 7 13.3 2 8.8 9 8z"/></svg>4.7 · بيتزا ومعجنات</div></div><span class="ptag done">مفتوح</span></div></div>
+        <div class="pc"><div class="row"><div class="picon org"><svg width="16" height="16" stroke="#fff" fill="none" stroke-width="1.7" viewBox="0 0 24 24"><path d="M4 9h16l-1 11H5z"/><path d="M9 9V6a3 3 0 0 1 6 0v3"/></svg></div><div style="flex:1"><div class="nm">ماركت السبعي</div><div class="sub"><svg width="9" height="9" fill="var(--gold)" viewBox="0 0 24 24"><path d="M12 2l3 6 7 .8-5 4.5L18.5 21 12 17.5 5.5 21 7 13.3 2 8.8 9 8z"/></svg>4.8 · سوبر ماركت</div></div><span class="ptag done">مفتوح</span></div></div>
+      </div>
+      <div class="pbnav"><div class="it on"><svg width="16" height="16" stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24"><path d="M3 11l9-7 9 7v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/></svg><span>الرئيسية</span></div><div class="it"><svg width="16" height="16" stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24"><path d="M4 7h16v13H4z"/><path d="M4 7l2-3h12l2 3"/></svg><span>طلباتي</span></div><div class="it"><svg width="16" height="16" stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/></svg><span>الإشعارات</span></div><div class="it"><svg width="16" height="16" stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 4-6 8-6s8 2 8 6"/></svg><span>حسابي</span></div></div>
+    </div></div></div>
+    <div class="annot">
+      <div class="knum"><b>شاشة 04A</b> · Home — Services</div>
+      <h3>الرئيسية — الخدمات والعروض</h3>
+      <div class="ad">الجزء الأول من الصفحة الرئيسية. ترحيب باسم العميل ومدينته، ثم بانر العروض، والخدمات الثلاث الأساسية، والمحلات الأكثر طلبًا.</div>
+      <div class="afeat"><div class="n">1</div><div class="tx"><b>ترحيب وموقع</b><span>«أهلاً محمد» مع تحديد المدينة (قفط) وزر الإشعارات.</span></div></div>
+      <div class="afeat"><div class="n">2</div><div class="tx"><b>بحث سريع</b><span>عن خدمة أو محل بعينه.</span></div></div>
+      <div class="afeat"><div class="n">3</div><div class="tx"><b>بانر العروض</b><span>خصومات وعروض محدودة بكود خصم — يتغيّر حسب إدارة التطبيق.</span></div></div>
+      <div class="afeat"><div class="n">4</div><div class="tx"><b>الخدمات الثلاث</b><span>دليفري · شحن · تاجر — بأيقونات وألوان مميزة.</span></div></div>
+      <div class="afeat"><div class="n">5</div><div class="tx"><b>الأكثر طلبًا</b><span>محلات مقترحة بتقييماتها وحالة الفتح.</span></div></div>
+    </div>
+  </div>
+  <div class="pf"><span>barmagly.tech · التصميم المبدئي لتطبيق تميم · مايو 2026</span><span class="num">7</span></div>
+</div>
+
+<!-- ============ SCREEN 04B — HOME (Page 2: Categories & Explore) ============ -->
+<div class="page">
+  <div class="ph"><div class="brand"><img src="barmagly-logo.jpg" alt=""><b>BAR<span>MAGLY</span></b></div><div class="crumb"><span class="ch"><img src="485861377_1066070162226760_1188895592111948389_n.jpg">تطبيق العميل</span>الرئيسية — الأقسام والاستكشاف</div></div>
+  <div class="spage">
+    <div class="phone-stage"><div class="phone"><span class="notch"></span><div class="screen">
+      <div class="ah grad" style="padding-top:13px">
+        <div class="ios on-dark" style="padding:0 0 8px"><span>9:41</span><span class="sig">
+          <svg width="15" height="11" viewBox="0 0 18 12" fill="#fff"><rect x="0" y="8" width="3" height="4" rx="1"/><rect x="5" y="5" width="3" height="7" rx="1"/><rect x="10" y="2" width="3" height="10" rx="1"/><rect x="15" y="0" width="3" height="12" rx="1" opacity=".4"/></svg>
+          <svg width="22" height="11" viewBox="0 0 26 12" fill="none" stroke="#fff" stroke-width="1.5"><rect x="1" y="1" width="20" height="10" rx="3"/><rect x="3" y="3" width="14" height="6" rx="1.5" fill="#fff" stroke="none"/></svg>
+        </span></div>
+        <div class="top"><div><h3>أهلاً محمد</h3><p><svg width="10" height="10" stroke="#fff" fill="none" stroke-width="2" viewBox="0 0 24 24"><path d="M12 21s-7-5-7-11a7 7 0 0 1 14 0c0 6-7 11-7 11z"/><circle cx="12" cy="10" r="2.5"/></svg> قفط — قنا</p></div>
+        <div style="width:30px;height:30px;border-radius:9px;background:rgba(255,255,255,.18);display:flex;align-items:center;justify-content:center;position:relative"><svg width="15" height="15" stroke="#fff" fill="none" stroke-width="1.8" viewBox="0 0 24 24"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10 21a2 2 0 0 0 4 0"/></svg><span style="position:absolute;top:5px;right:6px;width:6px;height:6px;border-radius:50%;background:var(--gold)"></span></div></div>
+      </div>
+      <div class="ab" style="padding-bottom:44px">
+        <!-- Categories row 1 -->
+        <div style="font-size:10px;font-weight:900;color:var(--ink);margin:0 0 8px;font-family:'Cairo'">تصفّح الأقسام</div>
+        <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:7px;margin-bottom:8px">
+          <div style="text-align:center"><div style="width:40px;height:40px;border-radius:13px;background:var(--soft);color:var(--red);display:flex;align-items:center;justify-content:center;margin:0 auto 4px"><svg width="18" height="18" stroke="var(--red)" fill="none" stroke-width="1.7" viewBox="0 0 24 24"><path d="M3 8l9-5 9 5-9 5z"/><path d="M3 8v8l9 5 9-5V8"/><circle cx="10" cy="7" r=".8" fill="var(--red)"/></svg></div><span style="font-size:7.5px;color:var(--ink);font-weight:700">مطاعم</span></div>
+          <div style="text-align:center"><div style="width:40px;height:40px;border-radius:13px;background:var(--soft);color:var(--red);display:flex;align-items:center;justify-content:center;margin:0 auto 4px"><svg width="18" height="18" stroke="var(--red)" fill="none" stroke-width="1.7" viewBox="0 0 24 24"><circle cx="9" cy="20" r="1.4"/><circle cx="18" cy="20" r="1.4"/><path d="M2 3h3l2.5 12.5a1.5 1.5 0 0 0 1.5 1.2h8"/></svg></div><span style="font-size:7.5px;color:var(--ink);font-weight:700">سوبر ماركت</span></div>
+          <div style="text-align:center"><div style="width:40px;height:40px;border-radius:13px;background:var(--soft);color:var(--red);display:flex;align-items:center;justify-content:center;margin:0 auto 4px"><svg width="18" height="18" stroke="var(--red)" fill="none" stroke-width="1.7" viewBox="0 0 24 24"><path d="M9 3v6l-5 8a2 2 0 0 0 2 3h12a2 2 0 0 0 2-3l-5-8V3"/></svg></div><span style="font-size:7.5px;color:var(--ink);font-weight:700">صيدليات</span></div>
+          <div style="text-align:center"><div style="width:40px;height:40px;border-radius:13px;background:var(--soft);color:var(--red);display:flex;align-items:center;justify-content:center;margin:0 auto 4px"><svg width="18" height="18" stroke="var(--red)" fill="none" stroke-width="1.7" viewBox="0 0 24 24"><path d="M4 11h16v9H4z"/><path d="M12 11V7M9 7a3 3 0 1 1 3-3 3 3 0 1 1 3 3"/></svg></div><span style="font-size:7.5px;color:var(--ink);font-weight:700">حلويات</span></div>
+        </div>
+        <!-- Categories row 2 -->
+        <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:7px;margin-bottom:11px">
+          <div style="text-align:center"><div style="width:40px;height:40px;border-radius:13px;background:var(--soft);color:var(--red);display:flex;align-items:center;justify-content:center;margin:0 auto 4px"><svg width="18" height="18" stroke="var(--red)" fill="none" stroke-width="1.7" viewBox="0 0 24 24"><path d="M4 9h16l-1 11H5z"/><path d="M9 9V6a3 3 0 0 1 6 0v3"/></svg></div><span style="font-size:7.5px;color:var(--ink);font-weight:700">مستلزمات</span></div>
+          <div style="text-align:center"><div style="width:40px;height:40px;border-radius:13px;background:var(--soft);color:var(--red);display:flex;align-items:center;justify-content:center;margin:0 auto 4px"><svg width="18" height="18" stroke="var(--red)" fill="none" stroke-width="1.7" viewBox="0 0 24 24"><path d="M3 7h18v4H3zM5 11v9h14v-9"/></svg></div><span style="font-size:7.5px;color:var(--ink);font-weight:700">مغسلة</span></div>
+          <div style="text-align:center"><div style="width:40px;height:40px;border-radius:13px;background:var(--soft);color:var(--red);display:flex;align-items:center;justify-content:center;margin:0 auto 4px"><svg width="18" height="18" stroke="var(--red)" fill="none" stroke-width="1.7" viewBox="0 0 24 24"><path d="M12 3a4.5 4.5 0 0 0-4.5 4.5C7.5 11 12 15 12 15s4.5-4 4.5-7.5A4.5 4.5 0 0 0 12 3z"/><path d="M9 18h6M10 21h4"/></svg></div><span style="font-size:7.5px;color:var(--ink);font-weight:700">ورد وهدايا</span></div>
+          <div style="text-align:center"><div style="width:40px;height:40px;border-radius:13px;background:linear-gradient(135deg,var(--red-l),#FCEFD9);color:var(--red);display:flex;align-items:center;justify-content:center;margin:0 auto 4px"><svg width="18" height="18" stroke="var(--red)" fill="none" stroke-width="1.7" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 5v2M12 17v2M5 12h2M17 12h2"/></svg></div><span style="font-size:7.5px;color:var(--red);font-weight:800">المزيد</span></div>
+        </div>
+
+        <!-- Nearby stores on map CTA -->
+        <div style="background:linear-gradient(135deg,#FDEAE2,#FCEFD9);border:1.5px solid var(--line2);border-radius:14px;padding:12px 13px;display:flex;align-items:center;gap:10px;margin-bottom:9px">
+          <div style="width:38px;height:38px;border-radius:11px;background:var(--grad);display:flex;align-items:center;justify-content:center;flex-shrink:0;box-shadow:0 4px 10px rgba(224,48,30,.2)"><svg width="19" height="19" stroke="#fff" fill="none" stroke-width="1.7" viewBox="0 0 24 24"><path d="M12 21s-7-5-7-11a7 7 0 0 1 14 0c0 6-7 11-7 11z"/><circle cx="12" cy="10" r="2.5"/></svg></div>
+          <div style="flex:1"><div style="font-size:10px;font-weight:900;color:var(--ink);font-family:'Cairo'">المحلات القريبة على الخريطة</div><div style="font-size:8px;color:var(--muted)">اكتشف المتاجر المتاحة للتوصيل حولك</div></div>
+          <svg width="14" height="14" stroke="var(--red)" fill="none" stroke-width="2.5" viewBox="0 0 24 24"><path d="M15 6l-6 6 6 6"/></svg>
+        </div>
+
+        <!-- Quick promo strip -->
+        <div style="background:var(--dark);border-radius:12px;padding:10px 13px;display:flex;align-items:center;gap:9px;color:#fff">
+          <div style="width:32px;height:32px;border-radius:9px;background:var(--grad-gold);display:flex;align-items:center;justify-content:center;flex-shrink:0"><svg width="16" height="16" stroke="#2B1206" fill="none" stroke-width="1.8" viewBox="0 0 24 24"><path d="M13 2L3 14h7l-1 8 10-12h-7z"/></svg></div>
+          <div style="flex:1"><div style="font-size:9px;font-weight:800;font-family:'Cairo'">توصيل سريع خلال 30 دقيقة</div><div style="font-size:7.5px;opacity:.75">داخل مدينة قفط — للطلبات القريبة</div></div>
+        </div>
+      </div>
+      <div class="pbnav"><div class="it on"><svg width="16" height="16" stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24"><path d="M3 11l9-7 9 7v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/></svg><span>الرئيسية</span></div><div class="it"><svg width="16" height="16" stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24"><path d="M4 7h16v13H4z"/><path d="M4 7l2-3h12l2 3"/></svg><span>طلباتي</span></div><div class="it"><svg width="16" height="16" stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/></svg><span>الإشعارات</span></div><div class="it"><svg width="16" height="16" stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 4-6 8-6s8 2 8 6"/></svg><span>حسابي</span></div></div>
+    </div></div></div>
+    <div class="annot">
+      <div class="knum"><b>شاشة 04B</b> · Home — Categories</div>
+      <h3>الرئيسية — الأقسام والاستكشاف</h3>
+      <div class="ad">الجزء الثاني من الصفحة الرئيسية عند السكرول لأسفل. يعرض كل الأقسام في شبكة مرتّبة مع زر الخريطة والتوصيل السريع.</div>
+      <div class="afeat"><div class="n">1</div><div class="tx"><b>شبكة الأقسام الكاملة</b><span>مطاعم · سوبر ماركت · صيدليات · حلويات · مستلزمات · مغسلة · ورد وهدايا + المزيد.</span></div></div>
+      <div class="afeat"><div class="n">2</div><div class="tx"><b>المحلات القريبة على الخريطة</b><span>زر بارز يفتح شاشة الخريطة لاستكشاف المتاجر حولك.</span></div></div>
+      <div class="afeat"><div class="n">3</div><div class="tx"><b>توصيل سريع</b><span>بانر يبرز ميزة التوصيل خلال 30 دقيقة داخل المدينة.</span></div></div>
+      <div class="afeat"><div class="n">4</div><div class="tx"><b>شريط تنقّل سفلي</b><span>الرئيسية · طلباتي · الإشعارات · حسابي.</span></div></div>
+    </div>
+  </div>
+  <div class="pf"><span>barmagly.tech · التصميم المبدئي لتطبيق تميم · مايو 2026</span><span class="num">8</span></div>
+</div>
+
+<!-- ============ SCREEN 04C — NEARBY STORES MAP ============ -->
+<div class="page">
+  <div class="ph"><div class="brand"><img src="barmagly-logo.jpg" alt=""><b>BAR<span>MAGLY</span></b></div><div class="crumb"><span class="ch"><img src="485861377_1066070162226760_1188895592111948389_n.jpg">تطبيق العميل</span>المتاجر القريبة — الخريطة</div></div>
+  <div class="spage">
+    <div class="phone-stage"><div class="phone"><span class="notch"></span><div class="screen">
+      <div class="ah grad"><div class="ios on-dark" style="padding:0 0 8px"><span>9:41</span><span class="sig">
+        <svg width="15" height="11" viewBox="0 0 18 12" fill="#fff"><rect x="0" y="8" width="3" height="4" rx="1"/><rect x="5" y="5" width="3" height="7" rx="1"/><rect x="10" y="2" width="3" height="10" rx="1"/><rect x="15" y="0" width="3" height="12" rx="1" opacity=".4"/></svg>
+        <svg width="22" height="11" viewBox="0 0 26 12" fill="none" stroke="#fff" stroke-width="1.5"><rect x="1" y="1" width="20" height="10" rx="3"/><rect x="3" y="3" width="14" height="6" rx="1.5" fill="#fff" stroke="none"/></svg>
+      </span></div>
+        <div class="top"><svg width="16" height="16" stroke="#fff" fill="none" stroke-width="2" viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"/></svg><div style="text-align:center;flex:1"><h3>متاجر قريبة منك</h3><p style="justify-content:center"><svg width="10" height="10" stroke="#fff" fill="none" stroke-width="2" viewBox="0 0 24 24"><path d="M12 21s-7-5-7-11a7 7 0 0 1 14 0c0 6-7 11-7 11z"/><circle cx="12" cy="10" r="2.5"/></svg> قفط — قنا</p></div><span style="width:16px"></span></div></div>
+      <div class="ab" style="padding:0;overflow:hidden">
+        <!-- Search bar over map -->
+        <div style="padding:8px 11px;background:#fff;border-bottom:1px solid var(--line)">
+          <div class="pfield" style="margin:0;background:var(--bg)"><svg width="13" height="13" stroke="var(--muted)" fill="none" stroke-width="2" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4-4"/></svg>ابحث عن متجر أو مطعم…</div>
+        </div>
+        <!-- Filter chips -->
+        <div style="padding:6px 11px;display:flex;gap:5px;background:#fff;border-bottom:1px solid var(--line);overflow-x:auto">
+          <span style="background:var(--grad);color:#fff;font-size:7.5px;padding:4px 10px;border-radius:99px;font-weight:800;white-space:nowrap">الكل</span>
+          <span style="background:var(--soft);color:var(--ink);font-size:7.5px;padding:4px 10px;border-radius:99px;font-weight:700;white-space:nowrap">مطاعم</span>
+          <span style="background:var(--soft);color:var(--ink);font-size:7.5px;padding:4px 10px;border-radius:99px;font-weight:700;white-space:nowrap">ماركت</span>
+          <span style="background:var(--soft);color:var(--ink);font-size:7.5px;padding:4px 10px;border-radius:99px;font-weight:700;white-space:nowrap">صيدليات</span>
+          <span style="background:var(--soft);color:var(--ink);font-size:7.5px;padding:4px 10px;border-radius:99px;font-weight:700;white-space:nowrap">حلويات</span>
+        </div>
+        <!-- Map area -->
+        <div style="height:178px;position:relative;overflow:hidden;background:linear-gradient(160deg,#FBEDE3 0%,#FCF4E8 40%,#EBF0E6 100%)">
+          <!-- Grid lines -->
+          <div style="position:absolute;inset:0;opacity:.45;background-image:linear-gradient(90deg,transparent 49%,#E2D3C3 49.5%,#E2D3C3 50.5%,transparent 51%),linear-gradient(0deg,transparent 49%,#E2D3C3 49.5%,#E2D3C3 50.5%,transparent 51%);background-size:26px 26px"></div>
+          <!-- Roads -->
+          <div style="position:absolute;top:50%;left:0;right:0;height:3px;background:rgba(200,180,160,.5)"></div>
+          <div style="position:absolute;top:0;bottom:0;left:40%;width:3px;background:rgba(200,180,160,.5)"></div>
+          <div style="position:absolute;top:30%;left:20%;right:20%;height:2px;background:rgba(200,180,160,.3);transform:rotate(-15deg)"></div>
+          <!-- Store pins -->
+          <div style="position:absolute;top:36px;right:28px;display:flex;flex-direction:column;align-items:center;z-index:3">
+            <div style="width:24px;height:24px;border-radius:50% 50% 50% 0;background:var(--red);transform:rotate(45deg);box-shadow:0 3px 8px rgba(224,48,30,.35);display:flex;align-items:center;justify-content:center"><svg width="12" height="12" stroke="#fff" fill="none" stroke-width="2" viewBox="0 0 24 24" style="transform:rotate(-45deg)"><path d="M3 8l9-5 9 5-9 5z"/></svg></div>
+            <div style="font-size:6px;color:var(--ink);font-weight:800;background:rgba(255,255,255,.9);padding:1px 5px;border-radius:4px;margin-top:2px;box-shadow:0 1px 3px rgba(0,0,0,.1)">اسكندراني</div>
+          </div>
+          <div style="position:absolute;top:78px;right:90px;display:flex;flex-direction:column;align-items:center;z-index:3">
+            <div style="width:24px;height:24px;border-radius:50% 50% 50% 0;background:var(--orange);transform:rotate(45deg);box-shadow:0 3px 8px rgba(236,122,44,.35);display:flex;align-items:center;justify-content:center"><svg width="12" height="12" stroke="#fff" fill="none" stroke-width="2" viewBox="0 0 24 24" style="transform:rotate(-45deg)"><path d="M4 9h16l-1 11H5z"/></svg></div>
+            <div style="font-size:6px;color:var(--ink);font-weight:800;background:rgba(255,255,255,.9);padding:1px 5px;border-radius:4px;margin-top:2px;box-shadow:0 1px 3px rgba(0,0,0,.1)">السبعي</div>
+          </div>
+          <div style="position:absolute;top:55px;left:22px;display:flex;flex-direction:column;align-items:center;z-index:3">
+            <div style="width:24px;height:24px;border-radius:50% 50% 50% 0;background:var(--green);transform:rotate(45deg);box-shadow:0 3px 8px rgba(26,159,110,.35);display:flex;align-items:center;justify-content:center"><svg width="12" height="12" stroke="#fff" fill="none" stroke-width="2" viewBox="0 0 24 24" style="transform:rotate(-45deg)"><path d="M9 3v6l-5 8a2 2 0 0 0 2 3h12"/></svg></div>
+            <div style="font-size:6px;color:var(--ink);font-weight:800;background:rgba(255,255,255,.9);padding:1px 5px;border-radius:4px;margin-top:2px;box-shadow:0 1px 3px rgba(0,0,0,.1)">صيدلية</div>
+          </div>
+          <div style="position:absolute;bottom:30px;right:55px;display:flex;flex-direction:column;align-items:center;z-index:3">
+            <div style="width:24px;height:24px;border-radius:50% 50% 50% 0;background:var(--gold);transform:rotate(45deg);box-shadow:0 3px 8px rgba(242,169,59,.35);display:flex;align-items:center;justify-content:center"><svg width="12" height="12" stroke="#2B1206" fill="none" stroke-width="2" viewBox="0 0 24 24" style="transform:rotate(-45deg)"><path d="M4 11h16v9H4z"/></svg></div>
+            <div style="font-size:6px;color:var(--ink);font-weight:800;background:rgba(255,255,255,.9);padding:1px 5px;border-radius:4px;margin-top:2px;box-shadow:0 1px 3px rgba(0,0,0,.1)">حلويات</div>
+          </div>
+          <!-- My location indicator -->
+          <div style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);z-index:5">
+            <div style="width:14px;height:14px;border-radius:50%;background:var(--primary);border:3px solid #fff;box-shadow:0 0 0 5px rgba(15,90,168,.15),0 3px 8px rgba(0,0,0,.2)"></div>
+          </div>
+          <!-- Radius circle -->
+          <div style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:120px;height:120px;border-radius:50%;border:1.5px dashed rgba(15,90,168,.2);z-index:1"></div>
+          <!-- Re-center button -->
+          <div style="position:absolute;bottom:8px;left:8px;width:28px;height:28px;border-radius:9px;background:#fff;box-shadow:0 2px 8px rgba(0,0,0,.15);display:flex;align-items:center;justify-content:center;z-index:5"><svg width="14" height="14" stroke="var(--primary)" fill="none" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2v4M12 18v4M2 12h4M18 12h4"/></svg></div>
+        </div>
+        <!-- Bottom sheet: Nearby stores list -->
+        <div style="background:#fff;border-radius:18px 18px 0 0;margin-top:-14px;position:relative;z-index:6;padding:8px 11px 10px;box-shadow:0 -4px 16px rgba(0,0,0,.06)">
+          <div style="width:32px;height:4px;border-radius:99px;background:var(--line2);margin:0 auto 8px"></div>
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:7px"><span style="font-size:9.5px;font-weight:900;color:var(--ink);font-family:'Cairo'">أقرب المتاجر إليك</span><span style="font-size:7.5px;color:var(--red);font-weight:800">عرض الكل ←</span></div>
+          <div class="pc" style="margin-bottom:5px"><div class="row"><div class="picon red"><svg width="14" height="14" stroke="#fff" fill="none" stroke-width="1.7" viewBox="0 0 24 24"><path d="M3 8l9-5 9 5-9 5z"/><path d="M3 8v8l9 5 9-5V8"/></svg></div><div style="flex:1"><div class="nm">مطعم اسكندراني</div><div class="sub"><svg width="9" height="9" fill="var(--gold)" viewBox="0 0 24 24"><path d="M12 2l3 6 7 .8-5 4.5L18.5 21 12 17.5 5.5 21 7 13.3 2 8.8 9 8z"/></svg>4.7 · 350م · 10 د</div></div><span class="ptag done">مفتوح</span></div></div>
+          <div class="pc" style="margin-bottom:5px"><div class="row"><div class="picon org"><svg width="14" height="14" stroke="#fff" fill="none" stroke-width="1.7" viewBox="0 0 24 24"><path d="M4 9h16l-1 11H5z"/><path d="M9 9V6a3 3 0 0 1 6 0v3"/></svg></div><div style="flex:1"><div class="nm">ماركت السبعي</div><div class="sub"><svg width="9" height="9" fill="var(--gold)" viewBox="0 0 24 24"><path d="M12 2l3 6 7 .8-5 4.5L18.5 21 12 17.5 5.5 21 7 13.3 2 8.8 9 8z"/></svg>4.8 · 700م · 15 د</div></div><span class="ptag done">مفتوح</span></div></div>
+          <div class="pc" style="margin-bottom:0"><div class="row"><div class="picon" style="background:linear-gradient(135deg,#1A9F6E,#3FBF8C)"><svg width="14" height="14" stroke="#fff" fill="none" stroke-width="1.7" viewBox="0 0 24 24"><path d="M9 3v6l-5 8a2 2 0 0 0 2 3h12a2 2 0 0 0 2-3l-5-8V3"/></svg></div><div style="flex:1"><div class="nm">صيدلية د/ حسين كمال</div><div class="sub"><svg width="9" height="9" fill="var(--gold)" viewBox="0 0 24 24"><path d="M12 2l3 6 7 .8-5 4.5L18.5 21 12 17.5 5.5 21 7 13.3 2 8.8 9 8z"/></svg>4.9 · 1.2 كم · 20 د</div></div><span class="ptag done">مفتوح</span></div></div>
+        </div>
+      </div>
+    </div></div></div>
+    <div class="annot">
+      <div class="knum"><b>شاشة 04C</b> · Nearby Stores Map</div>
+      <h3>البحث عن متجر قريب — الخريطة</h3>
+      <div class="ad">شاشة مستقلة تعرض خريطة تفاعلية بالمتاجر والمطاعم القريبة من موقع العميل، مع بحث وفلترة وقائمة بأقرب المتاجر.</div>
+      <div class="afeat"><div class="n">1</div><div class="tx"><b>خريطة تفاعلية</b><span>عرض موقع العميل ودبابيس المتاجر حوله بألوان حسب النوع (مطعم/ماركت/صيدلية).</span></div></div>
+      <div class="afeat"><div class="n">2</div><div class="tx"><b>بحث وفلترة</b><span>شريط بحث + فلاتر سريعة لكل نوع متجر (الكل · مطاعم · ماركت · صيدليات · حلويات).</span></div></div>
+      <div class="afeat"><div class="n">3</div><div class="tx"><b>نطاق التوصيل</b><span>دائرة توضّح نطاق التوصيل المتاح حول موقعك + زر إعادة التمركز.</span></div></div>
+      <div class="afeat"><div class="n">4</div><div class="tx"><b>قائمة أقرب المتاجر</b><span>بطاقات المتاجر بالتقييم، المسافة، ووقت التوصيل التقريبي — قابلة للسحب لأعلى.</span></div></div>
+      <div class="afeat"><div class="n">5</div><div class="tx"><b>اختيار المتجر</b><span>الضغط على أي متجر يفتح صفحة إنشاء الطلب مباشرة.</span></div></div>
+    </div>
+  </div>
+  <div class="pf"><span>barmagly.tech · التصميم المبدئي لتطبيق تميم · مايو 2026</span><span class="num">9</span></div>
+</div>
+
+<!-- ============ SCREEN 04B — STORES LIST ============ -->
+<div class="page">
+  <div class="ph"><div class="brand"><img src="barmagly-logo.jpg" alt=""><b>BAR<span>MAGLY</span></b></div><div class="crumb"><span class="ch"><img src="485861377_1066070162226760_1188895592111948389_n.jpg">تطبيق العميل</span>المحلات والمطاعم</div></div>
+  <div class="spage">
+    <div class="phone-stage"><div class="phone"><span class="notch"></span><div class="screen">
+      <div class="ah grad"><div class="ios on-dark" style="padding:0 0 8px"><span>9:41</span><span class="sig">
+        <svg width="15" height="11" viewBox="0 0 18 12" fill="#fff"><rect x="0" y="8" width="3" height="4" rx="1"/><rect x="5" y="5" width="3" height="7" rx="1"/><rect x="10" y="2" width="3" height="10" rx="1"/><rect x="15" y="0" width="3" height="12" rx="1" opacity=".4"/></svg>
+        <svg width="22" height="11" viewBox="0 0 26 12" fill="none" stroke="#fff" stroke-width="1.5"><rect x="1" y="1" width="20" height="10" rx="3"/><rect x="3" y="3" width="14" height="6" rx="1.5" fill="#fff" stroke="none"/></svg></span></div>
+        <div class="top"><svg width="16" height="16" stroke="#fff" fill="none" stroke-width="2" viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"/></svg><div style="text-align:center;flex:1"><h3>دليفري داخل قفط</h3><p style="justify-content:center">اختر المحل أو المطعم</p></div><span style="width:16px"></span></div></div>
+      <div class="ab">
+        <div class="pfield" style="margin-top:2px"><svg width="13" height="13" stroke="var(--muted)" fill="none" stroke-width="2" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4-4"/></svg>ابحث عن محل…</div>
+        <div class="seg" style="margin-bottom:8px"><span class="on">الكل</span><span>مطاعم</span><span>ماركت</span><span>صيدليات</span></div>
+        <div class="pc"><div class="row"><div class="picon red"><svg width="16" height="16" stroke="#fff" fill="none" stroke-width="1.7" viewBox="0 0 24 24"><path d="M3 8l9-5 9 5-9 5z"/><path d="M3 8v8l9 5 9-5V8"/><circle cx="10" cy="7" r=".8" fill="#fff"/><circle cx="13" cy="9" r=".8" fill="#fff"/></svg></div><div style="flex:1"><div class="nm">مطعم اسكندراني — بيتزا</div><div class="sub"><svg width="9" height="9" fill="var(--gold)" viewBox="0 0 24 24"><path d="M12 2l3 6 7 .8-5 4.5L18.5 21 12 17.5 5.5 21 7 13.3 2 8.8 9 8z"/></svg>4.7 · بيتزا ومعجنات · 25-40 د</div></div><span class="ptag done">مفتوح</span></div></div>
+        <div class="pc"><div class="row"><div class="picon org"><svg width="16" height="16" stroke="#fff" fill="none" stroke-width="1.7" viewBox="0 0 24 24"><path d="M4 9h16l-1 11H5z"/><path d="M9 9V6a3 3 0 0 1 6 0v3"/></svg></div><div style="flex:1"><div class="nm">ماركت السبعي</div><div class="sub"><svg width="9" height="9" fill="var(--gold)" viewBox="0 0 24 24"><path d="M12 2l3 6 7 .8-5 4.5L18.5 21 12 17.5 5.5 21 7 13.3 2 8.8 9 8z"/></svg>4.8 · بقالة وسوبر ماركت · 30 د</div></div><span class="ptag done">مفتوح</span></div></div>
+        <div class="pc"><div class="row"><div class="picon soft"><svg width="16" height="16" stroke="var(--red)" fill="none" stroke-width="1.7" viewBox="0 0 24 24"><path d="M9 3v6l-5 8a2 2 0 0 0 2 3h12a2 2 0 0 0 2-3l-5-8V3"/><path d="M8 3h8"/></svg></div><div style="flex:1"><div class="nm">صيدلية د/ حسين كمال محمد</div><div class="sub"><svg width="9" height="9" fill="var(--gold)" viewBox="0 0 24 24"><path d="M12 2l3 6 7 .8-5 4.5L18.5 21 12 17.5 5.5 21 7 13.3 2 8.8 9 8z"/></svg>4.9 · أرفق صورة الروشتة · 20 د</div></div><span class="ptag done">مفتوح</span></div></div>
+      </div>
+      <div class="pbnav"><div class="it on"><svg width="16" height="16" stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24"><path d="M3 11l9-7 9 7v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/></svg><span>الرئيسية</span></div><div class="it"><svg width="16" height="16" stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24"><path d="M4 7h16v13H4z"/><path d="M4 7l2-3h12l2 3"/></svg><span>طلباتي</span></div><div class="it"><svg width="16" height="16" stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/></svg><span>الإشعارات</span></div><div class="it"><svg width="16" height="16" stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 4-6 8-6s8 2 8 6"/></svg><span>حسابي</span></div></div>
+    </div></div></div>
+    <div class="annot">
+      <div class="knum"><b>شاشة 05</b> · Stores</div>
+      <h3>قائمة المحلات والمطاعم</h3>
+      <div class="ad">بعد اختيار «دليفري»، تظهر للعميل المحلات والمطاعم والصيدليات المتاحة في مدينته ليختار منها.</div>
+      <div class="afeat"><div class="n">1</div><div class="tx"><b>تصنيفات سريعة</b><span>الكل · مطاعم · ماركت · صيدليات للفلترة.</span></div></div>
+      <div class="afeat"><div class="n">2</div><div class="tx"><b>بطاقة كل محل</b><span>الاسم، التقييم، النوع، ووقت التوصيل التقريبي.</span></div></div>
+      <div class="afeat"><div class="n">3</div><div class="tx"><b>أمثلة</b><span>مطعم اسكندراني · ماركت السبعي · صيدلية د/ حسين كمال محمد.</span></div></div>
+      <div class="afeat"><div class="n">4</div><div class="tx"><b>حالة المحل</b><span>مفتوح / مغلق + بحث سريع بالاسم.</span></div></div>
+      <div class="afeat"><div class="n">5</div><div class="tx"><b>اختيار المحل</b><span>يفتح شاشة كتابة الطلب أو رفع صورة.</span></div></div>
+    </div>
+  </div>
+  <div class="pf"><span>barmagly.tech · التصميم المبدئي لتطبيق تميم · مايو 2026</span><span class="num">8</span></div>
+</div>
+
+<!-- ============ SCREEN 05 — DELIVERY ============ -->
+<div class="page">
+  <div class="ph"><div class="brand"><img src="barmagly-logo.jpg" alt=""><b>BAR<span>MAGLY</span></b></div><div class="crumb"><span class="ch"><img src="485861377_1066070162226760_1188895592111948389_n.jpg">تطبيق العميل</span>طلب دليفري</div></div>
+  <div class="spage">
+    <div class="phone-stage"><div class="phone"><span class="notch"></span><div class="screen">
+      <div class="ah grad"><div class="ios on-dark" style="padding:0 0 8px"><span>9:41</span><span class="sig">
+        <svg width="15" height="11" viewBox="0 0 18 12" fill="#fff"><rect x="0" y="8" width="3" height="4" rx="1"/><rect x="5" y="5" width="3" height="7" rx="1"/><rect x="10" y="2" width="3" height="10" rx="1"/><rect x="15" y="0" width="3" height="12" rx="1" opacity=".4"/></svg>
+        <svg width="22" height="11" viewBox="0 0 26 12" fill="none" stroke="#fff" stroke-width="1.5"><rect x="1" y="1" width="20" height="10" rx="3"/><rect x="3" y="3" width="14" height="6" rx="1.5" fill="#fff" stroke="none"/></svg></span></div>
+        <div class="top"><svg width="16" height="16" stroke="#fff" fill="none" stroke-width="2" viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"/></svg><div style="text-align:center;flex:1"><h3>طلب دليفري</h3><p style="justify-content:center">ماركت السبعي · داخل قفط</p></div><span style="width:16px"></span></div></div>
+      <div class="ab">
+        <div class="pc" style="margin-bottom:8px"><div class="row"><div class="picon soft"><svg width="16" height="16" stroke="var(--red)" fill="none" stroke-width="1.7" viewBox="0 0 24 24"><path d="M4 9h16l-1 11H5z"/><path d="M9 9V6a3 3 0 0 1 6 0v3"/></svg></div><div style="flex:1"><div class="nm">ماركت السبعي</div><div class="sub">المحل المختار · قفط</div></div><span class="ptag done">مفتوح</span></div></div>
+        <div style="font-size:9px;font-weight:900;color:var(--ink);margin:2px 0 5px;font-family:'Cairo'">اكتب طلبك</div>
+        <div class="pfield" style="height:56px;align-items:flex-start;padding-top:10px;line-height:1.6"><svg width="13" height="13" stroke="var(--muted)" fill="none" stroke-width="1.8" viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h10"/></svg>2 كيلو سكر · زيت · 3 علب تونة…</div>
+        <div style="text-align:center;font-size:8px;color:var(--muted);margin:2px 0 5px">— أو أرفق —</div>
+        <div style="display:flex;gap:6px;margin-bottom:8px">
+          <div class="pfield" style="flex:1;margin:0;justify-content:center;border:1.5px dashed var(--line2);color:var(--red);font-size:8.5px;font-weight:700"><svg width="13" height="13" stroke="var(--red)" fill="none" stroke-width="1.8" viewBox="0 0 24 24"><rect x="3" y="6" width="18" height="14" rx="2"/><circle cx="12" cy="13" r="3"/><path d="M8 6l1.5-2h5L16 6"/></svg>صورة</div>
+          <div class="pfield" style="flex:1;margin:0;justify-content:center;border:1.5px dashed var(--line2);color:var(--red);font-size:8.5px;font-weight:700"><svg width="13" height="13" stroke="var(--red)" fill="none" stroke-width="1.8" viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>تسجيل صوتي</div>
+        </div>
+        <div class="pfield" style="border-right:3px solid var(--red)"><svg width="13" height="13" stroke="var(--red)" fill="none" stroke-width="2" viewBox="0 0 24 24"><path d="M3 11l9-7 9 7v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/></svg><span class="lab">التسليم: منزلي — ش الجمهورية</span></div>
+        <div style="font-size:9px;font-weight:900;color:var(--ink);margin:2px 0 5px;font-family:'Cairo'">طريقة الدفع</div>
+        <div style="display:flex;gap:6px;margin-bottom:8px">
+          <div class="pfield" style="flex:1;margin:0;flex-direction:column;gap:3px;padding:8px 4px;justify-content:center;font-size:8px;border-color:var(--red);color:var(--red);font-weight:800;background:var(--red-l)"><svg width="16" height="16" stroke="var(--red)" fill="none" stroke-width="1.8" viewBox="0 0 24 24"><rect x="2" y="6" width="20" height="12" rx="2"/><circle cx="12" cy="12" r="2.5"/></svg>كاش</div>
+          <div class="pfield" style="flex:1;margin:0;flex-direction:column;gap:3px;padding:8px 4px;justify-content:center;font-size:8px;color:var(--ink);font-weight:700"><svg width="16" height="16" viewBox="0 0 24 24"><circle cx="12" cy="12" r="11" fill="#6A1B9A"/><path d="M7 9h6a3 3 0 0 1 0 6h-3v3H7z" fill="#fff"/><circle cx="16.5" cy="8" r="1.6" fill="#00C2A8"/></svg>انستاباي</div>
+          <div class="pfield" style="flex:1;margin:0;flex-direction:column;gap:3px;padding:8px 4px;justify-content:center;font-size:8px;color:var(--ink);font-weight:700"><svg width="16" height="16" viewBox="0 0 24 24"><circle cx="12" cy="12" r="11" fill="#E60000"/><path d="M13.5 5c-3 .2-5.5 2.6-5.5 5.8 0 3.4 2.7 6 6 6.2.3 0 .5.2.4.5-.4 1.4-1.6 2.4-3 2.5 3.6.4 7-2.1 7.6-5.7.5-3.3-1.4-6.4-4.4-7.4a6 6 0 0 0-1.6-.4z" fill="#fff"/></svg>فودافون</div>
+        </div>
+        <div class="pbtn">إرسال الطلب للإدارة</div>
+        <div style="font-size:7.5px;color:var(--muted);text-align:center;margin-top:7px;line-height:1.5">الإدارة ستراجع طلبك وتؤكده وتحدّد السعر</div>
+      </div>
+    </div></div></div>
+    <div class="annot">
+      <div class="knum"><b>شاشة 05</b> · Delivery Order</div>
+      <h3>طلب من المحل المختار</h3>
+      <div class="ad">بعد اختيار المحل من القائمة، يكتب العميل طلبه نصيًا أو يرفع صورة — ثم تراجعه الإدارة وتؤكده وتسعّره.</div>
+      <div class="afeat"><div class="n">1</div><div class="tx"><b>المحل المختار</b><span>يظهر المحل المحدد (مثال: ماركت السبعي) وحالته.</span></div></div>
+      <div class="afeat"><div class="n">2</div><div class="tx"><b>اكتب طلبك أو ارفع صورة</b><span>كتابة الأصناف نصيًا، أو رفع صورة بالطلب/الروشتة.</span></div></div>
+      <div class="afeat"><div class="n">3</div><div class="tx"><b>عنوان التسليم</b><span>من العناوين المحفوظة أو تحديد على الخريطة.</span></div></div>
+      <div class="afeat"><div class="n">4</div><div class="tx"><b>الدفع: كاش · انستاباي · فودافون كاش</b><span>اختيار وسيلة الدفع المناسبة.</span></div></div>
+      <div class="afeat"><div class="n">5</div><div class="tx"><b>مراجعة وتأكيد الإدارة</b><span>يصل الطلب للوحة التحكم لمراجعته وتأكيده وتسعيره.</span></div></div>
+    </div>
+  </div>
+  <div class="pf"><span>barmagly.tech · التصميم المبدئي لتطبيق تميم · مايو 2026</span><span class="num">9</span></div>
+</div>
+
+<!-- ============ SCREEN 06 — SHIPPING ============ -->
+<div class="page">
+  <div class="ph"><div class="brand"><img src="barmagly-logo.jpg" alt=""><b>BAR<span>MAGLY</span></b></div><div class="crumb"><span class="ch"><img src="485861377_1066070162226760_1188895592111948389_n.jpg">تطبيق العميل</span>طلب شحن</div></div>
+  <div class="spage">
+    <div class="phone-stage"><div class="phone"><span class="notch"></span><div class="screen">
+      <div class="ah grad"><div class="ios on-dark" style="padding:0 0 8px"><span>9:41</span><span class="sig">
+        <svg width="15" height="11" viewBox="0 0 18 12" fill="#fff"><rect x="0" y="8" width="3" height="4" rx="1"/><rect x="5" y="5" width="3" height="7" rx="1"/><rect x="10" y="2" width="3" height="10" rx="1"/><rect x="15" y="0" width="3" height="12" rx="1" opacity=".4"/></svg>
+        <svg width="22" height="11" viewBox="0 0 26 12" fill="none" stroke="#fff" stroke-width="1.5"><rect x="1" y="1" width="20" height="10" rx="3"/><rect x="3" y="3" width="14" height="6" rx="1.5" fill="#fff" stroke="none"/></svg></span></div>
+        <div class="top"><svg width="16" height="16" stroke="#fff" fill="none" stroke-width="2" viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"/></svg><div style="text-align:center;flex:1"><h3>طلب شحن</h3><p style="justify-content:center">من مكان إلى مكان</p></div><span style="width:16px"></span></div></div>
+      <div class="ab">
+        <div class="pfield" style="border-right:3px solid var(--green)"><svg width="13" height="13" stroke="var(--green)" fill="none" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="11" r="2.5"/><path d="M12 21s-7-5-7-11a7 7 0 0 1 14 0c0 6-7 11-7 11z"/></svg><span class="lab">من: قفط</span></div>
+        <div class="pfield" style="border-right:3px solid var(--red)"><svg width="13" height="13" stroke="var(--red)" fill="none" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="11" r="2.5"/><path d="M12 21s-7-5-7-11a7 7 0 0 1 14 0c0 6-7 11-7 11z"/></svg><span class="lab">إلى: الأقصر</span></div>
+        <div class="pfield"><svg width="13" height="13" stroke="var(--red)" fill="none" stroke-width="1.8" viewBox="0 0 24 24"><path d="M21 16V8l-9-5-9 5v8l9 5z"/><path d="M3 8l9 5 9-5"/></svg>نوع الشحنة: طرد</div>
+        <div style="display:flex;gap:7px;margin-bottom:8px">
+          <div class="pfield" style="flex:1;margin:0"><svg width="12" height="12" stroke="var(--muted)" fill="none" stroke-width="1.8" viewBox="0 0 24 24"><path d="M12 3l8 4-8 4-8-4z"/><path d="M4 7v10l8 4 8-4V7"/></svg>الوزن</div>
+          <div class="pfield" style="flex:1;margin:0"><svg width="12" height="12" stroke="var(--muted)" fill="none" stroke-width="1.8" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="2"/></svg>الحجم</div>
+        </div>
+        <div style="display:flex;gap:7px;margin-bottom:9px">
+          <div class="pfield" style="flex:1;margin:0;justify-content:center;font-size:8px"><svg width="11" height="11" stroke="var(--muted)" fill="none" stroke-width="1.8" viewBox="0 0 24 24"><path d="M5 8l3-3 4 4-3 3z"/><path d="M11 11l8 8"/></svg>قابل للكسر</div>
+          <div class="pfield" style="flex:1;margin:0;justify-content:center;font-size:8px;border-color:var(--red);color:var(--red);font-weight:800"><svg width="11" height="11" stroke="var(--red)" fill="none" stroke-width="1.8" viewBox="0 0 24 24"><path d="M13 2L3 14h7l-1 8 10-12h-7z"/></svg>شحن سريع</div>
+        </div>
+        <div class="pc" style="background:linear-gradient(135deg,#FFF4EC,#FDEDE2);border-color:#F6D3BC"><div class="row" style="justify-content:space-between"><div><div style="font-size:8px;color:var(--muted);font-weight:600">التكلفة التقديرية</div><div style="font-size:7px;color:var(--muted)">المسافة + الوزن + سريع</div></div><b style="font-family:'Cairo';color:var(--red-d);font-size:17px">85 ج.م</b></div></div>
+        <div class="pbtn">تأكيد طلب الشحن</div>
+      </div>
+    </div></div></div>
+    <div class="annot">
+      <div class="knum"><b>شاشة 06</b> · Shipping</div>
+      <h3>طلب شحن بين المناطق</h3>
+      <div class="ad">شحن طرود وبضائع من والى قنا والأقصر وأسوان والبحر الأحمر، مع تقدير فوري للتكلفة (بوصلة الشحن).</div>
+      <div class="afeat"><div class="n">1</div><div class="tx"><b>من / إلى</b><span>نقطة الاستلام ونقطة التسليم بوضوح بصري (أخضر/أحمر).</span></div></div>
+      <div class="afeat"><div class="n">2</div><div class="tx"><b>تفاصيل الشحنة</b><span>النوع، الوزن، الحجم، وهل قابلة للكسر.</span></div></div>
+      <div class="afeat"><div class="n">3</div><div class="tx"><b>خيار الشحن السريع</b><span>رسوم استعجال مقابل أولوية في التنفيذ.</span></div></div>
+      <div class="afeat"><div class="n">4</div><div class="tx"><b>بوصلة السعر</b><span>تقدير تلقائي للتكلفة بناءً على المسافة والوزن والخيارات.</span></div></div>
+    </div>
+  </div>
+  <div class="pf"><span>barmagly.tech · التصميم المبدئي لتطبيق تميم · مايو 2026</span><span class="num">10</span></div>
+</div>
+
+<!-- ============ SCREEN 07 — MERCHANT ============ -->
+<div class="page">
+  <div class="ph"><div class="brand"><img src="barmagly-logo.jpg" alt=""><b>BAR<span>MAGLY</span></b></div><div class="crumb"><span class="ch"><img src="485861377_1066070162226760_1188895592111948389_n.jpg">تطبيق العميل</span>طلب تاجر / موزع</div></div>
+  <div class="spage">
+    <div class="phone-stage"><div class="phone"><span class="notch"></span><div class="screen">
+      <div class="ah grad"><div class="ios on-dark" style="padding:0 0 8px"><span>9:41</span><span class="sig">
+        <svg width="15" height="11" viewBox="0 0 18 12" fill="#fff"><rect x="0" y="8" width="3" height="4" rx="1"/><rect x="5" y="5" width="3" height="7" rx="1"/><rect x="10" y="2" width="3" height="10" rx="1"/><rect x="15" y="0" width="3" height="12" rx="1" opacity=".4"/></svg>
+        <svg width="22" height="11" viewBox="0 0 26 12" fill="none" stroke="#fff" stroke-width="1.5"><rect x="1" y="1" width="20" height="10" rx="3"/><rect x="3" y="3" width="14" height="6" rx="1.5" fill="#fff" stroke="none"/></svg></span></div>
+        <div class="top"><svg width="16" height="16" stroke="#fff" fill="none" stroke-width="2" viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"/></svg><div style="text-align:center;flex:1"><h3>طلب تاجر / موزع</h3><p style="justify-content:center">منتجات وكميات متعددة</p></div><span style="width:16px"></span></div></div>
+      <div class="ab">
+        <div style="font-size:9px;font-weight:900;color:var(--ink);margin-bottom:5px;font-family:'Cairo'">المنتجات المطلوبة</div>
+        <div class="pc"><div class="row"><div class="picon k"><svg width="15" height="15" stroke="var(--gray)" fill="none" stroke-width="1.7" viewBox="0 0 24 24"><path d="M4 9h16l-1 11H5z"/><path d="M9 9V6a3 3 0 0 1 6 0v3"/></svg></div><div style="flex:1"><div class="nm">مياه معدنية</div><div class="sub">من مخزن A</div></div><div class="ptag new">×20 كرتونة</div></div></div>
+        <div class="pc"><div class="row"><div class="picon k"><svg width="15" height="15" stroke="var(--gray)" fill="none" stroke-width="1.7" viewBox="0 0 24 24"><path d="M4 9h16l-1 11H5z"/><path d="M9 9V6a3 3 0 0 1 6 0v3"/></svg></div><div style="flex:1"><div class="nm">عصائر متنوعة</div><div class="sub">من مخزن B</div></div><div class="ptag way">×10 كراتين</div></div></div>
+        <div class="pbtn line" style="margin-bottom:9px;font-size:9px;padding:9px">+ إضافة منتج آخر</div>
+        <div style="font-size:9px;font-weight:900;color:var(--ink);margin-bottom:5px;font-family:'Cairo'">نقاط التسليم</div>
+        <div class="pfield"><svg width="12" height="12" stroke="var(--red)" fill="none" stroke-width="2" viewBox="0 0 24 24"><path d="M3 11l9-7 9 7v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/></svg>الفرع 1 — قفط</div>
+        <div class="pfield"><svg width="12" height="12" stroke="var(--red)" fill="none" stroke-width="2" viewBox="0 0 24 24"><path d="M3 11l9-7 9 7v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/></svg>الفرع 2 — قوص</div>
+        <div class="pbtn">طلب عرض سعر</div>
+      </div>
+    </div></div></div>
+    <div class="annot">
+      <div class="knum"><b>شاشة 07</b> · Merchant</div>
+      <h3>طلب التاجر / الموزع</h3>
+      <div class="ad">للطلبات التجارية الأكبر — يدعم منتجات وكميات متعددة من أكثر من مخزن إلى أكثر من فرع، بنظام عرض سعر.</div>
+      <div class="afeat"><div class="n">1</div><div class="tx"><b>منتجات متعددة</b><span>إضافة عدة أصناف بكميات مختلفة لكل منها.</span></div></div>
+      <div class="afeat"><div class="n">2</div><div class="tx"><b>نقاط استلام متعددة</b><span>سحب المنتجات من أكثر من مخزن/مورد.</span></div></div>
+      <div class="afeat"><div class="n">3</div><div class="tx"><b>نقاط تسليم متعددة</b><span>توزيع على أكثر من فرع أو عنوان.</span></div></div>
+      <div class="afeat"><div class="n">4</div><div class="tx"><b>طلب عرض سعر</b><span>الإدارة تسعّر العملية التجارية وترسل العرض.</span></div></div>
+    </div>
+  </div>
+  <div class="pf"><span>barmagly.tech · التصميم المبدئي لتطبيق تميم · مايو 2026</span><span class="num">11</span></div>
+</div>
+
+<!-- ============ SCREEN 08 — TRACKING ============ -->
+<div class="page">
+  <div class="ph"><div class="brand"><img src="barmagly-logo.jpg" alt=""><b>BAR<span>MAGLY</span></b></div><div class="crumb"><span class="ch"><img src="485861377_1066070162226760_1188895592111948389_n.jpg">تطبيق العميل</span>تتبّع الطلب</div></div>
+  <div class="spage">
+    <div class="phone-stage"><div class="phone"><span class="notch"></span><div class="screen">
+      <div class="ah grad"><div class="ios on-dark" style="padding:0 0 8px"><span>9:41</span><span class="sig">
+        <svg width="15" height="11" viewBox="0 0 18 12" fill="#fff"><rect x="0" y="8" width="3" height="4" rx="1"/><rect x="5" y="5" width="3" height="7" rx="1"/><rect x="10" y="2" width="3" height="10" rx="1"/><rect x="15" y="0" width="3" height="12" rx="1" opacity=".4"/></svg>
+        <svg width="22" height="11" viewBox="0 0 26 12" fill="none" stroke="#fff" stroke-width="1.5"><rect x="1" y="1" width="20" height="10" rx="3"/><rect x="3" y="3" width="14" height="6" rx="1.5" fill="#fff" stroke="none"/></svg></span></div>
+        <div class="top"><div><h3>تتبّع الطلب #1042</h3><p>المندوب في الطريق إليك</p></div></div></div>
+      <div class="ab">
+        <div class="pmap"><span class="route"></span><span class="pin a"></span><span class="pin b"></span></div>
+        <div class="pc"><div class="row"><div class="picon red"><svg width="16" height="16" stroke="#fff" fill="none" stroke-width="1.7" viewBox="0 0 24 24"><circle cx="9" cy="20" r="1.5"/><circle cx="18" cy="20" r="1.5"/><path d="M2 3h3l2.5 12.5a1.5 1.5 0 0 0 1.5 1.2h8a1.5 1.5 0 0 0 1.5-1.2L21 7H6"/></svg></div><div style="flex:1"><div class="nm">محمود — مندوب تميم</div><div class="sub"><svg width="9" height="9" fill="var(--gold)" viewBox="0 0 24 24"><path d="M12 2l3 6 7 .8-5 4.5L18.5 21 12 17.5 5.5 21 7 13.3 2 8.8 9 8z"/></svg>4.9 · يبعد 1.2 كم · 7 دقائق</div></div><div style="width:28px;height:28px;border-radius:50%;background:var(--green-l);display:flex;align-items:center;justify-content:center"><svg width="14" height="14" stroke="var(--green)" fill="none" stroke-width="2" viewBox="0 0 24 24"><path d="M5 4h4l2 5-3 2a11 11 0 0 0 5 5l2-3 5 2v4a2 2 0 0 1-2 2A16 16 0 0 1 3 6a2 2 0 0 1 2-2z"/></svg></div></div></div>
+        <div class="ptrack">
+          <div class="s on">تم قبول الطلب<small>2:30 م</small></div>
+          <div class="s on">تم تعيين مندوب<small>2:34 م</small></div>
+          <div class="s on">تم استلام الطلب<small>2:48 م</small></div>
+          <div class="s on cur">في الطريق إليك<small>الآن</small></div>
+          <div class="s">تم التسليم</div>
+        </div>
+      </div>
+    </div></div></div>
+    <div class="annot">
+      <div class="knum"><b>شاشة 08</b> · Tracking</div>
+      <h3>تتبّع الطلب لحظيًا</h3>
+      <div class="ad">يتابع العميل طلبه على الخريطة مع خط زمني واضح للحالة، وبيانات المندوب والتواصل المباشر معه.</div>
+      <div class="afeat"><div class="n">1</div><div class="tx"><b>خريطة حيّة</b><span>موقع المندوب ومسار الوصول إلى العميل.</span></div></div>
+      <div class="afeat"><div class="n">2</div><div class="tx"><b>بيانات المندوب</b><span>الاسم، التقييم، المسافة، والوقت المتوقع + زر اتصال.</span></div></div>
+      <div class="afeat"><div class="n">3</div><div class="tx"><b>خط زمني للحالة</b><span>قبول ← تعيين ← استلام ← في الطريق ← تسليم.</span></div></div>
+      <div class="afeat"><div class="n">4</div><div class="tx"><b>إشعارات لحظية</b><span>عند كل تغيّر في حالة الطلب.</span></div></div>
+    </div>
+  </div>
+  <div class="pf"><span>barmagly.tech · التصميم المبدئي لتطبيق تميم · مايو 2026</span><span class="num">12</span></div>
+</div>
+
+<!-- ============ SCREEN 09 — MY ORDERS ============ -->
+<div class="page">
+  <div class="ph"><div class="brand"><img src="barmagly-logo.jpg" alt=""><b>BAR<span>MAGLY</span></b></div><div class="crumb"><span class="ch"><img src="485861377_1066070162226760_1188895592111948389_n.jpg">تطبيق العميل</span>طلباتي</div></div>
+  <div class="spage">
+    <div class="phone-stage"><div class="phone"><span class="notch"></span><div class="screen">
+      <div class="ah grad"><div class="ios on-dark" style="padding:0 0 8px"><span>9:41</span><span class="sig">
+        <svg width="15" height="11" viewBox="0 0 18 12" fill="#fff"><rect x="0" y="8" width="3" height="4" rx="1"/><rect x="5" y="5" width="3" height="7" rx="1"/><rect x="10" y="2" width="3" height="10" rx="1"/><rect x="15" y="0" width="3" height="12" rx="1" opacity=".4"/></svg>
+        <svg width="22" height="11" viewBox="0 0 26 12" fill="none" stroke="#fff" stroke-width="1.5"><rect x="1" y="1" width="20" height="10" rx="3"/><rect x="3" y="3" width="14" height="6" rx="1.5" fill="#fff" stroke="none"/></svg></span></div>
+        <div class="top"><div><h3>طلباتي</h3><p>سجل كل طلباتك</p></div></div></div>
+      <div class="ab">
+        <div class="seg"><span class="on">الحالية</span><span>المكتملة</span></div>
+        <div class="pc"><div class="row"><div class="picon soft"><svg width="15" height="15" stroke="var(--red)" fill="none" stroke-width="1.7" viewBox="0 0 24 24"><path d="M9 3v6l-5 8a2 2 0 0 0 2 3h12a2 2 0 0 0 2-3l-5-8V3"/></svg></div><div style="flex:1"><div class="nm">#1042 · دليفري صيدلية</div><div class="sub">اليوم 2:30 م · 45 ج.م</div></div><div class="ptag way">في الطريق</div></div></div>
+        <div class="pc"><div class="row"><div class="picon soft"><svg width="15" height="15" stroke="var(--red)" fill="none" stroke-width="1.7" viewBox="0 0 24 24"><path d="M21 16V8l-9-5-9 5v8l9 5z"/></svg></div><div style="flex:1"><div class="nm">#1039 · شحن للأقصر</div><div class="sub">اليوم 11:00 ص · 85 ج.م</div></div><div class="ptag new">قيد المراجعة</div></div></div>
+        <div class="pc"><div class="row"><div class="picon soft"><svg width="15" height="15" stroke="var(--red)" fill="none" stroke-width="1.7" viewBox="0 0 24 24"><path d="M5 8h14l-1 11H6z"/><path d="M9 8V6a3 3 0 0 1 6 0v2"/></svg></div><div style="flex:1"><div class="nm">#1031 · سوبر ماركت</div><div class="sub">أمس 6:10 م · 60 ج.م</div></div><div class="ptag done">تم التسليم</div></div></div>
+        <div class="pc"><div class="row"><div class="picon soft"><svg width="15" height="15" stroke="var(--red)" fill="none" stroke-width="1.7" viewBox="0 0 24 24"><path d="M4 9h16l-1 11H5z"/></svg></div><div style="flex:1"><div class="nm">#1024 · طلب تاجر</div><div class="sub">2 مايو · 420 ج.م</div></div><div class="ptag done">مكتمل</div></div></div>
+      </div>
+      <div class="pbnav"><div class="it"><svg width="16" height="16" stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24"><path d="M3 11l9-7 9 7v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/></svg><span>الرئيسية</span></div><div class="it on"><svg width="16" height="16" stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24"><path d="M4 7h16v13H4z"/><path d="M4 7l2-3h12l2 3"/></svg><span>طلباتي</span></div><div class="it"><svg width="16" height="16" stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/></svg><span>الإشعارات</span></div><div class="it"><svg width="16" height="16" stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 4-6 8-6s8 2 8 6"/></svg><span>حسابي</span></div></div>
+    </div></div></div>
+    <div class="annot">
+      <div class="knum"><b>شاشة 09</b> · My Orders</div>
+      <h3>طلباتي</h3>
+      <div class="ad">سجل كامل لطلبات العميل، مقسّم إلى الحالية والمكتملة، مع حالة وسعر كل طلب.</div>
+      <div class="afeat"><div class="n">1</div><div class="tx"><b>تبويب حالي / مكتمل</b><span>فصل الطلبات الجارية عن المنتهية.</span></div></div>
+      <div class="afeat"><div class="n">2</div><div class="tx"><b>بطاقة لكل طلب</b><span>رقم الطلب، النوع، الوقت، والسعر.</span></div></div>
+      <div class="afeat"><div class="n">3</div><div class="tx"><b>وسم الحالة</b><span>في الطريق · قيد المراجعة · تم التسليم · مكتمل.</span></div></div>
+      <div class="afeat"><div class="n">4</div><div class="tx"><b>فتح التفاصيل</b><span>الضغط على أي طلب يفتح صفحة تتبّعه وتفاصيله.</span></div></div>
+    </div>
+  </div>
+  <div class="pf"><span>barmagly.tech · التصميم المبدئي لتطبيق تميم · مايو 2026</span><span class="num">13</span></div>
+</div>
+
+<!-- ============ SCREEN 10 — PROFILE ============ -->
+<div class="page">
+  <div class="ph"><div class="brand"><img src="barmagly-logo.jpg" alt=""><b>BAR<span>MAGLY</span></b></div><div class="crumb"><span class="ch"><img src="485861377_1066070162226760_1188895592111948389_n.jpg">تطبيق العميل</span>الملف الشخصي</div></div>
+  <div class="spage">
+    <div class="phone-stage"><div class="phone"><span class="notch"></span><div class="screen">
+      <div class="ah grad" style="padding-bottom:34px"><div class="ios on-dark" style="padding:0 0 8px"><span>9:41</span><span class="sig">
+        <svg width="15" height="11" viewBox="0 0 18 12" fill="#fff"><rect x="0" y="8" width="3" height="4" rx="1"/><rect x="5" y="5" width="3" height="7" rx="1"/><rect x="10" y="2" width="3" height="10" rx="1"/><rect x="15" y="0" width="3" height="12" rx="1" opacity=".4"/></svg>
+        <svg width="22" height="11" viewBox="0 0 26 12" fill="none" stroke="#fff" stroke-width="1.5"><rect x="1" y="1" width="20" height="10" rx="3"/><rect x="3" y="3" width="14" height="6" rx="1.5" fill="#fff" stroke="none"/></svg></span></div>
+        <div class="top"><h3>حسابي</h3><svg width="16" height="16" stroke="#fff" fill="none" stroke-width="2" viewBox="0 0 24 24"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></svg></div></div>
+      <div class="ab" style="padding-top:0">
+        <div style="display:flex;align-items:center;gap:11px;background:#fff;border:1px solid var(--line);border-radius:16px;padding:11px;margin-top:-26px;box-shadow:0 6px 16px rgba(36,19,16,.08)">
+          <div style="position:relative;flex-shrink:0">
+            <svg width="54" height="54" viewBox="0 0 80 80" style="border-radius:50%;border:2.5px solid #fff;box-shadow:0 3px 8px rgba(0,0,0,.15)"><defs><clipPath id="pf"><circle cx="40" cy="40" r="40"/></clipPath></defs><g clip-path="url(#pf)"><rect width="80" height="80" fill="#DCE9F7"/><path d="M40 44c-13 0-23 8-25 20a40 40 0 0 0 50 0c-2-12-12-20-25-20z" fill="#0F5AA8"/><circle cx="40" cy="33" r="15" fill="#F0C09A"/><path d="M25 30c0-9 7-15 15-15s15 6 15 15c0 2-1 4-2 5 0-6-3-9-6-9-2 3-12 3-16 1-3 1-4 4-4 7-1-1-2-2-2-5z" fill="#3D2A1E"/></g></svg>
+            <div style="position:absolute;bottom:-2px;left:-2px;width:18px;height:18px;border-radius:50%;background:var(--grad);border:2px solid #fff;display:flex;align-items:center;justify-content:center"><svg width="9" height="9" stroke="#fff" fill="none" stroke-width="2.2" viewBox="0 0 24 24"><rect x="3" y="7" width="18" height="13" rx="2"/><circle cx="12" cy="13" r="3"/></svg></div>
+          </div>
+          <div style="flex:1">
+            <div style="display:flex;align-items:center;gap:6px"><span style="font-family:'Cairo';font-weight:900;font-size:14px;color:var(--ink)">محمد علي</span><span style="font-size:7px;font-weight:800;color:#9A6B16;background:#FCEFD9;padding:2px 7px;border-radius:99px">عميل مميز</span></div>
+            <div style="font-size:9px;color:var(--muted);margin-top:2px;direction:ltr;text-align:right">01000000000</div>
+          </div>
+        </div>
+        <div style="display:flex;gap:7px;margin:9px 0">
+          <div style="flex:1;background:#fff;border:1px solid var(--line);border-radius:12px;padding:8px;text-align:center"><div style="font-family:'Cairo';font-weight:900;font-size:15px;color:var(--ink)">12</div><div style="font-size:7.5px;color:var(--muted)">طلباتي</div></div>
+          <div style="flex:1;background:#fff;border:1px solid var(--line);border-radius:12px;padding:8px;text-align:center"><div style="font-family:'Cairo';font-weight:900;font-size:15px;color:var(--ink)">4.9</div><div style="font-size:7.5px;color:var(--muted)">التقييم</div></div>
+          <div style="flex:1;background:#fff;border:1px solid var(--line);border-radius:12px;padding:8px;text-align:center"><div style="font-family:'Cairo';font-weight:900;font-size:15px;color:var(--ink)">3</div><div style="font-size:7.5px;color:var(--muted)">عناوين</div></div>
+        </div>
+        <div style="background:#fff;border:1px solid var(--line);border-radius:14px;padding:2px 11px">
+          <div class="prow"><div class="ic"><svg width="14" height="14" stroke="var(--red)" fill="none" stroke-width="1.8" viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 4-6 8-6s8 2 8 6"/></svg></div>تعديل البيانات الشخصية<span class="ar"><svg width="13" height="13" stroke="var(--muted)" fill="none" stroke-width="2" viewBox="0 0 24 24"><path d="M15 6l-6 6 6 6"/></svg></span></div>
+          <div class="prow"><div class="ic"><svg width="14" height="14" stroke="var(--red)" fill="none" stroke-width="1.8" viewBox="0 0 24 24"><path d="M3 11l9-7 9 7v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/></svg></div>عناويني المحفوظة<span class="ar"><svg width="13" height="13" stroke="var(--muted)" fill="none" stroke-width="2" viewBox="0 0 24 24"><path d="M15 6l-6 6 6 6"/></svg></span></div>
+          <div class="prow"><div class="ic"><svg width="14" height="14" stroke="var(--red)" fill="none" stroke-width="1.8" viewBox="0 0 24 24"><rect x="2" y="6" width="20" height="12" rx="2"/><path d="M2 10h20"/></svg></div>طرق الدفع<span style="margin-right:auto;font-size:7.5px;color:var(--muted)">كاش · انستاباي · فودافون</span><span class="ar" style="margin-right:7px"><svg width="13" height="13" stroke="var(--muted)" fill="none" stroke-width="2" viewBox="0 0 24 24"><path d="M15 6l-6 6 6 6"/></svg></span></div>
+          <div class="prow"><div class="ic"><svg width="14" height="14" stroke="var(--red)" fill="none" stroke-width="1.8" viewBox="0 0 24 24"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/></svg></div>الإشعارات<span class="ar"><svg width="13" height="13" stroke="var(--muted)" fill="none" stroke-width="2" viewBox="0 0 24 24"><path d="M15 6l-6 6 6 6"/></svg></span></div>
+          <div class="prow" style="border:none"><div class="ic"><svg width="14" height="14" stroke="var(--red)" fill="none" stroke-width="1.8" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 16v-4M12 8h.01"/></svg></div>الدعم والمساعدة<span class="ar"><svg width="13" height="13" stroke="var(--muted)" fill="none" stroke-width="2" viewBox="0 0 24 24"><path d="M15 6l-6 6 6 6"/></svg></span></div>
+        </div>
+        <div style="text-align:center;margin-top:9px;font-size:10px;font-weight:800;color:var(--red);display:flex;align-items:center;justify-content:center;gap:6px"><svg width="13" height="13" stroke="var(--red)" fill="none" stroke-width="1.8" viewBox="0 0 24 24"><path d="M16 17l5-5-5-5M21 12H9M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/></svg>تسجيل الخروج</div>
+      </div>
+    </div></div></div>
+    <div class="annot">
+      <div class="knum"><b>شاشة 10</b> · Profile</div>
+      <h3>الملف الشخصي</h3>
+      <div class="ad">مركز إدارة حساب العميل — بياناته، عناوينه، طرق دفعه، وإعداداته في مكان واحد.</div>
+      <div class="afeat"><div class="n">1</div><div class="tx"><b>البيانات الشخصية</b><span>الاسم، الهاتف، المدينة وتعديلها.</span></div></div>
+      <div class="afeat"><div class="n">2</div><div class="tx"><b>العناوين المحفوظة</b><span>المنزل، العمل… لتسريع الطلبات القادمة.</span></div></div>
+      <div class="afeat"><div class="n">3</div><div class="tx"><b>طرق الدفع</b><span>كاش · انستاباي · فودافون كاش.</span></div></div>
+      <div class="afeat"><div class="n">4</div><div class="tx"><b>الإشعارات والدعم</b><span>التحكم في التنبيهات والتواصل مع خدمة العملاء.</span></div></div>
+      <div class="afeat"><div class="n">5</div><div class="tx"><b>تسجيل الخروج</b><span>إنهاء الجلسة بأمان.</span></div></div>
+    </div>
+  </div>
+  <div class="pf"><span>barmagly.tech · التصميم المبدئي لتطبيق تميم · مايو 2026</span><span class="num">14</span></div>
+</div>
+
+<!-- ============ DASH 01 — OVERVIEW ============ -->
+<div class="page">
+  <div class="ph"><div class="brand"><img src="barmagly-logo.jpg" alt=""><b>BAR<span>MAGLY</span></b></div><div class="crumb"><span class="ch"><img src="485861377_1066070162226760_1188895592111948389_n.jpg">لوحة التحكم</span>نظرة عامة</div></div>
+  <div class="dpage">
+    <h2 class="section">لوحة تحكم الإدارة · Overview</h2>
+    <p class="lead">كل طلب من التطبيق يظهر هنا فورًا. الإدارة تتابع الأداء وتدير العمليات بالكامل من مكان واحد.</p>
+    <div class="browser">
+      <div class="bbar"><span class="dot r"></span><span class="dot y"></span><span class="dot g"></span><span class="url"><svg width="11" height="11" stroke="var(--green)" fill="none" stroke-width="2" viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>admin.tamem-delivery.com/dashboard</span></div>
+      <div class="bbody">
+        <div class="dtop">
+          <div class="lg"><img src="485861377_1066070162226760_1188895592111948389_n.jpg" style="width:28px;height:28px;border-radius:6px;background:#fff;object-fit:contain;padding:2px">TAMEM <span>لوحة التحكم</span></div>
+          <div class="rt"><div class="sbox"><svg width="13" height="13" stroke="#D9C5B6" fill="none" stroke-width="2" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4-4"/></svg>بحث…</div><div class="u"><span>محمد السمان</span><span class="av">ت</span></div></div>
+        </div>
+        <div class="dside">
+          <div class="gp">الرئيسية</div>
+          <div class="it on"><svg width="16" height="16" stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="9"/><rect x="14" y="3" width="7" height="5"/><rect x="14" y="12" width="7" height="9"/><rect x="3" y="16" width="7" height="5"/></svg>نظرة عامة</div>
+          <div class="it"><svg width="16" height="16" stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24"><path d="M4 7h16v13H4z"/><path d="M4 7l2-3h12l2 3"/></svg>الطلبات<span class="bdg">14</span></div>
+          <div class="gp">الإدارة</div>
+          <div class="it"><svg width="16" height="16" stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24"><circle cx="9" cy="8" r="3"/><path d="M3 20c0-3 3-5 6-5s6 2 6 5"/><circle cx="18" cy="9" r="2"/></svg>العملاء</div>
+          <div class="it"><svg width="16" height="16" stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24"><circle cx="9" cy="20" r="1.5"/><circle cx="18" cy="20" r="1.5"/><path d="M2 4h3l2.5 11h11"/></svg>السائقون</div>
+          <div class="it"><svg width="16" height="16" stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24"><path d="M4 9h16l-1 11H5z"/><path d="M9 9V6a3 3 0 0 1 6 0v3"/></svg>التجار</div>
+          <div class="it"><svg width="16" height="16" stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 13a7 7 0 0 0 0-2l2-1.5-2-3.5-2.4 1a7 7 0 0 0-1.7-1L16.5 3h-4l-.4 2.5a7 7 0 0 0-1.7 1l-2.4-1-2 3.5L4.6 11a7 7 0 0 0 0 2l-2 1.5 2 3.5 2.4-1a7 7 0 0 0 1.7 1l.4 2.5h4l.4-2.5a7 7 0 0 0 1.7-1l2.4 1 2-3.5z"/></svg>الخدمات</div>
+          <div class="it"><svg width="16" height="16" stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24"><path d="M4 7l8-4 8 4-8 4z"/><path d="M4 7v10l8 4 8-4V7"/></svg>المنتجات</div>
+          <div class="it"><svg width="16" height="16" stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24"><path d="M12 2v20M7 6h8a3 3 0 0 1 0 6H9a3 3 0 0 0 0 6h8"/></svg>التسعير</div>
+          <div class="it"><svg width="16" height="16" stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24"><path d="M4 19V9l5-4 5 4v10M4 19h16M14 19V5l6 4v10"/></svg>التقارير</div>
+        </div>
+        <div class="dmain">
+          <div class="dhead"><div><h3>نظرة عامة</h3><div class="sub">ملخص أداء اليوم — الخميس 21 مايو 2026</div></div><div class="dbtn"><svg width="13" height="13" stroke="#fff" fill="none" stroke-width="2" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>طلب يدوي</div></div>
+          <div class="dkpis">
+            <div class="dkpi"><div class="ik" style="background:var(--grad)"><svg width="16" height="16" stroke="#fff" fill="none" stroke-width="2" viewBox="0 0 24 24"><path d="M4 7h16v13H4z"/><path d="M4 7l2-3h12l2 3"/></svg></div><div class="l">طلبات اليوم</div><div class="v">142</div><div class="c up">▲ 12% عن أمس</div></div>
+            <div class="dkpi"><div class="ik" style="background:var(--grad-gold)"><svg width="16" height="16" stroke="#fff" fill="none" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg></div><div class="l">قيد التنفيذ</div><div class="v" style="color:#B07D14">28</div><div class="c">جارية الآن</div></div>
+            <div class="dkpi"><div class="ik" style="background:linear-gradient(135deg,#1A9F6E,#3FBF8C)"><svg width="16" height="16" stroke="#fff" fill="none" stroke-width="2" viewBox="0 0 24 24"><path d="M5 12l5 5L20 7"/></svg></div><div class="l">مكتملة</div><div class="v" style="color:var(--green)">98</div><div class="c up">▲ 8%</div></div>
+            <div class="dkpi"><div class="ik" style="background:linear-gradient(135deg,#E0301E,#B82414)"><svg width="16" height="16" stroke="#fff" fill="none" stroke-width="2" viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12"/></svg></div><div class="l">ملغاة</div><div class="v" style="color:var(--red)">6</div><div class="c dn">▼ 2%</div></div>
+          </div>
+          <div class="drow">
+            <div class="dcard"><h4>الطلبات حسب اليوم <span class="mo">آخر 7 أيام</span></h4>
+              <div class="dchart"><div class="col"><div class="bar" style="height:46px"></div><small>سبت</small></div><div class="col"><div class="bar" style="height:66px"></div><small>أحد</small></div><div class="col"><div class="bar" style="height:54px"></div><small>إثن</small></div><div class="col"><div class="bar" style="height:80px"></div><small>ثلا</small></div><div class="col"><div class="bar" style="height:68px"></div><small>أرب</small></div><div class="col hi"><div class="bar" style="height:96px"></div><small>خمي</small></div><div class="col"><div class="bar" style="height:74px"></div><small>جمع</small></div></div>
+            </div>
+            <div class="dcard"><h4>الإيرادات</h4>
+              <div style="font-family:'Cairo';font-weight:900;font-size:27px;color:var(--red-d);line-height:1">8,450 <span style="font-size:12px;color:var(--muted)">ج.م</span></div>
+              <div style="font-size:10px;color:var(--green);font-weight:800;margin-top:4px">▲ 14% عن أمس</div>
+              <div style="margin-top:13px;font-size:10px;color:var(--muted);display:flex;justify-content:space-between">دليفري <b style="color:var(--ink)">62%</b></div>
+              <div style="height:7px;border-radius:99px;background:var(--line);margin:4px 0 9px"><div style="width:62%;height:100%;border-radius:99px;background:var(--grad)"></div></div>
+              <div style="font-size:10px;color:var(--muted);display:flex;justify-content:space-between">شحن <b style="color:var(--ink)">28%</b></div>
+              <div style="height:7px;border-radius:99px;background:var(--line);margin:4px 0 9px"><div style="width:28%;height:100%;border-radius:99px;background:var(--grad-gold)"></div></div>
+              <div style="font-size:10px;color:var(--muted);display:flex;justify-content:space-between">تجار <b style="color:var(--ink)">10%</b></div>
+              <div style="height:7px;border-radius:99px;background:var(--line);margin:4px 0 0"><div style="width:10%;height:100%;border-radius:99px;background:var(--gray)"></div></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="dfeats">
+      <div class="dfeat"><div class="ic"><svg width="15" height="15" stroke="#fff" fill="none" stroke-width="2" viewBox="0 0 24 24"><path d="M4 19V9l5-4 5 4v10"/></svg></div><b>مؤشرات فورية</b><span>طلبات اليوم، الجارية، المكتملة، الملغاة.</span></div>
+      <div class="dfeat"><div class="ic"><svg width="15" height="15" stroke="#fff" fill="none" stroke-width="2" viewBox="0 0 24 24"><path d="M3 3v18h18"/><path d="M7 14l3-3 3 3 4-5"/></svg></div><b>رسوم بيانية</b><span>أداء الطلبات عبر الأيام.</span></div>
+      <div class="dfeat"><div class="ic"><svg width="15" height="15" stroke="#fff" fill="none" stroke-width="2" viewBox="0 0 24 24"><path d="M12 2v20M7 6h8a3 3 0 0 1 0 6H9a3 3 0 0 0 0 6h8"/></svg></div><b>توزيع الإيراد</b><span>حسب كل خدمة (دليفري/شحن/تجار).</span></div>
+      <div class="dfeat"><div class="ic"><svg width="15" height="15" stroke="#fff" fill="none" stroke-width="2" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></div><b>إجراء سريع</b><span>إنشاء طلب يدوي من الإدارة.</span></div>
+    </div>
+  </div>
+  <div class="pf"><span>barmagly.tech · التصميم المبدئي لتطبيق تميم · مايو 2026</span><span class="num">15</span></div>
+</div>
+
+<!-- ============ DASH 02 — ORDERS ============ -->
+<div class="page">
+  <div class="ph"><div class="brand"><img src="barmagly-logo.jpg" alt=""><b>BAR<span>MAGLY</span></b></div><div class="crumb"><span class="ch"><img src="485861377_1066070162226760_1188895592111948389_n.jpg">لوحة التحكم</span>إدارة الطلبات</div></div>
+  <div class="dpage">
+    <h2 class="section">إدارة الطلبات · التسعير وتعيين السائق</h2>
+    <p class="lead">جدول الطلبات بكل تفاصيلها، مع فلترة بالحالة، وإمكانية التسعير وتعيين السائق وتغيير الحالة بضغطة.</p>
+    <div class="browser">
+      <div class="bbar"><span class="dot r"></span><span class="dot y"></span><span class="dot g"></span><span class="url"><svg width="11" height="11" stroke="var(--green)" fill="none" stroke-width="2" viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>admin.tamem-delivery.com/orders</span></div>
+      <div class="bbody">
+        <div class="dtop">
+          <div class="lg"><img src="485861377_1066070162226760_1188895592111948389_n.jpg" style="width:28px;height:28px;border-radius:6px;background:#fff;object-fit:contain;padding:2px">TAMEM <span>الطلبات</span></div>
+          <div class="rt"><div class="sbox"><svg width="13" height="13" stroke="#D9C5B6" fill="none" stroke-width="2" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4-4"/></svg>بحث…</div><div class="u"><span>محمد السمان</span><span class="av">ت</span></div></div>
+        </div>
+        <div class="dside">
+          <div class="gp">الرئيسية</div>
+          <div class="it"><svg width="16" height="16" stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="9"/><rect x="14" y="3" width="7" height="5"/><rect x="14" y="12" width="7" height="9"/><rect x="3" y="16" width="7" height="5"/></svg>نظرة عامة</div>
+          <div class="it on"><svg width="16" height="16" stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24"><path d="M4 7h16v13H4z"/><path d="M4 7l2-3h12l2 3"/></svg>الطلبات<span class="bdg">14</span></div>
+          <div class="gp">الإدارة</div>
+          <div class="it"><svg width="16" height="16" stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24"><circle cx="9" cy="8" r="3"/><path d="M3 20c0-3 3-5 6-5s6 2 6 5"/></svg>العملاء</div>
+          <div class="it"><svg width="16" height="16" stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24"><circle cx="9" cy="20" r="1.5"/><circle cx="18" cy="20" r="1.5"/><path d="M2 4h3l2.5 11h11"/></svg>السائقون</div>
+          <div class="it"><svg width="16" height="16" stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24"><path d="M4 9h16l-1 11H5z"/><path d="M9 9V6a3 3 0 0 1 6 0v3"/></svg>التجار</div>
+          <div class="it"><svg width="16" height="16" stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 13a7 7 0 0 0 0-2l2-1.5-2-3.5-2.4 1a7 7 0 0 0-1.7-1L16.5 3h-4l-.4 2.5a7 7 0 0 0-1.7 1l-2.4-1-2 3.5L4.6 11a7 7 0 0 0 0 2l-2 1.5 2 3.5 2.4-1a7 7 0 0 0 1.7 1l.4 2.5h4l.4-2.5a7 7 0 0 0 1.7-1l2.4 1 2-3.5z"/></svg>الخدمات</div>
+          <div class="it"><svg width="16" height="16" stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24"><path d="M4 7l8-4 8 4-8 4z"/><path d="M4 7v10l8 4 8-4V7"/></svg>المنتجات</div>
+          <div class="it"><svg width="16" height="16" stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24"><path d="M12 2v20M7 6h8a3 3 0 0 1 0 6H9a3 3 0 0 0 0 6h8"/></svg>التسعير</div>
+        </div>
+        <div class="dmain">
+          <div class="dhead"><div><h3>إدارة الطلبات</h3><div class="sub">142 طلب اليوم · 14 بانتظار الإجراء</div></div></div>
+          <div class="filterbar">
+            <div class="fsearch"><svg width="13" height="13" stroke="var(--muted)" fill="none" stroke-width="2" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4-4"/></svg>بحث برقم الطلب أو اسم العميل…</div>
+            <div class="fpill on">الكل 142</div><div class="fpill">جديد 14</div><div class="fpill">في الطريق 28</div><div class="fpill">مكتمل 98</div>
+          </div>
+          <div class="dcard" style="padding:6px 14px">
+            <table class="dtable">
+              <tr><th>رقم الطلب</th><th>العميل</th><th>الخدمة</th><th>الحالة</th><th>السعر</th><th>السائق</th><th></th></tr>
+              <tr><td class="oid">#1042</td><td>محمد علي</td><td>دليفري · صيدلية</td><td><span class="st way"><span class="d"></span>في الطريق</span></td><td>45 ج.م</td><td>محمود ح.</td><td class="lnk">عرض</td></tr>
+              <tr><td class="oid">#1045</td><td>سارة محمد</td><td>سوبر ماركت</td><td><span class="st new"><span class="d"></span>جديد</span></td><td>—</td><td class="lnk">تعيين سائق ›</td><td class="lnk">عرض</td></tr>
+              <tr><td class="oid">#1039</td><td>محمد علي</td><td>شحن · الأقصر</td><td><span class="st rev"><span class="d"></span>قيد المراجعة</span></td><td class="lnk">تسعير ›</td><td>—</td><td class="lnk">عرض</td></tr>
+              <tr><td class="oid">#1031</td><td>منى سيد</td><td>دليفري</td><td><span class="st done"><span class="d"></span>تم التسليم</span></td><td>60 ج.م</td><td>علاء س.</td><td class="lnk">عرض</td></tr>
+              <tr><td class="oid">#1024</td><td>تاجر — حسن</td><td>طلب تاجر</td><td><span class="st done"><span class="d"></span>مكتمل</span></td><td>420 ج.م</td><td>إبراهيم ع.</td><td class="lnk">عرض</td></tr>
+              <tr><td class="oid">#1019</td><td>ليلى ع.</td><td>دليفري · مطعم</td><td><span class="st way"><span class="d"></span>تم الاستلام</span></td><td>38 ج.م</td><td>محمود ح.</td><td class="lnk">عرض</td></tr>
+            </table>
+          </div>
+          <div style="display:flex;gap:8px;margin-top:12px"><div class="dbtn"><svg width="13" height="13" stroke="#fff" fill="none" stroke-width="2" viewBox="0 0 24 24"><path d="M5 12l5 5L20 7"/></svg>قبول الطلب</div><div class="dbtn line">تعديل السعر</div><div class="dbtn ghost">تعيين سائق</div><div class="dbtn ghost">تغيير الحالة</div></div>
+        </div>
+      </div>
+    </div>
+    <div class="dfeats">
+      <div class="dfeat"><div class="ic"><svg width="15" height="15" stroke="#fff" fill="none" stroke-width="2" viewBox="0 0 24 24"><path d="M3 6h18M7 12h10M10 18h4"/></svg></div><b>فلترة بالحالة</b><span>الكل · جديد · في الطريق · مكتمل.</span></div>
+      <div class="dfeat"><div class="ic"><svg width="15" height="15" stroke="#fff" fill="none" stroke-width="2" viewBox="0 0 24 24"><path d="M12 2v20M7 6h8a3 3 0 0 1 0 6H9a3 3 0 0 0 0 6h8"/></svg></div><b>تسعير الطلب</b><span>تحديد السعر للطلبات قيد المراجعة.</span></div>
+      <div class="dfeat"><div class="ic"><svg width="15" height="15" stroke="#fff" fill="none" stroke-width="2" viewBox="0 0 24 24"><circle cx="9" cy="20" r="1.5"/><circle cx="18" cy="20" r="1.5"/><path d="M2 4h3l2.5 11h11"/></svg></div><b>تعيين سائق</b><span>إسناد المندوب المناسب لكل طلب.</span></div>
+      <div class="dfeat"><div class="ic"><svg width="15" height="15" stroke="#fff" fill="none" stroke-width="2" viewBox="0 0 24 24"><path d="M5 12l5 5L20 7"/></svg></div><b>تغيير الحالة</b><span>متابعة الطلب حتى التسليم.</span></div>
+    </div>
+  </div>
+  <div class="pf"><span>barmagly.tech · التصميم المبدئي لتطبيق تميم · مايو 2026</span><span class="num">16</span></div>
+</div>
+
+<!-- ============ DASH 03 — ORDER DETAIL ============ -->
+<div class="page">
+  <div class="ph"><div class="brand"><img src="barmagly-logo.jpg" alt=""><b>BAR<span>MAGLY</span></b></div><div class="crumb"><span class="ch"><img src="485861377_1066070162226760_1188895592111948389_n.jpg">لوحة التحكم</span>تفاصيل الطلب</div></div>
+  <div class="dpage">
+    <h2 class="section">تفاصيل الطلب · بطاقة العملية الكاملة</h2>
+    <p class="lead">عند فتح أي طلب، تظهر كل بياناته في صفحة واحدة: العميل، المسار، الحالة، التكلفة، والإجراءات.</p>
+    <div class="browser">
+      <div class="bbar"><span class="dot r"></span><span class="dot y"></span><span class="dot g"></span><span class="url"><svg width="11" height="11" stroke="var(--green)" fill="none" stroke-width="2" viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>admin.tamem-delivery.com/orders/1042</span></div>
+      <div class="bbody" style="grid-template-columns:1fr;min-height:430px">
+        <div class="dtop">
+          <div class="lg"><img src="485861377_1066070162226760_1188895592111948389_n.jpg" style="width:28px;height:28px;border-radius:6px;background:#fff;object-fit:contain;padding:2px">TAMEM <span>الطلب #1042</span></div>
+          <div class="rt"><div class="u"><span>محمد السمان</span><span class="av">ت</span></div></div>
+        </div>
+        <div class="dmain" style="padding:16px 18px">
+          <div class="dhead"><div><h3>طلب دليفري #1042</h3><div class="sub">ماركت السبعي · أُنشئ اليوم 2:30 م</div></div><span class="st way" style="font-size:10px;padding:5px 13px"><span class="d"></span>في الطريق</span></div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:13px">
+            <div class="dcard"><h4>العميل</h4>
+              <div class="ddrv" style="padding-top:0;border:none"><span class="av">م</span><div style="flex:1"><div style="font-weight:800;color:var(--ink)">محمد علي</div><div style="font-size:9px;color:var(--muted)">01000000000 · قفط</div></div><div class="dbtn ghost" style="padding:6px 12px">اتصال</div></div>
+              <div style="margin-top:8px;font-size:10.5px;color:#4A4138;line-height:1.9">
+                <div style="display:flex;gap:7px;align-items:center"><svg width="13" height="13" stroke="var(--green)" fill="none" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="11" r="2.5"/><path d="M12 21s-7-5-7-11a7 7 0 0 1 14 0c0 6-7 11-7 11z"/></svg> الاستلام: ماركت السبعي — المحطة</div>
+                <div style="display:flex;gap:7px;align-items:center"><svg width="13" height="13" stroke="var(--red)" fill="none" stroke-width="2" viewBox="0 0 24 24"><path d="M3 11l9-7 9 7v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/></svg> التسليم: ش الجمهورية، قفط</div>
+                <div style="display:flex;gap:7px;align-items:flex-start;margin-top:4px"><svg width="13" height="13" stroke="var(--primary)" fill="none" stroke-width="2" viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h10"/></svg> الطلب: 2 كيلو سكر، زيت، 3 علب تونة <span style="color:var(--primary);font-weight:800;margin-right:4px">+ صورة مرفقة</span></div>
+              </div>
+            </div>
+            <div class="dcard"><h4>الحالة والمسار</h4>
+              <div class="ptrack" style="padding-right:16px"><div class="s on" style="font-size:10px">تم القبول<small>2:30 م</small></div><div class="s on" style="font-size:10px">تعيين مندوب<small>2:34 م</small></div><div class="s on" style="font-size:10px">تم الاستلام<small>2:48 م</small></div><div class="s on cur" style="font-size:10px">في الطريق<small>الآن</small></div><div class="s" style="font-size:10px">تم التسليم</div></div>
+            </div>
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:13px;margin-top:13px">
+            <div class="dcard"><h4>التكلفة</h4>
+              <div style="font-size:10.5px;color:#4A4138;display:flex;justify-content:space-between;padding:3px 0">قيمة التوصيل <b>40 ج.م</b></div>
+              <div style="font-size:10.5px;color:#4A4138;display:flex;justify-content:space-between;padding:3px 0;border-bottom:1px solid var(--line)">رسوم خدمة <b>5 ج.م</b></div>
+              <div style="font-size:12.5px;color:var(--ink);display:flex;justify-content:space-between;padding:7px 0;font-weight:900;font-family:'Cairo'">الإجمالي <span style="color:var(--red-d)">45 ج.م</span></div>
+              <div style="font-size:9px;color:var(--green);font-weight:800">الدفع: فودافون كاش · مدفوع</div>
+            </div>
+            <div class="dcard"><h4>المندوب المعيَّن</h4>
+              <div class="ddrv" style="padding-top:0;border:none"><span class="av">م</span><div style="flex:1"><div style="font-weight:800;color:var(--ink)">محمود حسن</div><div style="font-size:9px;color:var(--muted)">دراجة بخارية · ⭐ 4.9</div></div><span class="dot busy"></span></div>
+              <div style="display:flex;gap:7px;margin-top:9px"><div class="dbtn line" style="padding:7px 13px">تغيير السائق</div><div class="dbtn ghost" style="padding:7px 13px">ملاحظة داخلية</div></div>
+            </div>
+          </div>
+          <div style="display:flex;gap:8px;margin-top:13px"><div class="dbtn"><svg width="13" height="13" stroke="#fff" fill="none" stroke-width="2" viewBox="0 0 24 24"><path d="M5 12l5 5L20 7"/></svg>تحديث الحالة</div><div class="dbtn line">تعديل السعر</div><div class="dbtn ghost" style="color:var(--red);border-color:#F0C5BE">إلغاء الطلب</div></div>
+        </div>
+      </div>
+    </div>
+    <div class="note" style="margin-top:14px"><div class="ni"><svg width="15" height="15" stroke="#fff" fill="none" stroke-width="2" viewBox="0 0 24 24"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></div>
+      <div>صفحة تفاصيل الطلب هي مركز التحكم في كل عملية: بيانات العميل، المسار، التكلفة، المندوب، والإجراءات — كلها في مكان واحد لاتخاذ القرار بسرعة.</div></div>
+  </div>
+  <div class="pf"><span>barmagly.tech · التصميم المبدئي لتطبيق تميم · مايو 2026</span><span class="num">17</span></div>
+</div>
+
+<!-- ============ DASH 04 — DRIVERS ============ -->
+<div class="page">
+  <div class="ph"><div class="brand"><img src="barmagly-logo.jpg" alt=""><b>BAR<span>MAGLY</span></b></div><div class="crumb"><span class="ch"><img src="485861377_1066070162226760_1188895592111948389_n.jpg">لوحة التحكم</span>السائقون</div></div>
+  <div class="dpage">
+    <h2 class="section">إدارة السائقين والمندوبين</h2>
+    <p class="lead">الإدارة تضيف السائقين وتتابع حالتهم (متاح/مشغول/غير نشط)، وتعرف عدد طلباتهم ومستحقاتهم.</p>
+    <div class="browser">
+      <div class="bbar"><span class="dot r"></span><span class="dot y"></span><span class="dot g"></span><span class="url"><svg width="11" height="11" stroke="var(--green)" fill="none" stroke-width="2" viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>admin.tamem-delivery.com/drivers</span></div>
+      <div class="bbody">
+        <div class="dtop">
+          <div class="lg"><img src="485861377_1066070162226760_1188895592111948389_n.jpg" style="width:28px;height:28px;border-radius:6px;background:#fff;object-fit:contain;padding:2px">TAMEM <span>السائقون</span></div>
+          <div class="rt"><div class="sbox"><svg width="13" height="13" stroke="#D9C5B6" fill="none" stroke-width="2" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4-4"/></svg>بحث…</div><div class="u"><span>محمد السمان</span><span class="av">ت</span></div></div>
+        </div>
+        <div class="dside">
+          <div class="gp">الرئيسية</div>
+          <div class="it"><svg width="16" height="16" stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="9"/><rect x="14" y="3" width="7" height="5"/><rect x="14" y="12" width="7" height="9"/><rect x="3" y="16" width="7" height="5"/></svg>نظرة عامة</div>
+          <div class="it"><svg width="16" height="16" stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24"><path d="M4 7h16v13H4z"/><path d="M4 7l2-3h12l2 3"/></svg>الطلبات<span class="bdg">14</span></div>
+          <div class="gp">الإدارة</div>
+          <div class="it"><svg width="16" height="16" stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24"><circle cx="9" cy="8" r="3"/><path d="M3 20c0-3 3-5 6-5s6 2 6 5"/></svg>العملاء</div>
+          <div class="it on"><svg width="16" height="16" stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24"><circle cx="9" cy="20" r="1.5"/><circle cx="18" cy="20" r="1.5"/><path d="M2 4h3l2.5 11h11"/></svg>السائقون</div>
+          <div class="it"><svg width="16" height="16" stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24"><path d="M4 9h16l-1 11H5z"/><path d="M9 9V6a3 3 0 0 1 6 0v3"/></svg>التجار</div>
+          <div class="it"><svg width="16" height="16" stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 13a7 7 0 0 0 0-2l2-1.5-2-3.5-2.4 1a7 7 0 0 0-1.7-1L16.5 3h-4l-.4 2.5a7 7 0 0 0-1.7 1l-2.4-1-2 3.5L4.6 11a7 7 0 0 0 0 2l-2 1.5 2 3.5 2.4-1a7 7 0 0 0 1.7 1l.4 2.5h4l.4-2.5a7 7 0 0 0 1.7-1l2.4 1 2-3.5z"/></svg>الخدمات</div>
+          <div class="it"><svg width="16" height="16" stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24"><path d="M12 2v20M7 6h8a3 3 0 0 1 0 6H9a3 3 0 0 0 0 6h8"/></svg>التسعير</div>
+        </div>
+        <div class="dmain">
+          <div class="dhead"><div><h3>السائقون</h3><div class="sub">21 سائق · 8 متاح · 5 مشغول</div></div><div class="dbtn"><svg width="13" height="13" stroke="#fff" fill="none" stroke-width="2" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>إضافة سائق</div></div>
+          <div class="dcard">
+            <div class="ddrv"><span class="av">م</span><div style="flex:1"><div style="font-weight:800;color:var(--ink)">محمود حسن</div><div style="font-size:9px;color:var(--muted)">دراجة بخارية · ق م 3012 · ⭐ 4.9</div></div><div style="text-align:left;margin-left:12px"><div style="font-size:9px;color:var(--muted)">طلبات اليوم</div><b style="color:var(--ink)">3</b></div><span class="dot busy"></span><span style="font-size:8.5px;color:#9A6B16;font-weight:800">مشغول</span></div>
+            <div class="ddrv"><span class="av">ع</span><div style="flex:1"><div style="font-weight:800;color:var(--ink)">علاء سيد</div><div style="font-size:9px;color:var(--muted)">سيارة · ق م 7745 · ⭐ 4.7</div></div><div style="text-align:left;margin-left:12px"><div style="font-size:9px;color:var(--muted)">طلبات اليوم</div><b style="color:var(--ink)">5</b></div><span class="dot on"></span><span style="font-size:8.5px;color:#157A52;font-weight:800">متاح</span></div>
+            <div class="ddrv"><span class="av">إ</span><div style="flex:1"><div style="font-weight:800;color:var(--ink)">إبراهيم عادل</div><div style="font-size:9px;color:var(--muted)">نقل · شحن للأقصر · ⭐ 4.8</div></div><div style="text-align:left;margin-left:12px"><div style="font-size:9px;color:var(--muted)">طلبات اليوم</div><b style="color:var(--ink)">2</b></div><span class="dot busy"></span><span style="font-size:8.5px;color:#9A6B16;font-weight:800">مشغول</span></div>
+            <div class="ddrv" style="border:none"><span class="av">ط</span><div style="flex:1"><div style="font-weight:800;color:var(--ink)">طارق محمد</div><div style="font-size:9px;color:var(--muted)">دراجة · ق م 1290 · ⭐ 4.6</div></div><div style="text-align:left;margin-left:12px"><div style="font-size:9px;color:var(--muted)">طلبات اليوم</div><b style="color:var(--ink)">0</b></div><span class="dot off"></span><span style="font-size:8.5px;color:#9A9088;font-weight:800">غير نشط</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="dfeats">
+      <div class="dfeat"><div class="ic"><svg width="15" height="15" stroke="#fff" fill="none" stroke-width="2" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></div><b>إضافة سائق</b><span>الاسم، الهاتف، الهوية، نوع المركبة.</span></div>
+      <div class="dfeat"><div class="ic"><svg width="15" height="15" stroke="#fff" fill="none" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg></div><b>حالة لحظية</b><span>متاح · مشغول · غير نشط.</span></div>
+      <div class="dfeat"><div class="ic"><svg width="15" height="15" stroke="#fff" fill="none" stroke-width="2" viewBox="0 0 24 24"><path d="M12 2l3 6 7 .8-5 4.5L18.5 21 12 17.5 5.5 21 7 13.3 2 8.8 9 8z"/></svg></div><b>تقييم وأداء</b><span>عدد الطلبات والتقييم.</span></div>
+      <div class="dfeat"><div class="ic"><svg width="15" height="15" stroke="#fff" fill="none" stroke-width="2" viewBox="0 0 24 24"><path d="M12 2v20M7 6h8a3 3 0 0 1 0 6H9a3 3 0 0 0 0 6h8"/></svg></div><b>المستحقات</b><span>حساب أرباح كل سائق.</span></div>
+    </div>
+  </div>
+  <div class="pf"><span>barmagly.tech · التصميم المبدئي لتطبيق تميم · مايو 2026</span><span class="num">18</span></div>
+</div>
+
+<!-- ============ DASH 05 — SERVICES ============ -->
+<div class="page">
+  <div class="ph"><div class="brand"><img src="barmagly-logo.jpg" alt=""><b>BAR<span>MAGLY</span></b></div><div class="crumb"><span class="ch"><img src="485861377_1066070162226760_1188895592111948389_n.jpg">لوحة التحكم</span>الخدمات الديناميكية</div></div>
+  <div class="dpage">
+    <h2 class="section">الخدمات الديناميكية</h2>
+    <p class="lead">الإدارة تضيف أي خدمة جديدة وتحدد حقولها وتسعيرها — والتطبيق يعرضها للعملاء فورًا دون أي تعديل برمجي.</p>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
+      <div class="dcard" style="box-shadow:0 8px 22px rgba(11,43,92,.08)">
+        <h4>إضافة خدمة جديدة <span class="mo">Dynamic Service</span></h4>
+        <div class="pfield" style="font-size:11px;padding:11px;margin-bottom:10px"><svg width="14" height="14" stroke="var(--red)" fill="none" stroke-width="1.8" viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h10"/></svg><span class="lab">اسم الخدمة: مغسلة ملابس</span></div>
+        <div style="display:flex;gap:9px;margin-bottom:10px">
+          <div class="pfield" style="flex:1;margin:0;font-size:10px;padding:11px;justify-content:center;border-color:var(--red);color:var(--red);font-weight:800"><svg width="13" height="13" stroke="var(--red)" fill="none" stroke-width="1.8" viewBox="0 0 24 24"><path d="M3 7h7l2 2h9v10H3z"/></svg>تصنيف: دليفري</div>
+          <div class="pfield" style="flex:1;margin:0;font-size:10px;padding:11px;justify-content:center"><svg width="13" height="13" stroke="var(--muted)" fill="none" stroke-width="1.8" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="8.5" cy="10" r="1.5"/><path d="M21 16l-5-5L5 19"/></svg>صورة الخدمة</div>
+        </div>
+        <div style="font-size:10.5px;color:var(--ink);font-weight:800;margin-bottom:8px;font-family:'Cairo'">الحقول المطلوبة</div>
+        <div style="display:flex;gap:7px;flex-wrap:wrap;margin-bottom:12px">
+          <span class="st done" style="padding:5px 12px"><svg width="9" height="9" stroke="currentColor" fill="none" stroke-width="3" viewBox="0 0 24 24"><path d="M5 12l5 5L20 7"/></svg>موقع استلام</span>
+          <span class="st done" style="padding:5px 12px"><svg width="9" height="9" stroke="currentColor" fill="none" stroke-width="3" viewBox="0 0 24 24"><path d="M5 12l5 5L20 7"/></svg>موقع تسليم</span>
+          <span class="st way" style="padding:5px 12px"><svg width="9" height="9" stroke="currentColor" fill="none" stroke-width="3" viewBox="0 0 24 24"><path d="M5 12l5 5L20 7"/></svg>صورة</span>
+          <span style="background:#F0E8E0;color:var(--muted);font-size:8.5px;padding:5px 12px;border-radius:99px;font-weight:800;display:inline-flex;align-items:center;gap:4px"><svg width="9" height="9" stroke="currentColor" fill="none" stroke-width="3" viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12"/></svg>وزن</span>
+        </div>
+        <div style="font-size:10.5px;color:var(--ink);font-weight:800;margin-bottom:7px;font-family:'Cairo'">طريقة التسعير</div>
+        <div class="pfield" style="font-size:10.5px;padding:11px;margin-bottom:12px"><svg width="14" height="14" stroke="var(--red)" fill="none" stroke-width="1.8" viewBox="0 0 24 24"><path d="M12 2v20M7 6h8a3 3 0 0 1 0 6H9a3 3 0 0 0 0 6h8"/></svg><span class="lab">سعر ثابت داخل المدينة — 25 ج.م</span></div>
+        <div class="dbtn" style="width:100%;justify-content:center;padding:10px"><svg width="14" height="14" stroke="#fff" fill="none" stroke-width="2" viewBox="0 0 24 24"><path d="M5 12l5 5L20 7"/></svg>حفظ الخدمة وتفعيلها</div>
+      </div>
+
+      <div class="dcard" style="box-shadow:0 8px 22px rgba(11,43,92,.08)">
+        <h4>الخدمات الحالية <span class="mo">9 خدمات نشطة</span></h4>
+        <div class="ddrv"><div class="picon soft" style="width:30px;height:30px"><svg width="15" height="15" stroke="var(--red)" fill="none" stroke-width="1.7" viewBox="0 0 24 24"><path d="M5 8h14l-1 11H6z"/><path d="M9 8V6a3 3 0 0 1 6 0v2"/></svg></div><div style="flex:1"><div style="font-weight:800;color:var(--ink)">سوبر ماركت</div><div style="font-size:9px;color:var(--muted)">دليفري · حسب المسافة</div></div><span class="st done">نشطة</span></div>
+        <div class="ddrv"><div class="picon soft" style="width:30px;height:30px"><svg width="15" height="15" stroke="var(--red)" fill="none" stroke-width="1.7" viewBox="0 0 24 24"><path d="M9 3v6l-5 8a2 2 0 0 0 2 3h12a2 2 0 0 0 2-3l-5-8V3"/></svg></div><div style="flex:1"><div style="font-weight:800;color:var(--ink)">صيدلية</div><div style="font-size:9px;color:var(--muted)">دليفري · سعر ثابت</div></div><span class="st done">نشطة</span></div>
+        <div class="ddrv"><div class="picon soft" style="width:30px;height:30px"><svg width="15" height="15" stroke="var(--red)" fill="none" stroke-width="1.7" viewBox="0 0 24 24"><path d="M21 16V8l-9-5-9 5v8l9 5z"/></svg></div><div style="flex:1"><div style="font-weight:800;color:var(--ink)">شحن طرود</div><div style="font-size:9px;color:var(--muted)">شحن · مسافة + وزن</div></div><span class="st done">نشطة</span></div>
+        <div class="ddrv"><div class="picon soft" style="width:30px;height:30px"><svg width="15" height="15" stroke="var(--red)" fill="none" stroke-width="1.7" viewBox="0 0 24 24"><path d="M4 9h16l-1 11H5z"/></svg></div><div style="flex:1"><div style="font-weight:800;color:var(--ink)">طلبات تجار</div><div style="font-size:9px;color:var(--muted)">تاجر · عرض سعر</div></div><span class="st done">نشطة</span></div>
+        <div class="ddrv" style="border:none"><div class="picon k" style="width:30px;height:30px"><svg width="15" height="15" stroke="var(--gray)" fill="none" stroke-width="1.7" viewBox="0 0 24 24"><path d="M3 7h18v4H3zM5 11v9h14v-9"/></svg></div><div style="flex:1"><div style="font-weight:800;color:var(--ink)">مغسلة ملابس</div><div style="font-size:9px;color:var(--muted)">دليفري · سعر ثابت</div></div><span class="st rev">مسودة</span></div>
+      </div>
+    </div>
+    <div class="note" style="margin-top:14px"><div class="ni"><svg width="15" height="15" stroke="#fff" fill="none" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 13a7 7 0 0 0 0-2l2-1.5-2-3.5-2.4 1a7 7 0 0 0-1.7-1L16.5 3h-4l-.4 2.5a7 7 0 0 0-1.7 1l-2.4-1-2 3.5L4.6 11a7 7 0 0 0 0 2l-2 1.5 2 3.5 2.4-1a7 7 0 0 0 1.7 1l.4 2.5h4l.4-2.5a7 7 0 0 0 1.7-1l2.4 1 2-3.5z"/></svg></div>
+      <div><b>قوة النظام الديناميكي:</b> الإدارة تبني أي خدمة جديدة (مغسلة، ورد، حلويات، غسيل سيارات…) بتحديد حقولها وطريقة تسعيرها — ويعرضها التطبيق فورًا دون تدخّل المبرمج. هذا ما يجعل تميم منصة قابلة للنمو.</div></div>
+  </div>
+  <div class="pf"><span>barmagly.tech · التصميم المبدئي لتطبيق تميم · مايو 2026</span><span class="num">19</span></div>
+</div>
+
+<!-- ============ CLOSING ============ -->
+<div class="page cover" style="justify-content:center">
+  <span class="accent"></span><span class="glow"></span>
+  <div class="logo-wrap" style="width:130px;height:130px;margin-bottom:24px"><img src="barmagly-logo.jpg" alt="Barmagly"></div>
+  <span class="kicker">تصوّر مبدئي قابل للتطوير</span>
+  <h1 style="font-size:42px">نحوّل التصميم<br>إلى تطبيق <em>حقيقي</em></h1>
+  <p style="margin-top:8px">كل الشاشات المعروضة تصوّر مبدئي عالي الدقة للهوية والتجربة. التصميم النهائي يُعتمد معكم تفصيليًا قبل البرمجة، بنفس روح علامة تميم وألوانها.</p>
+  <div class="scope" style="margin-top:28px">
+    <span><svg width="15" height="15" stroke="#fff" fill="none" stroke-width="1.8" viewBox="0 0 24 24"><rect x="6" y="2" width="12" height="20" rx="3"/><path d="M10 19h4"/></svg>تطبيق العميل — 12 شاشة</span>
+    <span><svg width="15" height="15" stroke="#fff" fill="none" stroke-width="1.8" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8M12 17v4"/></svg>لوحة التحكم — 5 شاشات</span>
+  </div>
+  <div class="foot">شركة برمجلي — barmagly.tech · 01010254819 · مايو 2026</div>
+</div>
+
+</body>
+</html>

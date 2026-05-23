@@ -15,6 +15,7 @@ import {
 } from 'lucide-react';
 import { NavLink, Outlet, useNavigate } from 'react-router-dom';
 
+import { Logo } from '../components/Logo.js';
 import { useAuth } from '../lib/auth.js';
 import { cn } from '../lib/utils.js';
 
@@ -47,16 +48,9 @@ export function DashboardLayout() {
     <div className="min-h-screen flex bg-muted/30">
       {/* Sidebar — appears on the right in RTL */}
       <aside className="w-64 bg-white border-l border-border flex flex-col">
-        <div className="p-6 border-b border-border">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-lg bg-brand-red flex items-center justify-center">
-              <span className="text-white font-black text-xl">ت</span>
-            </div>
-            <div>
-              <div className="font-black text-brand-dark">تميم</div>
-              <div className="text-xs text-muted-foreground">لوحة التحكم</div>
-            </div>
-          </div>
+        <div className="p-4 border-b border-border">
+          <Logo className="h-14 w-auto mx-auto" />
+          <div className="text-xs text-muted-foreground text-center mt-1">لوحة التحكم</div>
         </div>
 
         <nav className="flex-1 p-3 space-y-1 overflow-y-auto">
