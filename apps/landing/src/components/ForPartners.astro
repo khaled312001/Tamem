@@ -1,35 +1,39 @@
 ---
+import Icon, { type IconName } from './Icon.astro';
+
 const WHATSAPP = import.meta.env.PUBLIC_TAMEM_WHATSAPP || '+201010254819';
 const wa = (text: string) =>
   `https://wa.me/${WHATSAPP.replace(/[^\d]/g, '')}?text=${encodeURIComponent(text)}`;
 
-const partners = [
+const partners: { badge: string; title: string; desc: string; bullets: string[]; cta: string; href: string; gradient: string; icon: IconName }[] = [
   {
-    badge: 'للتجار 🏪',
+    badge: 'للتجار',
     title: 'ضم محلك لتميم',
     desc: 'وصل لعملاء جدد بدون تكلفة إنشاء تطبيقك. لوحة تحكم لإدارة المنتجات والطلبات.',
     bullets: ['عمولة شفافة — صفر اشتراك', 'لوحة تحكم بسيطة', 'فريق دعم يساعدك في الإعداد'],
     cta: 'كلمنا واتساب',
     href: wa('أهلاً، أنا تاجر وعاوز أضم محلي لتميم'),
-    gradient: 'from-brand-red via-rose-600 to-brand-orange',
+    gradient: 'linear-gradient(135deg, #E0301E, #C4280F 60%, #EC7A2C)',
+    icon: 'store',
   },
   {
-    badge: 'للسائقين 🛵',
+    badge: 'للسائقين',
     title: 'اشتغل معانا',
     desc: 'دخل إضافي مرن — اختار وقتك ومنطقتك. الـ payouts أسبوعية ومضمونة.',
     bullets: ['بدون اشتراك أو رسوم', 'دفعات أسبوعية', 'مرونة في الوقت والمنطقة'],
     cta: 'سجّل كسائق',
     href: wa('أهلاً، عاوز أنضم لتميم كسائق'),
-    gradient: 'from-brand-dark via-zinc-800 to-brand-red',
+    gradient: 'linear-gradient(135deg, #241310, #3a1a14 50%, #E0301E)',
+    icon: 'bike',
   },
 ];
 ---
 
-<section class="relative py-24 px-6 bg-gradient-to-b from-brand-red/[0.03] to-white">
+<section class="relative py-24 px-6" style="background: linear-gradient(180deg, #1A0C08 0%, #0F0805 100%);">
   <div class="max-w-7xl mx-auto">
     <div class="text-center mb-12 reveal">
-      <h2 class="text-3xl md:text-5xl font-black mb-3">انضم لعائلة تميم</h2>
-      <p class="text-brand-gray max-w-xl mx-auto">
+      <h2 class="text-3xl md:text-5xl font-black mb-3 text-white">انضم لعائلة تميم</h2>
+      <p class="text-white/60 max-w-xl mx-auto">
         سواء كنت صاحب محل أو سائق — في مكان ليك معانا.
       </p>
     </div>
@@ -38,36 +42,40 @@ const partners = [
       {partners.map((p, i) => (
         <a
           href={p.href}
-          target="_blank"
-          rel="noreferrer"
-          class={`reveal reveal-delay-${i + 1} group relative overflow-hidden rounded-3xl p-8 md:p-10 text-white bg-gradient-to-br ${p.gradient} hover:scale-[1.02] hover:shadow-2xl transition-all`}
+          target="_blank" rel="noreferrer"
+          class={`reveal reveal-delay-${i + 1} group relative overflow-hidden rounded-3xl p-8 md:p-10 text-white hover:scale-[1.02] transition-all`}
+          style={`background: ${p.gradient}; box-shadow: 0 30px 60px -20px rgba(224,48,30,0.5);`}
         >
-          <!-- Background pattern -->
-          <div class="absolute -top-20 -left-20 w-72 h-72 bg-white/10 rounded-full blur-3xl"></div>
-          <div class="absolute -bottom-20 -right-20 w-80 h-80 bg-white/10 rounded-full blur-3xl"></div>
+          <div class="absolute -top-20 -left-20 w-72 h-72 rounded-full blur-3xl" style="background: rgba(242,169,59,0.18);"></div>
+          <div class="absolute -bottom-20 -right-20 w-80 h-80 rounded-full blur-3xl" style="background: rgba(255,255,255,0.08);"></div>
 
           <div class="relative">
-            <span class="inline-block bg-white/15 backdrop-blur text-xs font-black px-3 py-1 rounded-full mb-4 border border-white/20">
-              {p.badge}
-            </span>
+            <div class="flex items-center gap-3 mb-5">
+              <div class="w-14 h-14 rounded-2xl bg-white/15 backdrop-blur grid place-items-center border border-white/20">
+                <Icon name={p.icon} size={26} class="text-white" />
+              </div>
+              <span class="inline-block bg-white/15 backdrop-blur text-xs font-black px-3 py-1 rounded-full border border-white/20">
+                {p.badge}
+              </span>
+            </div>
             <h3 class="text-2xl md:text-3xl font-black mb-3">{p.title}</h3>
             <p class="text-white/90 mb-6 leading-relaxed">{p.desc}</p>
 
             <ul class="space-y-2 mb-6">
               {p.bullets.map((b) => (
                 <li class="flex items-center gap-2 text-sm text-white/95">
-                  <svg class="w-4 h-4 shrink-0" fill="currentColor" viewBox="0 0 20 20">
-                    <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/>
-                  </svg>
+                  <span class="w-5 h-5 rounded-full grid place-items-center" style="background: rgba(242,169,59,0.25); color:#F2A93B;">
+                    <Icon name="check" size={12} />
+                  </span>
                   {b}
                 </li>
               ))}
             </ul>
 
             <span class="inline-flex items-center gap-2 bg-white text-brand-dark font-black px-5 py-2.5 rounded-xl group-hover:gap-3 transition-all">
-              <svg class="w-4 h-4" viewBox="0 0 24 24" fill="currentColor"><path d="M.057 24l1.687-6.163a11.867 11.867 0 01-1.587-5.946C.16 5.335 5.495 0 12.05 0a11.817 11.817 0 018.413 3.488 11.824 11.824 0 013.48 8.414c-.003 6.557-5.338 11.892-11.893 11.892a11.9 11.9 0 01-5.688-1.448L.057 24z"/></svg>
+              <Icon name="whatsapp" size={16} />
               {p.cta}
-              <span class="opacity-50 group-hover:translate-x-1 transition">←</span>
+              <Icon name="arrow-up-right" size={14} class="opacity-60 group-hover:translate-x-1 transition" />
             </span>
           </div>
         </a>

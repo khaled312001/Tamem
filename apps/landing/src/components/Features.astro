@@ -1,66 +1,32 @@
 ---
-const features = [
-  {
-    icon: '⚡',
-    title: 'الطلب السريع',
-    desc: 'زر عائم في كل شاشة. اكتب أو ارفع صورة أو سجّل صوت — نحن نسعّر ونرسل.',
-    color: 'from-brand-red to-orange-500',
-  },
-  {
-    icon: '🗺️',
-    title: 'متاجر قريبة على الخريطة',
-    desc: 'تشوف المتاجر والمطاعم والصيدليات حواليك بـ pins على خريطة قفط الحقيقية.',
-    color: 'from-blue-500 to-cyan-500',
-  },
-  {
-    icon: '📊',
-    title: 'تتبع لحظي',
-    desc: 'من لحظة قبول الطلب لتسليمه، شاشة التتبع بتُحدّث تلقائياً عبر WebSocket.',
-    color: 'from-purple-500 to-pink-500',
-  },
-  {
-    icon: '💳',
-    title: 'دفع متعدد الوسائل',
-    desc: 'كاش عند الاستلام، فودافون كاش، إنستاباي — كله مدمج عبر Paymob.',
-    color: 'from-emerald-500 to-green-500',
-  },
-  {
-    icon: '🔔',
-    title: 'إشعارات لحظية',
-    desc: 'تنبيهات push + توست داخل التطبيق + رسائل واتساب على الأرقام المسجلة.',
-    color: 'from-amber-500 to-yellow-500',
-  },
-  {
-    icon: '🎙️',
-    title: 'طلب صوتي',
-    desc: 'مش عارف تكتب؟ سجّل صوتك حتى 60 ثانية والإدارة هتفهم وتسعّر يدوياً.',
-    color: 'from-red-500 to-pink-500',
-  },
-  {
-    icon: '🌐',
-    title: 'عربي 100%',
-    desc: 'RTL كامل — التصميم مفصّل عربي من البداية، مش ترجمة مترجمة.',
-    color: 'from-teal-500 to-cyan-500',
-  },
-  {
-    icon: '🛡️',
-    title: 'أمان وموثوقية',
-    desc: 'OTP وكلمات سر مشفّرة، JWT برسم تجديد تلقائي، سجلات كل حركة.',
-    color: 'from-indigo-500 to-violet-500',
-  },
+import Icon, { type IconName } from './Icon.astro';
+
+const features: { icon: IconName; title: string; desc: string; gradient: string }[] = [
+  { icon: 'zap', title: 'الطلب السريع', desc: 'زر عائم في كل شاشة. اكتب أو ارفع صورة أو سجّل صوت — والإدارة بتسعّر وترسل.', gradient: 'linear-gradient(135deg,#E0301E,#EC7A2C)' },
+  { icon: 'map-pin', title: 'متاجر على الخريطة', desc: 'تشوف المتاجر والمطاعم والصيدليات حواليك بـ pins على خريطة قفط.', gradient: 'linear-gradient(135deg,#3B82F6,#06B6D4)' },
+  { icon: 'route', title: 'تتبع لحظي', desc: 'من لحظة قبول الطلب لتسليمه — شاشة التتبع بتُحدّث تلقائياً.', gradient: 'linear-gradient(135deg,#8B5CF6,#EC4899)' },
+  { icon: 'wallet', title: 'دفع متعدد', desc: 'كاش عند الاستلام، فودافون كاش، إنستاباي — كله مدمج.', gradient: 'linear-gradient(135deg,#10B981,#22C55E)' },
+  { icon: 'bell', title: 'إشعارات لحظية', desc: 'تنبيهات push + توست داخل التطبيق + رسائل واتساب.', gradient: 'linear-gradient(135deg,#F59E0B,#F2A93B)' },
+  { icon: 'mic', title: 'طلب صوتي', desc: 'مش عارف تكتب؟ سجّل صوتك حتى 60 ثانية والإدارة تفهم وتسعّر.', gradient: 'linear-gradient(135deg,#EF4444,#EC4899)' },
+  { icon: 'globe', title: 'عربي 100%', desc: 'RTL كامل — التصميم مفصّل عربي من البداية، مش ترجمة.', gradient: 'linear-gradient(135deg,#14B8A6,#06B6D4)' },
+  { icon: 'shield', title: 'أمان وموثوقية', desc: 'OTP وكلمات سر مشفّرة، JWT برسم تجديد تلقائي.', gradient: 'linear-gradient(135deg,#6366F1,#8B5CF6)' },
 ];
 ---
 
-<section id="features" class="relative py-24 px-6 bg-white">
+<section id="features" class="relative py-24 px-6" style="background:#0F0805;">
   <div class="max-w-7xl mx-auto">
     <div class="text-center mb-14 reveal">
-      <span class="inline-block px-3 py-1 bg-brand-gold/15 text-amber-700 text-xs font-black rounded-full mb-3">
+      <span
+        class="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-black mb-3 border"
+        style="background: rgba(242,169,59,0.15); color: #F2A93B; border-color: rgba(242,169,59,0.25);"
+      >
+        <Icon name="flame" size={14} />
         المميزات
       </span>
-      <h2 class="text-3xl md:text-5xl font-black mb-4">
-        مش مجرد تطبيق توصيل — <span class="text-brand-red">منظومة كاملة</span>
+      <h2 class="text-3xl md:text-5xl font-black mb-4 text-white">
+        مش مجرد تطبيق توصيل —<br class="md:hidden" /> <span style="color: #F2A93B;">منظومة كاملة</span>
       </h2>
-      <p class="text-brand-gray max-w-xl mx-auto">
+      <p class="text-white/60 max-w-xl mx-auto">
         كل تفصيلة في تميم متصممة عشان التجربة تكون أسهل من أي بديل.
       </p>
     </div>
@@ -68,13 +34,17 @@ const features = [
     <div class="grid sm:grid-cols-2 lg:grid-cols-4 gap-4">
       {features.map((f, i) => (
         <div
-          class={`reveal reveal-delay-${(i % 4) + 1} group relative bg-gradient-to-br from-white to-black/[0.02] border border-black/5 rounded-2xl p-5 hover:shadow-xl hover:-translate-y-1 transition-all`}
+          class={`reveal reveal-delay-${(i % 4) + 1} group relative rounded-2xl p-5 border hover:-translate-y-1 transition-all duration-300`}
+          style="background: linear-gradient(180deg, rgba(255,255,255,0.04), rgba(255,255,255,0.01)); border-color: rgba(255,255,255,0.08);"
         >
-          <div class={`w-12 h-12 rounded-xl bg-gradient-to-br ${f.color} text-white text-2xl grid place-items-center mb-4 shadow-md group-hover:scale-110 transition`}>
-            {f.icon}
+          <div
+            class="w-12 h-12 rounded-xl text-white grid place-items-center mb-4 shadow-md group-hover:scale-110 transition-transform"
+            style={`background: ${f.gradient};`}
+          >
+            <Icon name={f.icon} size={22} />
           </div>
-          <h3 class="font-black text-lg mb-1.5">{f.title}</h3>
-          <p class="text-sm text-brand-gray leading-relaxed">{f.desc}</p>
+          <h3 class="font-black text-lg mb-1.5 text-white">{f.title}</h3>
+          <p class="text-sm text-white/60 leading-relaxed">{f.desc}</p>
         </div>
       ))}
     </div>

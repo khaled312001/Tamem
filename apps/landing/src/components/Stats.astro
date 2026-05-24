@@ -1,22 +1,38 @@
 ---
-const stats = [
-  { value: '30', suffix: 'دقيقة', label: 'متوسط زمن التوصيل', color: 'text-brand-red' },
-  { value: '17+', suffix: '', label: 'متجر وصيدلية ومطعم', color: 'text-brand-orange' },
-  { value: '24/7', suffix: '', label: 'دعم فني متاح', color: 'text-brand-gold' },
-  { value: '4', suffix: 'محافظات', label: 'قنا · الأقصر · أسوان · البحر الأحمر', color: 'text-brand-red' },
+import Icon, { type IconName } from './Icon.astro';
+
+const stats: { value: string; suffix?: string; label: string; icon: IconName; color: string }[] = [
+  { value: '30', suffix: 'دقيقة', label: 'متوسط زمن التوصيل', icon: 'clock', color: '#F2A93B' },
+  { value: '17+', label: 'متجر وصيدلية ومطعم', icon: 'store', color: '#EC7A2C' },
+  { value: '24/7', label: 'دعم فني متاح', icon: 'phone', color: '#E0301E' },
+  { value: '4', suffix: 'محافظات', label: 'قنا · الأقصر · أسوان · البحر الأحمر', icon: 'map-pin', color: '#F2A93B' },
 ];
 ---
 
-<section class="relative -mt-8 z-10 px-6">
-  <div class="max-w-6xl mx-auto bg-white rounded-3xl shadow-[0_30px_60px_-20px_rgba(36,19,16,0.15)] border border-black/5 overflow-hidden">
-    <div class="grid grid-cols-2 md:grid-cols-4 divide-x divide-y md:divide-y-0 divide-black/5">
+<section class="relative -mt-12 z-10 px-6">
+  <div
+    class="max-w-6xl mx-auto rounded-3xl overflow-hidden border backdrop-blur"
+    style="background: rgba(36,19,16,0.85); border-color: rgba(242,169,59,0.18); box-shadow: 0 30px 60px -20px rgba(0,0,0,0.6);"
+  >
+    <div class="grid grid-cols-2 md:grid-cols-4">
       {stats.map((s, i) => (
-        <div class={`reveal reveal-delay-${(i % 4) + 1} p-6 md:p-8 text-center`}>
-          <div class={`text-3xl md:text-5xl font-black mb-1 ${s.color}`}>
-            {s.value}
-            {s.suffix && <span class="text-sm md:text-base align-top opacity-80 ms-1">{s.suffix}</span>}
+        <div
+          class={`reveal reveal-delay-${(i % 4) + 1} p-6 md:p-7 text-center group relative ${
+            i < 3 ? 'md:border-l' : ''
+          } ${i % 2 === 0 ? 'border-l md:border-l' : ''} ${i > 1 ? 'border-t md:border-t-0' : ''}`}
+          style="border-color: rgba(242,169,59,0.10);"
+        >
+          <div
+            class="w-12 h-12 rounded-2xl grid place-items-center mx-auto mb-3 group-hover:scale-110 transition-transform"
+            style={`background: ${s.color}22; color: ${s.color};`}
+          >
+            <Icon name={s.icon} size={22} />
           </div>
-          <div class="text-xs md:text-sm text-brand-gray font-medium leading-tight">{s.label}</div>
+          <div class="text-3xl md:text-4xl font-black mb-1 text-white">
+            {s.value}
+            {s.suffix && <span class="text-sm md:text-base align-top opacity-60 ms-1">{s.suffix}</span>}
+          </div>
+          <div class="text-xs md:text-sm text-white/60 font-medium leading-tight">{s.label}</div>
         </div>
       ))}
     </div>

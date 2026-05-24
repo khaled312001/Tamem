@@ -8,19 +8,19 @@ const links = [
 ];
 ---
 
-<header
-  class="fixed top-0 inset-x-0 z-50 transition-all duration-300"
-  id="site-nav"
->
+<header class="fixed top-0 inset-x-0 z-50 transition-all duration-300" id="site-nav">
   <div class="max-w-7xl mx-auto px-4 md:px-8 py-3">
     <div
-      class="flex items-center justify-between gap-4 bg-white/85 backdrop-blur-xl border border-black/5 rounded-2xl shadow-[0_8px_30px_-12px_rgba(36,19,16,0.18)] px-4 md:px-6 py-2.5"
+      class="flex items-center justify-between gap-4 backdrop-blur-xl border rounded-2xl px-4 md:px-6 py-2.5"
+      style="background: rgba(20,10,8,0.65); border-color: rgba(255,255,255,0.08); box-shadow: 0 8px 30px -12px rgba(0,0,0,0.5);"
     >
       <a href="#top" class="flex items-center gap-2 shrink-0">
-        <img src="/logo.png" alt="تميم" class="h-12 w-auto rounded-lg" />
+        <div class="bg-white rounded-lg p-1 shadow-md">
+          <img src="/logo.png" alt="تميم" class="h-10 w-auto" />
+        </div>
         <span class="hidden sm:block">
-          <span class="block text-sm font-black leading-tight">تميم للتوصيل</span>
-          <span class="block text-[10px] text-brand-gray leading-tight">قفط · قنا · الصعيد</span>
+          <span class="block text-sm font-black leading-tight text-white">تميم للتوصيل</span>
+          <span class="block text-[10px] leading-tight" style="color:#F2A93B;">قفط · قنا · الصعيد</span>
         </span>
       </a>
 
@@ -28,7 +28,7 @@ const links = [
         {links.map((l) => (
           <a
             href={l.href}
-            class="px-3 py-1.5 rounded-lg text-sm text-brand-dark/80 hover:text-brand-red hover:bg-brand-red/5 transition"
+            class="px-3 py-1.5 rounded-lg text-sm text-white/75 hover:text-white transition"
           >
             {l.label}
           </a>
@@ -38,32 +38,24 @@ const links = [
       <div class="flex items-center gap-2">
         <a
           href="#download"
-          class="hidden sm:inline-flex bg-gradient-to-l from-brand-red to-brand-orange text-white font-bold text-sm px-4 py-2 rounded-xl shadow-md shadow-brand-red/30 hover:shadow-lg hover:shadow-brand-red/40 hover:-translate-y-0.5 transition-all"
+          class="hidden sm:inline-flex text-white font-bold text-sm px-4 py-2 rounded-xl shadow-md hover:-translate-y-0.5 transition-all"
+          style="background: linear-gradient(135deg,#E0301E,#EC7A2C); box-shadow: 0 8px 20px -8px rgba(224,48,30,0.6);"
         >
           حمّل التطبيق
         </a>
         <button
           id="nav-toggle"
-          class="md:hidden p-2 rounded-lg hover:bg-black/5"
+          class="md:hidden p-2 rounded-lg hover:bg-white/10 text-white"
           aria-label="فتح القائمة"
         >
-          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-            <path d="M4 6h16M4 12h16M4 18h16" />
-          </svg>
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
         </button>
       </div>
     </div>
 
-    <!-- Mobile menu -->
-    <div
-      id="mobile-menu"
-      class="md:hidden hidden mt-2 bg-white/95 backdrop-blur-xl border border-black/5 rounded-2xl shadow-lg p-2"
-    >
+    <div id="mobile-menu" class="md:hidden hidden mt-2 backdrop-blur-xl border rounded-2xl p-2" style="background:rgba(20,10,8,0.92); border-color: rgba(255,255,255,0.08);">
       {links.map((l) => (
-        <a
-          href={l.href}
-          class="block px-4 py-3 rounded-lg text-sm hover:bg-brand-red/5 hover:text-brand-red"
-        >
+        <a href={l.href} class="block px-4 py-3 rounded-lg text-sm text-white/85 hover:bg-white/10 hover:text-white">
           {l.label}
         </a>
       ))}
@@ -74,11 +66,8 @@ const links = [
 <script>
   const nav = document.getElementById('site-nav');
   const onScroll = () => {
-    if (window.scrollY > 12) {
-      nav?.classList.add('shadow-sm');
-    } else {
-      nav?.classList.remove('shadow-sm');
-    }
+    if (window.scrollY > 12) nav?.classList.add('shadow-2xl');
+    else nav?.classList.remove('shadow-2xl');
   };
   window.addEventListener('scroll', onScroll, { passive: true });
   onScroll();

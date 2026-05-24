@@ -1,13 +1,15 @@
 ---
+import Icon from './Icon.astro';
+
 const WHATSAPP = import.meta.env.PUBLIC_TAMEM_WHATSAPP || '+201010254819';
 const EMAIL = 'info@tamem-delivery.com';
 ---
 
-<section id="contact" class="py-24 px-6 bg-white">
+<section id="contact" class="py-24 px-6" style="background:#0F0805;">
   <div class="max-w-5xl mx-auto">
     <div class="text-center mb-12 reveal">
-      <h2 class="text-3xl md:text-5xl font-black mb-4">عاوز تتواصل معانا؟</h2>
-      <p class="text-brand-gray max-w-xl mx-auto">
+      <h2 class="text-3xl md:text-5xl font-black mb-4 text-white">عاوز تتواصل معانا؟</h2>
+      <p class="text-white/60 max-w-xl mx-auto">
         فريقنا متاح يومياً من 8 صباحاً لـ 12 منتصف الليل.
       </p>
     </div>
@@ -16,44 +18,48 @@ const EMAIL = 'info@tamem-delivery.com';
       <a
         href={`https://wa.me/${WHATSAPP.replace(/[^\d]/g, '')}`}
         target="_blank" rel="noreferrer"
-        class="reveal reveal-delay-1 group flex flex-col items-center text-center bg-white border-2 border-black/5 hover:border-green-500/30 rounded-2xl p-6 hover:shadow-xl hover:-translate-y-1 transition-all"
+        class="reveal reveal-delay-1 group flex flex-col items-center text-center rounded-2xl p-6 border hover:-translate-y-1 transition-all"
+        style="background: linear-gradient(180deg, rgba(255,255,255,0.04), rgba(255,255,255,0.01)); border-color: rgba(255,255,255,0.08);"
       >
-        <div class="w-14 h-14 rounded-2xl bg-green-500 text-white grid place-items-center mb-3 group-hover:scale-110 transition">
-          <svg class="w-7 h-7" viewBox="0 0 24 24" fill="currentColor"><path d="M.057 24l1.687-6.163a11.867 11.867 0 01-1.587-5.946C.16 5.335 5.495 0 12.05 0a11.817 11.817 0 018.413 3.488 11.824 11.824 0 013.48 8.414c-.003 6.557-5.338 11.892-11.893 11.892a11.9 11.9 0 01-5.688-1.448L.057 24z"/></svg>
+        <div class="w-14 h-14 rounded-2xl bg-green-500 text-white grid place-items-center mb-3 group-hover:scale-110 transition shadow-lg shadow-green-500/30">
+          <Icon name="whatsapp" size={24} />
         </div>
-        <div class="font-black mb-1">واتساب</div>
-        <div class="text-sm text-brand-gray" dir="ltr">{WHATSAPP}</div>
+        <div class="font-black mb-1 text-white">واتساب</div>
+        <div class="text-sm text-white/60" dir="ltr">{WHATSAPP}</div>
       </a>
 
       <a
         href={`tel:${WHATSAPP}`}
-        class="reveal reveal-delay-2 group flex flex-col items-center text-center bg-white border-2 border-black/5 hover:border-brand-red/30 rounded-2xl p-6 hover:shadow-xl hover:-translate-y-1 transition-all"
+        class="reveal reveal-delay-2 group flex flex-col items-center text-center rounded-2xl p-6 border hover:-translate-y-1 transition-all"
+        style="background: linear-gradient(180deg, rgba(255,255,255,0.04), rgba(255,255,255,0.01)); border-color: rgba(255,255,255,0.08);"
       >
-        <div class="w-14 h-14 rounded-2xl bg-brand-red text-white grid place-items-center mb-3 group-hover:scale-110 transition">
-          <svg class="w-7 h-7" fill="currentColor" viewBox="0 0 24 24"><path d="M20 15.5c-1.25 0-2.45-.2-3.57-.57a1.02 1.02 0 00-1.02.24l-2.2 2.2a15.045 15.045 0 01-6.59-6.58l2.2-2.21a.96.96 0 00.25-1A11.36 11.36 0 018.5 4c0-.55-.45-1-1-1H4c-.55 0-1 .45-1 1 0 9.39 7.61 17 17 17 .55 0 1-.45 1-1v-3.5c0-.55-.45-1-1-1z"/></svg>
+        <div class="w-14 h-14 rounded-2xl text-white grid place-items-center mb-3 group-hover:scale-110 transition shadow-lg" style="background:#E0301E; box-shadow: 0 8px 20px -8px rgba(224,48,30,0.6);">
+          <Icon name="phone" size={24} />
         </div>
-        <div class="font-black mb-1">اتصال مباشر</div>
-        <div class="text-sm text-brand-gray" dir="ltr">{WHATSAPP}</div>
+        <div class="font-black mb-1 text-white">اتصال مباشر</div>
+        <div class="text-sm text-white/60" dir="ltr">{WHATSAPP}</div>
       </a>
 
       <a
         href={`mailto:${EMAIL}`}
-        class="reveal reveal-delay-3 group flex flex-col items-center text-center bg-white border-2 border-black/5 hover:border-brand-orange/30 rounded-2xl p-6 hover:shadow-xl hover:-translate-y-1 transition-all"
+        class="reveal reveal-delay-3 group flex flex-col items-center text-center rounded-2xl p-6 border hover:-translate-y-1 transition-all"
+        style="background: linear-gradient(180deg, rgba(255,255,255,0.04), rgba(255,255,255,0.01)); border-color: rgba(255,255,255,0.08);"
       >
-        <div class="w-14 h-14 rounded-2xl bg-brand-orange text-white grid place-items-center mb-3 group-hover:scale-110 transition">
-          <svg class="w-7 h-7" fill="currentColor" viewBox="0 0 24 24"><path d="M20 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 4l-8 5-8-5V6l8 5 8-5v2z"/></svg>
+        <div class="w-14 h-14 rounded-2xl text-white grid place-items-center mb-3 group-hover:scale-110 transition shadow-lg" style="background:#EC7A2C; box-shadow: 0 8px 20px -8px rgba(236,122,44,0.6);">
+          <Icon name="mail" size={24} />
         </div>
-        <div class="font-black mb-1">إيميل</div>
-        <div class="text-sm text-brand-gray break-all" dir="ltr">{EMAIL}</div>
+        <div class="font-black mb-1 text-white">إيميل</div>
+        <div class="text-sm text-white/60 break-all" dir="ltr">{EMAIL}</div>
       </a>
     </div>
 
-    <!-- Working hours -->
-    <div class="reveal mt-8 bg-brand-red/5 border border-brand-red/15 rounded-2xl p-5 flex items-center gap-4 max-w-2xl mx-auto">
-      <div class="w-12 h-12 rounded-xl bg-brand-red/10 text-brand-red grid place-items-center text-xl">⏰</div>
+    <div class="reveal mt-8 max-w-2xl mx-auto rounded-2xl p-5 flex items-center gap-4 border" style="background: rgba(242,169,59,0.08); border-color: rgba(242,169,59,0.20);">
+      <div class="w-12 h-12 rounded-xl grid place-items-center" style="background: rgba(242,169,59,0.15); color:#F2A93B;">
+        <Icon name="clock" size={22} />
+      </div>
       <div>
-        <div class="font-black">ساعات العمل</div>
-        <div class="text-sm text-brand-gray">كل يوم — من 8:00 صباحاً حتى 12:00 منتصف الليل</div>
+        <div class="font-black text-white">ساعات العمل</div>
+        <div class="text-sm text-white/65">كل يوم — من 8:00 صباحاً حتى 12:00 منتصف الليل</div>
       </div>
     </div>
   </div>

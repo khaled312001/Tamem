@@ -7,14 +7,17 @@ import Footer from '../components/Footer.astro';
 <BaseLayout title="سياسة الخصوصية · تميم للتوصيل">
   <NavBar />
   <main class="max-w-3xl mx-auto px-6 pt-32 pb-16">
-    <div class="bg-white border border-black/5 rounded-3xl shadow-sm p-8 md:p-12">
-      <h1 class="text-3xl md:text-4xl font-black mb-2">سياسة الخصوصية</h1>
-      <p class="text-sm text-brand-gray mb-8">آخر تحديث: {new Date().toLocaleDateString('ar-EG')}</p>
+    <div
+      class="rounded-3xl p-8 md:p-12 border"
+      style="background: linear-gradient(180deg, rgba(255,255,255,0.04), rgba(255,255,255,0.01)); border-color: rgba(255,255,255,0.08);"
+    >
+      <h1 class="text-3xl md:text-4xl font-black mb-2 text-white">سياسة الخصوصية</h1>
+      <p class="text-sm text-white/55 mb-8">آخر تحديث: {new Date().toLocaleDateString('ar-EG')}</p>
 
-      <div class="prose-content space-y-6">
+      <div class="space-y-6">
         <section>
-          <h2 class="text-xl font-black mb-2">البيانات التي نجمعها</h2>
-          <ul class="list-disc pr-6 space-y-1.5 text-brand-gray">
+          <h2 class="text-xl font-black mb-2" style="color:#F2A93B;">البيانات التي نجمعها</h2>
+          <ul class="list-disc pr-6 space-y-1.5 text-white/80">
             <li>الاسم ورقم الهاتف (لإنشاء الحساب والتحقق)</li>
             <li>الموقع الجغرافي (لتنفيذ التوصيل)</li>
             <li>تفاصيل الطلبات والمدفوعات</li>
@@ -22,17 +25,17 @@ import Footer from '../components/Footer.astro';
           </ul>
         </section>
         <section>
-          <h2 class="text-xl font-black mb-2">استخدام البيانات</h2>
-          <p class="text-brand-gray leading-relaxed">
+          <h2 class="text-xl font-black mb-2" style="color:#F2A93B;">استخدام البيانات</h2>
+          <p class="text-white/80 leading-relaxed">
             تُستخدم البيانات فقط لتشغيل خدمة التوصيل، التواصل معك بشأن طلباتك، وتحسين تجربتك.
             لا نشارك بياناتك مع أي طرف ثالث بدون موافقتك، باستثناء بوابات الدفع (Paymob) ومنصات الإشعارات (WhatsApp/FCM) عند الضرورة لتنفيذ الطلب.
           </p>
         </section>
         <section>
-          <h2 class="text-xl font-black mb-2">حقوقك</h2>
-          <p class="text-brand-gray leading-relaxed">
+          <h2 class="text-xl font-black mb-2" style="color:#F2A93B;">حقوقك</h2>
+          <p class="text-white/80 leading-relaxed">
             تقدر تطلب نسخة من بياناتك أو حذف حسابك في أي وقت عن طريق التواصل معنا على
-            <a href="mailto:info@tamem-delivery.com" class="text-brand-red hover:underline">info@tamem-delivery.com</a>.
+            <a href="mailto:info@tamem-delivery.com" class="hover:underline" style="color:#F2A93B;">info@tamem-delivery.com</a>.
           </p>
         </section>
       </div>

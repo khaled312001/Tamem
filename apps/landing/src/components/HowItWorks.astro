@@ -1,41 +1,66 @@
 ---
-const steps = [
-  { num: '01', title: 'اختر الخدمة', desc: 'دليفري أو شحن أو طلب تاجر — أو استخدم الزر السريع.', icon: '🎯' },
-  { num: '02', title: 'أرسل الطلب', desc: 'تفاصيل + صور + موقع. بنحب الـ "اكتبه بسرعة" بدون فورمات معقدة.', icon: '✍️' },
-  { num: '03', title: 'استلم تأكيد', desc: 'تأكيد فوري على التطبيق + واتساب + إشعار بحالة الطلب.', icon: '📱' },
-  { num: '04', title: 'تابع وتسلّم', desc: 'تتبع لحظي للمندوب على الخريطة + استلام آمن.', icon: '✅' },
+import Icon, { type IconName } from './Icon.astro';
+
+const steps: { num: string; title: string; desc: string; icon: IconName }[] = [
+  { num: '01', title: 'اختر الخدمة', desc: 'دليفري أو شحن أو طلب تاجر — أو استخدم زر الطلب السريع.', icon: 'sparkles' },
+  { num: '02', title: 'أرسل الطلب', desc: 'تفاصيل + صور + موقع — بدون فورمات معقّدة.', icon: 'pen' },
+  { num: '03', title: 'استلم تأكيد', desc: 'إشعار فوري + رسالة واتساب + سعر تقديري.', icon: 'bell' },
+  { num: '04', title: 'تابع وتسلّم', desc: 'تتبع لحظي للمندوب على الخريطة + استلام آمن.', icon: 'check' },
 ];
 ---
 
-<section id="how" class="relative py-24 px-6 bg-gradient-to-b from-white to-brand-red/[0.03]">
+<section id="how" class="relative py-24 px-6" style="background: linear-gradient(180deg, #0F0805 0%, #1A0C08 100%);">
   <div class="max-w-7xl mx-auto">
     <div class="text-center mb-16 reveal">
-      <span class="inline-block px-3 py-1 bg-brand-orange/10 text-brand-orange text-xs font-black rounded-full mb-3">
+      <span
+        class="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-black mb-3 border"
+        style="background: rgba(236,122,44,0.15); color: #F2A93B; border-color: rgba(236,122,44,0.25);"
+      >
+        <Icon name="route" size={14} />
         كيف يعمل
       </span>
-      <h2 class="text-3xl md:text-5xl font-black mb-4">من فكرة الطلب لـ "وصل" — 4 خطوات</h2>
-      <p class="text-brand-gray max-w-xl mx-auto">صممنا الـ flow بحيث يكون أبسط من أي تطبيق توصيل تاني.</p>
+      <h2 class="text-3xl md:text-5xl font-black mb-4 text-white">
+        من فكرة الطلب لـ <span style="color: #F2A93B;">"وصل"</span> — 4 خطوات
+      </h2>
+      <p class="text-white/60 max-w-xl mx-auto">
+        صممنا الـ flow بحيث يكون أبسط من أي تطبيق توصيل تاني.
+      </p>
     </div>
 
-    <!-- Steps with connecting line -->
-    <div class="relative grid md:grid-cols-4 gap-6">
-      <!-- Horizontal connecting line (md+) -->
-      <div class="hidden md:block absolute top-12 right-[12.5%] left-[12.5%] h-0.5 bg-gradient-to-l from-brand-red via-brand-orange to-brand-gold opacity-30"></div>
+    <div class="relative grid md:grid-cols-4 gap-8">
+      <svg
+        class="hidden md:block absolute top-12 right-[12.5%] left-[12.5%] w-3/4 h-1 mx-auto pointer-events-none"
+        preserveAspectRatio="none" viewBox="0 0 100 1"
+      >
+        <line x1="0" y1="0.5" x2="100" y2="0.5" stroke="#F2A93B" stroke-width="1.5" stroke-dasharray="3 4" opacity="0.35"/>
+      </svg>
 
       {steps.map((step, i) => (
         <div class={`reveal reveal-delay-${i + 1} relative text-center`}>
-          <!-- Step circle -->
           <div class="relative inline-flex w-24 h-24 mb-5">
-            <div class="absolute inset-0 bg-gradient-to-br from-brand-red to-brand-orange rounded-full opacity-20 blur-xl"></div>
-            <div class="relative w-24 h-24 bg-white border-2 border-brand-red/15 rounded-full grid place-items-center text-4xl shadow-lg hover:shadow-xl hover:scale-105 transition">
-              {step.icon}
+            <div
+              class="absolute inset-0 rounded-full blur-xl opacity-60"
+              style="background: linear-gradient(135deg,#E0301E,#F2A93B);"
+            ></div>
+            <div
+              class="absolute inset-0 rounded-full border-[1.5px]"
+              style="border-color: rgba(242,169,59,0.4); transform: scale(1.08);"
+            ></div>
+            <div
+              class="relative w-24 h-24 rounded-full grid place-items-center shadow-2xl hover:scale-105 transition-all"
+              style="background: rgba(20,10,8,0.95); border: 1px solid rgba(242,169,59,0.2);"
+            >
+              <Icon name={step.icon} size={32} class="text-brand-gold" />
             </div>
-            <div class="absolute -top-2 -right-2 w-10 h-10 bg-brand-dark text-brand-gold font-black text-sm rounded-full grid place-items-center border-4 border-white shadow-md">
+            <div
+              class="absolute -top-2 -right-2 w-10 h-10 rounded-full grid place-items-center font-black text-sm shadow-md border-4"
+              style="background: #F2A93B; color: #241310; border-color: #0F0805;"
+            >
               {step.num}
             </div>
           </div>
-          <h3 class="text-lg font-black mb-2">{step.title}</h3>
-          <p class="text-sm text-brand-gray leading-relaxed max-w-[18ch] mx-auto">{step.desc}</p>
+          <h3 class="text-lg font-black mb-2 text-white">{step.title}</h3>
+          <p class="text-sm text-white/60 leading-relaxed max-w-[20ch] mx-auto">{step.desc}</p>
         </div>
       ))}
     </div>
