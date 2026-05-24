@@ -64,14 +64,12 @@ export const router: ReturnType<typeof createBrowserRouter> = createBrowserRoute
   // Opt into v7 behavior early so the deprecation warning goes away.
   // v7_startTransition wraps state updates in React.startTransition for smoother
   // navigations; safe to enable now since we're on React 18.
-  // Cast — react-router-dom 6.x ships these flags in the runtime but its types
-  // omit some of them; the runtime accepts the full set, and the silence
-  // script filters the deprecation warning either way.
+  // Only the two flags that are stable + supported in react-router-dom 6.28.
+  // The rest (v7_fetcherPersist, v7_normalizeFormMethod, v7_partialHydration)
+  // can break createBrowserRouter on routes that use React.Context consumers
+  // (e.g. /merchants which loads react-leaflet) → "render2 is not a function".
   future: {
     v7_startTransition: true,
     v7_relativeSplatPath: true,
-    v7_fetcherPersist: true,
-    v7_normalizeFormMethod: true,
-    v7_partialHydration: true,
   } as Record<string, boolean>,
 });

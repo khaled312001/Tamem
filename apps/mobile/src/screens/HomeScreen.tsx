@@ -2,7 +2,16 @@ import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useQuery } from '@tanstack/react-query';
 import { LinearGradient } from 'expo-linear-gradient';
-import { Copy, Gift, Package, Search, ShoppingBag, Store, Truck } from 'lucide-react-native';
+import {
+  Copy,
+  Gift,
+  MapPin,
+  Package,
+  Search,
+  ShoppingBag,
+  Store,
+  Truck,
+} from 'lucide-react-native';
 import { useState } from 'react';
 import {
   ActivityIndicator,
@@ -184,7 +193,16 @@ export function HomeScreen() {
           ))}
         </View>
 
-        <Text style={styles.sectionTitle}>الأكثر طلبًا</Text>
+        <View style={styles.sectionHeader}>
+          <Text style={styles.sectionTitle}>الأكثر طلبًا</Text>
+          <Pressable
+            onPress={() => navigation.navigate('NearbyMap', { search: '' })}
+            style={({ pressed }) => [styles.mapLink, pressed && { opacity: 0.85 }]}
+          >
+            <MapPin size={14} color={colors.brand.red} />
+            <Text style={styles.mapLinkText}>عرض على الخريطة</Text>
+          </Pressable>
+        </View>
         {loadingMerchants ? (
           <ActivityIndicator color={colors.brand.red} style={{ marginVertical: spacing.lg }} />
         ) : topMerchants.length === 0 ? (
@@ -293,6 +311,27 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(255,255,255,0.22)',
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  sectionHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginTop: spacing.md,
+    marginBottom: spacing.sm,
+  },
+  mapLink: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: colors.brand.redLight,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 4,
+    borderRadius: radii.pill,
+  },
+  mapLinkText: {
+    fontSize: fontSizes.xs,
+    color: colors.brand.red,
+    fontFamily: fontFamilies.bodyExtraBold,
   },
   sectionTitle: {
     fontSize: fontSizes.md,

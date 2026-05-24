@@ -1,21 +1,22 @@
 /**
  * MapPicker — click the map or search by place name to set lat/lng.
  *
- *   - Tile layer: OpenStreetMap (free, no API key required)
- *   - Geocoding: Nominatim (free, rate-limited — fine for occasional admin use)
- *   - Reverse-geocoding runs on each pin drop so the address field auto-fills.
+ * Implementation note: we use plain Leaflet (not react-leaflet) because
+ * react-leaflet's internal Context.Consumer trips a "render2 is not a function"
+ * error on this codebase under React 18 + dev-mode strict effects. Vanilla
+ * Leaflet sidesteps the React context issue completely.
  *
- * Usage:
- *   <MapPicker lat={lat} lng={lng} onChange={({lat,lng,address}) => ...} />
+ *   - Tile layer: OpenStreetMap (free, no API key required)
+ *   - Geocoding: Nominatim (free, rate-limited)
+ *   - Reverse-geocoding runs on each pin drop so the address field auto-fills.
  */
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import { Loader2, MapPin, Search } from 'lucide-react';
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { MapContainer, Marker, TileLayer, useMap, useMapEvents } from 'react-leaflet';
+import { useEffect, useRef, useState } from 'react';
 
-// react-leaflet's default marker assets don't bundle in Vite — point at the CDN.
-// Doing it here once is fine: it's an idempotent monkey-patch.
+// Patch the default marker icons once — Leaflet's bundled images don't resolve
+// through Vite without help. Pointing at the CDN keeps the picker self-contained.
 const DefaultIcon = L.icon({
   iconUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png',
   iconRetinaUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png',
@@ -40,7 +41,6 @@ interface MapPickerProps {
   lng?: number;
   onChange: (value: MapPickerValue) => void;
   height?: number;
-  /** Pre-fill the search box (e.g., with the current store name) */
   initialQuery?: string;
 }
 
@@ -51,17 +51,74 @@ interface NominatimResult {
 }
 
 export function MapPicker({ lat, lng, onChange, height = 320, initialQuery }: MapPickerProps) {
-  const center: [number, number] = useMemo(
-    () => [lat ?? QIFT_CENTER[0], lng ?? QIFT_CENTER[1]],
-    [lat, lng],
-  );
+  const mapDivRef = useRef<HTMLDivElement | null>(null);
+  const mapRef = useRef<L.Map | null>(null);
+  const markerRef = useRef<L.Marker | null>(null);
+  // Keep the latest onChange in a ref so the map's click handler always sees
+  // it without forcing a map re-init when the parent re-renders.
+  const onChangeRef = useRef(onChange);
+  useEffect(() => {
+    onChangeRef.current = onChange;
+  }, [onChange]);
+
   const [query, setQuery] = useState(initialQuery ?? '');
   const [results, setResults] = useState<NominatimResult[]>([]);
   const [searching, setSearching] = useState(false);
   const [showResults, setShowResults] = useState(false);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Search-as-you-type with debounce (Nominatim asks for max 1 req/sec — be polite)
+  // ────── Initialize map once on mount ──────
+  useEffect(() => {
+    if (!mapDivRef.current || mapRef.current) return;
+    const startLat = lat ?? QIFT_CENTER[0];
+    const startLng = lng ?? QIFT_CENTER[1];
+
+    const map = L.map(mapDivRef.current, {
+      center: [startLat, startLng],
+      zoom: lat && lng ? 16 : 13,
+      scrollWheelZoom: true,
+    });
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{y}/{x}.png', {
+      attribution: '&copy; OpenStreetMap',
+      maxZoom: 19,
+    }).addTo(map);
+
+    if (lat !== undefined && lng !== undefined) {
+      markerRef.current = L.marker([lat, lng]).addTo(map);
+    }
+
+    map.on('click', async (e: L.LeafletMouseEvent) => {
+      const la = e.latlng.lat;
+      const ln = e.latlng.lng;
+      if (markerRef.current) markerRef.current.setLatLng([la, ln]);
+      else markerRef.current = L.marker([la, ln]).addTo(map);
+      const address = await reverseGeocode(la, ln);
+      if (address) setQuery(address);
+      onChangeRef.current({ lat: la, lng: ln, address });
+    });
+
+    mapRef.current = map;
+
+    // Cleanup: tear down on unmount so subsequent dialog opens don't leak
+    return () => {
+      map.remove();
+      mapRef.current = null;
+      markerRef.current = null;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // ────── Reflect external lat/lng changes onto the marker ──────
+  useEffect(() => {
+    if (!mapRef.current) return;
+    if (lat !== undefined && lng !== undefined) {
+      if (markerRef.current) markerRef.current.setLatLng([lat, lng]);
+      else markerRef.current = L.marker([lat, lng]).addTo(mapRef.current);
+      mapRef.current.flyTo([lat, lng], Math.max(mapRef.current.getZoom(), 15), { duration: 0.6 });
+    }
+  }, [lat, lng]);
+
+  // ────── Search-as-you-type via Nominatim (debounced, polite to free API) ──────
   useEffect(() => {
     if (!query.trim() || query.trim().length < 3) {
       setResults([]);
@@ -107,12 +164,12 @@ export function MapPicker({ lat, lng, onChange, height = 320, initialQuery }: Ma
     return undefined;
   };
 
-  const pickResult = async (r: NominatimResult) => {
+  const pickResult = (r: NominatimResult) => {
     const la = Number(r.lat);
     const ln = Number(r.lon);
     setQuery(r.display_name);
     setShowResults(false);
-    onChange({ lat: la, lng: ln, address: r.display_name });
+    onChangeRef.current({ lat: la, lng: ln, address: r.display_name });
   };
 
   return (
@@ -137,6 +194,7 @@ export function MapPicker({ lat, lng, onChange, height = 320, initialQuery }: Ma
             {results.map((r, i) => (
               <button
                 key={`${r.lat}-${r.lon}-${i}`}
+                type="button"
                 onClick={() => pickResult(r)}
                 className="w-full text-right px-3 py-2 hover:bg-muted/50 text-sm border-b border-border/50 last:border-0 flex items-start gap-2"
               >
@@ -148,29 +206,12 @@ export function MapPicker({ lat, lng, onChange, height = 320, initialQuery }: Ma
         )}
       </div>
 
-      {/* Map */}
-      <div className="rounded-lg overflow-hidden border border-border" style={{ height }}>
-        <MapContainer
-          center={center}
-          zoom={lat && lng ? 16 : 13}
-          style={{ height: '100%', width: '100%' }}
-          scrollWheelZoom
-        >
-          <TileLayer
-            attribution="&copy; OpenStreetMap"
-            url="https://{s}.tile.openstreetmap.org/{z}/{y}/{x}.png"
-          />
-          {lat !== undefined && lng !== undefined && <Marker position={[lat, lng]} />}
-          <ClickHandler
-            onPick={async (la, ln) => {
-              const address = await reverseGeocode(la, ln);
-              if (address) setQuery(address);
-              onChange({ lat: la, lng: ln, address });
-            }}
-          />
-          {lat && lng && <RecenterOnChange lat={lat} lng={lng} />}
-        </MapContainer>
-      </div>
+      {/* Map container — Leaflet renders into this div imperatively */}
+      <div
+        ref={mapDivRef}
+        className="rounded-lg overflow-hidden border border-border"
+        style={{ height }}
+      />
 
       {/* Coordinate readout */}
       <div className="flex items-center justify-between text-xs text-muted-foreground">
@@ -186,19 +227,4 @@ export function MapPicker({ lat, lng, onChange, height = 320, initialQuery }: Ma
       </div>
     </div>
   );
-}
-
-function ClickHandler({ onPick }: { onPick: (lat: number, lng: number) => void }) {
-  useMapEvents({
-    click: (e) => onPick(e.latlng.lat, e.latlng.lng),
-  });
-  return null;
-}
-
-function RecenterOnChange({ lat, lng }: { lat: number; lng: number }) {
-  const map = useMap();
-  useEffect(() => {
-    map.flyTo([lat, lng], Math.max(map.getZoom(), 15), { duration: 0.6 });
-  }, [lat, lng, map]);
-  return null;
 }

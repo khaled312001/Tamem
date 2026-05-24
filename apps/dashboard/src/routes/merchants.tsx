@@ -1,15 +1,21 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Loader2, Plus, Store } from 'lucide-react';
-import { useState } from 'react';
+import { lazy, Suspense, useState } from 'react';
 import { toast } from 'sonner';
 
-import { MapPicker } from '../components/MapPicker.js';
 import { Badge } from '../components/ui/Badge.js';
 import { Button } from '../components/ui/Button.js';
 import { Dialog } from '../components/ui/Dialog.js';
 import { Field, Input, Textarea } from '../components/ui/Input.js';
 import { EmptyState, TableSkeleton } from '../components/ui/Skeleton.js';
 import { api } from '../lib/api.js';
+
+// Lazy — Leaflet pulls a large module and on first load triggered a context
+// consumer error inside react-router when imported eagerly on this route.
+// Loading it only when the dialog opens fixes the crash + speeds up the page.
+const MapPicker = lazy(() =>
+  import('../components/MapPicker.js').then((m) => ({ default: m.MapPicker })),
+);
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Row = any;
@@ -185,20 +191,28 @@ function CreateMerchantDialog({ onClose }: { onClose: () => void }) {
         </div>
         <div className="col-span-2">
           <Field label="موقع المتجر على الخريطة" required>
-            <MapPicker
-              lat={form.lat}
-              lng={form.lng}
-              initialQuery={form.addressLine || form.storeNameAr}
-              onChange={({ lat, lng, address }) =>
-                setForm((f) => ({
-                  ...f,
-                  lat,
-                  lng,
-                  // Auto-fill address line only if empty (don't clobber typed input)
-                  addressLine: f.addressLine || address || f.addressLine,
-                }))
+            <Suspense
+              fallback={
+                <div className="h-48 rounded-lg border border-border bg-muted/40 grid place-items-center text-xs text-muted-foreground">
+                  <Loader2 className="w-5 h-5 animate-spin" />
+                </div>
               }
-            />
+            >
+              <MapPicker
+                lat={form.lat}
+                lng={form.lng}
+                initialQuery={form.addressLine || form.storeNameAr}
+                onChange={({ lat, lng, address }) =>
+                  setForm((f) => ({
+                    ...f,
+                    lat,
+                    lng,
+                    // Auto-fill address line only if empty (don't clobber typed input)
+                    addressLine: f.addressLine || address || f.addressLine,
+                  }))
+                }
+              />
+            </Suspense>
           </Field>
         </div>
         <Field label="المحافظة" required>

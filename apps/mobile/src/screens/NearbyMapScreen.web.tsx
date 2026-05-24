@@ -44,6 +44,7 @@ interface Merchant {
 }
 
 type Nav = NativeStackNavigationProp<HomeStackParamList, 'NearbyMap'>;
+type Route = RouteProp<HomeStackParamList, 'NearbyMap'>;
 
 type Filter = { key: string; label: string; icon: typeof Store; match: (m: Merchant) => boolean };
 const FILTERS: Filter[] = [
@@ -84,8 +85,9 @@ const QIFT = { lat: 26.0297, lng: 32.8146 };
 
 export function NearbyMapScreen() {
   const navigation = useNavigation<Nav>();
+  const route = useRoute<Route>();
   const [filter, setFilter] = useState('all');
-  const [search, setSearch] = useState('');
+  const [search, setSearch] = useState(route.params?.search ?? '');
 
   const { data: merchants, isLoading } = useQuery<Merchant[]>({
     queryKey: ['merchants-near-web'],
