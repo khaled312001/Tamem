@@ -66,12 +66,80 @@ export function OrderDetailPage() {
 
   const allowed = (ORDER_TRANSITIONS[order.status as OrderStatus] ?? []) as OrderStatus[];
   const customData = order.customData as Record<string, unknown> | undefined;
-  const audioUri = typeof customData?.audioUri === 'string' ? customData.audioUri : undefined;
-  const imageUrls = Array.isArray(order.imageUrls)
-    ? (order.imageUrls as string[])
-    : Array.isArray(customData?.imageUrls)
-      ? (customData.imageUrls as string[])
-      : [];
+
+  // Auto-scan customData for media attachments. Mobile dynamic forms with
+  // image/audio fields can land here under any key (e.g. 'attachment',
+  // 'photo', 'voice_note'), so we sniff each value instead of hardcoding.
+  // Some mobile flows send raw base64 (no data URI prefix) — we coerce that
+  // into a displayable data URI on the fly.
+  const BASE64_RE = /^[A-Za-z0-9+/]{500,}={0,2}$/;
+  const looksLikeBase64Image = (v: unknown): v is string =>
+    typeof v === 'string' && BASE64_RE.test(v);
+
+  const normalizeImage = (v: string): string => {
+    if (
+      v.startsWith('data:') ||
+      v.startsWith('http') ||
+      v.startsWith('blob:') ||
+      v.startsWith('file:')
+    ) {
+      return v;
+    }
+    if (looksLikeBase64Image(v)) {
+      // Most camera uploads are JPEG; the browser will figure out the format
+      // even if we guess wrong (it sniffs the binary header).
+      return `data:image/jpeg;base64,${v}`;
+    }
+    return v;
+  };
+
+  const isImageRef = (v: unknown): v is string =>
+    typeof v === 'string' &&
+    (v.startsWith('data:image/') ||
+      v.startsWith('blob:') ||
+      v.startsWith('file://') ||
+      /\.(jpe?g|png|webp|gif|svg)(\?|$)/i.test(v) ||
+      /^https?:\/\/.+\/uploads\//i.test(v) ||
+      looksLikeBase64Image(v));
+  const isAudioRef = (v: unknown): v is string =>
+    typeof v === 'string' &&
+    (v.startsWith('data:audio/') ||
+      (v.startsWith('blob:') &&
+        (customData?.audioMime as string | undefined)?.startsWith('audio')) ||
+      /\.(mp3|m4a|wav|webm|ogg|aac)(\?|$)/i.test(v));
+
+  const collectedImages: string[] = [];
+  const collectedAudio: string[] = [];
+  const pushFrom = (v: unknown) => {
+    if (Array.isArray(v)) v.forEach(pushFrom);
+    else if (isImageRef(v)) collectedImages.push(normalizeImage(v));
+    else if (isAudioRef(v)) collectedAudio.push(v);
+  };
+  // 1. Top-level order.imageUrls (canonical)
+  if (Array.isArray(order.imageUrls)) (order.imageUrls as string[]).forEach(pushFrom);
+  // 2. Anything inside customData
+  if (customData) for (const v of Object.values(customData)) pushFrom(v);
+
+  const imageUrls = Array.from(new Set(collectedImages));
+  const audioUri = collectedAudio[0];
+  // Track which customData keys we've already rendered visually so the
+  // "بيانات إضافية" dump doesn't repeat them as raw base64.
+  const renderedKeys = new Set<string>();
+  if (customData) {
+    for (const [k, v] of Object.entries(customData)) {
+      if (
+        Array.isArray(v)
+          ? v.some((x) => isImageRef(x) || isAudioRef(x))
+          : isImageRef(v) || isAudioRef(v)
+      ) {
+        renderedKeys.add(k);
+      }
+    }
+  }
+  // Also skip the housekeeping keys our QuickOrder sheet writes
+  ['audioUri', 'audioMime', 'audioDurationMs', 'quickOrder', 'mode', 'imageUrls'].forEach((k) =>
+    renderedKeys.add(k),
+  );
 
   return (
     <div className="space-y-4">
@@ -268,25 +336,27 @@ export function OrderDetailPage() {
             </Card>
           )}
 
-          {customData && Object.keys(customData).length > 0 && (
-            <Card title="بيانات إضافية" icon={<Phone className="w-4 h-4" />}>
-              <dl className="grid grid-cols-2 gap-x-4 gap-y-2 text-sm">
-                {Object.entries(customData)
-                  .filter(
-                    ([k]) =>
-                      !['audioUri', 'audioMime', 'audioDurationMs', 'quickOrder', 'mode'].includes(
-                        k,
-                      ),
-                  )
-                  .map(([k, v]) => (
-                    <div key={k} className="contents">
-                      <dt className="text-muted-foreground">{k}</dt>
-                      <dd className="font-mono text-xs truncate">{String(v)}</dd>
-                    </div>
-                  ))}
-              </dl>
-            </Card>
-          )}
+          {customData &&
+            Object.entries(customData).filter(([k]) => !renderedKeys.has(k)).length > 0 && (
+              <Card title="بيانات إضافية" icon={<Phone className="w-4 h-4" />}>
+                <dl className="grid grid-cols-3 gap-x-4 gap-y-2 text-sm">
+                  {Object.entries(customData)
+                    .filter(([k]) => !renderedKeys.has(k))
+                    .map(([k, v]) => {
+                      const str = typeof v === 'string' ? v : JSON.stringify(v);
+                      const display = str.length > 80 ? `${str.slice(0, 80)}…` : str;
+                      return (
+                        <div key={k} className="contents">
+                          <dt className="text-muted-foreground">{k}</dt>
+                          <dd className="col-span-2 font-mono text-xs truncate" title={str}>
+                            {display}
+                          </dd>
+                        </div>
+                      );
+                    })}
+                </dl>
+              </Card>
+            )}
         </div>
 
         {/* Right: service + driver + history */}
