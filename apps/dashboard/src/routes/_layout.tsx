@@ -196,28 +196,6 @@ export function DashboardLayout() {
               </NavLink>
             ))}
           </nav>
-
-          <div className="p-3 border-t border-border/60 bg-gradient-to-t from-brand-red/[0.03] to-transparent">
-            <div className="text-[10px] text-muted-foreground text-center leading-relaxed">
-              تميم للتوصيل · v0.1
-              <br />
-              <span className="text-muted-foreground/60">© 2026</span>
-            </div>
-            <a
-              href="http://barmagly.tech/"
-              target="_blank"
-              rel="noreferrer"
-              className="mt-2 flex items-center justify-center gap-2 px-2 py-1.5 rounded-lg hover:bg-brand-red/5 transition group"
-              title="تطوير وتنفيذ شركة برمجلي"
-            >
-              <div className="w-5 h-5 rounded bg-gradient-to-br from-brand-red to-brand-orange grid place-items-center text-[9px] text-white font-black">
-                ب
-              </div>
-              <span className="text-[10px] text-muted-foreground group-hover:text-brand-red transition">
-                تطوير <span className="font-bold">برمجلي</span>
-              </span>
-            </a>
-          </div>
         </aside>
 
         {/* Main content */}
@@ -254,8 +232,38 @@ export function DashboardLayout() {
             </div>
           </header>
 
-          <div className="flex-1 overflow-y-auto p-3 md:p-6 animate-in fade-in slide-in-from-bottom-1 duration-300">
-            <Outlet />
+          <div className="flex-1 overflow-y-auto flex flex-col">
+            <div className="flex-1 p-3 md:p-6 animate-in fade-in slide-in-from-bottom-1 duration-300">
+              <Outlet />
+            </div>
+
+            {/* Main-content footer — version + Barmagly credit (compact) */}
+            <footer className="mt-4 border-t border-border/60">
+              <div className="px-4 md:px-6 py-2 flex items-center justify-between gap-3 text-[10px] text-muted-foreground">
+                <div className="flex items-center gap-1.5">
+                  <span className="font-medium">تميم للتوصيل</span>
+                  <span className="opacity-50">·</span>
+                  <span className="font-mono opacity-70">v0.1.0</span>
+                  <span className="opacity-50">·</span>
+                  <span className="opacity-70">© 2026</span>
+                </div>
+
+                <a
+                  href="http://barmagly.tech/"
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-flex items-center gap-1.5 hover:text-brand-red transition"
+                  title="تطوير وتنفيذ شركة برمجلي"
+                >
+                  <span className="w-4 h-4 rounded bg-gradient-to-br from-brand-red to-brand-orange grid place-items-center text-white font-black text-[8px]">
+                    ب
+                  </span>
+                  <span>
+                    تطوير <span className="font-bold">شركة برمجلي</span>
+                  </span>
+                </a>
+              </div>
+            </footer>
           </div>
         </main>
       </div>
