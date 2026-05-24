@@ -1,12 +1,41 @@
 ---
 import BaseLayout from '../layouts/BaseLayout.astro';
+import NavBar from '../components/NavBar.astro';
+import Footer from '../components/Footer.astro';
 ---
 
 <BaseLayout title="شروط الاستخدام · تميم للتوصيل">
-  <main class="max-w-3xl mx-auto px-6 py-16">
-    <h1 class="text-3xl font-black mb-6">شروط الاستخدام</h1>
-    <p class="text-muted-foreground">
-      صفحة شروط الاستخدام الأولية — يتم استكمالها قبل الإطلاق الرسمي.
-    </p>
+  <NavBar />
+  <main class="max-w-3xl mx-auto px-6 pt-32 pb-16">
+    <div class="bg-white border border-black/5 rounded-3xl shadow-sm p-8 md:p-12">
+      <h1 class="text-3xl md:text-4xl font-black mb-2">شروط الاستخدام</h1>
+      <p class="text-sm text-brand-gray mb-8">آخر تحديث: {new Date().toLocaleDateString('ar-EG')}</p>
+
+      <div class="space-y-6 text-brand-gray leading-relaxed">
+        <section>
+          <h2 class="text-xl font-black mb-2 text-brand-dark">1. القبول بالشروط</h2>
+          <p>باستخدامك لتطبيق تميم للتوصيل، فإنك توافق على هذه الشروط كاملةً.</p>
+        </section>
+        <section>
+          <h2 class="text-xl font-black mb-2 text-brand-dark">2. الخدمة</h2>
+          <p>تقدم تميم خدمة وساطة للتوصيل والشحن بين العملاء والمحلات والمندوبين، ولا تتحمل مسؤولية جودة منتجات المحلات نفسها.</p>
+        </section>
+        <section>
+          <h2 class="text-xl font-black mb-2 text-brand-dark">3. الدفع</h2>
+          <p>الأسعار تُحسب وقت الطلب وتظهر للعميل قبل التأكيد. الدفع كاش عند الاستلام أو إلكتروني عبر بوابات معتمدة.</p>
+        </section>
+        <section>
+          <h2 class="text-xl font-black mb-2 text-brand-dark">4. الإلغاء</h2>
+          <p>تقدر تلغي طلبك قبل ما يبدأ المندوب فيه. بعد كده يطبق رسوم إلغاء حسب حالة الطلب.</p>
+        </section>
+        <section>
+          <h2 class="text-xl font-black mb-2 text-brand-dark">5. التواصل</h2>
+          <p>
+            لأي استفسار: <a href="mailto:info@tamem-delivery.com" class="text-brand-red hover:underline">info@tamem-delivery.com</a>
+          </p>
+        </section>
+      </div>
+    </div>
   </main>
+  <Footer />
 </BaseLayout>

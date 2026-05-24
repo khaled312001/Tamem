@@ -1,0 +1,82 @@
+---
+const features = [
+  {
+    icon: '⚡',
+    title: 'الطلب السريع',
+    desc: 'زر عائم في كل شاشة. اكتب أو ارفع صورة أو سجّل صوت — نحن نسعّر ونرسل.',
+    color: 'from-brand-red to-orange-500',
+  },
+  {
+    icon: '🗺️',
+    title: 'متاجر قريبة على الخريطة',
+    desc: 'تشوف المتاجر والمطاعم والصيدليات حواليك بـ pins على خريطة قفط الحقيقية.',
+    color: 'from-blue-500 to-cyan-500',
+  },
+  {
+    icon: '📊',
+    title: 'تتبع لحظي',
+    desc: 'من لحظة قبول الطلب لتسليمه، شاشة التتبع بتُحدّث تلقائياً عبر WebSocket.',
+    color: 'from-purple-500 to-pink-500',
+  },
+  {
+    icon: '💳',
+    title: 'دفع متعدد الوسائل',
+    desc: 'كاش عند الاستلام، فودافون كاش، إنستاباي — كله مدمج عبر Paymob.',
+    color: 'from-emerald-500 to-green-500',
+  },
+  {
+    icon: '🔔',
+    title: 'إشعارات لحظية',
+    desc: 'تنبيهات push + توست داخل التطبيق + رسائل واتساب على الأرقام المسجلة.',
+    color: 'from-amber-500 to-yellow-500',
+  },
+  {
+    icon: '🎙️',
+    title: 'طلب صوتي',
+    desc: 'مش عارف تكتب؟ سجّل صوتك حتى 60 ثانية والإدارة هتفهم وتسعّر يدوياً.',
+    color: 'from-red-500 to-pink-500',
+  },
+  {
+    icon: '🌐',
+    title: 'عربي 100%',
+    desc: 'RTL كامل — التصميم مفصّل عربي من البداية، مش ترجمة مترجمة.',
+    color: 'from-teal-500 to-cyan-500',
+  },
+  {
+    icon: '🛡️',
+    title: 'أمان وموثوقية',
+    desc: 'OTP وكلمات سر مشفّرة، JWT برسم تجديد تلقائي، سجلات كل حركة.',
+    color: 'from-indigo-500 to-violet-500',
+  },
+];
+---
+
+<section id="features" class="relative py-24 px-6 bg-white">
+  <div class="max-w-7xl mx-auto">
+    <div class="text-center mb-14 reveal">
+      <span class="inline-block px-3 py-1 bg-brand-gold/15 text-amber-700 text-xs font-black rounded-full mb-3">
+        المميزات
+      </span>
+      <h2 class="text-3xl md:text-5xl font-black mb-4">
+        مش مجرد تطبيق توصيل — <span class="text-brand-red">منظومة كاملة</span>
+      </h2>
+      <p class="text-brand-gray max-w-xl mx-auto">
+        كل تفصيلة في تميم متصممة عشان التجربة تكون أسهل من أي بديل.
+      </p>
+    </div>
+
+    <div class="grid sm:grid-cols-2 lg:grid-cols-4 gap-4">
+      {features.map((f, i) => (
+        <div
+          class={`reveal reveal-delay-${(i % 4) + 1} group relative bg-gradient-to-br from-white to-black/[0.02] border border-black/5 rounded-2xl p-5 hover:shadow-xl hover:-translate-y-1 transition-all`}
+        >
+          <div class={`w-12 h-12 rounded-xl bg-gradient-to-br ${f.color} text-white text-2xl grid place-items-center mb-4 shadow-md group-hover:scale-110 transition`}>
+            {f.icon}
+          </div>
+          <h3 class="font-black text-lg mb-1.5">{f.title}</h3>
+          <p class="text-sm text-brand-gray leading-relaxed">{f.desc}</p>
+        </div>
+      ))}
+    </div>
+  </div>
+</section>

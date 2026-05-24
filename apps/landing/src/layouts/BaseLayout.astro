@@ -2,10 +2,12 @@
 interface Props {
   title?: string;
   description?: string;
+  ogImage?: string;
 }
 const {
   title = 'تميم للتوصيل · توصيلك في أمان معانا',
-  description = 'منصة توصيل وشحن متكاملة تخدم قفط وقنا والصعيد. دليفري، شحن بين المناطق، وطلبات تجار.',
+  description = 'منصة توصيل وشحن متكاملة تخدم قفط وقنا والصعيد. دليفري، شحن بين المناطق، وطلبات تجار B2B.',
+  ogImage = '/og-image.png',
 } = Astro.props;
 ---
 
@@ -15,32 +17,149 @@ const {
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="theme-color" content="#E0301E" />
+    <meta name="robots" content="index, follow" />
     <title>{title}</title>
     <meta name="description" content={description} />
     <meta property="og:title" content={title} />
     <meta property="og:description" content={description} />
     <meta property="og:type" content="website" />
-    <meta property="og:image" content="/og-image.png" />
+    <meta property="og:image" content={ogImage} />
+    <meta property="og:locale" content="ar_EG" />
+    <meta name="twitter:card" content="summary_large_image" />
     <link rel="icon" type="image/png" href="/favicon.png" />
     <link rel="apple-touch-icon" href="/logo.png" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
-      href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;700;800;900&family=Tajawal:wght@400;500;700;800&display=swap"
+      href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;700;800;900&family=Tajawal:wght@400;500;700;800;900&display=swap"
       rel="stylesheet"
     />
   </head>
-  <body class="bg-white text-brand-dark font-body antialiased">
+  <body class="bg-white text-brand-dark font-body antialiased overflow-x-hidden">
     <slot />
   </body>
 </html>
 
 <style is:global>
+  :root {
+    --brand-red: #E0301E;
+    --brand-orange: #EC7A2C;
+    --brand-gold: #F2A93B;
+    --brand-dark: #241310;
+    --brand-gray: #58595B;
+  }
+  html { scroll-behavior: smooth; }
   body {
     font-family: 'Tajawal', system-ui, sans-serif;
   }
   h1, h2, h3, h4 {
     font-family: 'Cairo', system-ui, sans-serif;
     font-weight: 900;
+    letter-spacing: -0.01em;
+  }
+
+  /* ===== Reveal-on-scroll animations ===== */
+  .reveal {
+    opacity: 0;
+    transform: translateY(24px);
+    transition: opacity 0.7s cubic-bezier(0.16, 1, 0.3, 1),
+                transform 0.7s cubic-bezier(0.16, 1, 0.3, 1);
+  }
+  .reveal.in {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  .reveal-delay-1 { transition-delay: 0.08s; }
+  .reveal-delay-2 { transition-delay: 0.16s; }
+  .reveal-delay-3 { transition-delay: 0.24s; }
+  .reveal-delay-4 { transition-delay: 0.32s; }
+
+  /* ===== Continuous animations ===== */
+  @keyframes float {
+    0%, 100% { transform: translateY(0); }
+    50% { transform: translateY(-12px); }
+  }
+  @keyframes blob {
+    0%, 100% { transform: translate(0, 0) scale(1); }
+    33% { transform: translate(20px, -30px) scale(1.05); }
+    66% { transform: translate(-20px, 20px) scale(0.95); }
+  }
+  @keyframes shine {
+    0% { background-position: -200% center; }
+    100% { background-position: 200% center; }
+  }
+  @keyframes pulse-ring {
+    0% { transform: scale(1); opacity: 0.6; }
+    100% { transform: scale(1.8); opacity: 0; }
+  }
+  @keyframes draw-line {
+    from { stroke-dashoffset: 100; }
+    to { stroke-dashoffset: 0; }
+  }
+
+  .float-anim { animation: float 6s ease-in-out infinite; }
+  .blob-anim { animation: blob 14s ease-in-out infinite; }
+  .shine-text {
+    background: linear-gradient(90deg, #F2A93B 0%, #fff 50%, #F2A93B 100%);
+    background-size: 200% auto;
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+    animation: shine 4s linear infinite;
+  }
+  .pulse-ring::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: 9999px;
+    border: 2px solid currentColor;
+    animation: pulse-ring 2.4s cubic-bezier(0.215, 0.61, 0.355, 1) infinite;
+  }
+
+  /* ===== Tilt on hover ===== */
+  .tilt-card {
+    transition: transform 0.4s cubic-bezier(0.16, 1, 0.3, 1),
+                box-shadow 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+    transform-style: preserve-3d;
+  }
+  .tilt-card:hover {
+    transform: translateY(-6px) rotateX(2deg);
+    box-shadow: 0 30px 60px -20px rgba(224, 48, 30, 0.25);
+  }
+
+  /* ===== Section dividers ===== */
+  .grain {
+    background-image:
+      radial-gradient(circle at 1px 1px, rgba(0, 0, 0, 0.04) 1px, transparent 0);
+    background-size: 24px 24px;
   }
 </style>
+
+<script>
+  // Reveal-on-scroll
+  const io = new IntersectionObserver(
+    (entries) => {
+      for (const e of entries) {
+        if (e.isIntersecting) {
+          e.target.classList.add('in');
+          io.unobserve(e.target);
+        }
+      }
+    },
+    { threshold: 0.12, rootMargin: '0px 0px -40px 0px' },
+  );
+  for (const el of document.querySelectorAll('.reveal')) io.observe(el);
+
+  // Subtle tilt-on-mousemove for tilt-card elements
+  for (const card of document.querySelectorAll<HTMLElement>('.tilt-card')) {
+    card.addEventListener('mousemove', (e) => {
+      const rect = card.getBoundingClientRect();
+      const x = (e.clientX - rect.left) / rect.width - 0.5;
+      const y = (e.clientY - rect.top) / rect.height - 0.5;
+      card.style.transform = `translateY(-6px) rotateX(${-y * 4}deg) rotateY(${x * 4}deg)`;
+    });
+    card.addEventListener('mouseleave', () => {
+      card.style.transform = '';
+    });
+  }
+</script>

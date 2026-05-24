@@ -1,0 +1,116 @@
+---
+const WHATSAPP = import.meta.env.PUBLIC_TAMEM_WHATSAPP || '+201010254819';
+const waLink = `https://wa.me/${WHATSAPP.replace(/[^\d]/g, '')}?text=${encodeURIComponent('أهلاً، عاوز أعرف أكتر عن تميم للتوصيل')}`;
+---
+
+<section
+  id="top"
+  class="relative pt-32 pb-24 md:pt-40 md:pb-32 overflow-hidden bg-gradient-to-br from-[#241310] via-[#3a1a14] to-[#E0301E] text-white"
+>
+  <!-- Animated background blobs -->
+  <div class="absolute inset-0 overflow-hidden pointer-events-none">
+    <div class="absolute -top-32 -right-32 w-[28rem] h-[28rem] bg-brand-orange/40 rounded-full blur-3xl blob-anim"></div>
+    <div class="absolute top-1/2 -left-32 w-96 h-96 bg-brand-gold/30 rounded-full blur-3xl blob-anim" style="animation-delay: -7s"></div>
+    <div class="absolute bottom-0 right-1/3 w-72 h-72 bg-brand-red/40 rounded-full blur-3xl blob-anim" style="animation-delay: -3s"></div>
+  </div>
+  <!-- Grid pattern -->
+  <div class="absolute inset-0 grain opacity-30 pointer-events-none"></div>
+
+  <div class="relative max-w-7xl mx-auto px-6 grid md:grid-cols-12 gap-12 items-center">
+    <!-- Copy -->
+    <div class="md:col-span-7 text-center md:text-right">
+      <div class="reveal inline-flex items-center gap-2 bg-white/10 backdrop-blur border border-white/15 rounded-full px-3 py-1.5 mb-6 text-xs font-bold">
+        <span class="relative inline-flex w-2 h-2 rounded-full bg-brand-gold pulse-ring"></span>
+        خدمة متاحة حالياً في قفط — توسّع قريب
+      </div>
+
+      <h1 class="reveal reveal-delay-1 text-4xl sm:text-5xl md:text-6xl lg:text-7xl font-black leading-[1.1] mb-6">
+        توصيلك<br />
+        في أمان <span class="shine-text">معانا</span>
+      </h1>
+
+      <p class="reveal reveal-delay-2 text-lg md:text-xl text-white/85 mb-8 max-w-xl md:mx-0 mx-auto leading-relaxed">
+        منصة توصيل وشحن متكاملة. اطلب من <strong class="text-white">السوبر ماركت أو الصيدلية أو المطعم</strong>، اشحن طرود بين المحافظات، أو شغّل تجارتك مع
+        مندوبين ثقة. كل ده من تطبيق واحد، في 3 ضغطات.
+      </p>
+
+      <div class="reveal reveal-delay-3 flex flex-wrap gap-3 justify-center md:justify-start mb-8">
+        <a
+          href="#download"
+          class="group inline-flex items-center gap-2 bg-white text-brand-dark font-bold px-6 py-3.5 rounded-xl hover:bg-brand-gold hover:scale-105 hover:shadow-2xl hover:shadow-brand-gold/40 transition-all"
+        >
+          <svg class="w-5 h-5" viewBox="0 0 24 24" fill="currentColor"><path d="M17.5 12.5l-10 6V6.5l10 6z"/></svg>
+          حمّل تطبيق Android
+          <span class="opacity-60 group-hover:translate-x-1 transition">←</span>
+        </a>
+        <a
+          href={waLink}
+          target="_blank" rel="noreferrer"
+          class="inline-flex items-center gap-2 bg-white/10 backdrop-blur text-white font-bold px-6 py-3.5 rounded-xl border border-white/20 hover:bg-white/20 transition"
+        >
+          <svg class="w-5 h-5" viewBox="0 0 24 24" fill="currentColor"><path d="M.057 24l1.687-6.163a11.867 11.867 0 01-1.587-5.946C.16 5.335 5.495 0 12.05 0a11.817 11.817 0 018.413 3.488 11.824 11.824 0 013.48 8.414c-.003 6.557-5.338 11.892-11.893 11.892a11.9 11.9 0 01-5.688-1.448L.057 24zm6.597-3.807c1.676.995 3.276 1.591 5.392 1.592 5.448 0 9.886-4.434 9.889-9.885.002-5.462-4.415-9.89-9.881-9.892-5.452 0-9.887 4.434-9.889 9.884a9.86 9.86 0 001.51 5.26l.6.952-1.005 3.667 3.749-1.003.235.025z"/></svg>
+          تواصل واتساب
+        </a>
+      </div>
+
+      <!-- Trust badges -->
+      <div class="reveal reveal-delay-4 flex flex-wrap items-center justify-center md:justify-start gap-6 text-sm">
+        <div class="flex items-center gap-2">
+          <div class="flex -space-x-1.5">
+            {[1, 2, 3, 4].map((i) => (
+              <div class={`w-7 h-7 rounded-full border-2 border-brand-dark bg-gradient-to-br ${
+                i === 1 ? 'from-brand-red to-brand-orange' :
+                i === 2 ? 'from-brand-orange to-brand-gold' :
+                i === 3 ? 'from-brand-gold to-yellow-200' :
+                'from-yellow-200 to-white'
+              }`}></div>
+            ))}
+          </div>
+          <span class="text-white/85"><strong class="text-white">+100</strong> طلب يومياً</span>
+        </div>
+        <div class="flex items-center gap-1.5">
+          {[1, 2, 3, 4, 5].map(() => (
+            <svg class="w-4 h-4 text-brand-gold" fill="currentColor" viewBox="0 0 24 24"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>
+          ))}
+          <span class="text-white/85 me-1"><strong class="text-white">4.9</strong> تقييم العملاء</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Phone mockup -->
+    <div class="md:col-span-5 flex items-center justify-center relative">
+      <!-- Glow -->
+      <div class="absolute inset-0 bg-gradient-to-br from-brand-gold/30 to-brand-orange/40 blur-3xl"></div>
+
+      <!-- Floating cards behind phone -->
+      <div class="absolute top-8 -right-4 md:-right-12 bg-white/95 backdrop-blur rounded-2xl shadow-2xl p-3 float-anim z-10 hidden sm:block" style="animation-delay: -2s">
+        <div class="flex items-center gap-2">
+          <div class="w-8 h-8 rounded-full bg-green-500 grid place-items-center text-white text-sm">✓</div>
+          <div class="text-brand-dark">
+            <div class="font-black text-xs">تم تسليم طلبك</div>
+            <div class="text-[10px] text-brand-gray">قبل 5 دقايق</div>
+          </div>
+        </div>
+      </div>
+      <div class="absolute bottom-12 -left-4 md:-left-8 bg-white/95 backdrop-blur rounded-2xl shadow-2xl p-3 float-anim z-10 hidden sm:block" style="animation-delay: -4s">
+        <div class="text-brand-dark">
+          <div class="font-black text-xs">⚡ طلب سريع</div>
+          <div class="text-[10px] text-brand-gray">دكتور · صيدلية · مطعم</div>
+        </div>
+      </div>
+
+      <!-- Phone frame -->
+      <div class="relative w-72 md:w-80 aspect-[9/19] rounded-[3rem] bg-brand-dark border-[10px] border-brand-dark shadow-[0_50px_100px_-20px_rgba(0,0,0,0.5)] float-anim overflow-hidden">
+        <div class="absolute top-0 left-1/2 -translate-x-1/2 w-32 h-6 bg-brand-dark rounded-b-2xl z-20"></div>
+        <div class="w-full h-full bg-gradient-to-br from-white to-brand-gold/10 grid place-items-center p-6">
+          <img src="/logo.png" alt="تميم app" class="w-44 h-44 object-contain drop-shadow-2xl" />
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Wave divider -->
+  <svg class="absolute -bottom-px left-0 right-0 w-full text-white" viewBox="0 0 1440 80" fill="currentColor" preserveAspectRatio="none">
+    <path d="M0,40 C320,80 720,0 1440,40 L1440,80 L0,80 Z" />
+  </svg>
+</section>

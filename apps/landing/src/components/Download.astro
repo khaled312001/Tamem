@@ -1,0 +1,78 @@
+---
+const WHATSAPP = import.meta.env.PUBLIC_TAMEM_WHATSAPP || '+201010254819';
+---
+
+<section
+  id="download"
+  class="relative py-24 px-6 overflow-hidden bg-gradient-to-br from-brand-dark via-[#3a1a14] to-brand-red text-white"
+>
+  <!-- Blobs -->
+  <div class="absolute -top-32 right-1/4 w-96 h-96 bg-brand-gold/20 rounded-full blur-3xl blob-anim"></div>
+  <div class="absolute bottom-0 -left-32 w-96 h-96 bg-brand-orange/20 rounded-full blur-3xl blob-anim" style="animation-delay: -8s"></div>
+
+  <div class="relative max-w-6xl mx-auto grid md:grid-cols-2 gap-12 items-center">
+    <div>
+      <span class="reveal inline-block bg-white/10 backdrop-blur border border-white/20 text-xs font-black px-3 py-1.5 rounded-full mb-5">
+        🎁 خصم 20% على أول طلب
+      </span>
+      <h2 class="reveal reveal-delay-1 text-3xl md:text-5xl font-black leading-tight mb-5">
+        التطبيق على Android.<br />
+        <span class="shine-text">حمّله دلوقتي.</span>
+      </h2>
+      <p class="reveal reveal-delay-2 text-white/85 text-lg mb-8 leading-relaxed">
+        تطبيق خفيف، يفتح بسرعة، عربي 100%. نسخة iOS هتتبعت لـ App Store قريباً.
+      </p>
+
+      <div class="reveal reveal-delay-3 flex flex-wrap gap-3">
+        <a
+          href="#"
+          class="group inline-flex items-center gap-3 bg-white text-brand-dark font-bold px-6 py-3.5 rounded-2xl hover:scale-105 hover:shadow-2xl hover:shadow-white/20 transition-all"
+        >
+          <svg class="w-9 h-9 text-brand-red" viewBox="0 0 512 512" fill="currentColor">
+            <path d="M325.3 234.3L104.6 13l280.8 161.2-60.1 60.1zM47 0C34 6.8 25.3 19.2 25.3 35.3v441.3c0 16.1 8.7 28.5 21.7 35.3l256.6-256L47 0zm425.2 225.6l-58.9-34.1-65.7 64.5 65.7 64.5 60.1-34.1c18-14.3 18-46.5-1.2-60.8zM104.6 499l280.8-161.2-60.1-60.1L104.6 499z"/>
+          </svg>
+          <span class="text-right">
+            <span class="block text-[10px] opacity-60">حمّل من</span>
+            <span class="block text-base">Google Play</span>
+          </span>
+        </a>
+        <a
+          href="#"
+          class="inline-flex items-center gap-3 bg-white/10 backdrop-blur border border-white/20 text-white font-bold px-6 py-3.5 rounded-2xl hover:bg-white/20 transition cursor-not-allowed opacity-70"
+        >
+          <svg class="w-9 h-9" viewBox="0 0 384 512" fill="currentColor">
+            <path d="M318.7 268.7c-.2-36.7 16.4-64.4 50-84.8-18.8-26.9-47.2-41.7-84.7-44.6-35.5-2.8-74.3 20.7-88.5 20.7-15 0-49.4-19.7-76.4-19.7C63.3 141.2 4 184.8 4 273.5q0 39.3 14.4 81.2c12.8 36.7 59 126.7 107.2 125.2 25.2-.6 43-17.9 75.8-17.9 31.8 0 48.3 17.9 76.4 17.9 48.6-.7 90.4-82.5 102.6-119.3-65.2-30.7-61.7-90-61.7-91.9zm-56.6-164.2c27.3-32.4 24.8-61.9 24-72.5-24.1 1.4-52 16.4-67.9 34.9-17.5 19.8-27.8 44.3-25.6 71.9 26.1 2 49.9-11.4 69.5-34.3z"/>
+          </svg>
+          <span class="text-right">
+            <span class="block text-[10px] opacity-60">قريباً على</span>
+            <span class="block text-base">App Store</span>
+          </span>
+        </a>
+      </div>
+
+      <p class="reveal reveal-delay-4 mt-6 text-xs text-white/60">
+        لمعاينة فورية في المتصفح: <a href="#" class="underline hover:text-white">جرّب النسخة التجريبية</a>
+      </p>
+    </div>
+
+    <!-- QR + rider image -->
+    <div class="relative flex items-center justify-center">
+      <!-- QR card -->
+      <div class="relative bg-white text-brand-dark rounded-3xl p-6 shadow-2xl max-w-xs float-anim">
+        <!-- QR placeholder (renders an SVG QR-like pattern via CSS) -->
+        <div class="aspect-square bg-white border-8 border-brand-dark rounded-xl mb-4 grid grid-cols-12 grid-rows-12 gap-px p-2 overflow-hidden">
+          {Array.from({ length: 144 }, (_, i) => (
+            <div class={`bg-brand-dark ${[1, 2, 5, 7, 8, 11, 13, 14, 17, 19].includes(i % 23) ? '' : 'opacity-0'}`}></div>
+          ))}
+        </div>
+        <p class="text-center font-black text-sm">امسح وحمّل التطبيق</p>
+        <p class="text-center text-xs text-brand-gray mt-1">+201010254819</p>
+      </div>
+
+      <!-- Floating rider badge -->
+      <div class="absolute -top-4 -right-4 bg-gradient-to-br from-brand-gold to-amber-500 text-brand-dark font-black rounded-full w-20 h-20 grid place-items-center text-3xl shadow-2xl float-anim" style="animation-delay: -3s">
+        🛵
+      </div>
+    </div>
+  </div>
+</section>

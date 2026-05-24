@@ -128,6 +128,21 @@ export function SupportScreen() {
         <Text style={styles.footnote}>
           {SUPPORT_PHONE} · {SUPPORT_EMAIL}
         </Text>
+
+        {/* Developer credit — شركة برمجلي */}
+        <Pressable
+          onPress={() => openURL('http://barmagly.tech/')}
+          style={({ pressed }) => [styles.devCard, pressed && { opacity: 0.85 }]}
+        >
+          <View style={styles.devLogo}>
+            <Text style={styles.devLogoText}>ب</Text>
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.devLabel}>تطوير وتنفيذ</Text>
+            <Text style={styles.devName}>شركة برمجلي</Text>
+            <Text style={styles.devLink}>barmagly.tech · +201010254819</Text>
+          </View>
+        </Pressable>
       </ScrollView>
     </SafeAreaView>
   );
@@ -218,5 +233,35 @@ const styles = StyleSheet.create({
     fontFamily: fontFamilies.body,
     fontSize: fontSizes.xs,
     textAlign: 'center',
+  },
+  devCard: {
+    marginTop: spacing.xl,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
+    backgroundColor: colors.brand.dark,
+    padding: spacing.md,
+    borderRadius: radii.lg,
+  },
+  devLogo: {
+    width: 44,
+    height: 44,
+    borderRadius: radii.md,
+    backgroundColor: colors.brand.red,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  devLogoText: {
+    color: colors.white,
+    fontSize: 22,
+    fontFamily: fontFamilies.headingBlack,
+  },
+  devLabel: { color: 'rgba(255,255,255,0.65)', fontFamily: fontFamilies.body, fontSize: 10 },
+  devName: { color: colors.white, fontFamily: fontFamilies.headingBlack, fontSize: fontSizes.md },
+  devLink: {
+    color: colors.brand.gold,
+    fontFamily: fontFamilies.body,
+    fontSize: fontSizes.xs,
+    marginTop: 2,
   },
 });

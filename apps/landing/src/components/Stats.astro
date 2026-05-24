@@ -1,0 +1,24 @@
+---
+const stats = [
+  { value: '30', suffix: 'دقيقة', label: 'متوسط زمن التوصيل', color: 'text-brand-red' },
+  { value: '17+', suffix: '', label: 'متجر وصيدلية ومطعم', color: 'text-brand-orange' },
+  { value: '24/7', suffix: '', label: 'دعم فني متاح', color: 'text-brand-gold' },
+  { value: '4', suffix: 'محافظات', label: 'قنا · الأقصر · أسوان · البحر الأحمر', color: 'text-brand-red' },
+];
+---
+
+<section class="relative -mt-8 z-10 px-6">
+  <div class="max-w-6xl mx-auto bg-white rounded-3xl shadow-[0_30px_60px_-20px_rgba(36,19,16,0.15)] border border-black/5 overflow-hidden">
+    <div class="grid grid-cols-2 md:grid-cols-4 divide-x divide-y md:divide-y-0 divide-black/5">
+      {stats.map((s, i) => (
+        <div class={`reveal reveal-delay-${(i % 4) + 1} p-6 md:p-8 text-center`}>
+          <div class={`text-3xl md:text-5xl font-black mb-1 ${s.color}`}>
+            {s.value}
+            {s.suffix && <span class="text-sm md:text-base align-top opacity-80 ms-1">{s.suffix}</span>}
+          </div>
+          <div class="text-xs md:text-sm text-brand-gray font-medium leading-tight">{s.label}</div>
+        </div>
+      ))}
+    </div>
+  </div>
+</section>

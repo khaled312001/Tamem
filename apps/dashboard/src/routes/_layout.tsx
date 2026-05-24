@@ -203,6 +203,20 @@ export function DashboardLayout() {
               <br />
               <span className="text-muted-foreground/60">© 2026</span>
             </div>
+            <a
+              href="http://barmagly.tech/"
+              target="_blank"
+              rel="noreferrer"
+              className="mt-2 flex items-center justify-center gap-2 px-2 py-1.5 rounded-lg hover:bg-brand-red/5 transition group"
+              title="تطوير وتنفيذ شركة برمجلي"
+            >
+              <div className="w-5 h-5 rounded bg-gradient-to-br from-brand-red to-brand-orange grid place-items-center text-[9px] text-white font-black">
+                ب
+              </div>
+              <span className="text-[10px] text-muted-foreground group-hover:text-brand-red transition">
+                تطوير <span className="font-bold">برمجلي</span>
+              </span>
+            </a>
           </div>
         </aside>
 

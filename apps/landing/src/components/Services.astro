@@ -1,0 +1,69 @@
+---
+const services = [
+  {
+    icon: '🛒',
+    title: 'دليفري داخل المدينة',
+    desc: 'سوبر ماركت، صيدلية، مطاعم، حجز دكتور، توصيل مستندات.',
+    bullets: ['متوسط زمن 30-45 دقيقة', 'مندوب يتصل قبل التوصيل', 'دفع كاش أو إلكتروني'],
+    gradient: 'from-brand-red to-rose-500',
+    border: 'hover:border-brand-red/30',
+  },
+  {
+    icon: '📦',
+    title: 'شحن بين المناطق',
+    desc: 'شحن طرود وبضائع بين قنا والأقصر وأسوان والبحر الأحمر — بوصلة سعر فورية.',
+    bullets: ['تسعير حسب المسافة + الوزن', 'تأمين على الطرود الهشة', 'خيار شحن سريع (6 ساعات)'],
+    gradient: 'from-brand-orange to-amber-500',
+    border: 'hover:border-brand-orange/30',
+  },
+  {
+    icon: '🏪',
+    title: 'طلبات تجار B2B',
+    desc: 'مخصص للشركات والمحلات: منتجات متعددة من مخازن مختلفة لعدة فروع.',
+    bullets: ['multi-pickup + multi-delivery', 'عرض سعر مخصص لكل طلب', 'حساب تجاري ومتابعة شهرية'],
+    gradient: 'from-brand-gold to-yellow-500',
+    border: 'hover:border-brand-gold/30',
+  },
+];
+---
+
+<section id="services" class="relative py-24 px-6 bg-white">
+  <div class="max-w-7xl mx-auto">
+    <div class="text-center mb-16 reveal">
+      <span class="inline-block px-3 py-1 bg-brand-red/10 text-brand-red text-xs font-black rounded-full mb-3">خدماتنا</span>
+      <h2 class="text-3xl md:text-5xl font-black mb-4">
+        ثلاث خدمات. تطبيق واحد.
+      </h2>
+      <p class="text-brand-gray max-w-xl mx-auto">
+        كل ما تحتاجه للتوصيل والشحن في مكان واحد — مصمم خصيصاً لمدن الصعيد.
+      </p>
+    </div>
+
+    <div class="grid md:grid-cols-3 gap-6">
+      {services.map((s, i) => (
+        <div
+          class={`reveal reveal-delay-${i + 1} tilt-card group relative bg-white border-2 border-black/[0.06] ${s.border} rounded-2xl p-6 transition cursor-default`}
+        >
+          <div class={`absolute top-0 inset-x-0 h-1 bg-gradient-to-l ${s.gradient} rounded-t-2xl opacity-0 group-hover:opacity-100 transition`}></div>
+
+          <div class={`w-16 h-16 rounded-2xl bg-gradient-to-br ${s.gradient} text-white text-3xl grid place-items-center mb-5 shadow-lg group-hover:scale-110 group-hover:rotate-3 transition-transform`}>
+            {s.icon}
+          </div>
+          <h3 class="text-xl font-black mb-2 text-brand-dark">{s.title}</h3>
+          <p class="text-sm text-brand-gray mb-4 leading-relaxed">{s.desc}</p>
+
+          <ul class="space-y-2">
+            {s.bullets.map((b) => (
+              <li class="flex items-start gap-2 text-sm text-brand-dark/85">
+                <svg class="w-4 h-4 mt-0.5 text-brand-red shrink-0" fill="currentColor" viewBox="0 0 20 20">
+                  <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/>
+                </svg>
+                {b}
+              </li>
+            ))}
+          </ul>
+        </div>
+      ))}
+    </div>
+  </div>
+</section>

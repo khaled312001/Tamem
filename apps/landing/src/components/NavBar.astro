@@ -1,0 +1,94 @@
+---
+const links = [
+  { href: '#services', label: 'الخدمات' },
+  { href: '#how', label: 'كيف يعمل' },
+  { href: '#features', label: 'المميزات' },
+  { href: '#download', label: 'تحميل التطبيق' },
+  { href: '#contact', label: 'تواصل' },
+];
+---
+
+<header
+  class="fixed top-0 inset-x-0 z-50 transition-all duration-300"
+  id="site-nav"
+>
+  <div class="max-w-7xl mx-auto px-4 md:px-8 py-3">
+    <div
+      class="flex items-center justify-between gap-4 bg-white/85 backdrop-blur-xl border border-black/5 rounded-2xl shadow-[0_8px_30px_-12px_rgba(36,19,16,0.18)] px-4 md:px-6 py-2.5"
+    >
+      <a href="#top" class="flex items-center gap-2 shrink-0">
+        <img src="/logo.png" alt="تميم" class="h-12 w-auto rounded-lg" />
+        <span class="hidden sm:block">
+          <span class="block text-sm font-black leading-tight">تميم للتوصيل</span>
+          <span class="block text-[10px] text-brand-gray leading-tight">قفط · قنا · الصعيد</span>
+        </span>
+      </a>
+
+      <nav class="hidden md:flex items-center gap-1">
+        {links.map((l) => (
+          <a
+            href={l.href}
+            class="px-3 py-1.5 rounded-lg text-sm text-brand-dark/80 hover:text-brand-red hover:bg-brand-red/5 transition"
+          >
+            {l.label}
+          </a>
+        ))}
+      </nav>
+
+      <div class="flex items-center gap-2">
+        <a
+          href="#download"
+          class="hidden sm:inline-flex bg-gradient-to-l from-brand-red to-brand-orange text-white font-bold text-sm px-4 py-2 rounded-xl shadow-md shadow-brand-red/30 hover:shadow-lg hover:shadow-brand-red/40 hover:-translate-y-0.5 transition-all"
+        >
+          حمّل التطبيق
+        </a>
+        <button
+          id="nav-toggle"
+          class="md:hidden p-2 rounded-lg hover:bg-black/5"
+          aria-label="فتح القائمة"
+        >
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+            <path d="M4 6h16M4 12h16M4 18h16" />
+          </svg>
+        </button>
+      </div>
+    </div>
+
+    <!-- Mobile menu -->
+    <div
+      id="mobile-menu"
+      class="md:hidden hidden mt-2 bg-white/95 backdrop-blur-xl border border-black/5 rounded-2xl shadow-lg p-2"
+    >
+      {links.map((l) => (
+        <a
+          href={l.href}
+          class="block px-4 py-3 rounded-lg text-sm hover:bg-brand-red/5 hover:text-brand-red"
+        >
+          {l.label}
+        </a>
+      ))}
+    </div>
+  </div>
+</header>
+
+<script>
+  const nav = document.getElementById('site-nav');
+  const onScroll = () => {
+    if (window.scrollY > 12) {
+      nav?.classList.add('shadow-sm');
+    } else {
+      nav?.classList.remove('shadow-sm');
+    }
+  };
+  window.addEventListener('scroll', onScroll, { passive: true });
+  onScroll();
+
+  document.getElementById('nav-toggle')?.addEventListener('click', () => {
+    document.getElementById('mobile-menu')?.classList.toggle('hidden');
+  });
+  document.getElementById('mobile-menu')?.addEventListener('click', (e) => {
+    if ((e.target as HTMLElement).tagName === 'A') {
+      document.getElementById('mobile-menu')?.classList.add('hidden');
+    }
+  });
+</script>

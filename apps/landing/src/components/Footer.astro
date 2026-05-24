@@ -1,0 +1,114 @@
+---
+const WHATSAPP = import.meta.env.PUBLIC_TAMEM_WHATSAPP || '+201010254819';
+const year = new Date().getFullYear();
+---
+
+<footer class="relative bg-brand-dark text-white pt-16 pb-8 px-6 overflow-hidden">
+  <!-- Top gradient strip -->
+  <div class="absolute top-0 inset-x-0 h-1 bg-gradient-to-l from-brand-red via-brand-orange to-brand-gold"></div>
+
+  <div class="max-w-7xl mx-auto">
+    <div class="grid md:grid-cols-12 gap-10 mb-12">
+      <!-- Brand -->
+      <div class="md:col-span-4">
+        <div class="bg-white rounded-2xl p-3 inline-block mb-4 shadow-xl">
+          <img src="/logo.png" alt="تميم للتوصيل" class="h-16 w-auto" />
+        </div>
+        <p class="text-white/70 leading-relaxed text-sm">
+          منصة توصيل وشحن متكاملة تخدم قفط وقنا والصعيد. نتوسع لتغطية الأقصر وأسوان والبحر الأحمر قريباً.
+        </p>
+
+        <!-- Social -->
+        <div class="flex gap-3 mt-5">
+          <a href="https://wa.me/{WHATSAPP.replace(/[^\d]/g, '')}" target="_blank" rel="noreferrer" aria-label="WhatsApp"
+             class="w-10 h-10 rounded-full bg-white/10 hover:bg-green-500 grid place-items-center transition">
+            <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 24 24"><path d="M.057 24l1.687-6.163a11.867 11.867 0 01-1.587-5.946C.16 5.335 5.495 0 12.05 0a11.817 11.817 0 018.413 3.488 11.824 11.824 0 013.48 8.414c-.003 6.557-5.338 11.892-11.893 11.892a11.9 11.9 0 01-5.688-1.448L.057 24z"/></svg>
+          </a>
+          <a href="#" aria-label="Facebook"
+             class="w-10 h-10 rounded-full bg-white/10 hover:bg-[#1877F2] grid place-items-center transition">
+            <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 24 24"><path d="M24 12.07C24 5.41 18.63 0 12 0S0 5.41 0 12.07c0 6.02 4.39 11.01 10.13 11.93v-8.44H7.08v-3.49h3.05V9.41c0-3.02 1.79-4.69 4.53-4.69 1.31 0 2.69.24 2.69.24v2.97h-1.52c-1.49 0-1.95.93-1.95 1.89v2.27h3.32l-.53 3.49h-2.79V24C19.61 23.08 24 18.1 24 12.07z"/></svg>
+          </a>
+          <a href="#" aria-label="Instagram"
+             class="w-10 h-10 rounded-full bg-white/10 hover:bg-gradient-to-br hover:from-purple-500 hover:to-pink-500 grid place-items-center transition">
+            <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 24 24"><path d="M12 2.16c3.2 0 3.58.01 4.85.07 1.17.05 1.8.25 2.23.41.56.22.96.48 1.38.9.42.42.68.82.9 1.38.16.42.36 1.06.41 2.23.06 1.27.07 1.65.07 4.85s-.01 3.58-.07 4.85c-.05 1.17-.25 1.8-.41 2.23-.22.56-.48.96-.9 1.38-.42.42-.82.68-1.38.9-.42.16-1.06.36-2.23.41-1.27.06-1.65.07-4.85.07s-3.58-.01-4.85-.07c-1.17-.05-1.8-.25-2.23-.41-.56-.22-.96-.48-1.38-.9-.42-.42-.68-.82-.9-1.38-.16-.42-.36-1.06-.41-2.23C2.18 15.58 2.16 15.2 2.16 12s.01-3.58.07-4.85c.05-1.17.25-1.8.41-2.23.22-.56.48-.96.9-1.38.42-.42.82-.68 1.38-.9.42-.16 1.06-.36 2.23-.41C8.42 2.18 8.8 2.16 12 2.16M12 0C8.74 0 8.33.01 7.05.07 5.78.13 4.9.33 4.14.63c-.79.31-1.46.72-2.13 1.38C1.35 2.67.94 3.34.63 4.14c-.3.76-.5 1.64-.56 2.91C.01 8.33 0 8.74 0 12s.01 3.67.07 4.95c.06 1.27.26 2.15.56 2.91.31.8.72 1.47 1.38 2.13.66.66 1.33 1.07 2.13 1.38.76.3 1.64.5 2.91.56C8.33 23.99 8.74 24 12 24s3.67-.01 4.95-.07c1.27-.06 2.15-.26 2.91-.56.8-.31 1.47-.72 2.13-1.38.66-.66 1.07-1.33 1.38-2.13.3-.76.5-1.64.56-2.91.06-1.28.07-1.69.07-4.95s-.01-3.67-.07-4.95c-.06-1.27-.26-2.15-.56-2.91-.31-.8-.72-1.47-1.38-2.13C21.33 1.35 20.66.94 19.86.63c-.76-.3-1.64-.5-2.91-.56C15.67.01 15.26 0 12 0zm0 5.84A6.16 6.16 0 1 0 18.16 12 6.16 6.16 0 0 0 12 5.84zm0 10.16A4 4 0 1 1 16 12a4 4 0 0 1-4 4zm6.41-11.85a1.44 1.44 0 1 0 1.44 1.44 1.44 1.44 0 0 0-1.44-1.44z"/></svg>
+          </a>
+        </div>
+      </div>
+
+      <!-- Links -->
+      <div class="md:col-span-2">
+        <h4 class="font-black mb-4 text-brand-gold">المنصة</h4>
+        <ul class="space-y-2 text-sm text-white/70">
+          <li><a href="#services" class="hover:text-white transition">الخدمات</a></li>
+          <li><a href="#how" class="hover:text-white transition">كيف يعمل</a></li>
+          <li><a href="#features" class="hover:text-white transition">المميزات</a></li>
+          <li><a href="#download" class="hover:text-white transition">حمّل التطبيق</a></li>
+        </ul>
+      </div>
+
+      <div class="md:col-span-2">
+        <h4 class="font-black mb-4 text-brand-gold">الشركاء</h4>
+        <ul class="space-y-2 text-sm text-white/70">
+          <li><a href="#" class="hover:text-white transition">للتجار</a></li>
+          <li><a href="#" class="hover:text-white transition">للسائقين</a></li>
+          <li><a href="/privacy" class="hover:text-white transition">سياسة الخصوصية</a></li>
+          <li><a href="/terms" class="hover:text-white transition">شروط الاستخدام</a></li>
+        </ul>
+      </div>
+
+      <!-- Tamem contact -->
+      <div class="md:col-span-4">
+        <h4 class="font-black mb-4 text-brand-gold">تواصل</h4>
+        <ul class="space-y-2.5 text-sm text-white/80">
+          <li class="flex items-center gap-2">
+            <span class="text-brand-gold">📍</span> قفط - قنا، جمهورية مصر العربية
+          </li>
+          <li class="flex items-center gap-2">
+            <span class="text-brand-gold">📞</span>
+            <a href={`tel:${WHATSAPP}`} dir="ltr" class="hover:text-white">{WHATSAPP}</a>
+          </li>
+          <li class="flex items-center gap-2">
+            <span class="text-brand-gold">📧</span>
+            <a href="mailto:info@tamem-delivery.com" class="hover:text-white">info@tamem-delivery.com</a>
+          </li>
+          <li class="flex items-center gap-2">
+            <span class="text-brand-gold">⏰</span> يومياً 8 صباحاً - 12 منتصف الليل
+          </li>
+        </ul>
+      </div>
+    </div>
+
+    <!-- Developer credit (شركة برمجلي) -->
+    <div class="border-t border-white/10 pt-8 pb-2 grid md:grid-cols-2 gap-6 items-center">
+      <div class="text-sm text-white/60">
+        © {year} <strong class="text-white">تميم للتوصيل</strong>. كل الحقوق محفوظة.
+      </div>
+      <div class="md:text-left">
+        <a
+          href="http://barmagly.tech/"
+          target="_blank"
+          rel="noreferrer"
+          class="group inline-flex items-center gap-3 bg-white/5 hover:bg-white/10 border border-white/10 hover:border-brand-gold/40 rounded-2xl px-4 py-2.5 transition-all"
+        >
+          <div class="w-10 h-10 rounded-xl bg-gradient-to-br from-brand-red to-brand-orange grid place-items-center text-white font-black shadow-md group-hover:scale-110 transition">
+            ب
+          </div>
+          <div class="text-right">
+            <div class="text-[10px] text-white/60 leading-tight">تنفيذ وتطوير</div>
+            <div class="font-black text-sm text-white leading-tight">شركة برمجلي</div>
+          </div>
+          <div class="flex items-center gap-1.5 ms-2">
+            <a href="https://www.facebook.com/BarmaglyOfficial/" target="_blank" rel="noreferrer" aria-label="Barmagly Facebook"
+               class="w-7 h-7 rounded-md bg-white/10 hover:bg-[#1877F2] grid place-items-center transition">
+              <svg class="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24"><path d="M24 12.07C24 5.41 18.63 0 12 0S0 5.41 0 12.07c0 6.02 4.39 11.01 10.13 11.93v-8.44H7.08v-3.49h3.05V9.41c0-3.02 1.79-4.69 4.53-4.69 1.31 0 2.69.24 2.69.24v2.97h-1.52c-1.49 0-1.95.93-1.95 1.89v2.27h3.32l-.53 3.49h-2.79V24C19.61 23.08 24 18.1 24 12.07z"/></svg>
+            </a>
+            <a href="https://wa.me/201010254819" target="_blank" rel="noreferrer" aria-label="Barmagly WhatsApp"
+               class="w-7 h-7 rounded-md bg-white/10 hover:bg-green-500 grid place-items-center transition">
+              <svg class="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24"><path d="M.057 24l1.687-6.163a11.867 11.867 0 01-1.587-5.946C.16 5.335 5.495 0 12.05 0a11.817 11.817 0 018.413 3.488 11.824 11.824 0 013.48 8.414c-.003 6.557-5.338 11.892-11.893 11.892a11.9 11.9 0 01-5.688-1.448L.057 24z"/></svg>
+            </a>
+          </div>
+        </a>
+      </div>
+    </div>
+  </div>
+</footer>

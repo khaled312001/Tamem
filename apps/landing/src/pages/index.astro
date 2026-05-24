@@ -1,174 +1,28 @@
 ---
 import BaseLayout from '../layouts/BaseLayout.astro';
-
-const WHATSAPP = import.meta.env.PUBLIC_TAMEM_WHATSAPP || '+201010254819';
-const waLink = (text: string) =>
-  `https://wa.me/${WHATSAPP.replace(/[^\d]/g, '')}?text=${encodeURIComponent(text)}`;
-
-const services = [
-  {
-    title: 'دليفري داخل المدينة',
-    description: 'سوبر ماركت، صيدلية، مطاعم، حجز دكتور، توصيل مستندات.',
-    icon: '🛵',
-    color: 'bg-brand-red',
-  },
-  {
-    title: 'شحن بين المناطق',
-    description: 'شحن طرود وبضائع من وإلى قنا والأقصر وأسوان والبحر الأحمر.',
-    icon: '📦',
-    color: 'bg-brand-orange',
-  },
-  {
-    title: 'طلبات تجار',
-    description: 'منتجات وكميات متعددة، من عدة مخازن إلى عدة فروع.',
-    icon: '🏪',
-    color: 'bg-brand-gold',
-  },
-];
-
-const steps = [
-  { num: '1', title: 'اختر الخدمة', desc: 'دليفري أو شحن أو طلب تاجر.' },
-  { num: '2', title: 'أرسل الطلب', desc: 'أدخل التفاصيل واختر طريقة الدفع.' },
-  { num: '3', title: 'تابع الطلب', desc: 'تأكيد فوري على واتساب وتتبع لحظي.' },
-  { num: '4', title: 'استلم بأمان', desc: 'المندوب يصلك بأمان وسرعة.' },
-];
+import NavBar from '../components/NavBar.astro';
+import Hero from '../components/Hero.astro';
+import Stats from '../components/Stats.astro';
+import Services from '../components/Services.astro';
+import HowItWorks from '../components/HowItWorks.astro';
+import Features from '../components/Features.astro';
+import ForPartners from '../components/ForPartners.astro';
+import Download from '../components/Download.astro';
+import Contact from '../components/Contact.astro';
+import Footer from '../components/Footer.astro';
 ---
 
 <BaseLayout>
-  <!-- Hero -->
-  <section class="relative bg-gradient-to-br from-brand-dark via-brand-dark to-brand-red text-white overflow-hidden">
-    <div class="absolute inset-0 opacity-10 bg-[radial-gradient(circle_at_30%_50%,white,transparent_50%)]"></div>
-    <div class="relative max-w-7xl mx-auto px-6 py-20 md:py-32 grid md:grid-cols-2 gap-12 items-center">
-      <div>
-        <div class="inline-flex items-center mb-6 bg-white/95 rounded-2xl p-2 shadow-2xl">
-          <img src="/logo.png" alt="تميم للتوصيل" class="h-20 w-auto" />
-        </div>
-
-        <h1 class="text-4xl md:text-6xl font-black leading-tight mb-4">
-          توصيلك في أمان <span class="text-brand-gold">معانا</span>
-        </h1>
-        <p class="text-lg opacity-90 mb-8 max-w-md">
-          منصة توصيل وشحن متكاملة لمدينة قفط وقنا — تتوسع للأقصر وأسوان والبحر الأحمر قريباً.
-        </p>
-
-        <div class="flex flex-wrap gap-3">
-          <a
-            href="#"
-            class="inline-flex items-center gap-2 bg-white text-brand-dark font-bold px-6 py-3 rounded-xl hover:bg-brand-gold transition"
-          >
-            📱 حمّل التطبيق
-          </a>
-          <a
-            href={waLink('أهلاً، عاوز أعرف أكتر عن تميم للتوصيل')}
-            class="inline-flex items-center gap-2 bg-brand-red text-white font-bold px-6 py-3 rounded-xl border-2 border-white/20 hover:bg-brand-red/80 transition"
-          >
-            💬 تواصل واتساب
-          </a>
-        </div>
-      </div>
-
-      <div class="hidden md:flex items-center justify-center relative">
-        <div class="w-80 h-80 rounded-full bg-brand-red/30 blur-3xl absolute"></div>
-        <div class="relative bg-white rounded-3xl p-8 shadow-2xl">
-          <img src="/logo.png" alt="تميم" class="w-72 h-72 object-contain" />
-        </div>
-      </div>
-    </div>
-  </section>
-
-  <!-- Services -->
-  <section class="py-20 px-6">
-    <div class="max-w-7xl mx-auto">
-      <div class="text-center mb-12">
-        <h2 class="text-3xl md:text-4xl font-black mb-3">خدماتنا</h2>
-        <p class="text-muted-foreground">ثلاث خدمات رئيسية لتغطية كل احتياجاتك</p>
-      </div>
-      <div class="grid md:grid-cols-3 gap-6">
-        {services.map((s) => (
-          <div class="group bg-white border border-border rounded-2xl p-6 hover:shadow-2xl transition">
-            <div class={`w-14 h-14 rounded-xl ${s.color} flex items-center justify-center text-3xl mb-4 group-hover:scale-110 transition`}>
-              {s.icon}
-            </div>
-            <h3 class="text-xl font-black mb-2">{s.title}</h3>
-            <p class="text-sm text-muted-foreground">{s.description}</p>
-          </div>
-        ))}
-      </div>
-    </div>
-  </section>
-
-  <!-- How it works -->
-  <section class="py-20 px-6 bg-muted/30">
-    <div class="max-w-7xl mx-auto">
-      <div class="text-center mb-12">
-        <h2 class="text-3xl md:text-4xl font-black mb-3">كيف يعمل؟</h2>
-        <p class="text-muted-foreground">أربع خطوات بسيطة</p>
-      </div>
-      <div class="grid md:grid-cols-4 gap-4">
-        {steps.map((step) => (
-          <div class="bg-white rounded-2xl p-6 text-center">
-            <div class="w-12 h-12 rounded-full bg-brand-red text-white font-black text-xl flex items-center justify-center mx-auto mb-4">
-              {step.num}
-            </div>
-            <h3 class="font-black mb-2">{step.title}</h3>
-            <p class="text-sm text-muted-foreground">{step.desc}</p>
-          </div>
-        ))}
-      </div>
-    </div>
-  </section>
-
-  <!-- CTAs for merchants and drivers -->
-  <section class="py-20 px-6">
-    <div class="max-w-7xl mx-auto grid md:grid-cols-2 gap-6">
-      <a
-        href={waLink('أهلاً، أنا تاجر وعاوز أضم محلي لتميم')}
-        class="bg-gradient-to-br from-brand-red to-brand-orange text-white rounded-2xl p-8 hover:scale-105 transition shadow-xl"
-      >
-        <div class="text-4xl mb-3">🏪</div>
-        <h3 class="text-2xl font-black mb-2">للتجار</h3>
-        <p class="opacity-90 mb-4">انضم لتميم وزود مبيعاتك. فريقنا يساعدك تكون أونلاين خلال دقائق.</p>
-        <span class="inline-flex items-center gap-2 font-bold">تواصل واتساب ←</span>
-      </a>
-
-      <a
-        href={waLink('أهلاً، عاوز أنضم لتميم كسائق')}
-        class="bg-gradient-to-br from-brand-dark to-brand-gray text-white rounded-2xl p-8 hover:scale-105 transition shadow-xl"
-      >
-        <div class="text-4xl mb-3">🛵</div>
-        <h3 class="text-2xl font-black mb-2">للسائقين</h3>
-        <p class="opacity-90 mb-4">اشتغل مع تميم في وقتك المناسب وحقّق دخل إضافي.</p>
-        <span class="inline-flex items-center gap-2 font-bold">تواصل واتساب ←</span>
-      </a>
-    </div>
-  </section>
-
-  <!-- Footer -->
-  <footer class="bg-brand-dark text-white py-12 px-6">
-    <div class="max-w-7xl mx-auto grid md:grid-cols-3 gap-8">
-      <div>
-        <div class="bg-white rounded-xl p-2 inline-block mb-4">
-          <img src="/logo.png" alt="تميم للتوصيل" class="h-14 w-auto" />
-        </div>
-        <p class="text-sm opacity-70 mt-2">منصة توصيل وشحن متكاملة. قفط وقنا — والمزيد قريباً.</p>
-      </div>
-      <div>
-        <h4 class="font-bold mb-3">روابط</h4>
-        <ul class="space-y-2 text-sm opacity-70">
-          <li><a href="/privacy" class="hover:opacity-100">سياسة الخصوصية</a></li>
-          <li><a href="/terms" class="hover:opacity-100">شروط الاستخدام</a></li>
-        </ul>
-      </div>
-      <div>
-        <h4 class="font-bold mb-3">تواصل</h4>
-        <ul class="space-y-2 text-sm opacity-70">
-          <li>📞 {WHATSAPP}</li>
-          <li>📧 info@tamem-delivery.com</li>
-        </ul>
-      </div>
-    </div>
-    <div class="border-t border-white/10 mt-8 pt-6 text-center text-sm opacity-50">
-      © {new Date().getFullYear()} تميم للتوصيل · تنفيذ شركة برمجلي
-    </div>
-  </footer>
+  <NavBar />
+  <main>
+    <Hero />
+    <Stats />
+    <Services />
+    <HowItWorks />
+    <Features />
+    <ForPartners />
+    <Download />
+    <Contact />
+  </main>
+  <Footer />
 </BaseLayout>
