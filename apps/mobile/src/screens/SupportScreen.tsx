@@ -2,6 +2,7 @@ import * as Linking from 'expo-linking';
 import { Clock, HelpCircle, Mail, MessageCircle, Phone } from 'lucide-react-native';
 import {
   Alert,
+  Image,
   Linking as RNLinking,
   Pressable,
   ScrollView,
@@ -135,7 +136,11 @@ export function SupportScreen() {
           style={({ pressed }) => [styles.devCard, pressed && { opacity: 0.85 }]}
         >
           <View style={styles.devLogo}>
-            <Text style={styles.devLogoText}>ب</Text>
+            <Image
+              source={require('../assets/barmagly-logo.jpg')}
+              style={styles.devLogoImg}
+              resizeMode="cover"
+            />
           </View>
           <View style={{ flex: 1 }}>
             <Text style={styles.devLabel}>تطوير وتنفيذ</Text>
@@ -247,15 +252,12 @@ const styles = StyleSheet.create({
     width: 44,
     height: 44,
     borderRadius: radii.md,
-    backgroundColor: colors.brand.red,
+    backgroundColor: colors.white,
     alignItems: 'center',
     justifyContent: 'center',
+    overflow: 'hidden',
   },
-  devLogoText: {
-    color: colors.white,
-    fontSize: 22,
-    fontFamily: fontFamilies.headingBlack,
-  },
+  devLogoImg: { width: '100%', height: '100%' },
   devLabel: { color: 'rgba(255,255,255,0.65)', fontFamily: fontFamilies.body, fontSize: 10 },
   devName: { color: colors.white, fontFamily: fontFamilies.headingBlack, fontSize: fontSizes.md },
   devLink: {

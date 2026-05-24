@@ -255,9 +255,11 @@ export function DashboardLayout() {
                   className="inline-flex items-center gap-1.5 hover:text-brand-red transition"
                   title="تطوير وتنفيذ شركة برمجلي"
                 >
-                  <span className="w-4 h-4 rounded bg-gradient-to-br from-brand-red to-brand-orange grid place-items-center text-white font-black text-[8px]">
-                    ب
-                  </span>
+                  <img
+                    src="/barmagly-logo.jpg"
+                    alt="برمجلي"
+                    className="w-4 h-4 rounded object-cover"
+                  />
                   <span>
                     تطوير <span className="font-bold">شركة برمجلي</span>
                   </span>

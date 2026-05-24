@@ -39,12 +39,14 @@ export async function uploadFile(
       } as unknown as Blob);
     }
 
-    const res = await api.raw.post('/uploads', form, {
-      headers: { 'Content-Type': 'multipart/form-data' },
-    });
+    // NB: don't set Content-Type manually — axios + FormData inject the
+    // multipart boundary automatically. Setting the header by hand strips
+    // the boundary and multer rejects the request silently.
+    const res = await api.raw.post('/uploads', form);
     return { url: res.data.data.url as string, uploaded: true };
-  } catch {
-    // Surface a console warn — the caller will fall back gracefully.
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.warn('[uploadFile] failed, falling back to original URI:', err);
     return { url: uri, uploaded: false };
   }
 }
