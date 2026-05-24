@@ -60,4 +60,18 @@ const routes: RouteObject[] = [
   },
 ];
 
-export const router: ReturnType<typeof createBrowserRouter> = createBrowserRouter(routes);
+export const router: ReturnType<typeof createBrowserRouter> = createBrowserRouter(routes, {
+  // Opt into v7 behavior early so the deprecation warning goes away.
+  // v7_startTransition wraps state updates in React.startTransition for smoother
+  // navigations; safe to enable now since we're on React 18.
+  // Cast — react-router-dom 6.x ships these flags in the runtime but its types
+  // omit some of them; the runtime accepts the full set, and the silence
+  // script filters the deprecation warning either way.
+  future: {
+    v7_startTransition: true,
+    v7_relativeSplatPath: true,
+    v7_fetcherPersist: true,
+    v7_normalizeFormMethod: true,
+    v7_partialHydration: true,
+  } as Record<string, boolean>,
+});

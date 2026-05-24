@@ -20,14 +20,10 @@ export function NotificationsProvider({ children }: { children: React.ReactNode 
   const push = useNotifications((s) => s.push);
 
   useEffect(() => {
-    // Ask once for browser notification permission (no-op if already decided)
-    if (
-      typeof window !== 'undefined' &&
-      'Notification' in window &&
-      Notification.permission === 'default'
-    ) {
-      Notification.requestPermission().catch(() => undefined);
-    }
+    // NB: do NOT auto-request Notification permission here. Chrome blocks
+    // sites that prompt without a user gesture and emits a noisy console
+    // warning. We ask only when the admin clicks the bell for the first time
+    // (see NotificationBell.tsx) — that's a real gesture.
 
     const socket = connectSocket();
 

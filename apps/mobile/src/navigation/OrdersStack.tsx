@@ -5,7 +5,7 @@ import { OrderTrackingScreen } from '../screens/OrderTrackingScreen';
 
 export type OrdersStackParamList = {
   OrdersList: undefined;
-  OrderTracking: { orderId: string };
+  OrderTracking: { orderId: string; justCreated?: boolean };
 };
 
 const Stack = createNativeStackNavigator<OrdersStackParamList>();

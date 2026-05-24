@@ -1,3 +1,7 @@
+// Mute Expo + react-native-web dev-mode console noise on web. Must import
+// before App so the patch is in place before React/AppRegistry start logging.
+import './src/lib/silenceWebNoise';
+
 import { registerRootComponent } from 'expo';
 
 import App from './App';

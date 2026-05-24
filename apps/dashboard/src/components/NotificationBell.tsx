@@ -52,7 +52,19 @@ export function NotificationBell() {
   return (
     <div className="relative" ref={ref}>
       <button
-        onClick={() => setOpen((o) => !o)}
+        onClick={() => {
+          // Use this real user gesture as the moment to ask for browser
+          // notification permission — Chrome only allows the prompt during
+          // a user-initiated event.
+          if (
+            typeof window !== 'undefined' &&
+            'Notification' in window &&
+            Notification.permission === 'default'
+          ) {
+            Notification.requestPermission().catch(() => undefined);
+          }
+          setOpen((o) => !o);
+        }}
         className="relative p-2 hover:bg-muted rounded-lg"
         aria-label="الإشعارات"
       >

@@ -1,10 +1,11 @@
 import { useRoute, type RouteProp } from '@react-navigation/native';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Phone } from 'lucide-react-native';
-import { useEffect } from 'react';
+import { CheckCircle2, MessageCircle, Phone, X } from 'lucide-react-native';
+import { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
   Linking,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -48,10 +49,21 @@ interface OrderDetail {
   createdAt: string;
 }
 
+const SUPPORT_WHATSAPP =
+  (typeof process !== 'undefined' && process.env?.EXPO_PUBLIC_TAMEM_WHATSAPP) || '+201010254819';
+
 export function OrderTrackingScreen() {
   const route = useRoute<Route>();
   const qc = useQueryClient();
-  const { orderId } = route.params;
+  const { orderId, justCreated } = route.params;
+  const [showWaBanner, setShowWaBanner] = useState(!!justCreated);
+
+  const openWhatsApp = (msg: string) => {
+    const num = SUPPORT_WHATSAPP.replace(/\D/g, '');
+    const url = `https://wa.me/${num}?text=${encodeURIComponent(msg)}`;
+    if (Platform.OS === 'web') window.open(url, '_blank');
+    else void Linking.openURL(url);
+  };
 
   const { data: order, isLoading } = useQuery<OrderDetail>({
     queryKey: ['order', orderId],
@@ -97,6 +109,23 @@ export function OrderTrackingScreen() {
       />
 
       <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
+        {showWaBanner && (
+          <View style={styles.waBanner}>
+            <View style={styles.waIconWrap}>
+              <CheckCircle2 size={22} color={colors.white} />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.waTitle}>تم استلام طلبك بنجاح</Text>
+              <Text style={styles.waBody}>
+                هنبعتلك تأكيد فوري على واتساب بكل التفاصيل بمجرد ما الإدارة تراجع الطلب وتسعّره.
+              </Text>
+            </View>
+            <Pressable onPress={() => setShowWaBanner(false)} style={styles.waClose} hitSlop={8}>
+              <X size={16} color={colors.white} />
+            </Pressable>
+          </View>
+        )}
+
         <View style={styles.statusCard}>
           <View
             style={[
@@ -188,6 +217,19 @@ export function OrderTrackingScreen() {
             </View>
           ))}
         </View>
+
+        {/* تواصل مع الإدارة — WhatsApp deep-link with order context */}
+        <Pressable
+          onPress={() =>
+            openWhatsApp(
+              `استفسار عن طلب ${order.orderNumber}${price ? ` (${Number(price).toLocaleString('ar-EG')} ج.م)` : ''} — الحالة: ${ORDER_STATUS_AR[order.status]}`,
+            )
+          }
+          style={({ pressed }) => [styles.contactBtn, pressed && { opacity: 0.85 }]}
+        >
+          <MessageCircle size={18} color={colors.white} />
+          <Text style={styles.contactBtnText}>تواصل مع الإدارة</Text>
+        </Pressable>
 
         <View style={{ height: spacing.xl }} />
       </ScrollView>
@@ -316,5 +358,56 @@ const styles = StyleSheet.create({
     fontSize: 10,
     color: colors.text.muted,
     marginTop: 2,
+  },
+  // WhatsApp confirmation banner (justCreated)
+  waBanner: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: spacing.sm,
+    backgroundColor: '#1A9F6E',
+    padding: spacing.md,
+    borderRadius: radii.lg,
+    marginBottom: spacing.md,
+  },
+  waIconWrap: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: 'rgba(255,255,255,0.18)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  waTitle: {
+    color: colors.white,
+    fontFamily: fontFamilies.headingBold,
+    fontSize: fontSizes.sm,
+    marginBottom: 2,
+  },
+  waBody: {
+    color: 'rgba(255,255,255,0.9)',
+    fontFamily: fontFamilies.body,
+    fontSize: fontSizes.xs,
+    lineHeight: 18,
+  },
+  waClose: {
+    padding: 4,
+  },
+  // Contact admin CTA
+  contactBtn: {
+    marginTop: spacing.lg,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing.sm,
+    backgroundColor: '#25D366',
+    borderRadius: radii.lg,
+    paddingVertical: spacing.md,
+    boxShadow: '0 8px 20px rgba(37,211,102,0.30)',
+    elevation: 6,
+  },
+  contactBtnText: {
+    color: colors.white,
+    fontFamily: fontFamilies.headingBold,
+    fontSize: fontSizes.sm,
   },
 });
