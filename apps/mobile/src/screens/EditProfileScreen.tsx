@@ -1,9 +1,12 @@
 import { useNavigation } from '@react-navigation/native';
 import { useMutation } from '@tanstack/react-query';
-import { Mail, Phone, User } from 'lucide-react-native';
+import * as ImagePicker from 'expo-image-picker';
+import { Camera, Mail, Phone, User } from 'lucide-react-native';
 import { useState } from 'react';
 import {
+  ActivityIndicator,
   Alert,
+  Image,
   KeyboardAvoidingView,
   Platform,
   Pressable,
@@ -19,21 +22,81 @@ import { IconField } from '../components/IconField';
 import { ScreenHeader } from '../components/ScreenHeader';
 import { api } from '../lib/api';
 import { useAuth } from '../stores/auth';
-import { colors, fontFamilies, fontSizes, spacing } from '../theme/tokens';
+import { colors, fontFamilies, fontSizes, radii, spacing } from '../theme/tokens';
+
+interface UserExt {
+  name?: string;
+  email?: string;
+  phone?: string;
+  avatarUrl?: string;
+}
+
+/**
+ * Posts the picked image to /uploads (multipart) and returns the hosted URL.
+ * Works on both web (Blob from URI) and native (FormData with uri).
+ */
+async function uploadAvatar(uri: string): Promise<string> {
+  const form = new FormData();
+
+  if (Platform.OS === 'web') {
+    const res = await fetch(uri);
+    const blob = await res.blob();
+    form.append('file', blob, 'avatar.jpg');
+  } else {
+    // RN FormData accepts { uri, name, type } as a synthetic file
+    form.append('file', {
+      uri,
+      name: 'avatar.jpg',
+      type: 'image/jpeg',
+    } as unknown as Blob);
+  }
+
+  const res = await api.raw.post('/uploads', form, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  });
+  return res.data.data.url as string;
+}
 
 export function EditProfileScreen() {
   const navigation = useNavigation();
-  const user = useAuth((s) => s.user);
+  const user = useAuth((s) => s.user) as (UserExt & { id: string }) | null;
   const setUser = useAuth((s) => s.setUser);
 
   const [name, setName] = useState(user?.name ?? '');
   const [email, setEmail] = useState(user?.email ?? '');
+  const [avatarUrl, setAvatarUrl] = useState<string | null>(user?.avatarUrl ?? null);
+  const [uploadingAvatar, setUploadingAvatar] = useState(false);
+
+  const pickAvatar = async () => {
+    try {
+      const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (!perm.granted) {
+        Alert.alert('لا يوجد إذن', 'فعّل صلاحية الصور من الإعدادات');
+        return;
+      }
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ['images'],
+        quality: 0.85,
+        allowsEditing: true,
+        aspect: [1, 1],
+      });
+      if (result.canceled || !result.assets?.[0]) return;
+      setUploadingAvatar(true);
+      const url = await uploadAvatar(result.assets[0].uri);
+      setAvatarUrl(url);
+    } catch (err) {
+      Alert.alert('خطأ', err instanceof Error ? err.message : 'فشل رفع الصورة');
+    } finally {
+      setUploadingAvatar(false);
+    }
+  };
 
   const save = useMutation({
     mutationFn: async () => {
       const body: Record<string, string> = {};
       if (name.trim() && name !== user?.name) body.name = name.trim();
       if (email.trim() && email !== user?.email) body.email = email.trim();
+      if (avatarUrl && avatarUrl !== user?.avatarUrl) body.avatarUrl = avatarUrl;
       if (Object.keys(body).length === 0) return user;
       const res = await api.raw.patch('/me', body);
       return res.data.data;
@@ -48,6 +111,8 @@ export function EditProfileScreen() {
     },
   });
 
+  const initial = (name || user?.name || 'ت').charAt(0);
+
   return (
     <SafeAreaView edges={['top']} style={styles.container}>
       <ScreenHeader title="تعديل البيانات الشخصية" />
@@ -57,8 +122,26 @@ export function EditProfileScreen() {
         style={{ flex: 1 }}
       >
         <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
-          <View style={styles.avatar}>
-            <Text style={styles.avatarText}>{(name || user?.name || 'ت').charAt(0)}</Text>
+          {/* Avatar with picker */}
+          <View style={styles.avatarWrap}>
+            <Pressable
+              onPress={pickAvatar}
+              style={({ pressed }) => [styles.avatar, pressed && { opacity: 0.85 }]}
+            >
+              {avatarUrl ? (
+                <Image source={{ uri: avatarUrl }} style={styles.avatarImg} />
+              ) : (
+                <Text style={styles.avatarText}>{initial}</Text>
+              )}
+              <View style={styles.avatarBadge}>
+                {uploadingAvatar ? (
+                  <ActivityIndicator color={colors.white} size="small" />
+                ) : (
+                  <Camera size={16} color={colors.white} />
+                )}
+              </View>
+            </Pressable>
+            <Text style={styles.avatarHint}>اضغط على الصورة لتغييرها</Text>
           </View>
 
           <IconField
@@ -104,20 +187,42 @@ export function EditProfileScreen() {
   );
 }
 
+const AVATAR = 96;
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.surface },
   scroll: { padding: spacing.lg, paddingBottom: spacing.xl },
+  avatarWrap: { alignItems: 'center', marginBottom: spacing.lg },
   avatar: {
-    width: 88,
-    height: 88,
-    borderRadius: 44,
+    width: AVATAR,
+    height: AVATAR,
+    borderRadius: AVATAR / 2,
     backgroundColor: colors.brand.red,
-    alignSelf: 'center',
     alignItems: 'center',
     justifyContent: 'center',
-    marginBottom: spacing.lg,
+    position: 'relative',
+    overflow: 'hidden',
   },
-  avatarText: { color: colors.white, fontSize: 36, fontFamily: fontFamilies.headingBlack },
+  avatarImg: { width: '100%', height: '100%' },
+  avatarText: { color: colors.white, fontSize: 38, fontFamily: fontFamilies.headingBlack },
+  avatarBadge: {
+    position: 'absolute',
+    bottom: 0,
+    insetInlineEnd: 0,
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: colors.brand.dark,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 2,
+    borderColor: colors.surface,
+  },
+  avatarHint: {
+    marginTop: spacing.sm,
+    color: colors.text.muted,
+    fontFamily: fontFamilies.body,
+    fontSize: fontSizes.xs,
+  },
   hint: {
     color: colors.text.muted,
     fontSize: fontSizes.xs,
@@ -132,4 +237,8 @@ const styles = StyleSheet.create({
     fontFamily: fontFamilies.bodyBold,
     fontSize: fontSizes.sm,
   },
+  // legacy class kept to avoid touching all callers (no-op)
+  _unused: { display: 'none' as const },
 });
+
+void radii; // referenced in case of future use; suppresses unused-var lint

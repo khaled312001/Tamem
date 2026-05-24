@@ -34,81 +34,114 @@ interface StatusMessages {
 function messagesFor(order: Order, status: OrderStatus): StatusMessages | null {
   const num = order.orderNumber;
   const price = order.quotedPrice ? `${order.quotedPrice} ج.م` : '';
+  const sig = '\n\n— تميم للتوصيل';
+
   switch (status) {
+    case 'NEW':
+      return {
+        titleAr: '✓ تم استلام طلبك',
+        bodyAr:
+          `أهلاً بك في تميم 👋\n` +
+          `استلمنا طلبك رقم ${num} بنجاح.\n` +
+          `هتوصلك رسالة تأكيد تانية بمجرد ما الإدارة تراجع الطلب وتسعّره (خلال دقائق).` +
+          sig,
+        channel: 'IN_APP',
+        whatsapp: true,
+      };
     case 'UNDER_REVIEW':
       return {
-        titleAr: 'طلبك قيد المراجعة',
-        bodyAr: `استلمنا طلبك ${num} وجاري المراجعة.`,
+        titleAr: '🔍 طلبك قيد المراجعة',
+        bodyAr: `طلب ${num} قيد المراجعة.\n` + `الفريق بيتحقق من التفاصيل ويسعّره الآن.` + sig,
         channel: 'IN_APP',
         whatsapp: true,
       };
     case 'PRICED':
       return {
-        titleAr: 'تم تسعير طلبك',
-        bodyAr: `طلب ${num} تم تسعيره بـ ${price}. ادخل التطبيق للموافقة.`,
+        titleAr: '💰 تم تسعير طلبك',
+        bodyAr:
+          `طلب ${num} جاهز.\n` +
+          `💵 السعر: ${price}\n\n` +
+          `افتح التطبيق ووافق على السعر للبدء فوراً.` +
+          sig,
         channel: 'IN_APP',
         whatsapp: true,
       };
     case 'AWAITING_CUSTOMER_APPROVAL':
       return {
-        titleAr: 'بانتظار موافقتك',
-        bodyAr: `طلب ${num} جاهز — برجاء الموافقة من التطبيق لبدء التنفيذ.`,
+        titleAr: '⏳ بانتظار موافقتك',
+        bodyAr:
+          `طلب ${num} في انتظار موافقتك.\n` +
+          (price ? `💵 السعر النهائي: ${price}\n\n` : '\n') +
+          `افتح التطبيق ووافق علشان نبدأ التجهيز.` +
+          sig,
         channel: 'IN_APP',
         whatsapp: true,
       };
     case 'ACCEPTED':
       return {
-        titleAr: 'تم قبول الطلب',
-        bodyAr: `طلب ${num} تم قبوله. هنبدأ التجهيز فوراً.`,
+        titleAr: '✅ تم قبول الطلب',
+        bodyAr:
+          `شكراً ليك 🎉\n` +
+          `طلب ${num} تم قبوله، هنبدأ تجهيزه فوراً وندوّر على مندوب مناسب.` +
+          sig,
         channel: 'IN_APP',
         whatsapp: true,
       };
     case 'DRIVER_ASSIGNED':
       return {
-        titleAr: 'تم تعيين سائق',
-        bodyAr: `طلب ${num} في طريقه — السائق سيتواصل معك قريباً.`,
+        titleAr: '🛵 تم تعيين السائق',
+        bodyAr: `طلب ${num} في طريقه إليك.\n` + `المندوب هيكلمك قريباً جداً.` + sig,
         channel: 'IN_APP',
         whatsapp: true,
       };
     case 'PICKED_UP':
       return {
-        titleAr: 'تم استلام طلبك',
-        bodyAr: `استلم السائق طلب ${num} وفي الطريق إليك.`,
+        titleAr: '📦 تم استلام الطلب',
+        bodyAr: `المندوب استلم طلب ${num} وبدأ التحرك ليك.\n` + `استعد للاستلام خلال دقايق.` + sig,
         channel: 'IN_APP',
         whatsapp: true,
       };
     case 'IN_ROUTE':
       return {
-        titleAr: 'الطلب في الطريق',
-        bodyAr: `طلب ${num} وصل لمنطقتك قريباً.`,
+        titleAr: '🚀 الطلب في الطريق',
+        bodyAr: `طلب ${num} وصل لمنطقتك.\n` + `جهّز التواجد عند العنوان من فضلك.` + sig,
         channel: 'IN_APP',
         whatsapp: true,
       };
     case 'DELIVERED':
       return {
-        titleAr: 'تم تسليم الطلب',
-        bodyAr: `طلب ${num} تم تسليمه — شكراً لاختيارك تميم.`,
+        titleAr: '🎁 تم تسليم الطلب',
+        bodyAr:
+          `تم تسليم طلب ${num} بنجاح.\n` + `شكراً لاختيارك تميم 🙏 — قيّم تجربتك من التطبيق.` + sig,
         channel: 'IN_APP',
         whatsapp: true,
       };
     case 'COMPLETED':
       return {
-        titleAr: 'تم إكمال الطلب',
-        bodyAr: `طلب ${num} مكتمل. نتمنى أن نخدمك مرة أخرى.`,
+        titleAr: '⭐ تم إكمال الطلب',
+        bodyAr: `طلب ${num} مكتمل بالكامل.\n` + `نتمنى أن نخدمك مرة أخرى قريباً 💛` + sig,
         channel: 'IN_APP',
         whatsapp: true,
       };
     case 'CANCELLED':
       return {
-        titleAr: 'تم إلغاء الطلب',
-        bodyAr: `تم إلغاء طلب ${num}.${order.cancellationReason ? ` السبب: ${order.cancellationReason}` : ''}`,
+        titleAr: '🚫 تم إلغاء الطلب',
+        bodyAr:
+          `تم إلغاء طلب ${num}.` +
+          (order.cancellationReason ? `\nالسبب: ${order.cancellationReason}` : '') +
+          `\n\nلو فيه أي استفسار، تواصل معنا.` +
+          sig,
         channel: 'IN_APP',
         whatsapp: true,
       };
     case 'REJECTED':
       return {
-        titleAr: 'تم رفض الطلب',
-        bodyAr: `للأسف لم نتمكن من تنفيذ طلب ${num}. تواصل معنا للتفاصيل.`,
+        titleAr: '❌ تعذّر تنفيذ الطلب',
+        bodyAr:
+          `للأسف ما قدرناش ننفذ طلب ${num}.` +
+          (order.cancellationReason ? `\nالسبب: ${order.cancellationReason}` : '') +
+          `\n\nنعتذر، تواصل معنا للتفاصيل.` +
+          sig,
         channel: 'IN_APP',
         whatsapp: true,
       };

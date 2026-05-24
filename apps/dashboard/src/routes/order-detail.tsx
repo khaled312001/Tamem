@@ -112,8 +112,10 @@ export function OrderDetailPage() {
   const collectedAudio: string[] = [];
   const pushFrom = (v: unknown) => {
     if (Array.isArray(v)) v.forEach(pushFrom);
-    else if (isImageRef(v)) collectedImages.push(normalizeImage(v));
+    // Audio must be checked FIRST — blob: URLs match both image and audio
+    // predicates; without this, voice notes get rendered as broken images.
     else if (isAudioRef(v)) collectedAudio.push(v);
+    else if (isImageRef(v)) collectedImages.push(normalizeImage(v));
   };
   // 1. Top-level order.imageUrls (canonical)
   if (Array.isArray(order.imageUrls)) (order.imageUrls as string[]).forEach(pushFrom);

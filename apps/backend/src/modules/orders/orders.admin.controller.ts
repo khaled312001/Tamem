@@ -180,16 +180,36 @@ export const adminSetPrice: RequestHandler = async (req, res, next) => {
     const order = await prisma.order.findUnique({ where: { id: param(req.params.id) } });
     if (!order) throw new NotFoundError('Order', 'الطلب غير موجود');
 
-    // Pricing usually moves the order from UNDER_REVIEW -> PRICED.
-    // Allow setting/updating the price without changing status if it's already PRICED.
     if (order.status === OrderStatus.UNDER_REVIEW) {
       assertTransition(order.status, OrderStatus.PRICED, req.user!.role);
     }
 
+    // If the customer attached a promo code (in customData.promoCode), apply
+    // the discount automatically before storing the quoted price so the
+    // customer sees the discounted number — and the admin doesn't have to
+    // remember to subtract it manually.
+    const customData = (order.customData ?? {}) as Record<string, unknown>;
+    const promoCode = typeof customData.promoCode === 'string' ? customData.promoCode : undefined;
+    const { applyPromoToPrice } = await import('../promos/promos.controller.js');
+    const promoResult = await applyPromoToPrice(order.customerId, promoCode, input.quotedPrice);
+
     const updated = await prisma.order.update({
       where: { id: order.id },
       data: {
-        quotedPrice: input.quotedPrice,
+        quotedPrice: promoResult.finalPriceEgp,
+        ...(promoResult.discountEgp > 0
+          ? {
+              customData: {
+                ...customData,
+                promoApplied: {
+                  code: promoResult.promo?.code,
+                  rawPrice: input.quotedPrice,
+                  discount: promoResult.discountEgp,
+                  appliedAt: new Date().toISOString(),
+                },
+              },
+            }
+          : {}),
         ...(order.status === OrderStatus.UNDER_REVIEW ? { status: OrderStatus.PRICED } : {}),
       },
     });
@@ -202,8 +222,21 @@ export const adminSetPrice: RequestHandler = async (req, res, next) => {
           toStatus: OrderStatus.PRICED,
           changedById: req.user!.id,
           changedByRole: UserRole.ADMIN,
-          reason: input.note ?? `Priced at ${input.quotedPrice}`,
-          metadata: { quotedPrice: input.quotedPrice },
+          reason:
+            input.note ??
+            (promoResult.discountEgp > 0
+              ? `Priced at ${input.quotedPrice} − ${promoResult.discountEgp} (${promoResult.promo?.code}) = ${promoResult.finalPriceEgp}`
+              : `Priced at ${input.quotedPrice}`),
+          metadata: {
+            quotedPrice: promoResult.finalPriceEgp,
+            ...(promoResult.discountEgp > 0
+              ? {
+                  rawPrice: input.quotedPrice,
+                  discount: promoResult.discountEgp,
+                  promoCode: promoResult.promo?.code,
+                }
+              : {}),
+          },
         },
       });
       await dispatchOrderStatusChanged(req.app, updated, OrderStatus.PRICED);

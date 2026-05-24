@@ -30,6 +30,7 @@ import {
   paymobWebhookRouter,
 } from './modules/payments/paymob.routes.js';
 import { adminPaymentsRouter } from './modules/payments/payments.routes.js';
+import { promosRouter } from './modules/promos/promos.routes.js';
 import { adminPricingRulesRouter } from './modules/pricing/pricing-rules.routes.js';
 import { adminProductsRouter } from './modules/products/products.routes.js';
 import { adminReportsRouter } from './modules/reports/reports.routes.js';
@@ -91,6 +92,7 @@ export function createApp(): Express {
   v1.use('/payments', paymentsPublicRouter);
   v1.use('/payments', paymentsCustomerRouter);
   v1.use('/payments/webhook', paymobWebhookRouter);
+  v1.use('/promos', promosRouter);
 
   // ----- Admin namespace -----
   const adminRouter = express.Router();

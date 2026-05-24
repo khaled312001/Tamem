@@ -1,4 +1,4 @@
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, useRoute, type RouteProp } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useQuery } from '@tanstack/react-query';
 import * as Location from 'expo-location';
@@ -42,6 +42,7 @@ interface Merchant {
 }
 
 type Nav = NativeStackNavigationProp<HomeStackParamList, 'NearbyMap'>;
+type Route = RouteProp<HomeStackParamList, 'NearbyMap'>;
 
 const DEFAULT_REGION = {
   latitude: 26.0297,
@@ -98,10 +99,11 @@ const RADIUS_KM = 5;
 
 export function NearbyMapScreen() {
   const navigation = useNavigation<Nav>();
+  const route = useRoute<Route>();
   const [region, setRegion] = useState(DEFAULT_REGION);
   const [userLoc, setUserLoc] = useState<{ lat: number; lng: number } | null>(null);
   const [filter, setFilter] = useState('all');
-  const [search, setSearch] = useState('');
+  const [search, setSearch] = useState(route.params?.search ?? '');
   const mapRef = useRef<MapView | null>(null);
 
   useEffect(() => {

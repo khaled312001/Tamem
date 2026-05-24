@@ -12,7 +12,7 @@ import { StoresListScreen } from '../screens/StoresListScreen';
 export type HomeStackParamList = {
   Home: undefined;
   StoresList: { categoryId?: string } | undefined;
-  NearbyMap: undefined;
+  NearbyMap: { search?: string } | undefined;
   MerchantDetail: { merchantId: string };
   DynamicServiceFlow: { serviceKey?: string; serviceId?: string; merchantId?: string };
   DeliveryServices: undefined;

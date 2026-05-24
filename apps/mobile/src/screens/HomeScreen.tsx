@@ -2,9 +2,12 @@ import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useQuery } from '@tanstack/react-query';
 import { LinearGradient } from 'expo-linear-gradient';
-import { Gift, Package, Search, ShoppingBag, Store, Truck } from 'lucide-react-native';
+import { Copy, Gift, Package, Search, ShoppingBag, Store, Truck } from 'lucide-react-native';
+import { useState } from 'react';
 import {
   ActivityIndicator,
+  Alert,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -65,9 +68,40 @@ const SERVICES = [
   },
 ] as const;
 
+const PROMO_CODE = 'TAMEM20';
+
+async function copyCode(text: string) {
+  try {
+    if (Platform.OS === 'web' && typeof navigator !== 'undefined' && navigator.clipboard) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch {
+    /* fall through */
+  }
+  return false;
+}
+
 export function HomeScreen() {
   const navigation = useNavigation<NavProp>();
   const user = useAuth((s) => s.user);
+  const [searchValue, setSearchValue] = useState('');
+
+  const submitSearch = () => {
+    const q = searchValue.trim();
+    if (!q) return;
+    navigation.navigate('NearbyMap', { search: q });
+  };
+
+  const onPromoPress = async () => {
+    const ok = await copyCode(PROMO_CODE);
+    Alert.alert(
+      ok ? 'تم نسخ الكود ✓' : `كود الخصم: ${PROMO_CODE}`,
+      ok
+        ? `كود "${PROMO_CODE}" اتنسخ. ضيفه عند تأكيد طلبك للحصول على خصم 20%.`
+        : 'انسخه واستخدمه عند الطلب للحصول على خصم 20% على أول طلب.',
+    );
+  };
 
   const { data: offers } = useQuery<Offer[]>({
     queryKey: ['offers'],
@@ -92,8 +126,14 @@ export function HomeScreen() {
 
       <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
         <View style={styles.searchWrap}>
-          <Search size={16} color={colors.text.muted} />
+          <Pressable onPress={submitSearch} hitSlop={8}>
+            <Search size={16} color={colors.text.muted} />
+          </Pressable>
           <TextInput
+            value={searchValue}
+            onChangeText={setSearchValue}
+            onSubmitEditing={submitSearch}
+            returnKeyType="search"
             placeholder="ابحث عن مطعم، محل، أو منتج…"
             placeholderTextColor={colors.text.muted}
             style={styles.searchInput}
@@ -101,20 +141,25 @@ export function HomeScreen() {
         </View>
 
         {topOffer && (
-          <LinearGradient
-            colors={gradients.brand}
-            start={{ x: 0, y: 0 }}
-            end={{ x: 1, y: 1 }}
-            style={styles.banner}
-          >
-            <View style={styles.bannerIcon}>
-              <Gift size={20} color={colors.white} />
-            </View>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.bannerTitle}>{topOffer.titleAr}</Text>
-              <Text style={styles.bannerSub}>استخدم كود TAMEM20 — لفترة محدودة</Text>
-            </View>
-          </LinearGradient>
+          <Pressable onPress={onPromoPress}>
+            <LinearGradient
+              colors={gradients.brand}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 1 }}
+              style={styles.banner}
+            >
+              <View style={styles.bannerIcon}>
+                <Gift size={20} color={colors.white} />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.bannerTitle}>{topOffer.titleAr}</Text>
+                <Text style={styles.bannerSub}>استخدم كود {PROMO_CODE} — لفترة محدودة</Text>
+              </View>
+              <View style={styles.bannerCopy}>
+                <Copy size={14} color={colors.white} />
+              </View>
+            </LinearGradient>
+          </Pressable>
         )}
 
         <Text style={styles.sectionTitle}>خدماتنا</Text>
@@ -240,6 +285,14 @@ const styles = StyleSheet.create({
     opacity: 0.92,
     marginTop: 2,
     fontFamily: fontFamilies.body,
+  },
+  bannerCopy: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: 'rgba(255,255,255,0.22)',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   sectionTitle: {
     fontSize: fontSizes.md,

@@ -20,6 +20,7 @@ import {
 
 import { createRecorder, formatDuration, type Recorder } from '../lib/audioRecorder';
 import { api } from '../lib/api';
+import { uploadFile } from '../lib/uploadFile';
 import { colors, fontFamilies, fontSizes, gradients, radii, spacing } from '../theme/tokens';
 
 type Mode = 'menu' | 'text' | 'photo' | 'voice';
@@ -71,7 +72,23 @@ export function QuickOrderSheet({ visible, onClose }: QuickOrderSheetProps) {
   }) {
     setSubmitting(true);
     try {
-      // Find the supermarket delivery service (fallback to first DELIVERY)
+      // 1) Host every media URL via /uploads so the admin can actually open
+      //    them from a different tab/device. blob: URLs are tab-local and die.
+      const hostedImages = payload.imageUrls
+        ? await Promise.all(
+            payload.imageUrls.map((u) => uploadFile(u, { mime: 'image/jpeg' }).then((r) => r.url)),
+          )
+        : undefined;
+      let hostedAudio = payload.audioUri;
+      if (payload.audioUri) {
+        const r = await uploadFile(payload.audioUri, {
+          mime: payload.audioMime ?? 'audio/webm',
+          name: `voice-${Date.now()}.${(payload.audioMime ?? 'audio/webm').split('/')[1]}`,
+        });
+        hostedAudio = r.url;
+      }
+
+      // 2) Find the supermarket delivery service (fallback to first DELIVERY)
       const services = await api.raw.get('/services');
       const list = services.data.data as { id: string; key: string; category: string }[];
       const fallback =
@@ -92,13 +109,13 @@ export function QuickOrderSheet({ visible, onClose }: QuickOrderSheetProps) {
         deliveryLng: 32.8146,
         paymentMethod: 'CASH',
         notes: payload.notes,
-        imageUrls: payload.imageUrls,
+        imageUrls: hostedImages,
         customData: {
           quickOrder: true,
           mode,
-          ...(payload.audioUri
+          ...(hostedAudio
             ? {
-                audioUri: payload.audioUri,
+                audioUri: hostedAudio,
                 audioMime: payload.audioMime,
                 audioDurationMs: payload.audioDurationMs,
               }

@@ -10,13 +10,30 @@ import { env } from '../../config/env.js';
 import { ValidationError } from '../../utils/errors.js';
 import { created } from '../../utils/response.js';
 
+const ALLOWED_MIMES = [
+  // images
+  'image/jpeg',
+  'image/jpg',
+  'image/png',
+  'image/webp',
+  // audio (voice notes recorded via MediaRecorder/expo-av)
+  'audio/webm',
+  'audio/ogg',
+  'audio/mpeg',
+  'audio/mp3',
+  'audio/mp4',
+  'audio/m4a',
+  'audio/wav',
+  'audio/x-wav',
+  'audio/aac',
+];
+
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: env.UPLOAD_MAX_BYTES },
   fileFilter: (_req, file, cb) => {
-    const allowed = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'];
-    if (!allowed.includes(file.mimetype)) {
-      cb(new Error('Only JPG/PNG/WEBP files are allowed'));
+    if (!ALLOWED_MIMES.includes(file.mimetype.toLowerCase())) {
+      cb(new Error(`Mimetype ${file.mimetype} not allowed (allowed: ${ALLOWED_MIMES.join(', ')})`));
       return;
     }
     cb(null, true);
