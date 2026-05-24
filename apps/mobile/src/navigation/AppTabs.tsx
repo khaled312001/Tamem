@@ -29,6 +29,7 @@ export function AppTabs() {
 
   return (
     <Tabs.Navigator
+      initialRouteName="HomeTab"
       screenOptions={{
         headerShown: false,
         tabBarActiveTintColor: colors.brand.red,
@@ -60,20 +61,15 @@ export function AppTabs() {
         },
       }}
     >
+      {/* RTL visual order: tabs render in declaration order (LTR on web), so we
+          declare them in reverse — الرئيسية goes last to land on the right.
+          The deepLink-friendly `name` props don't change, only their order. */}
       <Tabs.Screen
-        name="HomeTab"
-        component={HomeStack}
+        name="ProfileTab"
+        component={ProfileStack}
         options={{
-          title: 'الرئيسية',
-          tabBarIcon: ({ color }) => <Home size={TAB_ICON_SIZE} color={color} />,
-        }}
-      />
-      <Tabs.Screen
-        name="Orders"
-        component={OrdersStack}
-        options={{
-          title: 'طلباتي',
-          tabBarIcon: ({ color }) => <Package size={TAB_ICON_SIZE} color={color} />,
+          title: 'حسابي',
+          tabBarIcon: ({ color }) => <User size={TAB_ICON_SIZE} color={color} />,
         }}
       />
       <Tabs.Screen
@@ -85,11 +81,19 @@ export function AppTabs() {
         }}
       />
       <Tabs.Screen
-        name="ProfileTab"
-        component={ProfileStack}
+        name="Orders"
+        component={OrdersStack}
         options={{
-          title: 'حسابي',
-          tabBarIcon: ({ color }) => <User size={TAB_ICON_SIZE} color={color} />,
+          title: 'طلباتي',
+          tabBarIcon: ({ color }) => <Package size={TAB_ICON_SIZE} color={color} />,
+        }}
+      />
+      <Tabs.Screen
+        name="HomeTab"
+        component={HomeStack}
+        options={{
+          title: 'الرئيسية',
+          tabBarIcon: ({ color }) => <Home size={TAB_ICON_SIZE} color={color} />,
         }}
       />
     </Tabs.Navigator>

@@ -37,10 +37,9 @@ export function QuickOrderFAB() {
 
   return (
     <>
-      <View pointerEvents="box-none" style={styles.layer}>
+      <View style={[styles.layer, { pointerEvents: 'box-none' }]}>
         <Animated.View
-          style={[styles.fabWrap, { transform: [{ scale: pulse }] }]}
-          pointerEvents="box-none"
+          style={[styles.fabWrap, { transform: [{ scale: pulse }], pointerEvents: 'box-none' }]}
         >
           <Pressable
             onPress={() => setOpen(true)}
@@ -61,7 +60,7 @@ export function QuickOrderFAB() {
           </Pressable>
         </Animated.View>
 
-        <View style={styles.labelBubble} pointerEvents="none">
+        <View style={[styles.labelBubble, { pointerEvents: 'none' }]}>
           <Text style={styles.labelText}>طلب سريع</Text>
         </View>
       </View>

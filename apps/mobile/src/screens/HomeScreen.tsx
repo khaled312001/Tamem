@@ -248,7 +248,7 @@ const styles = StyleSheet.create({
     marginTop: spacing.md,
     marginBottom: spacing.sm,
   },
-  services: { flexDirection: 'row', gap: spacing.sm, marginBottom: spacing.md },
+  services: { flexDirection: 'row-reverse', gap: spacing.sm, marginBottom: spacing.md },
   serviceCard: {
     flex: 1,
     backgroundColor: colors.white,

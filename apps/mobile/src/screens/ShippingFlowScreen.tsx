@@ -267,8 +267,7 @@ export function ShippingFlowScreen() {
       {/* Sticky bottom: estimate + CTA */}
       <LinearGradient
         colors={[colors.surface + '00', colors.surface]}
-        style={styles.fade}
-        pointerEvents="none"
+        style={[styles.fade, { pointerEvents: 'none' }]}
       />
       <View style={styles.footer}>
         <View style={styles.estimateRow}>
