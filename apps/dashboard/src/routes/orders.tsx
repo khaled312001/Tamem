@@ -1,6 +1,16 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ChevronLeft, ChevronRight, Loader2, Search } from 'lucide-react';
+import {
+  ArrowRight,
+  ChevronLeft,
+  ChevronRight,
+  DollarSign,
+  Eye,
+  Loader2,
+  Search,
+  Truck,
+} from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { toast } from 'sonner';
 
 import { ORDER_TRANSITIONS, ORDER_STATUS_AR } from '@tamem/types';
@@ -29,12 +39,57 @@ type OrderRow = any;
 
 export function OrdersPage() {
   const qc = useQueryClient();
+  const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [page, setPage] = useState(1);
   const [pageSize] = useState(20);
   const [statusFilter, setStatusFilter] = useState<string>('');
-  const [search, setSearch] = useState('');
-  const [debouncedSearch, setDebouncedSearch] = useState('');
+  const [search, setSearch] = useState(searchParams.get('search') ?? '');
+  const [debouncedSearch, setDebouncedSearch] = useState(searchParams.get('search') ?? '');
   const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null);
+  const [quickPriceFor, setQuickPriceFor] = useState<OrderRow | null>(null);
+  const [quickAssignFor, setQuickAssignFor] = useState<OrderRow | null>(null);
+
+  // Keep URL ?search= in sync with the input so deep links work both ways
+  useEffect(() => {
+    const current = searchParams.get('search') ?? '';
+    if (debouncedSearch && debouncedSearch !== current) {
+      setSearchParams({ search: debouncedSearch }, { replace: true });
+    } else if (!debouncedSearch && current) {
+      setSearchParams({}, { replace: true });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [debouncedSearch]);
+
+  // React to the URL changing externally (e.g. header search bar pushes a new query)
+  useEffect(() => {
+    const fromUrl = searchParams.get('search') ?? '';
+    if (fromUrl !== search) {
+      setSearch(fromUrl);
+      setDebouncedSearch(fromUrl);
+      setPage(1);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams]);
+
+  // Quick advance to next status (skips drawer entirely)
+  const quickAdvance = useMutation({
+    mutationFn: ({ id, status }: { id: string; status: OrderStatus }) =>
+      api.adminUpdateOrderStatus(id, status),
+    onSuccess: () => {
+      toast.success('تم تحديث الحالة');
+      qc.invalidateQueries({ queryKey: ['admin', 'orders'] });
+    },
+    onError: (err: Error) => toast.error(err.message),
+  });
+
+  // Helper: best "next status" suggestion for one-click advance
+  const nextStatusFor = (o: OrderRow): OrderStatus | null => {
+    const allowed = (ORDER_TRANSITIONS[o.status as OrderStatus] ?? []) as OrderStatus[];
+    // Skip terminal/branch states for one-click suggestion
+    const candidates = allowed.filter((s) => s !== 'CANCELLED' && s !== 'REJECTED');
+    return candidates[0] ?? null;
+  };
 
   useEffect(() => {
     const t = setTimeout(() => setDebouncedSearch(search), 300);
@@ -124,37 +179,81 @@ export function OrdersPage() {
                   <th className="px-4 py-3 font-bold">السعر</th>
                   <th className="px-4 py-3 font-bold">السائق</th>
                   <th className="px-4 py-3 font-bold">التاريخ</th>
+                  <th className="px-4 py-3 font-bold text-center">إجراءات</th>
                 </tr>
               </thead>
               <tbody>
-                {(data.items as OrderRow[]).map((o) => (
-                  <tr
-                    key={o.id}
-                    onClick={() => setSelectedOrderId(o.id)}
-                    className="border-b border-border/50 hover:bg-muted/30 cursor-pointer"
-                  >
-                    <td className="px-4 py-3 font-mono text-xs">{o.orderNumber}</td>
-                    <td className="px-4 py-3">
-                      <div className="font-medium">{o.customer?.name ?? '—'}</div>
-                      <div className="text-xs text-muted-foreground" dir="ltr">
-                        {o.customer?.phone ?? ''}
-                      </div>
-                    </td>
-                    <td className="px-4 py-3">{o.service?.nameAr ?? '—'}</td>
-                    <td className="px-4 py-3">
-                      <StatusBadge status={o.status as OrderStatus} />
-                    </td>
-                    <td className="px-4 py-3">
-                      {(o.finalPrice ?? o.quotedPrice)
-                        ? `${Number(o.finalPrice ?? o.quotedPrice).toLocaleString('ar-EG')} ج.م`
-                        : '—'}
-                    </td>
-                    <td className="px-4 py-3">{o.assignedDriver?.name ?? '—'}</td>
-                    <td className="px-4 py-3 text-xs text-muted-foreground">
-                      {new Date(o.createdAt).toLocaleDateString('ar-EG')}
-                    </td>
-                  </tr>
-                ))}
+                {(data.items as OrderRow[]).map((o) => {
+                  const next = nextStatusFor(o);
+                  return (
+                    <tr
+                      key={o.id}
+                      onClick={() => navigate(`/orders/${o.id}`)}
+                      className="border-b border-border/50 hover:bg-muted/30 cursor-pointer"
+                    >
+                      <td className="px-4 py-3 font-mono text-xs">{o.orderNumber}</td>
+                      <td className="px-4 py-3">
+                        <div className="font-medium">{o.customer?.name ?? '—'}</div>
+                        <div className="text-xs text-muted-foreground" dir="ltr">
+                          {o.customer?.phone ?? ''}
+                        </div>
+                      </td>
+                      <td className="px-4 py-3">{o.service?.nameAr ?? '—'}</td>
+                      <td className="px-4 py-3">
+                        <StatusBadge status={o.status as OrderStatus} />
+                      </td>
+                      <td className="px-4 py-3">
+                        {(o.finalPrice ?? o.quotedPrice)
+                          ? `${Number(o.finalPrice ?? o.quotedPrice).toLocaleString('ar-EG')} ج.م`
+                          : '—'}
+                      </td>
+                      <td className="px-4 py-3">{o.assignedDriver?.name ?? '—'}</td>
+                      <td className="px-4 py-3 text-xs text-muted-foreground">
+                        {new Date(o.createdAt).toLocaleDateString('ar-EG')}
+                      </td>
+                      <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
+                        <div className="flex items-center justify-center gap-1">
+                          {/* Status-aware quick action */}
+                          {o.status === 'UNDER_REVIEW' && (
+                            <button
+                              onClick={() => setQuickPriceFor(o)}
+                              title="تسعير سريع"
+                              className="p-1.5 rounded-md hover:bg-brand-red/10 text-brand-red"
+                            >
+                              <DollarSign className="w-4 h-4" />
+                            </button>
+                          )}
+                          {(o.status === 'ACCEPTED' || o.status === 'PRICED') && (
+                            <button
+                              onClick={() => setQuickAssignFor(o)}
+                              title="تعيين سائق"
+                              className="p-1.5 rounded-md hover:bg-blue-50 text-blue-600"
+                            >
+                              <Truck className="w-4 h-4" />
+                            </button>
+                          )}
+                          {next && !['UNDER_REVIEW', 'ACCEPTED', 'PRICED'].includes(o.status) && (
+                            <button
+                              onClick={() => quickAdvance.mutate({ id: o.id, status: next })}
+                              disabled={quickAdvance.isPending}
+                              title={`→ ${ORDER_STATUS_AR[next]}`}
+                              className="p-1.5 rounded-md hover:bg-green-50 text-green-600"
+                            >
+                              <ArrowRight className="w-4 h-4" />
+                            </button>
+                          )}
+                          <button
+                            onClick={() => navigate(`/orders/${o.id}`)}
+                            title="فتح التفاصيل"
+                            className="p-1.5 rounded-md hover:bg-muted"
+                          >
+                            <Eye className="w-4 h-4" />
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -192,6 +291,25 @@ export function OrdersPage() {
 
       {selectedOrderId && (
         <OrderDetailDrawer orderId={selectedOrderId} onClose={() => setSelectedOrderId(null)} />
+      )}
+
+      {quickPriceFor && (
+        <PriceDialog
+          orderId={quickPriceFor.id}
+          onClose={() => {
+            setQuickPriceFor(null);
+            qc.invalidateQueries({ queryKey: ['admin', 'orders'] });
+          }}
+        />
+      )}
+      {quickAssignFor && (
+        <AssignDriverDialog
+          orderId={quickAssignFor.id}
+          onClose={() => {
+            setQuickAssignFor(null);
+            qc.invalidateQueries({ queryKey: ['admin', 'orders'] });
+          }}
+        />
       )}
     </div>
   );

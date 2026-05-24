@@ -3,6 +3,7 @@ import { Loader2, Plus, Store } from 'lucide-react';
 import { useState } from 'react';
 import { toast } from 'sonner';
 
+import { MapPicker } from '../components/MapPicker.js';
 import { Badge } from '../components/ui/Badge.js';
 import { Button } from '../components/ui/Button.js';
 import { Dialog } from '../components/ui/Dialog.js';
@@ -182,22 +183,24 @@ function CreateMerchantDialog({ onClose }: { onClose: () => void }) {
             />
           </Field>
         </div>
-        <Field label="خط العرض (lat)" required>
-          <Input
-            type="number"
-            step="any"
-            value={form.lat}
-            onChange={(e) => setForm({ ...form, lat: Number(e.target.value) })}
-          />
-        </Field>
-        <Field label="خط الطول (lng)" required>
-          <Input
-            type="number"
-            step="any"
-            value={form.lng}
-            onChange={(e) => setForm({ ...form, lng: Number(e.target.value) })}
-          />
-        </Field>
+        <div className="col-span-2">
+          <Field label="موقع المتجر على الخريطة" required>
+            <MapPicker
+              lat={form.lat}
+              lng={form.lng}
+              initialQuery={form.addressLine || form.storeNameAr}
+              onChange={({ lat, lng, address }) =>
+                setForm((f) => ({
+                  ...f,
+                  lat,
+                  lng,
+                  // Auto-fill address line only if empty (don't clobber typed input)
+                  addressLine: f.addressLine || address || f.addressLine,
+                }))
+              }
+            />
+          </Field>
+        </div>
         <Field label="المحافظة" required>
           <Input
             value={form.governorate}

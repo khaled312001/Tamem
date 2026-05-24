@@ -24,6 +24,7 @@
     "@prisma/client": "^6.1.0",
     "@tamem/types": "workspace:*",
     "@tamem/validators": "workspace:*",
+    "@wppconnect-team/wppconnect": "^2.2.0",
     "bcryptjs": "^2.4.3",
     "compression": "^1.7.5",
     "cors": "^2.8.5",

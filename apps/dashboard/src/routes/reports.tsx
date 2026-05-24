@@ -1,6 +1,8 @@
 import { useQuery } from '@tanstack/react-query';
-import { Download } from 'lucide-react';
+import { Download, Printer } from 'lucide-react';
 import { useState } from 'react';
+
+import { printReport } from '../lib/printReport.js';
 import {
   Bar,
   BarChart,
@@ -35,13 +37,29 @@ const PIE_COLORS = ['#E0301E', '#EC7A2C', '#F2A93B', '#3B82F6', '#10B981', '#8B5
 export function ReportsPage() {
   const [tab, setTab] = useState<(typeof TABS)[number]['value']>('revenue');
 
+  const tabLabel = TABS.find((t) => t.value === tab)?.label ?? '';
   return (
-    <div className="space-y-4">
+    <div className="space-y-4" id="report-printable">
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-black text-brand-dark">التقارير</h1>
+        <div>
+          <h1 className="text-2xl font-black text-brand-dark">تقرير {tabLabel}</h1>
+          <p className="text-xs text-muted-foreground mt-1">
+            تميم للتوصيل ·{' '}
+            {new Date().toLocaleDateString('ar-EG', {
+              day: 'numeric',
+              month: 'long',
+              year: 'numeric',
+            })}
+          </p>
+        </div>
+        <div data-print="hide">
+          <Button onClick={() => printReport('report-printable', `تقرير ${tabLabel} - تميم`)}>
+            <Printer className="w-4 h-4" /> طباعة / PDF
+          </Button>
+        </div>
       </div>
 
-      <div className="bg-white rounded-xl border border-border p-3 flex gap-1">
+      <div className="bg-white rounded-xl border border-border p-3 flex gap-1" data-print="hide">
         {TABS.map((t) => (
           <button
             key={t.value}

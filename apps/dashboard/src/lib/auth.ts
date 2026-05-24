@@ -8,6 +8,7 @@ interface AuthState {
   tokens: AuthTokens | null;
   setSession: (user: User, tokens: AuthTokens) => void;
   setTokens: (tokens: AuthTokens) => void;
+  setUser: (user: User) => void;
   clear: () => void;
 }
 
@@ -18,6 +19,7 @@ export const useAuth = create<AuthState>()(
       tokens: null,
       setSession: (user, tokens) => set({ user, tokens }),
       setTokens: (tokens) => set({ tokens }),
+      setUser: (user) => set({ user }),
       clear: () => set({ user: null, tokens: null }),
     }),
     { name: 'tamem-auth' },

@@ -40,11 +40,26 @@ function messagesFor(order: Order, status: OrderStatus): StatusMessages | null {
         titleAr: 'طلبك قيد المراجعة',
         bodyAr: `استلمنا طلبك ${num} وجاري المراجعة.`,
         channel: 'IN_APP',
+        whatsapp: true,
       };
     case 'PRICED':
       return {
         titleAr: 'تم تسعير طلبك',
         bodyAr: `طلب ${num} تم تسعيره بـ ${price}. ادخل التطبيق للموافقة.`,
+        channel: 'IN_APP',
+        whatsapp: true,
+      };
+    case 'AWAITING_CUSTOMER_APPROVAL':
+      return {
+        titleAr: 'بانتظار موافقتك',
+        bodyAr: `طلب ${num} جاهز — برجاء الموافقة من التطبيق لبدء التنفيذ.`,
+        channel: 'IN_APP',
+        whatsapp: true,
+      };
+    case 'ACCEPTED':
+      return {
+        titleAr: 'تم قبول الطلب',
+        bodyAr: `طلب ${num} تم قبوله. هنبدأ التجهيز فوراً.`,
         channel: 'IN_APP',
         whatsapp: true,
       };
@@ -60,12 +75,14 @@ function messagesFor(order: Order, status: OrderStatus): StatusMessages | null {
         titleAr: 'تم استلام طلبك',
         bodyAr: `استلم السائق طلب ${num} وفي الطريق إليك.`,
         channel: 'IN_APP',
+        whatsapp: true,
       };
     case 'IN_ROUTE':
       return {
         titleAr: 'الطلب في الطريق',
         bodyAr: `طلب ${num} وصل لمنطقتك قريباً.`,
         channel: 'IN_APP',
+        whatsapp: true,
       };
     case 'DELIVERED':
       return {
@@ -79,18 +96,21 @@ function messagesFor(order: Order, status: OrderStatus): StatusMessages | null {
         titleAr: 'تم إكمال الطلب',
         bodyAr: `طلب ${num} مكتمل. نتمنى أن نخدمك مرة أخرى.`,
         channel: 'IN_APP',
+        whatsapp: true,
       };
     case 'CANCELLED':
       return {
         titleAr: 'تم إلغاء الطلب',
         bodyAr: `تم إلغاء طلب ${num}.${order.cancellationReason ? ` السبب: ${order.cancellationReason}` : ''}`,
         channel: 'IN_APP',
+        whatsapp: true,
       };
     case 'REJECTED':
       return {
         titleAr: 'تم رفض الطلب',
         bodyAr: `للأسف لم نتمكن من تنفيذ طلب ${num}. تواصل معنا للتفاصيل.`,
         channel: 'IN_APP',
+        whatsapp: true,
       };
     default:
       return null;

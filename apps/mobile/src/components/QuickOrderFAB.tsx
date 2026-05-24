@@ -1,21 +1,20 @@
 import { LinearGradient } from 'expo-linear-gradient';
-import { Plus } from 'lucide-react-native';
+import { Zap } from 'lucide-react-native';
 import { useEffect, useRef, useState } from 'react';
-import { Animated, Platform, Pressable, StyleSheet, View } from 'react-native';
+import { Animated, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { QuickOrderSheet } from './QuickOrderSheet';
 
-import { colors, gradients, spacing } from '../theme/tokens';
+import { colors, fontFamilies, gradients, spacing } from '../theme/tokens';
 
 const spacingMd = spacing.md;
 
 /**
- * Floating Action Button — visible on every screen (HomeStack root level).
- * Tap → opens QuickOrderSheet with 3 instant-order modes (text / photo / voice).
+ * Floating Action Button — circular lightning icon with "طلب سريع" label
+ * underneath. Lives inside HomeScreen only.
  */
 export function QuickOrderFAB() {
   const [open, setOpen] = useState(false);
-  const rotate = useRef(new Animated.Value(0)).current;
   const pulse = useRef(new Animated.Value(1)).current;
 
   useEffect(() => {
@@ -36,16 +35,6 @@ export function QuickOrderFAB() {
     ).start();
   }, [pulse]);
 
-  useEffect(() => {
-    Animated.timing(rotate, {
-      toValue: open ? 1 : 0,
-      duration: 220,
-      useNativeDriver: Platform.OS !== 'web',
-    }).start();
-  }, [open, rotate]);
-
-  const spin = rotate.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '45deg'] });
-
   return (
     <>
       <View pointerEvents="box-none" style={styles.layer}>
@@ -54,12 +43,12 @@ export function QuickOrderFAB() {
           pointerEvents="box-none"
         >
           <Pressable
-            onPress={() => setOpen((p) => !p)}
+            onPress={() => setOpen(true)}
             style={({ pressed }) => [
               styles.fabPressable,
               pressed && { transform: [{ scale: 0.95 }] },
             ]}
-            accessibilityLabel="فتح الطلب السريع"
+            accessibilityLabel="طلب سريع"
           >
             <LinearGradient
               colors={gradients.brand}
@@ -67,12 +56,14 @@ export function QuickOrderFAB() {
               end={{ x: 1, y: 1 }}
               style={styles.fabInner}
             >
-              <Animated.View style={{ transform: [{ rotate: spin }] }}>
-                <Plus size={28} color={colors.white} strokeWidth={2.5} />
-              </Animated.View>
+              <Zap size={28} color={colors.white} strokeWidth={2.5} fill={colors.white} />
             </LinearGradient>
           </Pressable>
         </Animated.View>
+
+        <View style={styles.labelBubble} pointerEvents="none">
+          <Text style={styles.labelText}>طلب سريع</Text>
+        </View>
       </View>
 
       <QuickOrderSheet visible={open} onClose={() => setOpen(false)} />
@@ -85,6 +76,7 @@ const styles = StyleSheet.create({
     position: 'absolute',
     bottom: 24,
     insetInlineStart: spacingMd, // RTL-aware: hugs the right side in Arabic
+    alignItems: 'center',
     zIndex: 50,
   },
   fabWrap: {
@@ -98,7 +90,7 @@ const styles = StyleSheet.create({
   fabPressable: {
     width: '100%',
     height: '100%',
-    borderRadius: 32,
+    borderRadius: 30,
     overflow: 'hidden',
   },
   fabInner: {
@@ -107,6 +99,21 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     borderWidth: 3,
     borderColor: colors.white,
-    borderRadius: 32,
+    borderRadius: 30,
+  },
+  labelBubble: {
+    marginTop: 6,
+    backgroundColor: colors.brand.dark,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 3,
+    borderRadius: 99,
+    ...(Platform.OS === 'web' ? { boxShadow: '0 4px 10px rgba(0,0,0,0.18)' } : { elevation: 4 }),
+  },
+  labelText: {
+    color: colors.white,
+    fontFamily: fontFamilies.bodyExtraBold,
+    fontSize: 11,
+    textAlign: 'center',
+    lineHeight: 14,
   },
 });

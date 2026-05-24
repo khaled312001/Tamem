@@ -31,6 +31,16 @@ const envSchema = z.object({
   UPLOAD_MAX_BYTES: z.coerce.number().int().positive().default(10_485_760),
 
   DRIVER_CASH_LIMIT: z.coerce.number().nonnegative().default(1000),
+
+  // Paymob (Egyptian payment gateway — only Vodafone Cash + InstaPay enabled)
+  // Variable names match Nafezly/Paymob conventions so credentials can be copied
+  // straight from the Paymob dashboard or a Nafezly-shaped .env.
+  // Leave empty to disable online payments; cash-on-delivery still works.
+  PAYMOB_API_KEY: z.string().optional(),
+  PAYMOB_WALLET_INTEGRATION_ID: z.coerce.number().int().positive().optional(),
+  PAYMOB_INSTAPAY_INTEGRATION_ID: z.coerce.number().int().positive().optional(),
+  PAYMOB_IFRAME_ID: z.coerce.number().int().positive().optional(),
+  PAYMOB_HMAC: z.string().optional(),
 });
 
 const parsed = envSchema.safeParse(process.env);

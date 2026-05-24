@@ -45,6 +45,12 @@ export class ValidationError extends AppError {
   }
 }
 
+export class BadRequestError extends AppError {
+  constructor(code: string, messageAr = 'طلب غير صحيح') {
+    super(code, messageAr, 400, { messageAr });
+  }
+}
+
 export class ConflictError extends AppError {
   constructor(message: string, messageAr = 'تعارض في البيانات') {
     super('CONFLICT', message, 409, { messageAr });

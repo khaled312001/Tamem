@@ -274,7 +274,7 @@ export function ImageFieldInput({ field, control, errors }: BaseProps) {
             // Lazy import to keep startup light
             const ImagePicker = await import('expo-image-picker');
             const result = await ImagePicker.launchImageLibraryAsync({
-              mediaTypes: ImagePicker.MediaTypeOptions.Images,
+              mediaTypes: ['images'],
               quality: 0.85,
             });
             if (result.canceled || !result.assets?.[0]) return;

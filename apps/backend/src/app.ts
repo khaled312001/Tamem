@@ -24,6 +24,11 @@ import { notificationsRouter } from './modules/notifications/notifications.route
 import { adminOffersRouter } from './modules/offers/offers.routes.js';
 import { adminOrdersRouter } from './modules/orders/orders.admin.routes.js';
 import { ordersRouter, pricingRouter } from './modules/orders/orders.routes.js';
+import {
+  paymentsCustomerRouter,
+  paymentsPublicRouter,
+  paymobWebhookRouter,
+} from './modules/payments/paymob.routes.js';
 import { adminPaymentsRouter } from './modules/payments/payments.routes.js';
 import { adminPricingRulesRouter } from './modules/pricing/pricing-rules.routes.js';
 import { adminProductsRouter } from './modules/products/products.routes.js';
@@ -32,6 +37,7 @@ import { adminServicesRouter, publicServicesRouter } from './modules/services/se
 import { adminSettingsRouter } from './modules/settings/settings.routes.js';
 import { uploadsRouter } from './modules/uploads/uploads.routes.js';
 import { meRouter } from './modules/users/users.routes.js';
+import { whatsappRouter } from './modules/whatsapp/whatsapp.routes.js';
 import { logger } from './utils/logger.js';
 import { ok } from './utils/response.js';
 
@@ -82,6 +88,9 @@ export function createApp(): Express {
   v1.use('/pricing', pricingRouter);
   v1.use('/uploads', uploadsRouter);
   v1.use('/notifications', notificationsRouter);
+  v1.use('/payments', paymentsPublicRouter);
+  v1.use('/payments', paymentsCustomerRouter);
+  v1.use('/payments/webhook', paymobWebhookRouter);
 
   // ----- Admin namespace -----
   const adminRouter = express.Router();
@@ -100,6 +109,7 @@ export function createApp(): Express {
   adminRouter.use('/settings', adminSettingsRouter);
   adminRouter.use('/categories', adminCategoriesRouter);
   adminRouter.use('/offers', adminOffersRouter);
+  adminRouter.use('/whatsapp', whatsappRouter);
   v1.use('/admin', adminRouter);
 
   app.use('/api/v1', v1);

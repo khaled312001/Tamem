@@ -10,9 +10,7 @@ import type { Service } from '@tamem/types';
 import { DynamicForm } from '../components/DynamicForm/DynamicForm';
 import { GradientButton } from '../components/GradientButton';
 import { api } from '../lib/api';
-import { openWhatsAppConfirmation } from '../lib/whatsapp';
 import type { HomeStackParamList } from '../navigation/HomeStack';
-import { useAuth } from '../stores/auth';
 import { colors, fontFamilies, fontSizes, radii, spacing } from '../theme/tokens';
 
 type RouteParam = RouteProp<HomeStackParamList, 'DynamicServiceFlow'>;
@@ -21,7 +19,6 @@ type NavProp = NativeStackNavigationProp<HomeStackParamList, 'DynamicServiceFlow
 export function DynamicServiceFlowScreen() {
   const route = useRoute<RouteParam>();
   const navigation = useNavigation<NavProp>();
-  const user = useAuth((s) => s.user);
   const { serviceKey, serviceId, merchantId } = route.params;
 
   const [estimatedPrice, setEstimatedPrice] = useState<number | null>(null);
@@ -45,18 +42,24 @@ export function DynamicServiceFlowScreen() {
   const createOrder = useMutation({
     mutationFn: (payload: Record<string, unknown>) =>
       api.raw.post('/orders', payload).then((r) => r.data.data),
-    onSuccess: async (order) => {
-      if (user) {
-        await openWhatsAppConfirmation({
-          orderNumber: order.orderNumber,
-          serviceNameAr: service?.nameAr ?? '',
-          customerName: user.name,
-          estimatedPrice: estimatedPrice ?? undefined,
-        });
+    onSuccess: (order) => {
+      // Navigate immediately — Alert.alert on web is a synchronous window.alert
+      // that doesn't honor button callbacks reliably, so we jump straight to
+      // the tracking screen and let it announce the success.
+      try {
+        const parent = navigation.getParent();
+        if (parent) {
+          parent.navigate('Orders', {
+            screen: 'OrderTracking',
+            params: { orderId: order.id, justCreated: true },
+          } as never);
+        } else {
+          // Fallback for any nav structure surprise — at least pop back home
+          navigation.popToTop();
+        }
+      } catch {
+        navigation.popToTop();
       }
-      Alert.alert('تم', `طلبك ${order.orderNumber} تم استلامه`, [
-        { text: 'تتبع الطلب', onPress: () => navigation.popToTop() },
-      ]);
     },
     onError: (err) => {
       Alert.alert('خطأ', err instanceof Error ? err.message : 'فشل إرسال الطلب');
@@ -82,14 +85,57 @@ export function DynamicServiceFlowScreen() {
   let formValues: Record<string, unknown> = {};
   let submitForm = () => {};
 
+  // Default Qift center — real coords are taken from the dynamic form if the
+  // service exposes a LOCATION field, otherwise we fall back to these so the
+  // backend's required deliveryLat/Lng/address validation passes.
+  const QIFT_LAT = 26.0297;
+  const QIFT_LNG = 32.8146;
+
   const handleSubmit = async (values: Record<string, unknown>) => {
-    const payload: Record<string, unknown> = {
-      serviceId: service.id,
-      category: service.category,
-      paymentMethod: 'CASH',
-      customData: values,
-    };
-    if (merchantId) payload.merchantId = merchantId;
+    // Pull standard fields out of customData if present — they map 1:1 to top-level
+    const notes =
+      typeof values.notes === 'string'
+        ? values.notes
+        : typeof values.details === 'string'
+          ? values.details
+          : (Object.values(values).find((v): v is string => typeof v === 'string') ?? '');
+
+    const imageUrls = Array.isArray(values.imageUrls)
+      ? (values.imageUrls.filter((u) => typeof u === 'string') as string[])
+      : Array.isArray(values.images)
+        ? (values.images.filter((u) => typeof u === 'string') as string[])
+        : undefined;
+
+    const address =
+      (typeof values.deliveryAddress === 'string' && values.deliveryAddress.trim()) ||
+      'الرجاء تأكيد العنوان مع الإدارة';
+    const lat = typeof values.deliveryLat === 'number' ? values.deliveryLat : QIFT_LAT;
+    const lng = typeof values.deliveryLng === 'number' ? values.deliveryLng : QIFT_LNG;
+
+    let payload: Record<string, unknown>;
+    if (service.category === 'DELIVERY') {
+      payload = {
+        category: 'DELIVERY',
+        serviceId: service.id,
+        deliveryAddress: address,
+        deliveryLat: lat,
+        deliveryLng: lng,
+        notes: notes || undefined,
+        imageUrls,
+        paymentMethod: 'CASH',
+        customData: values,
+        ...(merchantId ? { merchantId } : {}),
+      };
+    } else {
+      // SHIPPING and MERCHANT flows have their own dedicated screens. If we land
+      // here for them, send a minimal best-effort payload.
+      payload = {
+        category: service.category,
+        serviceId: service.id,
+        paymentMethod: 'CASH',
+        customData: values,
+      };
+    }
     await createOrder.mutateAsync(payload);
   };
 

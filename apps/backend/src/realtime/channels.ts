@@ -29,3 +29,17 @@ export function emitNewAlert(io: SocketServer | undefined, alert: { id: string }
   if (!io) return;
   io.to('admin:alerts').emit('alert:new', alert);
 }
+
+export function emitWhatsAppStatus(
+  io: SocketServer | undefined,
+  payload: {
+    status: string;
+    qrDataUrl: string | null;
+    phone: string | null;
+    lastError: string | null;
+  },
+) {
+  if (!io) return;
+  io.to('admin:orders').emit('whatsapp:status', payload);
+  io.to('admin:alerts').emit('whatsapp:status', payload);
+}

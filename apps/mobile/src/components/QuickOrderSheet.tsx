@@ -1,4 +1,4 @@
-import { Audio } from 'expo-av';
+import { useNavigation } from '@react-navigation/native';
 import * as ImagePicker from 'expo-image-picker';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Camera, Mic, Pause, Pen, Play, Send, Trash2, X } from 'lucide-react-native';
@@ -18,9 +18,8 @@ import {
   View,
 } from 'react-native';
 
+import { createRecorder, formatDuration, type Recorder } from '../lib/audioRecorder';
 import { api } from '../lib/api';
-import { openWhatsAppConfirmation } from '../lib/whatsapp';
-import { useAuth } from '../stores/auth';
 import { colors, fontFamilies, fontSizes, gradients, radii, spacing } from '../theme/tokens';
 
 type Mode = 'menu' | 'text' | 'photo' | 'voice';
@@ -34,16 +33,18 @@ interface QuickOrderSheetProps {
  * Bottom sheet with 3 instant-order modes:
  * 1. اكتب — textarea + delivery address
  * 2. صورة — image picker + optional caption
- * 3. صوت — voice note recording (max 60s)
+ * 3. صوت — voice note (works on web via MediaRecorder, native via expo-av)
  *
- * On submit: POST /orders with category=DELIVERY + customData carrying the input.
- * Backend admin reviews and prices manually.
+ * Submits silently to POST /orders with category=DELIVERY + customData.
+ * Then navigates to OrderTracking — no WhatsApp prompt.
  */
 export function QuickOrderSheet({ visible, onClose }: QuickOrderSheetProps) {
+  const navigation = useNavigation<{
+    getParent: () => { navigate: (...a: unknown[]) => void } | undefined;
+  }>();
   const [mode, setMode] = useState<Mode>('menu');
   const [submitting, setSubmitting] = useState(false);
 
-  const user = useAuth((s) => s.user);
   const slide = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
@@ -54,7 +55,6 @@ export function QuickOrderSheet({ visible, onClose }: QuickOrderSheetProps) {
       useNativeDriver: Platform.OS !== 'web',
     }).start();
     if (!visible) {
-      // Reset to menu when closed so the user lands on choices next time
       setTimeout(() => setMode('menu'), 250);
     }
   }, [visible, slide]);
@@ -62,14 +62,27 @@ export function QuickOrderSheet({ visible, onClose }: QuickOrderSheetProps) {
   const translateY = slide.interpolate({ inputRange: [0, 1], outputRange: [600, 0] });
   const opacity = slide.interpolate({ inputRange: [0, 1], outputRange: [0, 1] });
 
-  async function submitOrder(payload: { notes?: string; imageUrls?: string[]; audioUri?: string }) {
+  async function submitOrder(payload: {
+    notes?: string;
+    imageUrls?: string[];
+    audioUri?: string;
+    audioMime?: string;
+    audioDurationMs?: number;
+  }) {
     setSubmitting(true);
     try {
-      // Find the supermarket delivery service (fallback default)
+      // Find the supermarket delivery service (fallback to first DELIVERY)
       const services = await api.raw.get('/services');
+      const list = services.data.data as { id: string; key: string; category: string }[];
       const fallback =
-        services.data.data.find((s: { key: string }) => s.key === 'delivery-supermarket') ??
-        services.data.data[0];
+        list.find((s) => s.key === 'delivery-supermarket') ??
+        list.find((s) => s.category === 'DELIVERY') ??
+        list[0];
+
+      if (!fallback) {
+        Alert.alert('لا توجد خدمات متاحة حالياً');
+        return;
+      }
 
       const res = await api.raw.post('/orders', {
         category: 'DELIVERY',
@@ -83,24 +96,29 @@ export function QuickOrderSheet({ visible, onClose }: QuickOrderSheetProps) {
         customData: {
           quickOrder: true,
           mode,
-          ...(payload.audioUri ? { audioUri: payload.audioUri } : {}),
+          ...(payload.audioUri
+            ? {
+                audioUri: payload.audioUri,
+                audioMime: payload.audioMime,
+                audioDurationMs: payload.audioDurationMs,
+              }
+            : {}),
         },
       });
       const order = res.data.data;
 
-      if (user) {
-        await openWhatsAppConfirmation({
-          orderNumber: order.orderNumber,
-          serviceNameAr: 'طلب سريع',
-          customerName: user.name,
-        });
-      }
-
-      Alert.alert(
-        'تم إرسال طلبك ✓',
-        `رقم الطلب: ${order.orderNumber}\nالإدارة هتراجع طلبك وتسعّره.`,
-      );
       onClose();
+      // Navigate straight to OrderTracking — Alert button callbacks are
+      // unreliable on web (window.alert collapses to a plain dialog).
+      try {
+        const parent = navigation.getParent?.();
+        parent?.navigate('Orders', {
+          screen: 'OrderTracking',
+          params: { orderId: order.id, justCreated: true },
+        });
+      } catch {
+        // ignore — sheet is already closed
+      }
     } catch (err) {
       Alert.alert('خطأ', err instanceof Error ? err.message : 'فشل إرسال الطلب');
     } finally {
@@ -118,7 +136,6 @@ export function QuickOrderSheet({ visible, onClose }: QuickOrderSheetProps) {
         <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
           <View style={styles.handle} />
 
-          {/* Header */}
           <View style={styles.header}>
             <View style={{ flex: 1 }}>
               <Text style={styles.title}>طلب سريع ⚡</Text>
@@ -148,7 +165,14 @@ export function QuickOrderSheet({ visible, onClose }: QuickOrderSheetProps) {
             <VoiceMode
               submitting={submitting}
               onBack={() => setMode('menu')}
-              onSubmit={(audioUri) => submitOrder({ audioUri, notes: 'طلب صوتي — راجع التسجيل' })}
+              onSubmit={(uri, mime, durationMs) =>
+                submitOrder({
+                  audioUri: uri,
+                  audioMime: mime,
+                  audioDurationMs: durationMs,
+                  notes: 'طلب صوتي — راجع التسجيل المرفق',
+                })
+              }
             />
           )}
         </KeyboardAvoidingView>
@@ -205,9 +229,7 @@ function ModeMenu({ onPick }: { onPick: (m: Mode) => void }) {
           </View>
         </Pressable>
       ))}
-      <Text style={styles.helperText}>
-        ⓘ الإدارة هتراجع الطلب وتسعّره خلال دقائق، وتبعتلك تأكيد على WhatsApp.
-      </Text>
+      <Text style={styles.helperText}>ⓘ الإدارة هتراجع الطلب وتسعّره خلال دقائق.</Text>
     </View>
   );
 }
@@ -272,7 +294,8 @@ function PhotoMode({
     const launcher =
       source === 'camera' ? ImagePicker.launchCameraAsync : ImagePicker.launchImageLibraryAsync;
     const res = await launcher({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      // SDK 52 accepts string-array form; the enum form is deprecated.
+      mediaTypes: ['images'],
       quality: 0.85,
     });
     if (!res.canceled && res.assets?.[0]) {
@@ -342,42 +365,34 @@ function VoiceMode({
 }: {
   submitting: boolean;
   onBack: () => void;
-  onSubmit: (audioUri: string) => void;
+  onSubmit: (uri: string, mime: string, durationMs: number) => void;
 }) {
-  const [recording, setRecording] = useState<Audio.Recording | null>(null);
-  const [uri, setUri] = useState<string | null>(null);
+  const recorderRef = useRef<Recorder | null>(null);
+  const [recording, setRecording] = useState(false);
+  const [done, setDone] = useState<{ uri: string; mime: string; durationMs: number } | null>(null);
   const [duration, setDuration] = useState(0);
   const [playing, setPlaying] = useState(false);
-  const [sound, setSound] = useState<Audio.Sound | null>(null);
   const tickRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const audioElRef = useRef<HTMLAudioElement | null>(null);
+  const soundRef = useRef<unknown>(null);
 
   useEffect(() => {
     return () => {
       if (tickRef.current) clearInterval(tickRef.current);
-      sound?.unloadAsync().catch(() => undefined);
-      recording?.stopAndUnloadAsync().catch(() => undefined);
+      recorderRef.current?.cancel().catch(() => undefined);
+      audioElRef.current?.pause();
+      audioElRef.current = null;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const startRecording = async () => {
-    if (Platform.OS === 'web') {
-      Alert.alert('غير متاح على الويب', 'تسجيل الصوت متاح على تطبيق الهاتف فقط.');
-      return;
-    }
     try {
-      const perm = await Audio.requestPermissionsAsync();
-      if (!perm.granted) {
-        Alert.alert('لا يوجد إذن', 'فعّل صلاحية الميكروفون');
-        return;
-      }
-      await Audio.setAudioModeAsync({ allowsRecordingIOS: true, playsInSilentModeIOS: true });
-      const { recording: rec } = await Audio.Recording.createAsync(
-        Audio.RecordingOptionsPresets.HIGH_QUALITY,
-      );
-      setRecording(rec);
+      const rec = createRecorder();
+      await rec.start();
+      recorderRef.current = rec;
+      setRecording(true);
       setDuration(0);
-      setUri(null);
+      setDone(null);
       tickRef.current = setInterval(() => {
         setDuration((d) => {
           const next = d + 100;
@@ -389,7 +404,7 @@ function VoiceMode({
         });
       }, 100);
     } catch (err) {
-      Alert.alert('خطأ', err instanceof Error ? err.message : 'فشل بدء التسجيل');
+      Alert.alert('تعذّر التسجيل', err instanceof Error ? err.message : 'حدث خطأ');
     }
   };
 
@@ -398,46 +413,70 @@ function VoiceMode({
       clearInterval(tickRef.current);
       tickRef.current = null;
     }
-    if (!recording) return;
-    await recording.stopAndUnloadAsync();
-    setUri(recording.getURI());
-    setRecording(null);
+    const rec = recorderRef.current;
+    if (!rec) return;
+    try {
+      const result = await rec.stop();
+      setDone(result);
+    } catch (err) {
+      Alert.alert('خطأ', err instanceof Error ? err.message : 'فشل إيقاف التسجيل');
+    } finally {
+      recorderRef.current = null;
+      setRecording(false);
+    }
   };
 
   const togglePlay = async () => {
-    if (!uri) return;
-    if (playing && sound) {
-      await sound.pauseAsync();
+    if (!done) return;
+    if (Platform.OS === 'web') {
+      if (!audioElRef.current) {
+        audioElRef.current = new Audio(done.uri);
+        audioElRef.current.onended = () => setPlaying(false);
+      }
+      if (playing) {
+        audioElRef.current.pause();
+        setPlaying(false);
+      } else {
+        await audioElRef.current.play();
+        setPlaying(true);
+      }
+      return;
+    }
+    // Native: use expo-av Sound
+    const { Audio: AudioModule } = await import('expo-av');
+    if (playing && soundRef.current) {
+      const s = soundRef.current as { pauseAsync: () => Promise<void> };
+      await s.pauseAsync();
       setPlaying(false);
       return;
     }
-    if (sound) {
-      await sound.playAsync();
+    if (soundRef.current) {
+      const s = soundRef.current as { playAsync: () => Promise<void> };
+      await s.playAsync();
       setPlaying(true);
       return;
     }
-    const { sound: newSound } = await Audio.Sound.createAsync({ uri });
-    setSound(newSound);
-    newSound.setOnPlaybackStatusUpdate((status) => {
+    const { sound } = await AudioModule.Sound.createAsync({ uri: done.uri });
+    soundRef.current = sound;
+    sound.setOnPlaybackStatusUpdate((status) => {
       if ('didJustFinish' in status && status.didJustFinish) setPlaying(false);
     });
-    await newSound.playAsync();
+    await sound.playAsync();
     setPlaying(true);
   };
 
   const reset = async () => {
-    if (sound) {
-      await sound.unloadAsync();
-      setSound(null);
+    if (Platform.OS === 'web' && audioElRef.current) {
+      audioElRef.current.pause();
+      audioElRef.current = null;
+    } else if (soundRef.current) {
+      const s = soundRef.current as { unloadAsync: () => Promise<void> };
+      await s.unloadAsync().catch(() => undefined);
+      soundRef.current = null;
     }
-    setUri(null);
+    setDone(null);
     setDuration(0);
     setPlaying(false);
-  };
-
-  const fmt = (ms: number) => {
-    const s = Math.floor(ms / 1000);
-    return `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
   };
 
   return (
@@ -448,7 +487,7 @@ function VoiceMode({
 
       <View style={styles.voiceCard}>
         <Text style={styles.voiceTimer}>
-          {fmt(duration)} {duration > 0 && `/ ${fmt(MAX_RECORDING_MS)}`}
+          {formatDuration(duration)} {duration > 0 && `/ ${formatDuration(MAX_RECORDING_MS)}`}
         </Text>
 
         {recording ? (
@@ -456,7 +495,7 @@ function VoiceMode({
             <View style={styles.recDot} />
             <Text style={styles.recBtnText}>اضغط لإيقاف التسجيل</Text>
           </Pressable>
-        ) : uri ? (
+        ) : done ? (
           <View style={styles.voiceActions}>
             <Pressable onPress={togglePlay} style={styles.voiceAction}>
               {playing ? (
@@ -482,9 +521,9 @@ function VoiceMode({
       </View>
 
       <SendButton
-        disabled={!uri || submitting}
+        disabled={!done || submitting}
         loading={submitting}
-        onPress={() => uri && onSubmit(uri)}
+        onPress={() => done && onSubmit(done.uri, done.mime, done.durationMs)}
       />
     </View>
   );
@@ -548,16 +587,8 @@ const styles = StyleSheet.create({
     alignSelf: 'center',
     marginBottom: spacing.md,
   },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: spacing.md,
-  },
-  title: {
-    fontSize: fontSizes.lg,
-    fontFamily: fontFamilies.headingBlack,
-    color: colors.ink,
-  },
+  header: { flexDirection: 'row', alignItems: 'center', marginBottom: spacing.md },
+  title: { fontSize: fontSizes.lg, fontFamily: fontFamilies.headingBlack, color: colors.ink },
   subtitle: {
     fontSize: fontSizes.xs,
     color: colors.text.muted,
@@ -591,11 +622,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  modeTitle: {
-    fontSize: fontSizes.md,
-    fontFamily: fontFamilies.headingBold,
-    color: colors.ink,
-  },
+  modeTitle: { fontSize: fontSizes.md, fontFamily: fontFamilies.headingBold, color: colors.ink },
   modeSub: {
     fontSize: fontSizes.xs,
     color: colors.text.muted,
@@ -613,11 +640,7 @@ const styles = StyleSheet.create({
   },
   modeContent: { gap: spacing.md },
   backLink: { alignSelf: 'flex-start' },
-  backText: {
-    color: colors.brand.red,
-    fontFamily: fontFamilies.bodyBold,
-    fontSize: fontSizes.sm,
-  },
+  backText: { color: colors.brand.red, fontFamily: fontFamilies.bodyBold, fontSize: fontSizes.sm },
   fieldLabel: {
     fontSize: fontSizes.sm,
     fontFamily: fontFamilies.bodyBold,
@@ -702,21 +725,13 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   recBtnActive: { backgroundColor: colors.danger },
-  recDot: {
-    width: 12,
-    height: 12,
-    borderRadius: 6,
-    backgroundColor: colors.white,
-  },
+  recDot: { width: 12, height: 12, borderRadius: 6, backgroundColor: colors.white },
   recBtnText: {
     color: colors.white,
     fontFamily: fontFamilies.bodyExtraBold,
     fontSize: fontSizes.sm,
   },
-  voiceActions: {
-    flexDirection: 'row',
-    gap: spacing.md,
-  },
+  voiceActions: { flexDirection: 'row', gap: spacing.md },
   voiceAction: {
     flexDirection: 'row',
     alignItems: 'center',

@@ -22,9 +22,7 @@ import type { Service } from '@tamem/types';
 import { GradientButton } from '../components/GradientButton';
 import { GradientHeader } from '../components/GradientHeader';
 import { api } from '../lib/api';
-import { openWhatsAppConfirmation } from '../lib/whatsapp';
 import type { HomeStackParamList } from '../navigation/HomeStack';
-import { useAuth } from '../stores/auth';
 import { colors, fontFamilies, fontSizes, radii, spacing } from '../theme/tokens';
 
 type Nav = NativeStackNavigationProp<HomeStackParamList, 'ShippingFlow'>;
@@ -49,7 +47,6 @@ const SPEEDS: { key: SpeedKey; label: string; sub: string; multiplier: string }[
  */
 export function ShippingFlowScreen() {
   const navigation = useNavigation<Nav>();
-  const user = useAuth((s) => s.user);
 
   const [from, setFrom] = useState('قفط');
   const [to, setTo] = useState('الأقصر');
@@ -119,18 +116,20 @@ export function ShippingFlowScreen() {
       });
       return res.data.data;
     },
-    onSuccess: async (order) => {
-      if (user) {
-        await openWhatsAppConfirmation({
-          orderNumber: order.orderNumber,
-          serviceNameAr: 'شحن طرد',
-          customerName: user.name,
-          estimatedPrice: estimate ?? undefined,
-        });
+    onSuccess: (order) => {
+      try {
+        const parent = navigation.getParent();
+        if (parent) {
+          parent.navigate('Orders', {
+            screen: 'OrderTracking',
+            params: { orderId: order.id, justCreated: true },
+          } as never);
+        } else {
+          navigation.popToTop();
+        }
+      } catch {
+        navigation.popToTop();
       }
-      Alert.alert('تم ✓', `تم إنشاء طلب الشحن ${order.orderNumber}`, [
-        { text: 'حسناً', onPress: () => navigation.popToTop() },
-      ]);
     },
     onError: (err) => {
       Alert.alert('خطأ', err instanceof Error ? err.message : 'فشل إنشاء الطلب');

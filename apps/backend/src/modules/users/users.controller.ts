@@ -1,8 +1,14 @@
+import bcrypt from 'bcryptjs';
 import type { RequestHandler } from 'express';
 import { z } from 'zod';
 
 import { prisma } from '../../db/prisma.js';
-import { NotFoundError, UnauthorizedError } from '../../utils/errors.js';
+import {
+  ConflictError,
+  NotFoundError,
+  UnauthorizedError,
+  ValidationError,
+} from '../../utils/errors.js';
 import { ok } from '../../utils/response.js';
 
 const PROFILE_FIELDS = {
@@ -24,10 +30,22 @@ const meUpdateSchema = z
   .object({
     name: z.string().trim().min(2).max(100).optional(),
     email: z.string().email().optional(),
+    phone: z
+      .string()
+      .trim()
+      .regex(/^\+?\d{8,15}$/, 'رقم تليفون غير صحيح')
+      .optional(),
     city: z.string().trim().max(100).optional(),
     governorate: z.string().trim().max(100).optional(),
     defaultAddress: z.string().trim().max(500).optional(),
     avatarUrl: z.string().url().optional(),
+  })
+  .strict();
+
+const passwordChangeSchema = z
+  .object({
+    currentPassword: z.string().min(1, 'كلمة السر الحالية مطلوبة'),
+    newPassword: z.string().min(8, 'كلمة السر الجديدة 8 أحرف على الأقل').max(72),
   })
   .strict();
 
@@ -53,12 +71,52 @@ export const updateMe: RequestHandler = async (req, res, next) => {
   try {
     if (!req.user) throw new UnauthorizedError();
     const input = meUpdateSchema.parse(req.body);
+
+    // Phone change requires uniqueness check
+    if (input.phone) {
+      const clash = await prisma.user.findFirst({
+        where: { phone: input.phone, NOT: { id: req.user.id } },
+        select: { id: true },
+      });
+      if (clash) throw new ConflictError('Phone already used', 'هذا الرقم مستخدم بحساب آخر');
+    }
+
     const user = await prisma.user.update({
       where: { id: req.user.id },
       data: input,
       select: PROFILE_FIELDS,
     });
     ok(res, user);
+  } catch (err) {
+    next(err);
+  }
+};
+
+export const changePassword: RequestHandler = async (req, res, next) => {
+  try {
+    if (!req.user) throw new UnauthorizedError();
+    const input = passwordChangeSchema.parse(req.body);
+
+    const user = await prisma.user.findUnique({
+      where: { id: req.user.id },
+      select: { passwordHash: true },
+    });
+    if (!user?.passwordHash) {
+      throw new ValidationError(
+        { reason: 'NO_PASSWORD' },
+        'حسابك ليس عليه كلمة سر — استخدم إعادة تعيين بدلاً',
+      );
+    }
+
+    const matches = await bcrypt.compare(input.currentPassword, user.passwordHash);
+    if (!matches) throw new UnauthorizedError('كلمة السر الحالية غير صحيحة');
+
+    const newHash = await bcrypt.hash(input.newPassword, 12);
+    await prisma.user.update({
+      where: { id: req.user.id },
+      data: { passwordHash: newHash },
+    });
+    ok(res, { changed: true });
   } catch (err) {
     next(err);
   }

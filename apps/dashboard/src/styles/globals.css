@@ -72,3 +72,63 @@
     font-weight: 900;
   }
 }
+
+/* Print styles: hide nav, give report content the full page */
+@media print {
+  @page {
+    size: A4;
+    margin: 12mm;
+  }
+  body {
+    background: white !important;
+  }
+  /* Hide chrome */
+  aside, header[class*="sticky"], [data-print="hide"] {
+    display: none !important;
+  }
+  /* Expand main content */
+  main {
+    overflow: visible !important;
+  }
+  main > div {
+    overflow: visible !important;
+    padding: 0 !important;
+  }
+  /* Page-breaks for sections */
+  .print-page-break {
+    page-break-before: always;
+  }
+  /* Plain white cards for print */
+  .bg-white {
+    box-shadow: none !important;
+    border: 1px solid #e5e5e5 !important;
+  }
+}
+
+/* Custom thin scrollbar for sidebar — keeps the elegant feel */
+.custom-scrollbar::-webkit-scrollbar {
+  width: 4px;
+}
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: rgba(224, 48, 30, 0.15);
+  border-radius: 99px;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: rgba(224, 48, 30, 0.3);
+}
+.custom-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(224, 48, 30, 0.15) transparent;
+}
+
+/* Hover lift for stat cards */
+.stat-card {
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+.stat-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 10px 28px -12px rgba(224, 48, 30, 0.18);
+}

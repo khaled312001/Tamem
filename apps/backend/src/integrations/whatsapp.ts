@@ -1,17 +1,30 @@
 import { env } from '../config/env.js';
 import { logger } from '../utils/logger.js';
 
+import * as wpp from './wppconnect.js';
+
 interface WhatsAppTemplate {
   toPhone: string;
   text: string;
 }
 
 /**
- * Sends a WhatsApp message via Cloud API.
- * Gracefully no-ops if credentials aren't configured — Phase 1 uses
- * mobile deep-links as the primary path; this is the optional server-side dispatch.
+ * Sends a WhatsApp message via — in this order of preference:
+ *   1. WppConnect bridge (admin scanned the QR) — uses the admin's own WhatsApp,
+ *      so the customer sees the real Tamem business number replying.
+ *   2. WhatsApp Cloud API — when WHATSAPP_ACCESS_TOKEN + WHATSAPP_PHONE_NUMBER_ID
+ *      are set, falls back to Meta's official API.
+ * Returns true if either path delivered the message.
  */
 export async function sendWhatsAppMessage({ toPhone, text }: WhatsAppTemplate): Promise<boolean> {
+  // 1) WppConnect bridge — preferred when the admin has scanned the QR
+  try {
+    const sent = await wpp.sendText(toPhone, text);
+    if (sent) return true;
+  } catch (err) {
+    logger.warn({ err, toPhone }, 'wppconnect send error');
+  }
+
   if (!env.WHATSAPP_ACCESS_TOKEN || !env.WHATSAPP_PHONE_NUMBER_ID) {
     logger.debug({ toPhone }, 'WhatsApp not configured — skipping server-side send');
     return false;

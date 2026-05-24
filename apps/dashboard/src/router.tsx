@@ -8,8 +8,10 @@ import { DriversPage } from './routes/drivers.js';
 import { LoginPage } from './routes/login.js';
 import { MerchantsPage } from './routes/merchants.js';
 import { NotFoundPage } from './routes/not-found.js';
+import { OrderDetailPage } from './routes/order-detail.js';
 import { OrdersPage } from './routes/orders.js';
 import { OverviewPage } from './routes/overview.js';
+import { PaymentGatewayPage } from './routes/payment-gateway.js';
 import { PaymentsPage } from './routes/payments.js';
 import { PricingPage } from './routes/pricing.js';
 import { ProductsPage } from './routes/products.js';
@@ -17,6 +19,7 @@ import { ReportsPage } from './routes/reports.js';
 import { ServiceEditPage } from './routes/service-edit.js';
 import { ServicesPage } from './routes/services.js';
 import { SettingsPage } from './routes/settings.js';
+import { WhatsAppPage } from './routes/whatsapp.js';
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
   const user = useAuth((s) => s.user);
@@ -37,6 +40,7 @@ const routes: RouteObject[] = [
       { index: true, element: <Navigate to="/overview" replace /> },
       { path: 'overview', element: <OverviewPage /> },
       { path: 'orders', element: <OrdersPage /> },
+      { path: 'orders/:id', element: <OrderDetailPage /> },
       { path: 'customers', element: <CustomersPage /> },
       { path: 'drivers', element: <DriversPage /> },
       { path: 'merchants', element: <MerchantsPage /> },
@@ -46,8 +50,10 @@ const routes: RouteObject[] = [
       { path: 'products', element: <ProductsPage /> },
       { path: 'pricing', element: <PricingPage /> },
       { path: 'payments', element: <PaymentsPage /> },
+      { path: 'payment-gateway', element: <PaymentGatewayPage /> },
       { path: 'reports', element: <ReportsPage /> },
       { path: 'alerts', element: <AlertsPage /> },
+      { path: 'whatsapp', element: <WhatsAppPage /> },
       { path: 'settings', element: <SettingsPage /> },
       { path: '*', element: <NotFoundPage /> },
     ],

@@ -20,9 +20,7 @@ import type { Service } from '@tamem/types';
 import { GradientButton } from '../components/GradientButton';
 import { GradientHeader } from '../components/GradientHeader';
 import { api } from '../lib/api';
-import { openWhatsAppConfirmation } from '../lib/whatsapp';
 import type { HomeStackParamList } from '../navigation/HomeStack';
-import { useAuth } from '../stores/auth';
 import { colors, fontFamilies, fontSizes, radii, spacing } from '../theme/tokens';
 
 type Nav = NativeStackNavigationProp<HomeStackParamList, 'MerchantFlow'>;
@@ -53,7 +51,6 @@ const newId = () => Math.random().toString(36).slice(2);
  */
 export function MerchantFlowScreen() {
   const navigation = useNavigation<Nav>();
-  const user = useAuth((s) => s.user);
 
   const [items, setItems] = useState<ItemDraft[]>([
     { id: newId(), productNameSnapshot: '', quantity: '1' },
@@ -107,19 +104,20 @@ export function MerchantFlowScreen() {
       });
       return res.data.data;
     },
-    onSuccess: async (order) => {
-      if (user) {
-        await openWhatsAppConfirmation({
-          orderNumber: order.orderNumber,
-          serviceNameAr: 'طلب تاجر / موزع',
-          customerName: user.name,
-        });
+    onSuccess: (order) => {
+      try {
+        const parent = navigation.getParent();
+        if (parent) {
+          parent.navigate('Orders', {
+            screen: 'OrderTracking',
+            params: { orderId: order.id, justCreated: true },
+          } as never);
+        } else {
+          navigation.popToTop();
+        }
+      } catch {
+        navigation.popToTop();
       }
-      Alert.alert(
-        'تم إرسال الطلب ✓',
-        `رقم الطلب: ${order.orderNumber}\nالإدارة هتراجع الطلب وترسل عرض سعر.`,
-        [{ text: 'حسناً', onPress: () => navigation.popToTop() }],
-      );
     },
     onError: (err) => Alert.alert('خطأ', err instanceof Error ? err.message : 'فشل الإرسال'),
   });

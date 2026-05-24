@@ -84,3 +84,11 @@ apps/dashboard/dist-ssr/
 .cache/
 .vercel
 .netlify
+
+# WhatsApp Web (wppconnect) saved session — contains the admin's logged-in
+# tokens for whatsapp.com plus puppeteer's chromium user data. Must NOT be
+# committed: it's huge, machine-specific, and a security risk if leaked.
+apps/backend/tokens/
+
+# Local uploads (multer-served customer/order images & audio)
+apps/backend/uploads/

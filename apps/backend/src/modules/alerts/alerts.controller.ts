@@ -10,8 +10,22 @@ const param = (v: unknown): string => {
   return v;
 };
 
+// z.coerce.boolean() runs Boolean(value), which makes "false" → true (non-empty
+// string is truthy). Parse it ourselves so the dashboard can pass the literal
+// string "false" via URL query and have it actually filter out resolved alerts.
+const boolFromQuery = z
+  .union([z.boolean(), z.string()])
+  .transform((v) => {
+    if (typeof v === 'boolean') return v;
+    const s = v.trim().toLowerCase();
+    if (s === 'true' || s === '1') return true;
+    if (s === 'false' || s === '0') return false;
+    return undefined;
+  })
+  .optional();
+
 const listQuery = z.object({
-  resolved: z.coerce.boolean().optional(),
+  resolved: boolFromQuery,
   severity: z.enum(['LOW', 'MEDIUM', 'HIGH', 'CRITICAL']).optional(),
   type: z
     .enum([

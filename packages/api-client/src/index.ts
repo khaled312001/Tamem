@@ -115,6 +115,23 @@ export class TamemClient {
     return this.request({ method: 'GET', url: '/me' });
   }
 
+  async updateMe(
+    data: Partial<Pick<User, 'name' | 'email' | 'phone'>> & Record<string, unknown>,
+  ): Promise<User> {
+    return this.request({ method: 'PATCH', url: '/me', data });
+  }
+
+  async changePassword(
+    currentPassword: string,
+    newPassword: string,
+  ): Promise<{ changed: boolean }> {
+    return this.request({
+      method: 'POST',
+      url: '/me/change-password',
+      data: { currentPassword, newPassword },
+    });
+  }
+
   // ===== Services (public) =====
   async listServices(): Promise<Service[]> {
     return this.request({ method: 'GET', url: '/services' });
@@ -369,6 +386,62 @@ export class TamemClient {
       url: `/admin/alerts/${id}/resolve`,
       data: { note },
     });
+  }
+
+  // ===== Admin WhatsApp bridge =====
+  async adminWhatsAppStatus(): Promise<{
+    status: 'disconnected' | 'qr' | 'connecting' | 'connected';
+    qrDataUrl: string | null;
+    phone: string | null;
+    startedAt: number | null;
+    lastError: string | null;
+  }> {
+    return this.request({ method: 'GET', url: '/admin/whatsapp/status' });
+  }
+  async adminWhatsAppStart(): Promise<unknown> {
+    return this.request({ method: 'POST', url: '/admin/whatsapp/start' });
+  }
+  async adminWhatsAppStop(): Promise<unknown> {
+    return this.request({ method: 'POST', url: '/admin/whatsapp/stop' });
+  }
+  async adminWhatsAppSendTest(phone: string, message: string): Promise<{ sent: boolean }> {
+    return this.request({
+      method: 'POST',
+      url: '/admin/whatsapp/send-test',
+      data: { phone, message },
+    });
+  }
+
+  // ===== Admin Payment Gateway (Paymob) =====
+  async adminGatewayStatus(): Promise<{
+    configured: boolean;
+    methods: { vodafoneCash: boolean; instapay: boolean };
+    keys: {
+      apiKey: string | null;
+      walletIntegrationId: number | null;
+      instapayIntegrationId: number | null;
+      iframeId: number | null;
+      hmac: string | null;
+    };
+  }> {
+    return this.request({ method: 'GET', url: '/admin/payments/gateway' });
+  }
+  async adminGatewayTest(): Promise<{
+    ok: boolean;
+    reason?: string;
+    message?: string;
+    tokenPreview?: string;
+  }> {
+    return this.request({ method: 'POST', url: '/admin/payments/gateway/test' });
+  }
+  async adminGatewaySave(input: {
+    apiKey?: string;
+    walletIntegrationId?: string | number;
+    instapayIntegrationId?: string | number;
+    iframeId?: string | number;
+    hmac?: string;
+  }): Promise<{ saved: boolean }> {
+    return this.request({ method: 'PUT', url: '/admin/payments/gateway', data: input });
   }
 
   // ===== Admin Reports =====
