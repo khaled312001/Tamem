@@ -17,6 +17,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { TamemApiError } from '@tamem/api-client';
 import { type LoginInput, loginSchema } from '@tamem/validators';
 
 import { GoogleSignInButton } from '../components/GoogleSignInButton';
@@ -28,6 +29,30 @@ import { useAuth } from '../stores/auth';
 import { colors, fontFamilies, fontSizes, gradients, radii, spacing } from '../theme/tokens';
 
 type NavProp = NativeStackNavigationProp<AuthStackParamList, 'Login'>;
+
+// Maps backend / network errors to a friendly Arabic message for the alert.
+function loginErrorMessage(err: unknown): string {
+  if (err instanceof TamemApiError) {
+    if (err.status === 401) {
+      return 'رقم الهاتف أو كلمة المرور غير صحيحة. تأكد منهما وحاول مرة أخرى.';
+    }
+    if (err.status === 422) {
+      return err.messageAr ?? 'بيانات الدخول غير صحيحة.';
+    }
+    if (err.status === 403) {
+      return err.messageAr ?? 'الحساب غير مفعّل.';
+    }
+    if (err.status >= 500) {
+      return 'خطأ في الخادم. حاول مرة أخرى بعد قليل.';
+    }
+    return err.messageAr ?? err.message;
+  }
+  // Axios / fetch network failure (e.g. backend not running, CORS)
+  if (err instanceof Error && /network|fetch|ECONN|timeout/i.test(err.message)) {
+    return 'تعذّر الاتصال بالخادم. تأكد من اتصالك بالإنترنت ثم حاول مرة أخرى.';
+  }
+  return err instanceof Error ? err.message : 'فشل تسجيل الدخول';
+}
 
 export function LoginScreen() {
   const navigation = useNavigation<NavProp>();
@@ -49,8 +74,7 @@ export function LoginScreen() {
       const res = await api.login(values.phone, values.password);
       await setSession(res.user, res.tokens);
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : 'فشل تسجيل الدخول';
-      Alert.alert('خطأ', msg);
+      Alert.alert('تعذّر تسجيل الدخول', loginErrorMessage(err));
     } finally {
       setLoading(false);
     }

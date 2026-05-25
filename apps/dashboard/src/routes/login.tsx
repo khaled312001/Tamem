@@ -1,3 +1,4 @@
+import { TamemApiError } from '@tamem/api-client';
 import { useState, type FormEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
@@ -6,23 +7,40 @@ import { Logo } from '../components/Logo.js';
 import { api } from '../lib/api.js';
 import { useAuth } from '../lib/auth.js';
 
+function loginErrorMessage(err: unknown): string {
+  if (err instanceof TamemApiError) {
+    if (err.status === 401) return 'رقم الهاتف أو كلمة المرور غير صحيحة';
+    if (err.status === 422) return err.messageAr ?? 'بيانات الدخول غير صحيحة';
+    if (err.status === 403) return err.messageAr ?? 'الحساب غير مفعّل';
+    if (err.status >= 500) return 'خطأ في الخادم، حاول بعد قليل';
+    return err.messageAr ?? err.message;
+  }
+  if (err instanceof Error && /network|fetch|ECONN|timeout/i.test(err.message)) {
+    return 'تعذّر الاتصال بالخادم — تأكد أن الـ Backend شغّال على :4000';
+  }
+  return err instanceof Error ? err.message : 'فشل تسجيل الدخول';
+}
+
 export function LoginPage() {
   const navigate = useNavigate();
   const setSession = useAuth((s) => s.setSession);
   const [phone, setPhone] = useState('+201010254819');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   const onSubmit = async (e: FormEvent) => {
     e.preventDefault();
     setLoading(true);
+    setErrorMsg(null);
     try {
       const res = await api.login(phone, password);
       setSession(res.user, res.tokens);
       toast.success(`أهلاً ${res.user.name}`);
       navigate('/overview', { replace: true });
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : 'فشل تسجيل الدخول';
+      const msg = loginErrorMessage(err);
+      setErrorMsg(msg);
       toast.error(msg);
     } finally {
       setLoading(false);
@@ -68,6 +86,14 @@ export function LoginPage() {
               placeholder="••••••••"
             />
           </div>
+          {errorMsg && (
+            <div
+              role="alert"
+              className="rounded-lg border border-red-200 bg-red-50 text-red-700 text-sm px-3 py-2"
+            >
+              {errorMsg}
+            </div>
+          )}
           <button
             type="submit"
             disabled={loading}
