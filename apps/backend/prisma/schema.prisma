@@ -166,9 +166,29 @@ model User {
   resolvedAlerts  Alert[]          @relation("AlertResolver")
   confirmedPays   Payment[]        @relation("PaymentConfirmer")
   servicesCreated Service[]        @relation("ServiceCreator")
+  savedAddresses  CustomerAddress[]
 
   @@index([role])
   @@index([phone])
+}
+
+/// Address book entries the customer can pick from when creating an order.
+/// Cleaner than stuffing them into a JSON column — lets us index, soft-delete,
+/// and reference them from Order later if needed.
+model CustomerAddress {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  label     String   @db.VarChar(60)
+  address   String   @db.VarChar(500)
+  lat       Decimal? @db.Decimal(10, 7)
+  lng       Decimal? @db.Decimal(10, 7)
+  notes     String?  @db.VarChar(500)
+  isDefault Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId, isDefault])
 }
 
 model DriverProfile {

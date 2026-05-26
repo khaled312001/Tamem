@@ -1,12 +1,15 @@
-import { useRoute, type RouteProp } from '@react-navigation/native';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { CheckCircle2, MessageCircle, Phone, X } from 'lucide-react-native';
+import { useNavigation, useRoute, type RouteProp } from '@react-navigation/native';
+import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { CheckCircle2, MessageCircle, Phone, RotateCcw, X } from 'lucide-react-native';
 import { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
+  Alert,
   Linking,
   Platform,
   Pressable,
+  RefreshControl,
   ScrollView,
   StyleSheet,
   Text,
@@ -52,11 +55,18 @@ interface OrderDetail {
 const SUPPORT_WHATSAPP =
   (typeof process !== 'undefined' && process.env?.EXPO_PUBLIC_TAMEM_WHATSAPP) || '+201010254819';
 
+interface DriverLocation {
+  lat: number;
+  lng: number;
+  at: string;
+}
+
 export function OrderTrackingScreen() {
   const route = useRoute<Route>();
   const qc = useQueryClient();
   const { orderId, justCreated } = route.params;
   const [showWaBanner, setShowWaBanner] = useState(!!justCreated);
+  const [driverLoc, setDriverLoc] = useState<DriverLocation | null>(null);
 
   const openWhatsApp = (msg: string) => {
     const num = SUPPORT_WHATSAPP.replace(/\D/g, '');
@@ -65,12 +75,19 @@ export function OrderTrackingScreen() {
     else void Linking.openURL(url);
   };
 
-  const { data: order, isLoading } = useQuery<OrderDetail>({
+  const {
+    data: order,
+    isLoading,
+    refetch,
+    isFetching,
+  } = useQuery<OrderDetail>({
     queryKey: ['order', orderId],
     queryFn: () => api.raw.get(`/orders/${orderId}`).then((r) => r.data.data),
   });
 
-  // Realtime: subscribe to this order's room + invalidate on any update
+  // Realtime: subscribe to this order's room. order:status invalidates the
+  // query so any field changes are picked up; driver:location updates the
+  // local "last seen" indicator without re-fetching.
   useEffect(() => {
     let mounted = true;
     void (async () => {
@@ -78,10 +95,17 @@ export function OrderTrackingScreen() {
       const refetch = () => {
         if (mounted) qc.invalidateQueries({ queryKey: ['order', orderId] });
       };
+      const onLoc = (msg: { orderId?: string; lat: number; lng: number; at: string }) => {
+        if (msg.orderId === orderId || !msg.orderId) {
+          setDriverLoc({ lat: msg.lat, lng: msg.lng, at: msg.at });
+        }
+      };
       s.on('order:status', refetch);
+      s.on('driver:location', onLoc);
       await subscribeToOrder(orderId);
       return () => {
         s.off('order:status', refetch);
+        s.off('driver:location', onLoc);
       };
     })();
     return () => {
@@ -108,7 +132,18 @@ export function OrderTrackingScreen() {
         location={ORDER_STATUS_AR[order.status]}
       />
 
-      <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
+      <ScrollView
+        contentContainerStyle={styles.scroll}
+        showsVerticalScrollIndicator={false}
+        refreshControl={
+          <RefreshControl
+            refreshing={isFetching && !isLoading}
+            onRefresh={() => refetch()}
+            tintColor={colors.brand.red}
+            colors={[colors.brand.red]}
+          />
+        }
+      >
         {showWaBanner && (
           <View style={styles.waBanner}>
             <View style={styles.waIconWrap}>
@@ -148,6 +183,11 @@ export function OrderTrackingScreen() {
           )}
         </View>
 
+        {/* Status progress bar — shows the 7-stage happy path with the current
+            stage highlighted. Cancelled/Rejected orders skip this and show a
+            terminal indicator instead. */}
+        <OrderStageProgress status={order.status} />
+
         {order.assignedDriver && (
           <View style={styles.driverCard}>
             <Text style={styles.sectionTitle}>السائق</Text>
@@ -160,6 +200,7 @@ export function OrderTrackingScreen() {
               <View style={{ flex: 1 }}>
                 <Text style={styles.driverName}>{order.assignedDriver.name}</Text>
                 <Text style={styles.driverPhone}>{order.assignedDriver.phone}</Text>
+                {driverLoc && <DriverLastSeen at={driverLoc.at} />}
               </View>
               <Pressable
                 onPress={() => Linking.openURL(`tel:${order.assignedDriver!.phone}`)}
@@ -218,6 +259,12 @@ export function OrderTrackingScreen() {
           ))}
         </View>
 
+        {/* Reorder — clones this order's content into a brand new NEW order.
+            Only useful once the original has reached a terminal state. */}
+        {['COMPLETED', 'DELIVERED', 'CANCELLED'].includes(order.status) && (
+          <ReorderButton orderId={order.id} orderNumber={order.orderNumber} />
+        )}
+
         {/* تواصل مع الإدارة — WhatsApp deep-link with order context */}
         <Pressable
           onPress={() =>
@@ -236,6 +283,241 @@ export function OrderTrackingScreen() {
     </SafeAreaView>
   );
 }
+
+// ────────────────────────────────────────────────────────────────────────────
+// Driver "last seen" indicator — re-renders every 10s with relative timeago.
+// ────────────────────────────────────────────────────────────────────────────
+
+function DriverLastSeen({ at }: { at: string }) {
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => setTick((t) => t + 1), 10_000);
+    return () => clearInterval(id);
+  }, []);
+  const seconds = Math.max(0, Math.floor((Date.now() - new Date(at).getTime()) / 1000));
+  const label =
+    seconds < 60
+      ? 'الآن'
+      : seconds < 3600
+        ? `منذ ${Math.floor(seconds / 60)} د`
+        : `منذ ${Math.floor(seconds / 3600)} س`;
+  const fresh = seconds < 90;
+  return (
+    <Text
+      style={{
+        fontSize: 10,
+        marginTop: 2,
+        color: fresh ? colors.success : colors.text.muted,
+        fontFamily: fontFamilies.bodyBold,
+      }}
+    >
+      📍 آخر موقع: {label}
+    </Text>
+  );
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Progress bar + Reorder helpers
+// ────────────────────────────────────────────────────────────────────────────
+
+const STAGE_ORDER: OrderStatus[] = [
+  'NEW',
+  'UNDER_REVIEW',
+  'PRICED',
+  'ACCEPTED',
+  'DRIVER_ASSIGNED',
+  'IN_ROUTE',
+  'DELIVERED',
+];
+const STAGE_LABEL: Record<OrderStatus, string> = {
+  NEW: 'استلمنا',
+  UNDER_REVIEW: 'مراجعة',
+  PRICED: 'تسعير',
+  AWAITING_CUSTOMER_APPROVAL: 'موافقة',
+  ACCEPTED: 'تأكيد',
+  DRIVER_ASSIGNED: 'سائق',
+  PICKED_UP: 'استلام',
+  IN_ROUTE: 'الطريق',
+  DELIVERED: 'سُلِّم',
+  COMPLETED: 'مكتمل',
+  CANCELLED: 'ملغي',
+  REJECTED: 'مرفوض',
+};
+
+function OrderStageProgress({ status }: { status: OrderStatus }) {
+  if (status === 'CANCELLED' || status === 'REJECTED') {
+    return (
+      <View style={progressStyles.terminal}>
+        <Text style={progressStyles.terminalText}>
+          {status === 'CANCELLED' ? '🚫 تم إلغاء الطلب' : '❌ تم رفض الطلب'}
+        </Text>
+      </View>
+    );
+  }
+  // Treat AWAITING_CUSTOMER_APPROVAL as still on the "PRICED" stage,
+  // PICKED_UP as same group as DRIVER_ASSIGNED, COMPLETED as DELIVERED+1.
+  const aliasMap: Partial<Record<OrderStatus, OrderStatus>> = {
+    AWAITING_CUSTOMER_APPROVAL: 'PRICED',
+    PICKED_UP: 'DRIVER_ASSIGNED',
+    COMPLETED: 'DELIVERED',
+  };
+  const effective = aliasMap[status] ?? status;
+  const currentIdx = Math.max(0, STAGE_ORDER.indexOf(effective));
+  return (
+    <View style={progressStyles.row}>
+      {STAGE_ORDER.map((stage, i) => {
+        const done = i < currentIdx;
+        const current = i === currentIdx;
+        return (
+          <View key={stage} style={progressStyles.stage}>
+            <View style={progressStyles.dotRow}>
+              {i > 0 && (
+                <View
+                  style={[
+                    progressStyles.line,
+                    (done || current) && { backgroundColor: colors.brand.red },
+                  ]}
+                />
+              )}
+              <View
+                style={[
+                  progressStyles.dot,
+                  done && progressStyles.dotDone,
+                  current && progressStyles.dotCurrent,
+                ]}
+              />
+              {i < STAGE_ORDER.length - 1 && (
+                <View
+                  style={[progressStyles.line, done && { backgroundColor: colors.brand.red }]}
+                />
+              )}
+            </View>
+            <Text
+              style={[
+                progressStyles.label,
+                (done || current) && {
+                  color: colors.brand.red,
+                  fontFamily: fontFamilies.bodyExtraBold,
+                },
+              ]}
+              numberOfLines={1}
+            >
+              {STAGE_LABEL[stage]}
+            </Text>
+          </View>
+        );
+      })}
+    </View>
+  );
+}
+
+function ReorderButton({ orderId, orderNumber }: { orderId: string; orderNumber: string }) {
+  const navigation =
+    useNavigation<NativeStackNavigationProp<OrdersStackParamList, 'OrderTracking'>>();
+  const reorderMut = useMutation({
+    mutationFn: () =>
+      api.raw
+        .post(`/orders/from/${orderId}`)
+        .then((r) => r.data.data as { id: string; orderNumber: string }),
+    onSuccess: (newOrder) => {
+      // replace so the back button goes to the orders list, not the old order
+      navigation.replace('OrderTracking', { orderId: newOrder.id, justCreated: true });
+    },
+    onError: (err) => Alert.alert('خطأ', err instanceof Error ? err.message : 'فشل إعادة الطلب'),
+  });
+  return (
+    <Pressable
+      onPress={() => reorderMut.mutate()}
+      disabled={reorderMut.isPending}
+      style={({ pressed }) => [
+        progressStyles.reorderBtn,
+        pressed && { opacity: 0.85 },
+        reorderMut.isPending && { opacity: 0.6 },
+      ]}
+    >
+      {reorderMut.isPending ? (
+        <ActivityIndicator size="small" color={colors.brand.red} />
+      ) : (
+        <>
+          <RotateCcw size={16} color={colors.brand.red} />
+          <Text style={progressStyles.reorderText}>اطلب نفس الطلب مرة أخرى</Text>
+          <Text style={progressStyles.reorderSubtext}>{orderNumber}</Text>
+        </>
+      )}
+    </Pressable>
+  );
+}
+
+const progressStyles = StyleSheet.create({
+  row: {
+    flexDirection: 'row',
+    backgroundColor: colors.white,
+    padding: spacing.md,
+    borderRadius: radii.lg,
+    borderWidth: 1,
+    borderColor: colors.line,
+    marginTop: spacing.md,
+  },
+  stage: { flex: 1, alignItems: 'center' },
+  dotRow: { flexDirection: 'row', alignItems: 'center', width: '100%' },
+  line: { flex: 1, height: 2, backgroundColor: colors.line2 },
+  dot: {
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+    backgroundColor: colors.line2,
+    borderWidth: 2,
+    borderColor: colors.white,
+  },
+  dotDone: { backgroundColor: colors.brand.red },
+  dotCurrent: {
+    backgroundColor: colors.brand.red,
+    transform: [{ scale: 1.4 }],
+  },
+  label: {
+    fontSize: 10,
+    fontFamily: fontFamilies.body,
+    color: colors.text.muted,
+    marginTop: 4,
+    textAlign: 'center',
+  },
+  terminal: {
+    backgroundColor: colors.soft,
+    padding: spacing.md,
+    borderRadius: radii.lg,
+    marginTop: spacing.md,
+    alignItems: 'center',
+  },
+  terminalText: {
+    fontFamily: fontFamilies.bodyExtraBold,
+    color: colors.text.muted,
+    fontSize: fontSizes.sm,
+  },
+  reorderBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing.sm,
+    backgroundColor: colors.brand.redLight,
+    borderRadius: radii.lg,
+    paddingVertical: spacing.md,
+    paddingHorizontal: spacing.lg,
+    marginTop: spacing.md,
+    borderWidth: 1,
+    borderColor: colors.brand.red,
+  },
+  reorderText: {
+    color: colors.brand.red,
+    fontFamily: fontFamilies.bodyExtraBold,
+    fontSize: fontSizes.sm,
+  },
+  reorderSubtext: {
+    color: colors.brand.red,
+    opacity: 0.7,
+    fontFamily: fontFamilies.body,
+    fontSize: fontSizes.xs,
+  },
+});
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.surface },

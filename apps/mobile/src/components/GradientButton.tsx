@@ -1,5 +1,13 @@
+import * as Haptics from 'expo-haptics';
 import { LinearGradient } from 'expo-linear-gradient';
-import { ActivityIndicator, Pressable, StyleSheet, Text, type ViewStyle } from 'react-native';
+import {
+  ActivityIndicator,
+  Platform,
+  Pressable,
+  StyleSheet,
+  Text,
+  type ViewStyle,
+} from 'react-native';
 
 import { colors, fontFamilies, fontSizes, gradients, radii, spacing } from '../theme/tokens';
 
@@ -10,6 +18,17 @@ interface GradientButtonProps {
   disabled?: boolean;
   variant?: 'brand' | 'gold' | 'outline';
   style?: ViewStyle;
+  /** Set to false to disable the medium-impact haptic feedback. Default true. */
+  haptic?: boolean;
+}
+
+function tap(haptic: boolean | undefined) {
+  if (haptic === false) return;
+  if (Platform.OS === 'web') return;
+  // ImpactFeedbackStyle.Medium feels best for primary CTAs.
+  void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {
+    // ignore — some Android devices ship without the haptic motor.
+  });
 }
 
 /**
@@ -23,13 +42,20 @@ export function GradientButton({
   disabled,
   variant = 'brand',
   style,
+  haptic,
 }: GradientButtonProps) {
   const isDisabled = disabled || loading;
+  const handlePress = () => {
+    if (!isDisabled) {
+      tap(haptic);
+      onPress();
+    }
+  };
 
   if (variant === 'outline') {
     return (
       <Pressable
-        onPress={onPress}
+        onPress={handlePress}
         disabled={isDisabled}
         style={({ pressed }) => [
           styles.outline,
@@ -50,7 +76,7 @@ export function GradientButton({
   const grad = variant === 'gold' ? gradients.brandGold : gradients.brand;
   return (
     <Pressable
-      onPress={onPress}
+      onPress={handlePress}
       disabled={isDisabled}
       style={({ pressed }) => [
         styles.shadow,

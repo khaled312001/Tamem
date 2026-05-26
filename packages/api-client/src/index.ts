@@ -164,6 +164,41 @@ export class TamemClient {
     return this.request({ method: 'POST', url: '/orders', data: payload });
   }
 
+  async reorderFromExisting(sourceOrderId: string): Promise<Order> {
+    return this.request({ method: 'POST', url: `/orders/from/${sourceOrderId}` });
+  }
+
+  // ===== Customer Addresses =====
+  async listMyAddresses(): Promise<unknown[]> {
+    return this.request({ method: 'GET', url: '/me/addresses' });
+  }
+  async createMyAddress(data: {
+    label: string;
+    address: string;
+    lat?: number;
+    lng?: number;
+    notes?: string;
+    isDefault?: boolean;
+  }): Promise<unknown> {
+    return this.request({ method: 'POST', url: '/me/addresses', data });
+  }
+  async updateMyAddress(
+    id: string,
+    data: Partial<{
+      label: string;
+      address: string;
+      lat: number;
+      lng: number;
+      notes: string;
+      isDefault: boolean;
+    }>,
+  ): Promise<unknown> {
+    return this.request({ method: 'PATCH', url: `/me/addresses/${id}`, data });
+  }
+  async deleteMyAddress(id: string): Promise<void> {
+    await this.http.request({ method: 'DELETE', url: `/me/addresses/${id}` });
+  }
+
   // ===== Admin Overview =====
   async adminOverview(range: 'today' | 'week' | 'month' = 'week'): Promise<unknown> {
     return this.request({ method: 'GET', url: '/admin/overview', params: { range } });

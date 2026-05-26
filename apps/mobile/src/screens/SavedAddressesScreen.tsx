@@ -1,8 +1,8 @@
-import { useNavigation } from '@react-navigation/native';
-import { useMutation, useQuery } from '@tanstack/react-query';
-import { Building2, Home, MapPin } from 'lucide-react-native';
-import { useEffect, useState } from 'react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { Briefcase, Home, MapPin, Plus, Star, Trash2 } from 'lucide-react-native';
+import { useState } from 'react';
 import {
+  ActivityIndicator,
   Alert,
   KeyboardAvoidingView,
   Platform,
@@ -18,54 +18,66 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { GradientButton } from '../components/GradientButton';
 import { ScreenHeader } from '../components/ScreenHeader';
 import { api } from '../lib/api';
-import { useAuth } from '../stores/auth';
 import { colors, fontFamilies, fontSizes, radii, spacing } from '../theme/tokens';
 
-interface MeResponse {
-  city?: string | null;
-  governorate?: string | null;
-  defaultAddress?: string | null;
+interface SavedAddress {
+  id: string;
+  label: string;
+  address: string;
+  lat?: number | null;
+  lng?: number | null;
+  notes?: string | null;
+  isDefault: boolean;
+  createdAt: string;
 }
 
+const QUICK_LABELS: { value: string; icon: typeof Home }[] = [
+  { value: 'البيت', icon: Home },
+  { value: 'الشغل', icon: Briefcase },
+  { value: 'عند ماما', icon: MapPin },
+];
+
 export function SavedAddressesScreen() {
-  const navigation = useNavigation();
-  const setUser = useAuth((s) => s.setUser);
-  const user = useAuth((s) => s.user);
-
-  const [city, setCity] = useState('');
-  const [governorate, setGovernorate] = useState('قنا');
+  const qc = useQueryClient();
+  const [adding, setAdding] = useState(false);
+  const [label, setLabel] = useState('');
   const [address, setAddress] = useState('');
+  const [notes, setNotes] = useState('');
 
-  const { data: me } = useQuery<MeResponse>({
-    queryKey: ['me'],
-    queryFn: () => api.raw.get('/me').then((r) => r.data.data),
+  const { data: list = [], isLoading } = useQuery<SavedAddress[]>({
+    queryKey: ['my-addresses'],
+    queryFn: () => api.raw.get('/me/addresses').then((r) => r.data.data),
   });
 
-  useEffect(() => {
-    if (me) {
-      setCity(me.city ?? '');
-      setGovernorate(me.governorate ?? 'قنا');
-      setAddress(me.defaultAddress ?? '');
-    }
-  }, [me]);
-
-  const save = useMutation({
+  const createMut = useMutation({
     mutationFn: () =>
-      api.raw.patch('/me', {
-        city: city.trim() || undefined,
-        governorate: governorate.trim() || undefined,
-        defaultAddress: address.trim() || undefined,
+      api.raw.post('/me/addresses', {
+        label: label.trim(),
+        address: address.trim(),
+        notes: notes.trim() || undefined,
+        isDefault: list.length === 0, // first address becomes default automatically
       }),
-    onSuccess: (res) => {
-      const updated = res.data.data;
-      if (user && updated) setUser({ ...user, ...updated });
-      Alert.alert('تم الحفظ', 'تم تحديث عنوانك');
-      navigation.goBack();
+    onSuccess: () => {
+      setLabel('');
+      setAddress('');
+      setNotes('');
+      setAdding(false);
+      qc.invalidateQueries({ queryKey: ['my-addresses'] });
     },
-    onError: (err: unknown) => {
-      Alert.alert('خطأ', err instanceof Error ? err.message : 'فشل الحفظ');
-    },
+    onError: (err) => Alert.alert('خطأ', err instanceof Error ? err.message : 'فشل الحفظ'),
   });
+
+  const setDefaultMut = useMutation({
+    mutationFn: (id: string) => api.raw.patch(`/me/addresses/${id}`, { isDefault: true }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['my-addresses'] }),
+  });
+
+  const deleteMut = useMutation({
+    mutationFn: (id: string) => api.raw.delete(`/me/addresses/${id}`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['my-addresses'] }),
+  });
+
+  const canSave = label.trim().length >= 1 && address.trim().length >= 2;
 
   return (
     <SafeAreaView edges={['top']} style={styles.container}>
@@ -77,73 +89,164 @@ export function SavedAddressesScreen() {
       >
         <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
           <View style={styles.banner}>
-            <MapPin size={20} color={colors.brand.red} />
+            <MapPin size={18} color={colors.brand.red} />
             <Text style={styles.bannerText}>
-              العنوان الافتراضي يُستخدم تلقائياً في طلباتك القادمة
+              العنوان الافتراضي يُستخدم تلقائياً عند إنشاء طلب جديد
             </Text>
           </View>
 
-          <View style={styles.chips}>
-            {(['قنا', 'الأقصر', 'أسوان', 'البحر الأحمر'] as const).map((g) => {
-              const active = governorate === g;
-              return (
+          {isLoading ? (
+            <ActivityIndicator color={colors.brand.red} style={{ marginVertical: spacing.xl }} />
+          ) : list.length === 0 && !adding ? (
+            <View style={styles.empty}>
+              <MapPin size={40} color={colors.text.muted} />
+              <Text style={styles.emptyTitle}>مفيش عناوين محفوظة لسه</Text>
+              <Text style={styles.emptySub}>أضف عنوان لتوفر الوقت في طلباتك القادمة</Text>
+            </View>
+          ) : (
+            list.map((addr) => (
+              <View key={addr.id} style={styles.card}>
+                <View style={styles.cardIcon}>
+                  <IconForLabel label={addr.label} />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <View style={styles.cardHeader}>
+                    <Text style={styles.cardLabel}>{addr.label}</Text>
+                    {addr.isDefault && (
+                      <View style={styles.defaultBadge}>
+                        <Star size={10} color={colors.white} fill={colors.white} />
+                        <Text style={styles.defaultBadgeText}>افتراضي</Text>
+                      </View>
+                    )}
+                  </View>
+                  <Text style={styles.cardAddress} numberOfLines={2}>
+                    {addr.address}
+                  </Text>
+                  {addr.notes && <Text style={styles.cardNotes}>{addr.notes}</Text>}
+                  <View style={styles.cardActions}>
+                    {!addr.isDefault && (
+                      <Pressable
+                        onPress={() => setDefaultMut.mutate(addr.id)}
+                        style={({ pressed }) => [styles.actionBtn, pressed && { opacity: 0.7 }]}
+                      >
+                        <Star size={12} color={colors.brand.red} />
+                        <Text style={styles.actionText}>اجعله افتراضي</Text>
+                      </Pressable>
+                    )}
+                    <Pressable
+                      onPress={() =>
+                        Alert.alert('حذف العنوان', `هل تريد حذف "${addr.label}"؟`, [
+                          { text: 'تراجع', style: 'cancel' },
+                          {
+                            text: 'حذف',
+                            style: 'destructive',
+                            onPress: () => deleteMut.mutate(addr.id),
+                          },
+                        ])
+                      }
+                      style={({ pressed }) => [styles.actionBtn, pressed && { opacity: 0.7 }]}
+                    >
+                      <Trash2 size={12} color={colors.danger} />
+                      <Text style={[styles.actionText, { color: colors.danger }]}>حذف</Text>
+                    </Pressable>
+                  </View>
+                </View>
+              </View>
+            ))
+          )}
+
+          {adding ? (
+            <View style={styles.addForm}>
+              <Text style={styles.fieldLabel}>الاسم</Text>
+              <View style={styles.quickLabels}>
+                {QUICK_LABELS.map((q) => (
+                  <Pressable
+                    key={q.value}
+                    onPress={() => setLabel(q.value)}
+                    style={[styles.chip, label === q.value && styles.chipActive]}
+                  >
+                    <q.icon size={12} color={label === q.value ? colors.white : colors.brand.red} />
+                    <Text style={[styles.chipText, label === q.value && styles.chipTextActive]}>
+                      {q.value}
+                    </Text>
+                  </Pressable>
+                ))}
+              </View>
+              <TextInput
+                placeholder="أو اكتب اسم مختلف (مثل: شقة الإجازة)"
+                placeholderTextColor={colors.text.muted}
+                value={label}
+                onChangeText={setLabel}
+                style={styles.input}
+              />
+
+              <Text style={styles.fieldLabel}>العنوان بالتفصيل</Text>
+              <TextInput
+                placeholder="الشارع، رقم العمارة، الدور، علامة مميزة…"
+                placeholderTextColor={colors.text.muted}
+                value={address}
+                onChangeText={setAddress}
+                multiline
+                style={styles.textArea}
+              />
+
+              <Text style={styles.fieldLabel}>ملاحظات (اختياري)</Text>
+              <TextInput
+                placeholder="رقم بديل، اتصل قبل الوصول…"
+                placeholderTextColor={colors.text.muted}
+                value={notes}
+                onChangeText={setNotes}
+                style={styles.input}
+              />
+
+              <View style={styles.formActions}>
                 <Pressable
-                  key={g}
-                  onPress={() => setGovernorate(g)}
-                  style={[styles.chip, active && styles.chipActive]}
+                  onPress={() => {
+                    setAdding(false);
+                    setLabel('');
+                    setAddress('');
+                    setNotes('');
+                  }}
+                  style={styles.cancelBtn}
                 >
-                  <Building2 size={14} color={active ? colors.white : colors.brand.red} />
-                  <Text style={[styles.chipText, active && styles.chipTextActive]}>{g}</Text>
+                  <Text style={styles.cancelText}>إلغاء</Text>
                 </Pressable>
-              );
-            })}
-          </View>
-
-          <Text style={styles.fieldLabel}>المدينة / المركز</Text>
-          <TextInput
-            placeholder="مثال: قفط"
-            placeholderTextColor={colors.text.muted}
-            value={city}
-            onChangeText={setCity}
-            style={styles.input}
-          />
-
-          <Text style={styles.fieldLabel}>العنوان بالتفصيل</Text>
-          <TextInput
-            placeholder="الشارع، رقم المنزل، علامة مميزة…"
-            placeholderTextColor={colors.text.muted}
-            value={address}
-            onChangeText={setAddress}
-            multiline
-            style={styles.textArea}
-          />
-
-          <View style={styles.savedCard}>
-            <View style={styles.savedIcon}>
-              <Home size={18} color={colors.brand.red} />
+                <View style={{ flex: 1 }}>
+                  <GradientButton
+                    label={createMut.isPending ? 'جاري الحفظ…' : 'حفظ العنوان'}
+                    onPress={() => canSave && createMut.mutate()}
+                    loading={createMut.isPending}
+                    disabled={!canSave}
+                  />
+                </View>
+              </View>
             </View>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.savedTitle}>العنوان الحالي</Text>
-              <Text style={styles.savedBody}>
-                {[address, city, governorate].filter(Boolean).join('، ') || 'لم تضف عنوان بعد'}
-              </Text>
-            </View>
-          </View>
-
-          <GradientButton
-            label={save.isPending ? 'جاري الحفظ…' : 'حفظ العنوان'}
-            onPress={() => save.mutate()}
-            loading={save.isPending}
-          />
+          ) : (
+            <Pressable
+              onPress={() => setAdding(true)}
+              style={({ pressed }) => [styles.addBtn, pressed && { opacity: 0.85 }]}
+            >
+              <Plus size={18} color={colors.brand.red} />
+              <Text style={styles.addBtnText}>أضف عنوان جديد</Text>
+            </Pressable>
+          )}
         </ScrollView>
       </KeyboardAvoidingView>
     </SafeAreaView>
   );
 }
 
+function IconForLabel({ label }: { label: string }) {
+  if (label.includes('بيت') || label.toLowerCase().includes('home'))
+    return <Home size={18} color={colors.brand.red} />;
+  if (label.includes('شغل') || label.includes('عمل') || label.toLowerCase().includes('work'))
+    return <Briefcase size={18} color={colors.brand.red} />;
+  return <MapPin size={18} color={colors.brand.red} />;
+}
+
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.surface },
-  scroll: { padding: spacing.lg, paddingBottom: spacing.xl },
+  scroll: { padding: spacing.lg, paddingBottom: spacing.xxl, gap: spacing.sm },
   banner: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -151,30 +254,104 @@ const styles = StyleSheet.create({
     backgroundColor: colors.brand.redLight,
     padding: spacing.md,
     borderRadius: radii.lg,
-    marginBottom: spacing.lg,
+    marginBottom: spacing.md,
   },
   bannerText: {
     flex: 1,
     color: colors.ink,
     fontFamily: fontFamilies.body,
-    fontSize: fontSizes.sm,
-    lineHeight: 20,
+    fontSize: fontSizes.xs,
+    lineHeight: 18,
   },
-  chips: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm, marginBottom: spacing.md },
-  chip: {
+  empty: { alignItems: 'center', padding: spacing.xl, gap: spacing.sm },
+  emptyTitle: { fontFamily: fontFamilies.bodyExtraBold, color: colors.ink, fontSize: fontSizes.md },
+  emptySub: {
+    fontFamily: fontFamilies.body,
+    color: colors.text.muted,
+    fontSize: fontSizes.sm,
+    textAlign: 'center',
+  },
+  card: {
+    flexDirection: 'row',
+    gap: spacing.md,
+    backgroundColor: colors.white,
+    padding: spacing.md,
+    borderRadius: radii.lg,
+    borderWidth: 1,
+    borderColor: colors.line,
+    marginBottom: spacing.sm,
+  },
+  cardIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: radii.md,
+    backgroundColor: colors.brand.redLight,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  cardHeader: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
+  cardLabel: { fontFamily: fontFamilies.bodyExtraBold, color: colors.ink, fontSize: fontSizes.sm },
+  cardAddress: {
+    fontFamily: fontFamilies.body,
+    color: colors.text.secondary,
+    fontSize: fontSizes.xs,
+    marginTop: 2,
+    lineHeight: 18,
+  },
+  cardNotes: {
+    fontFamily: fontFamilies.body,
+    color: colors.text.muted,
+    fontSize: fontSizes.xs,
+    marginTop: 4,
+    fontStyle: 'italic',
+  },
+  defaultBadge: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
-    backgroundColor: colors.white,
-    borderColor: colors.brand.red,
-    borderWidth: 1,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
+    gap: 3,
+    backgroundColor: colors.brand.red,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
     borderRadius: radii.pill,
   },
-  chipActive: { backgroundColor: colors.brand.red },
-  chipText: { color: colors.brand.red, fontFamily: fontFamilies.bodyBold, fontSize: fontSizes.xs },
-  chipTextActive: { color: colors.white },
+  defaultBadgeText: {
+    color: colors.white,
+    fontFamily: fontFamilies.bodyExtraBold,
+    fontSize: 9,
+  },
+  cardActions: { flexDirection: 'row', gap: spacing.md, marginTop: spacing.sm },
+  actionBtn: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  actionText: {
+    fontFamily: fontFamilies.bodyBold,
+    color: colors.brand.red,
+    fontSize: fontSizes.xs,
+  },
+  addBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing.sm,
+    backgroundColor: colors.brand.redLight,
+    borderRadius: radii.lg,
+    paddingVertical: spacing.md,
+    marginTop: spacing.md,
+    borderWidth: 1,
+    borderColor: colors.brand.red,
+    borderStyle: 'dashed',
+  },
+  addBtnText: {
+    color: colors.brand.red,
+    fontFamily: fontFamilies.bodyExtraBold,
+    fontSize: fontSizes.sm,
+  },
+  addForm: {
+    backgroundColor: colors.white,
+    borderRadius: radii.lg,
+    padding: spacing.md,
+    marginTop: spacing.md,
+    borderWidth: 1,
+    borderColor: colors.line,
+  },
   fieldLabel: {
     fontSize: fontSizes.sm,
     fontFamily: fontFamilies.bodyBold,
@@ -182,54 +359,63 @@ const styles = StyleSheet.create({
     marginBottom: spacing.xs,
     marginTop: spacing.sm,
   },
-  input: {
+  quickLabels: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.xs,
+    marginBottom: spacing.xs,
+  },
+  chip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
     backgroundColor: colors.white,
+    borderColor: colors.brand.red,
+    borderWidth: 1,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 4,
+    borderRadius: radii.pill,
+  },
+  chipActive: { backgroundColor: colors.brand.red },
+  chipText: { color: colors.brand.red, fontFamily: fontFamilies.bodyBold, fontSize: fontSizes.xs },
+  chipTextActive: { color: colors.white },
+  input: {
+    backgroundColor: colors.surface,
     borderColor: colors.line2,
     borderWidth: 1,
-    borderRadius: radii.lg,
-    padding: spacing.md,
+    borderRadius: radii.md,
+    padding: spacing.sm,
     fontFamily: fontFamilies.body,
-    fontSize: fontSizes.md,
+    fontSize: fontSizes.sm,
     color: colors.text.primary,
     textAlign: 'right',
   },
   textArea: {
-    backgroundColor: colors.white,
+    backgroundColor: colors.surface,
     borderColor: colors.line2,
     borderWidth: 1,
-    borderRadius: radii.lg,
-    padding: spacing.md,
+    borderRadius: radii.md,
+    padding: spacing.sm,
     fontFamily: fontFamilies.body,
-    fontSize: fontSizes.md,
+    fontSize: fontSizes.sm,
     color: colors.text.primary,
     textAlign: 'right',
     textAlignVertical: 'top',
-    minHeight: 96,
+    minHeight: 72,
   },
-  savedCard: {
+  formActions: {
     flexDirection: 'row',
+    gap: spacing.sm,
+    marginTop: spacing.md,
     alignItems: 'center',
-    gap: spacing.md,
-    backgroundColor: colors.soft,
-    padding: spacing.md,
-    borderRadius: radii.lg,
-    marginTop: spacing.lg,
-    marginBottom: spacing.lg,
   },
-  savedIcon: {
-    width: 40,
-    height: 40,
-    borderRadius: radii.md,
-    backgroundColor: colors.white,
-    alignItems: 'center',
-    justifyContent: 'center',
+  cancelBtn: {
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
   },
-  savedTitle: { fontFamily: fontFamilies.bodyExtraBold, color: colors.ink, fontSize: fontSizes.sm },
-  savedBody: {
-    fontFamily: fontFamilies.body,
+  cancelText: {
+    fontFamily: fontFamilies.bodyBold,
     color: colors.text.muted,
-    fontSize: fontSizes.xs,
-    marginTop: 2,
-    lineHeight: 18,
+    fontSize: fontSizes.sm,
   },
 });

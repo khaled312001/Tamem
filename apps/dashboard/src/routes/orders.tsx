@@ -6,7 +6,9 @@ import {
   ChevronRight,
   DollarSign,
   Eye,
+  LayoutGrid,
   Loader2,
+  Map as MapIcon,
   Search,
   Truck,
   X,
@@ -24,6 +26,7 @@ import { Badge, StatusBadge } from '../components/ui/Badge.js';
 import { Button } from '../components/ui/Button.js';
 import { Dialog, Drawer } from '../components/ui/Dialog.js';
 import { Field, Input, Textarea } from '../components/ui/Input.js';
+import { OrdersMap, type OrdersMapOrder } from '../components/OrdersMap.js';
 import { EmptyState, TableSkeleton } from '../components/ui/Skeleton.js';
 import { api } from '../lib/api.js';
 import { connectSocket } from '../lib/socket.js';
@@ -88,6 +91,9 @@ export function OrdersPage() {
   const [quickAssignFor, setQuickAssignFor] = useState<OrderRow | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [bulkActionFor, setBulkActionFor] = useState<OrderStatus | null>(null);
+  const [viewMode, setViewMode] = useState<'table' | 'map'>(() =>
+    searchParams.get('view') === 'map' ? 'map' : 'table',
+  );
 
   // Sync ALL filter state to the URL so reload + browser back/forward work.
   useEffect(() => {
@@ -96,13 +102,14 @@ export function OrdersPage() {
     if (statusFilter) next.status = statusFilter;
     if (fromPreset) next.from = fromPreset;
     if (page > 1) next.page = String(page);
+    if (viewMode === 'map') next.view = 'map';
     const current = Object.fromEntries(searchParams.entries());
     const changed =
       Object.keys(next).length !== Object.keys(current).length ||
       Object.entries(next).some(([k, v]) => current[k] !== v);
     if (changed) setSearchParams(next, { replace: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [debouncedSearch, statusFilter, fromPreset, page]);
+  }, [debouncedSearch, statusFilter, fromPreset, page, viewMode]);
 
   // React to the URL changing externally (e.g. header search bar pushes a new query)
   useEffect(() => {
@@ -266,6 +273,27 @@ export function OrdersPage() {
             {data?.pagination.total ?? 0} طلب إجمالي
           </p>
         </div>
+        {/* View toggle: table vs map */}
+        <div className="inline-flex border border-border rounded-lg overflow-hidden bg-white">
+          <button
+            onClick={() => setViewMode('table')}
+            className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold transition ${
+              viewMode === 'table' ? 'bg-brand-red text-white' : 'text-brand-dark hover:bg-muted'
+            }`}
+          >
+            <LayoutGrid className="w-3.5 h-3.5" />
+            جدول
+          </button>
+          <button
+            onClick={() => setViewMode('map')}
+            className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold transition ${
+              viewMode === 'map' ? 'bg-brand-red text-white' : 'text-brand-dark hover:bg-muted'
+            }`}
+          >
+            <MapIcon className="w-3.5 h-3.5" />
+            خريطة
+          </button>
+        </div>
       </div>
 
       {/* Quick filter presets */}
@@ -375,166 +403,192 @@ export function OrdersPage() {
         </div>
       )}
 
-      {/* Table */}
-      <div className="bg-white rounded-xl border border-border overflow-hidden">
-        {isLoading ? (
-          <div className="p-6">
-            <TableSkeleton rows={8} cols={7} />
-          </div>
-        ) : !data?.items.length ? (
-          <EmptyState title="لا توجد طلبات" description="جرّب تغيير الفلتر أو انتظر طلبات جديدة." />
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead className="bg-muted/50 border-b border-border">
-                <tr className="text-right">
-                  <th className="px-3 py-3 w-10">
-                    <input
-                      type="checkbox"
-                      checked={allSelected}
-                      ref={(el) => {
-                        if (el) el.indeterminate = someSelected;
-                      }}
-                      onChange={toggleSelectAll}
-                      aria-label="تحديد كل الصفحة"
-                      className="w-4 h-4 cursor-pointer accent-brand-red"
-                    />
-                  </th>
-                  <th className="px-4 py-3 font-bold">رقم الطلب</th>
-                  <th className="px-4 py-3 font-bold">العميل</th>
-                  <th className="px-4 py-3 font-bold">الخدمة</th>
-                  <th className="px-4 py-3 font-bold">الحالة</th>
-                  <th className="px-4 py-3 font-bold">السعر</th>
-                  <th className="px-4 py-3 font-bold">السائق</th>
-                  <th className="px-4 py-3 font-bold">التاريخ</th>
-                  <th className="px-4 py-3 font-bold text-center">إجراءات</th>
-                </tr>
-              </thead>
-              <tbody>
-                {(data.items as OrderRow[]).map((o) => {
-                  const next = nextStatusFor(o);
-                  const isSelected = selectedIds.has(o.id);
-                  return (
-                    <tr
-                      key={o.id}
-                      onClick={() => navigate(`/orders/${o.id}`)}
-                      className={`border-b border-border/50 hover:bg-muted/30 cursor-pointer ${
-                        isSelected ? 'bg-brand-red/5' : ''
-                      }`}
-                    >
-                      <td
-                        className="px-3 py-3"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          toggleSelectOne(o.id);
-                        }}
-                      >
-                        <input
-                          type="checkbox"
-                          checked={isSelected}
-                          onChange={() => toggleSelectOne(o.id)}
-                          onClick={(e) => e.stopPropagation()}
-                          aria-label="تحديد الطلب"
-                          className="w-4 h-4 cursor-pointer accent-brand-red"
-                        />
-                      </td>
-                      <td className="px-4 py-3 font-mono text-xs">{o.orderNumber}</td>
-                      <td className="px-4 py-3">
-                        <div className="font-medium">{o.customer?.name ?? '—'}</div>
-                        <div className="text-xs text-muted-foreground" dir="ltr">
-                          {o.customer?.phone ?? ''}
-                        </div>
-                      </td>
-                      <td className="px-4 py-3">{o.service?.nameAr ?? '—'}</td>
-                      <td className="px-4 py-3">
-                        <StatusBadge status={o.status as OrderStatus} />
-                      </td>
-                      <td className="px-4 py-3">
-                        {(o.finalPrice ?? o.quotedPrice)
-                          ? `${Number(o.finalPrice ?? o.quotedPrice).toLocaleString('ar-EG')} ج.م`
-                          : '—'}
-                      </td>
-                      <td className="px-4 py-3">{o.assignedDriver?.name ?? '—'}</td>
-                      <td className="px-4 py-3 text-xs text-muted-foreground">
-                        {new Date(o.createdAt).toLocaleDateString('ar-EG')}
-                      </td>
-                      <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
-                        <div className="flex items-center justify-center gap-1">
-                          {/* Status-aware quick action */}
-                          {o.status === 'UNDER_REVIEW' && (
-                            <button
-                              onClick={() => setQuickPriceFor(o)}
-                              title="تسعير سريع"
-                              className="p-1.5 rounded-md hover:bg-brand-red/10 text-brand-red"
-                            >
-                              <DollarSign className="w-4 h-4" />
-                            </button>
-                          )}
-                          {(o.status === 'ACCEPTED' || o.status === 'PRICED') && (
-                            <button
-                              onClick={() => setQuickAssignFor(o)}
-                              title="تعيين سائق"
-                              className="p-1.5 rounded-md hover:bg-blue-50 text-blue-600"
-                            >
-                              <Truck className="w-4 h-4" />
-                            </button>
-                          )}
-                          {next && !['UNDER_REVIEW', 'ACCEPTED', 'PRICED'].includes(o.status) && (
-                            <button
-                              onClick={() => quickAdvance.mutate({ id: o.id, status: next })}
-                              disabled={quickAdvance.isPending}
-                              title={`→ ${ORDER_STATUS_AR[next]}`}
-                              className="p-1.5 rounded-md hover:bg-green-50 text-green-600"
-                            >
-                              <ArrowRight className="w-4 h-4" />
-                            </button>
-                          )}
-                          <button
-                            onClick={() => navigate(`/orders/${o.id}`)}
-                            title="فتح التفاصيل"
-                            className="p-1.5 rounded-md hover:bg-muted"
-                          >
-                            <Eye className="w-4 h-4" />
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        )}
+      {/* Map view — orders + drivers on a single map */}
+      {viewMode === 'map' && (
+        <div className="bg-white rounded-xl border border-border p-3">
+          {isLoading ? (
+            <div className="h-[420px] grid place-items-center text-muted-foreground text-sm">
+              جاري تحميل الخريطة...
+            </div>
+          ) : !data?.items.length ? (
+            <EmptyState
+              title="لا توجد طلبات لعرضها على الخريطة"
+              description="غيّر الفلتر أو انتظر طلبات جديدة."
+            />
+          ) : (
+            <OrdersMap orders={data.items as OrdersMapOrder[]} />
+          )}
+          <p className="text-xs text-muted-foreground mt-2 text-center">
+            النقاط الزرقاء = موقع التوصيل · 🚚 = السائق (يتحدث لحظياً)
+          </p>
+        </div>
+      )}
 
-        {/* Pagination */}
-        {data && data.pagination.totalPages > 1 && (
-          <div className="flex items-center justify-between px-4 py-3 border-t border-border bg-muted/20">
-            <div className="text-sm text-muted-foreground">
-              صفحة {page} من {data.pagination.totalPages}
+      {/* Table */}
+      {viewMode === 'table' && (
+        <div className="bg-white rounded-xl border border-border overflow-hidden">
+          {isLoading ? (
+            <div className="p-6">
+              <TableSkeleton rows={8} cols={7} />
             </div>
-            <div className="flex gap-2">
-              <Button
-                size="sm"
-                variant="outline"
-                disabled={page === 1}
-                onClick={() => setPage((p) => Math.max(1, p - 1))}
-              >
-                <ChevronRight className="w-4 h-4" />
-                السابق
-              </Button>
-              <Button
-                size="sm"
-                variant="outline"
-                disabled={page >= data.pagination.totalPages}
-                onClick={() => setPage((p) => p + 1)}
-              >
-                التالي
-                <ChevronLeft className="w-4 h-4" />
-              </Button>
+          ) : !data?.items.length ? (
+            <EmptyState
+              title="لا توجد طلبات"
+              description="جرّب تغيير الفلتر أو انتظر طلبات جديدة."
+            />
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="bg-muted/50 border-b border-border">
+                  <tr className="text-right">
+                    <th className="px-3 py-3 w-10">
+                      <input
+                        type="checkbox"
+                        checked={allSelected}
+                        ref={(el) => {
+                          if (el) el.indeterminate = someSelected;
+                        }}
+                        onChange={toggleSelectAll}
+                        aria-label="تحديد كل الصفحة"
+                        className="w-4 h-4 cursor-pointer accent-brand-red"
+                      />
+                    </th>
+                    <th className="px-4 py-3 font-bold">رقم الطلب</th>
+                    <th className="px-4 py-3 font-bold">العميل</th>
+                    <th className="px-4 py-3 font-bold">الخدمة</th>
+                    <th className="px-4 py-3 font-bold">الحالة</th>
+                    <th className="px-4 py-3 font-bold">السعر</th>
+                    <th className="px-4 py-3 font-bold">السائق</th>
+                    <th className="px-4 py-3 font-bold">التاريخ</th>
+                    <th className="px-4 py-3 font-bold text-center">إجراءات</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(data.items as OrderRow[]).map((o) => {
+                    const next = nextStatusFor(o);
+                    const isSelected = selectedIds.has(o.id);
+                    return (
+                      <tr
+                        key={o.id}
+                        onClick={() => navigate(`/orders/${o.id}`)}
+                        className={`border-b border-border/50 hover:bg-muted/30 cursor-pointer ${
+                          isSelected ? 'bg-brand-red/5' : ''
+                        }`}
+                      >
+                        <td
+                          className="px-3 py-3"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            toggleSelectOne(o.id);
+                          }}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={isSelected}
+                            onChange={() => toggleSelectOne(o.id)}
+                            onClick={(e) => e.stopPropagation()}
+                            aria-label="تحديد الطلب"
+                            className="w-4 h-4 cursor-pointer accent-brand-red"
+                          />
+                        </td>
+                        <td className="px-4 py-3 font-mono text-xs">{o.orderNumber}</td>
+                        <td className="px-4 py-3">
+                          <div className="font-medium">{o.customer?.name ?? '—'}</div>
+                          <div className="text-xs text-muted-foreground" dir="ltr">
+                            {o.customer?.phone ?? ''}
+                          </div>
+                        </td>
+                        <td className="px-4 py-3">{o.service?.nameAr ?? '—'}</td>
+                        <td className="px-4 py-3">
+                          <StatusBadge status={o.status as OrderStatus} />
+                        </td>
+                        <td className="px-4 py-3">
+                          {(o.finalPrice ?? o.quotedPrice)
+                            ? `${Number(o.finalPrice ?? o.quotedPrice).toLocaleString('ar-EG')} ج.م`
+                            : '—'}
+                        </td>
+                        <td className="px-4 py-3">{o.assignedDriver?.name ?? '—'}</td>
+                        <td className="px-4 py-3 text-xs text-muted-foreground">
+                          {new Date(o.createdAt).toLocaleDateString('ar-EG')}
+                        </td>
+                        <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
+                          <div className="flex items-center justify-center gap-1">
+                            {/* Status-aware quick action */}
+                            {o.status === 'UNDER_REVIEW' && (
+                              <button
+                                onClick={() => setQuickPriceFor(o)}
+                                title="تسعير سريع"
+                                className="p-1.5 rounded-md hover:bg-brand-red/10 text-brand-red"
+                              >
+                                <DollarSign className="w-4 h-4" />
+                              </button>
+                            )}
+                            {(o.status === 'ACCEPTED' || o.status === 'PRICED') && (
+                              <button
+                                onClick={() => setQuickAssignFor(o)}
+                                title="تعيين سائق"
+                                className="p-1.5 rounded-md hover:bg-blue-50 text-blue-600"
+                              >
+                                <Truck className="w-4 h-4" />
+                              </button>
+                            )}
+                            {next && !['UNDER_REVIEW', 'ACCEPTED', 'PRICED'].includes(o.status) && (
+                              <button
+                                onClick={() => quickAdvance.mutate({ id: o.id, status: next })}
+                                disabled={quickAdvance.isPending}
+                                title={`→ ${ORDER_STATUS_AR[next]}`}
+                                className="p-1.5 rounded-md hover:bg-green-50 text-green-600"
+                              >
+                                <ArrowRight className="w-4 h-4" />
+                              </button>
+                            )}
+                            <button
+                              onClick={() => navigate(`/orders/${o.id}`)}
+                              title="فتح التفاصيل"
+                              className="p-1.5 rounded-md hover:bg-muted"
+                            >
+                              <Eye className="w-4 h-4" />
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
             </div>
-          </div>
-        )}
-      </div>
+          )}
+
+          {/* Pagination */}
+          {data && data.pagination.totalPages > 1 && (
+            <div className="flex items-center justify-between px-4 py-3 border-t border-border bg-muted/20">
+              <div className="text-sm text-muted-foreground">
+                صفحة {page} من {data.pagination.totalPages}
+              </div>
+              <div className="flex gap-2">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={page === 1}
+                  onClick={() => setPage((p) => Math.max(1, p - 1))}
+                >
+                  <ChevronRight className="w-4 h-4" />
+                  السابق
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={page >= data.pagination.totalPages}
+                  onClick={() => setPage((p) => p + 1)}
+                >
+                  التالي
+                  <ChevronLeft className="w-4 h-4" />
+                </Button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
 
       {selectedOrderId && (
         <OrderDetailDrawer orderId={selectedOrderId} onClose={() => setSelectedOrderId(null)} />

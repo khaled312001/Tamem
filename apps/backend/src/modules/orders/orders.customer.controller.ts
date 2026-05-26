@@ -284,6 +284,128 @@ export const cancelMine: RequestHandler = async (req, res, next) => {
   }
 };
 
+/**
+ * POST /orders/from/:sourceId — clone a previous order's content (service,
+ * delivery address/coords, notes, image URLs, customData) into a brand new
+ * order with status=NEW. Customer must own the source order. Frequent-repeat
+ * orders are common enough in delivery to justify a 1-tap path.
+ */
+export const reorderFromExisting: RequestHandler = async (req, res, next) => {
+  try {
+    if (!req.user) throw new UnauthorizedError();
+    const source = await prisma.order.findUnique({
+      where: { id: param(req.params.id) },
+      include: {
+        items: true,
+        pickupPoints: { orderBy: { sortOrder: 'asc' } },
+        deliveryPoints: { orderBy: { sortOrder: 'asc' } },
+      },
+    });
+    if (!source) throw new NotFoundError('Order', 'الطلب الأصلي غير موجود');
+    if (source.customerId !== req.user.id) throw new ForbiddenError();
+
+    const orderNumber = generateOrderNumber();
+    let newOrder;
+
+    if (source.category === 'MERCHANT') {
+      newOrder = await prisma.order.create({
+        data: {
+          orderNumber,
+          serviceId: source.serviceId,
+          customerId: req.user.id,
+          category: source.category,
+          status: OrderStatus.NEW,
+          merchantId: source.merchantId,
+          notes: source.notes,
+          customData: (source.customData ?? undefined) as object | undefined,
+          paymentMethod: source.paymentMethod,
+          items: {
+            create: source.items.map((it) => ({
+              productId: it.productId,
+              productNameSnapshot: it.productNameSnapshot,
+              unitPriceSnapshot: it.unitPriceSnapshot,
+              quantity: it.quantity,
+              merchantId: it.merchantId,
+              notes: it.notes,
+            })),
+          },
+          pickupPoints: {
+            create: source.pickupPoints.map((p, i) => ({
+              sortOrder: i,
+              merchantId: p.merchantId,
+              label: p.label,
+              address: p.address,
+              lat: p.lat,
+              lng: p.lng,
+              contactName: p.contactName,
+              contactPhone: p.contactPhone,
+              notes: p.notes,
+            })),
+          },
+          deliveryPoints: {
+            create: source.deliveryPoints.map((d, i) => ({
+              sortOrder: i,
+              recipientName: d.recipientName,
+              recipientPhone: d.recipientPhone,
+              address: d.address,
+              lat: d.lat,
+              lng: d.lng,
+              notes: d.notes,
+            })),
+          },
+        },
+      });
+    } else {
+      newOrder = await prisma.order.create({
+        data: {
+          orderNumber,
+          serviceId: source.serviceId,
+          customerId: req.user.id,
+          category: source.category,
+          status: OrderStatus.NEW,
+          merchantId: source.merchantId,
+          notes: source.notes,
+          customData: (source.customData ?? undefined) as object | undefined,
+          imageUrls: (source.imageUrls ?? undefined) as object | undefined,
+          pickupLat: source.pickupLat,
+          pickupLng: source.pickupLng,
+          pickupAddress: source.pickupAddress,
+          deliveryLat: source.deliveryLat,
+          deliveryLng: source.deliveryLng,
+          deliveryAddress: source.deliveryAddress,
+          weightKg: source.weightKg,
+          sizeCategory: source.sizeCategory,
+          isFragile: source.isFragile,
+          speedTier: source.speedTier,
+          paymentMethod: source.paymentMethod,
+        },
+      });
+    }
+
+    await prisma.orderStatusHistory.create({
+      data: {
+        orderId: newOrder.id,
+        toStatus: OrderStatus.NEW,
+        changedById: req.user.id,
+        changedByRole: UserRole.CUSTOMER,
+        reason: `Reorder from ${source.orderNumber}`,
+        metadata: { reorderedFrom: source.id },
+      },
+    });
+
+    try {
+      const { emitNewOrder } = await import('../../realtime/channels.js');
+      emitNewOrder(req.app.locals.io, newOrder);
+    } catch {
+      /* not critical */
+    }
+
+    created(res, newOrder);
+  } catch (err) {
+    next(err);
+  }
+};
+
 export const estimatePrice: RequestHandler = async (req, res, next) => {
   try {
     const input = pricingEstimateSchema.parse(req.body);

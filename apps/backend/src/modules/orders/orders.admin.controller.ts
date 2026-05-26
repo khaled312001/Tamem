@@ -84,7 +84,22 @@ export const adminList: RequestHandler = async (req, res, next) => {
         include: {
           service: { select: { id: true, name: true, nameAr: true, category: true } },
           customer: { select: { id: true, name: true, phone: true } },
-          assignedDriver: { select: { id: true, name: true, phone: true } },
+          assignedDriver: {
+            select: {
+              id: true,
+              name: true,
+              phone: true,
+              driverProfile: {
+                select: {
+                  currentLat: true,
+                  currentLng: true,
+                  lastLocationAt: true,
+                  vehicleType: true,
+                  vehiclePlate: true,
+                },
+              },
+            },
+          },
         },
       }),
       prisma.order.count({ where }),
