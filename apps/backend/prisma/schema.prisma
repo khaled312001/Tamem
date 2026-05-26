@@ -153,6 +153,8 @@ model User {
   governorate     String?
   defaultAddress  String?  @db.VarChar(500)
   fcmToken        String?
+  passwordResetHash     String?
+  passwordResetExpiresAt DateTime?
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
@@ -380,12 +382,33 @@ model Order {
   statusHistory       OrderStatusHistory[]
   payments            Payment[]
   alerts              Alert[]
+  review              OrderReview?
 
   @@index([status, createdAt(sort: Desc)])
   @@index([customerId, createdAt(sort: Desc)])
   @@index([assignedDriverId, status])
   @@index([category])
   @@index([serviceId])
+}
+
+/// One review per completed order. Customer rates the experience overall and
+/// optionally the driver / merchant separately. We recompute the driver's and
+/// merchant's running average ratings whenever a review is created.
+model OrderReview {
+  id            String   @id @default(cuid())
+  orderId       String   @unique
+  order         Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  customerId    String
+  driverId      String?
+  merchantId    String?
+  rating        Int      // 1..5, overall order experience
+  driverRating  Int?     // 1..5, optional
+  merchantRating Int?    // 1..5, optional
+  comment       String?  @db.VarChar(1000)
+  createdAt     DateTime @default(now())
+
+  @@index([driverId])
+  @@index([merchantId])
 }
 
 model OrderItem {

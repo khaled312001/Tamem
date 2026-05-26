@@ -207,6 +207,7 @@ export const getMine: RequestHandler = async (req, res, next) => {
         deliveryPoints: { orderBy: { sortOrder: 'asc' } },
         statusHistory: { orderBy: { createdAt: 'asc' } },
         assignedDriver: { select: { id: true, name: true, phone: true } },
+        review: true,
       },
     });
     if (!order) throw new NotFoundError('Order', 'الطلب غير موجود');

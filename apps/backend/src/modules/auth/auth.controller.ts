@@ -1,5 +1,8 @@
+import { createHash, randomInt } from 'node:crypto';
+
 import bcrypt from 'bcryptjs';
 import type { RequestHandler } from 'express';
+import { z } from 'zod';
 
 import { UserRole } from '@tamem/types';
 import {
@@ -11,6 +14,7 @@ import {
   registerSchema,
 } from '@tamem/validators';
 
+import { env } from '../../config/env.js';
 import { prisma } from '../../db/prisma.js';
 import { ConflictError, UnauthorizedError } from '../../utils/errors.js';
 import { created, ok } from '../../utils/response.js';
@@ -21,6 +25,14 @@ import {
   refreshTokenExpiry,
   signAccessToken,
 } from './tokens.js';
+
+function generatePasswordResetCode(): string {
+  // 6-digit zero-padded
+  return String(randomInt(0, 1_000_000)).padStart(6, '0');
+}
+function hashResetCode(code: string): string {
+  return createHash('sha256').update(code).digest('hex');
+}
 
 export const register: RequestHandler = async (req, res, next) => {
   try {
@@ -163,6 +175,98 @@ export const googleLogin: RequestHandler = async (req, res, next) => {
     const tokens = await issueTokens(user.id, user.role as UserRole, req);
     ok(res, {
       user: { id: user.id, name: user.name, phone: user.phone, email: user.email, role: user.role },
+      tokens,
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+/**
+ * POST /auth/forgot-password — initiate a password reset by phone number.
+ * In dev/stub mode we return the reset code in the response so the mobile
+ * app can autofill it for testing. In production this code would be sent
+ * over SMS / WhatsApp and the response would be `{ sent: true }` only.
+ *
+ * The code is a 6-digit number stored hashed on the User record with a
+ * 10-minute expiry. We deliberately don't reveal whether the phone exists
+ * — return `{ sent: true }` even on unknown numbers to prevent enumeration.
+ */
+export const forgotPassword: RequestHandler = async (req, res, next) => {
+  try {
+    const input = z.object({ phone: z.string().trim().min(8) }).parse(req.body);
+    const user = await prisma.user.findUnique({ where: { phone: input.phone } });
+    if (!user) {
+      ok(res, { sent: true });
+      return;
+    }
+    const code = generatePasswordResetCode();
+    const codeHash = hashResetCode(code);
+    await prisma.user.update({
+      where: { id: user.id },
+      data: {
+        passwordResetHash: codeHash,
+        passwordResetExpiresAt: new Date(Date.now() + 10 * 60_000),
+      },
+    });
+    // STUB: include the code in the response so dev / QA can copy it.
+    const debugCode = env.NODE_ENV === 'production' ? undefined : code;
+    ok(res, { sent: true, ...(debugCode ? { debugCode } : {}) });
+  } catch (err) {
+    next(err);
+  }
+};
+
+/**
+ * POST /auth/reset-password — verify the reset code and set a new password.
+ * Same hash-verify pattern as the refresh token: hash the user-supplied code
+ * with the same algorithm and compare to the stored hash. Clear the reset
+ * fields + revoke all existing refresh tokens so any logged-in session on
+ * other devices is killed (defense in depth).
+ */
+export const resetPassword: RequestHandler = async (req, res, next) => {
+  try {
+    const input = z
+      .object({
+        phone: z.string().trim().min(8),
+        code: z.string().regex(/^\d{6}$/, 'كود التحقق 6 أرقام'),
+        newPassword: z.string().min(8).max(100),
+      })
+      .parse(req.body);
+
+    const user = await prisma.user.findUnique({ where: { phone: input.phone } });
+    if (!user || !user.passwordResetHash || !user.passwordResetExpiresAt) {
+      throw new UnauthorizedError('كود التحقق غير صحيح أو منتهي');
+    }
+    if (user.passwordResetExpiresAt < new Date()) {
+      throw new UnauthorizedError('انتهت صلاحية كود التحقق — اطلب كوداً جديداً');
+    }
+    if (hashResetCode(input.code) !== user.passwordResetHash) {
+      throw new UnauthorizedError('كود التحقق غير صحيح');
+    }
+
+    const newHash = await bcrypt.hash(input.newPassword, 12);
+    await prisma.$transaction([
+      prisma.user.update({
+        where: { id: user.id },
+        data: {
+          passwordHash: newHash,
+          passwordResetHash: null,
+          passwordResetExpiresAt: null,
+        },
+      }),
+      // Kill every refresh token so other devices are logged out.
+      prisma.refreshToken.updateMany({
+        where: { userId: user.id, revokedAt: null },
+        data: { revokedAt: new Date() },
+      }),
+    ]);
+
+    // Issue a fresh session immediately so the mobile flow can land on Home
+    // without forcing the user to type the new password again.
+    const tokens = await issueTokens(user.id, user.role as UserRole, req);
+    ok(res, {
+      user: { id: user.id, name: user.name, phone: user.phone, role: user.role },
       tokens,
     });
   } catch (err) {

@@ -141,7 +141,10 @@ export function LoginScreen() {
             )}
           />
 
-          <Pressable style={styles.forgotLink}>
+          <Pressable
+            style={styles.forgotLink}
+            onPress={() => navigation.navigate('ForgotPassword')}
+          >
             <Text style={styles.forgotText}>نسيت كلمة المرور؟</Text>
           </Pressable>
 

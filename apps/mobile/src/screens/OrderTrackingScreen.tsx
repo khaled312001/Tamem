@@ -1,7 +1,7 @@
 import { useNavigation, useRoute, type RouteProp } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { CheckCircle2, MessageCircle, Phone, RotateCcw, X } from 'lucide-react-native';
+import { CheckCircle2, MessageCircle, Phone, RotateCcw, Star, X } from 'lucide-react-native';
 import { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
@@ -50,6 +50,7 @@ interface OrderDetail {
   assignedDriver?: { id: string; name: string; phone: string } | null;
   statusHistory?: StatusHistoryItem[];
   createdAt: string;
+  review?: { id: string; rating: number; comment?: string | null } | null;
 }
 
 const SUPPORT_WHATSAPP =
@@ -259,6 +260,18 @@ export function OrderTrackingScreen() {
           ))}
         </View>
 
+        {/* Review prompt — only shown for delivered/completed orders without a
+            review yet. Once submitted, it collapses into a "تم تقييم الطلب"
+            badge so the customer doesn't get nagged. */}
+        {['DELIVERED', 'COMPLETED'].includes(order.status) && (
+          <ReviewPrompt
+            orderId={order.id}
+            hasDriver={!!order.assignedDriver}
+            hasMerchant={false /* could be derived from order.merchantId */}
+            existingReview={order.review ?? null}
+          />
+        )}
+
         {/* Reorder — clones this order's content into a brand new NEW order.
             Only useful once the original has reached a terminal state. */}
         {['COMPLETED', 'DELIVERED', 'CANCELLED'].includes(order.status) && (
@@ -447,6 +460,218 @@ function ReorderButton({ orderId, orderNumber }: { orderId: string; orderNumber:
     </Pressable>
   );
 }
+
+// ────────────────────────────────────────────────────────────────────────────
+// Review prompt — 5-star rating + driver rating + optional comment
+// ────────────────────────────────────────────────────────────────────────────
+
+interface ReviewPromptProps {
+  orderId: string;
+  hasDriver: boolean;
+  hasMerchant: boolean;
+  existingReview: { rating: number; comment?: string | null } | null;
+}
+
+function ReviewPrompt({ orderId, hasDriver, existingReview }: ReviewPromptProps) {
+  const qc = useQueryClient();
+  const [rating, setRating] = useState(0);
+  const [driverRating, setDriverRating] = useState(0);
+  const [comment, setComment] = useState('');
+
+  const submitMut = useMutation({
+    mutationFn: () =>
+      api.raw.post(`/orders/${orderId}/review`, {
+        rating,
+        ...(hasDriver && driverRating ? { driverRating } : {}),
+        ...(comment.trim() ? { comment: comment.trim() } : {}),
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['order', orderId] });
+    },
+    onError: (err) => Alert.alert('خطأ', err instanceof Error ? err.message : 'فشل إرسال التقييم'),
+  });
+
+  if (existingReview) {
+    return (
+      <View style={reviewStyles.done}>
+        <View style={reviewStyles.doneRow}>
+          {[1, 2, 3, 4, 5].map((i) => (
+            <Star
+              key={i}
+              size={16}
+              color={colors.brand.gold}
+              fill={i <= existingReview.rating ? colors.brand.gold : 'transparent'}
+            />
+          ))}
+        </View>
+        <Text style={reviewStyles.doneText}>تم تقييم الطلب — شكراً لك على ملاحظاتك ❤️</Text>
+      </View>
+    );
+  }
+
+  return (
+    <View style={reviewStyles.card}>
+      <Text style={reviewStyles.cardTitle}>قيّم تجربتك</Text>
+      <Text style={reviewStyles.cardSub}>ملاحظاتك تساعدنا نقدّم خدمة أفضل</Text>
+
+      <StarRow value={rating} onChange={setRating} label="التقييم العام" />
+      {hasDriver && (
+        <StarRow value={driverRating} onChange={setDriverRating} label="تقييم السائق" />
+      )}
+
+      <View style={reviewStyles.commentField}>
+        <Text style={reviewStyles.commentLabel}>تعليق (اختياري)</Text>
+        <View style={reviewStyles.commentBox}>
+          <Text
+            // Use TextInput when available — fallback to display-only is fine
+            // since the component below is the real input.
+            style={{ display: 'none' }}
+          />
+          <CommentInput value={comment} onChange={setComment} />
+        </View>
+      </View>
+
+      <Pressable
+        onPress={() => rating > 0 && !submitMut.isPending && submitMut.mutate()}
+        disabled={rating === 0 || submitMut.isPending}
+        style={({ pressed }) => [
+          reviewStyles.submitBtn,
+          (rating === 0 || submitMut.isPending) && { opacity: 0.5 },
+          pressed && { opacity: 0.85 },
+        ]}
+      >
+        {submitMut.isPending ? (
+          <ActivityIndicator color={colors.white} size="small" />
+        ) : (
+          <Text style={reviewStyles.submitText}>إرسال التقييم</Text>
+        )}
+      </Pressable>
+    </View>
+  );
+}
+
+function StarRow({
+  value,
+  onChange,
+  label,
+}: {
+  value: number;
+  onChange: (v: number) => void;
+  label: string;
+}) {
+  return (
+    <View style={reviewStyles.starRow}>
+      <Text style={reviewStyles.starLabel}>{label}</Text>
+      <View style={{ flexDirection: 'row', gap: 4 }}>
+        {[1, 2, 3, 4, 5].map((i) => (
+          <Pressable key={i} onPress={() => onChange(i)} hitSlop={6}>
+            <Star
+              size={22}
+              color={colors.brand.gold}
+              fill={i <= value ? colors.brand.gold : 'transparent'}
+            />
+          </Pressable>
+        ))}
+      </View>
+    </View>
+  );
+}
+
+function CommentInput({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  // Importing TextInput inline keeps the top imports lean and avoids dragging
+  // platform-specific keyboard avoiding behavior into the prompt.
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { TextInput } = require('react-native') as typeof import('react-native');
+  return (
+    <TextInput
+      value={value}
+      onChangeText={onChange}
+      placeholder="إيه الحاجة اللي أعجبتك أو ممكن تتحسن؟"
+      placeholderTextColor={colors.text.muted}
+      multiline
+      maxLength={1000}
+      style={{
+        backgroundColor: colors.surface,
+        borderRadius: 8,
+        padding: spacing.sm,
+        fontFamily: fontFamilies.body,
+        fontSize: fontSizes.sm,
+        textAlign: 'right',
+        minHeight: 60,
+        textAlignVertical: 'top',
+        color: colors.text.primary,
+      }}
+    />
+  );
+}
+
+const reviewStyles = StyleSheet.create({
+  card: {
+    backgroundColor: colors.white,
+    borderRadius: radii.lg,
+    padding: spacing.md,
+    marginTop: spacing.md,
+    borderWidth: 1,
+    borderColor: colors.brand.gold + '60',
+    shadowColor: colors.brand.gold,
+    shadowOpacity: 0.1,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 2 },
+  },
+  cardTitle: { fontFamily: fontFamilies.headingBold, color: colors.ink, fontSize: fontSizes.md },
+  cardSub: {
+    fontFamily: fontFamilies.body,
+    color: colors.text.muted,
+    fontSize: fontSizes.xs,
+    marginTop: 2,
+    marginBottom: spacing.sm,
+  },
+  starRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: spacing.sm,
+    borderTopWidth: 1,
+    borderTopColor: colors.line,
+  },
+  starLabel: {
+    fontFamily: fontFamilies.bodyBold,
+    color: colors.text.primary,
+    fontSize: fontSizes.sm,
+  },
+  commentField: { marginTop: spacing.xs },
+  commentLabel: {
+    fontFamily: fontFamilies.bodyBold,
+    color: colors.text.secondary,
+    fontSize: fontSizes.xs,
+    marginBottom: 4,
+  },
+  commentBox: {},
+  submitBtn: {
+    backgroundColor: colors.brand.red,
+    borderRadius: radii.md,
+    paddingVertical: spacing.sm,
+    alignItems: 'center',
+    marginTop: spacing.md,
+  },
+  submitText: { color: colors.white, fontFamily: fontFamilies.headingBold, fontSize: fontSizes.sm },
+  done: {
+    backgroundColor: colors.brand.gold + '14',
+    borderRadius: radii.lg,
+    padding: spacing.md,
+    marginTop: spacing.md,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: colors.brand.gold + '40',
+  },
+  doneRow: { flexDirection: 'row', gap: 2 },
+  doneText: {
+    fontFamily: fontFamilies.bodyBold,
+    color: colors.ink,
+    fontSize: fontSizes.sm,
+    marginTop: 4,
+  },
+});
 
 const progressStyles = StyleSheet.create({
   row: {

@@ -3,6 +3,7 @@ import { Router } from 'express';
 import { requireAuth } from '../../middleware/auth.js';
 
 import * as ctrl from './orders.customer.controller.js';
+import * as reviewCtrl from './orders.review.controller.js';
 
 export const ordersRouter: Router = Router();
 ordersRouter.use(requireAuth);
@@ -14,6 +15,8 @@ ordersRouter.get('/mine', ctrl.listMine);
 ordersRouter.get('/:id', ctrl.getMine);
 ordersRouter.post('/:id/approve', ctrl.approveOrder);
 ordersRouter.post('/:id/cancel', ctrl.cancelMine);
+ordersRouter.get('/:id/review', reviewCtrl.getOrderReview);
+ordersRouter.post('/:id/review', reviewCtrl.createOrderReview);
 
 export const pricingRouter: Router = Router();
 pricingRouter.post('/estimate', ctrl.estimatePrice);

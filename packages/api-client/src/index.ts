@@ -111,6 +111,38 @@ export class TamemClient {
     await this.http.request({ method: 'POST', url: '/auth/logout', data: { refreshToken } });
   }
 
+  /** Start the forgot-password flow; backend sends a code to the user's phone. */
+  async forgotPassword(phone: string): Promise<{ sent: boolean; debugCode?: string }> {
+    return this.request({
+      method: 'POST',
+      url: '/auth/forgot-password',
+      data: { phone },
+    });
+  }
+
+  async resetPassword(
+    phone: string,
+    code: string,
+    newPassword: string,
+  ): Promise<{ user: User; tokens: AuthTokens }> {
+    return this.request({
+      method: 'POST',
+      url: '/auth/reset-password',
+      data: { phone, code, newPassword },
+    });
+  }
+
+  async submitReview(
+    orderId: string,
+    payload: { rating: number; driverRating?: number; merchantRating?: number; comment?: string },
+  ): Promise<unknown> {
+    return this.request({
+      method: 'POST',
+      url: `/orders/${orderId}/review`,
+      data: payload,
+    });
+  }
+
   async me(): Promise<User> {
     return this.request({ method: 'GET', url: '/me' });
   }

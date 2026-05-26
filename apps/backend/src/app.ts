@@ -22,7 +22,7 @@ import { adminDriversRouter } from './modules/drivers/drivers.routes.js';
 import { adminMerchantsRouter } from './modules/merchants/merchants.routes.js';
 import { notificationsRouter } from './modules/notifications/notifications.routes.js';
 import { adminOffersRouter } from './modules/offers/offers.routes.js';
-import { adminOrdersRouter } from './modules/orders/orders.admin.routes.js';
+import { adminOrdersRouter, adminReviewsRouter } from './modules/orders/orders.admin.routes.js';
 import { ordersRouter, pricingRouter } from './modules/orders/orders.routes.js';
 import {
   paymentsCustomerRouter,
@@ -100,6 +100,7 @@ export function createApp(): Express {
   adminRouter.use('/overview', adminOverviewRouter);
   adminRouter.use('/services', adminServicesRouter);
   adminRouter.use('/orders', adminOrdersRouter);
+  adminRouter.use('/reviews', adminReviewsRouter);
   adminRouter.use('/drivers', adminDriversRouter);
   adminRouter.use('/merchants', adminMerchantsRouter);
   adminRouter.use('/customers', adminCustomersRouter);

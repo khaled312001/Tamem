@@ -1,6 +1,7 @@
 import { Router } from 'express';
 
 import {
+  forgotPassword,
   googleLogin,
   login,
   logout,
@@ -8,6 +9,7 @@ import {
   otpVerify,
   refresh,
   register,
+  resetPassword,
 } from './auth.controller.js';
 
 export const authRouter: Router = Router();
@@ -19,3 +21,5 @@ authRouter.post('/refresh', refresh);
 authRouter.post('/logout', logout);
 authRouter.post('/otp/request', otpRequest);
 authRouter.post('/otp/verify', otpVerify);
+authRouter.post('/forgot-password', forgotPassword);
+authRouter.post('/reset-password', resetPassword);
