@@ -10,13 +10,28 @@
  */
 import { Platform } from 'react-native';
 
-import { api } from './api';
+import { getAccessTokenAsync } from '../stores/auth';
 
 export interface UploadResult {
   url: string;
   uploaded: boolean;
 }
 
+const API_URL = process.env.EXPO_PUBLIC_API_URL ?? 'http://localhost:4000/api/v1';
+
+/**
+ * Uploads a file via the browser's native fetch / RN's fetch. We deliberately
+ * bypass the shared axios api client because it sets a default
+ * `Content-Type: application/json` header that overrides axios's FormData
+ * auto-boundary, causing the form to arrive as `{}` at multer.
+ *
+ * With raw fetch + FormData:
+ *   - Web: the browser sets `Content-Type: multipart/form-data; boundary=...`
+ *     automatically when it sees a FormData body. We MUST NOT set it ourselves
+ *     because that strips the boundary.
+ *   - Native (Expo / RN): the same auto-detection works for FormData with
+ *     `{ uri, name, type }` entries.
+ */
 export async function uploadFile(
   uri: string,
   opts: { name?: string; mime?: string } = {},
@@ -27,8 +42,8 @@ export async function uploadFile(
 
   try {
     if (Platform.OS === 'web') {
-      const res = await fetch(uri);
-      const blob = await res.blob();
+      const blobRes = await fetch(uri);
+      const blob = await blobRes.blob();
       const file = new File([blob], name, { type: mime });
       form.append('file', file);
     } else {
@@ -39,11 +54,18 @@ export async function uploadFile(
       } as unknown as Blob);
     }
 
-    // NB: don't set Content-Type manually — axios + FormData inject the
-    // multipart boundary automatically. Setting the header by hand strips
-    // the boundary and multer rejects the request silently.
-    const res = await api.raw.post('/uploads', form);
-    return { url: res.data.data.url as string, uploaded: true };
+    const token = await getAccessTokenAsync();
+    // No Content-Type header on purpose — let the runtime compute the boundary.
+    const res = await fetch(`${API_URL}/uploads`, {
+      method: 'POST',
+      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+      body: form,
+    });
+    if (!res.ok) {
+      throw new Error(`upload failed: HTTP ${res.status}`);
+    }
+    const json = (await res.json()) as { data: { url: string } };
+    return { url: json.data.url, uploaded: true };
   } catch (err) {
     // eslint-disable-next-line no-console
     console.warn('[uploadFile] failed, falling back to original URI:', err);
