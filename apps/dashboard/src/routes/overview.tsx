@@ -1,6 +1,7 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { AlertTriangle, Loader2, Package, RefreshCw, TrendingUp, Users } from 'lucide-react';
 import { useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
   Bar,
   BarChart,
@@ -22,6 +23,7 @@ import { Button } from '../components/ui/Button.js';
 import { CardSkeleton } from '../components/ui/Skeleton.js';
 import { api } from '../lib/api.js';
 import { connectSocket } from '../lib/socket.js';
+import { playNewOrderSound } from '../lib/sound.js';
 
 const RANGE_OPTIONS = [
   { value: 'today', label: 'اليوم' },
@@ -53,6 +55,7 @@ const PIE_COLORS = ['#E0301E', '#EC7A2C', '#F2A93B', '#3B82F6', '#10B981', '#8B5
 
 export function OverviewPage() {
   const qc = useQueryClient();
+  const navigate = useNavigate();
   const [range, setRange] = useState<Range>('week');
 
   const { data, isLoading, refetch, isFetching } = useQuery({
@@ -60,18 +63,24 @@ export function OverviewPage() {
     queryFn: () => api.adminOverview(range) as Promise<OverviewResponse>,
   });
 
-  // Realtime: when a new order arrives, refetch overview + show toast.
+  // Realtime: when a new order arrives, refetch + sound + actionable toast.
   useEffect(() => {
     const socket = connectSocket();
-    const onNew = () => {
-      toast('🆕 طلب جديد وصل', { description: 'يتم تحديث القائمة' });
+    const onNew = (order: { id?: string; orderNumber?: string }) => {
+      playNewOrderSound();
+      toast('🆕 طلب جديد وصل', {
+        description: order?.orderNumber ? `رقم ${order.orderNumber}` : 'يتم تحديث القائمة',
+        action: order?.id
+          ? { label: 'افتح', onClick: () => navigate(`/orders/${order.id}`) }
+          : undefined,
+      });
       qc.invalidateQueries({ queryKey: ['admin', 'overview'] });
     };
     socket.on('order:new', onNew);
     return () => {
       socket.off('order:new', onNew);
     };
-  }, [qc]);
+  }, [qc, navigate]);
 
   return (
     <div className="space-y-6">

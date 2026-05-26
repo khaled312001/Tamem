@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   ArrowRight,
+  CheckCircle2,
   ChevronLeft,
   ChevronRight,
   DollarSign,
@@ -8,6 +9,9 @@ import {
   Loader2,
   Search,
   Truck,
+  X,
+  XCircle,
+  Zap,
 } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
@@ -23,6 +27,7 @@ import { Field, Input, Textarea } from '../components/ui/Input.js';
 import { EmptyState, TableSkeleton } from '../components/ui/Skeleton.js';
 import { api } from '../lib/api.js';
 import { connectSocket } from '../lib/socket.js';
+import { playNewOrderSound } from '../lib/sound.js';
 
 const STATUS_TABS = [
   { value: '', label: 'الكل' },
@@ -34,6 +39,35 @@ const STATUS_TABS = [
   { value: 'CANCELLED,REJECTED', label: 'ملغي' },
 ] as const;
 
+// Quick filter presets — preset name + which URL params to set.
+const QUICK_FILTERS: {
+  key: string;
+  label: string;
+  icon: React.ReactNode;
+  status?: string;
+  from?: 'today';
+}[] = [
+  { key: 'today', label: 'اليوم', icon: <Zap className="w-3.5 h-3.5" />, from: 'today' },
+  {
+    key: 'pending-pricing',
+    label: 'بانتظار تسعير',
+    icon: <DollarSign className="w-3.5 h-3.5" />,
+    status: 'UNDER_REVIEW',
+  },
+  {
+    key: 'pending-customer',
+    label: 'بانتظار العميل',
+    icon: <CheckCircle2 className="w-3.5 h-3.5" />,
+    status: 'PRICED,AWAITING_CUSTOMER_APPROVAL',
+  },
+  {
+    key: 'on-the-way',
+    label: 'في الطريق',
+    icon: <Truck className="w-3.5 h-3.5" />,
+    status: 'DRIVER_ASSIGNED,PICKED_UP,IN_ROUTE',
+  },
+];
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type OrderRow = any;
 
@@ -41,25 +75,34 @@ export function OrdersPage() {
   const qc = useQueryClient();
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
-  const [page, setPage] = useState(1);
+  const [page, setPage] = useState(() => Math.max(1, Number(searchParams.get('page') ?? 1)));
   const [pageSize] = useState(20);
-  const [statusFilter, setStatusFilter] = useState<string>('');
+  const [statusFilter, setStatusFilter] = useState<string>(searchParams.get('status') ?? '');
+  const [fromPreset, setFromPreset] = useState<'today' | undefined>(
+    searchParams.get('from') === 'today' ? 'today' : undefined,
+  );
   const [search, setSearch] = useState(searchParams.get('search') ?? '');
   const [debouncedSearch, setDebouncedSearch] = useState(searchParams.get('search') ?? '');
   const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null);
   const [quickPriceFor, setQuickPriceFor] = useState<OrderRow | null>(null);
   const [quickAssignFor, setQuickAssignFor] = useState<OrderRow | null>(null);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [bulkActionFor, setBulkActionFor] = useState<OrderStatus | null>(null);
 
-  // Keep URL ?search= in sync with the input so deep links work both ways
+  // Sync ALL filter state to the URL so reload + browser back/forward work.
   useEffect(() => {
-    const current = searchParams.get('search') ?? '';
-    if (debouncedSearch && debouncedSearch !== current) {
-      setSearchParams({ search: debouncedSearch }, { replace: true });
-    } else if (!debouncedSearch && current) {
-      setSearchParams({}, { replace: true });
-    }
+    const next: Record<string, string> = {};
+    if (debouncedSearch) next.search = debouncedSearch;
+    if (statusFilter) next.status = statusFilter;
+    if (fromPreset) next.from = fromPreset;
+    if (page > 1) next.page = String(page);
+    const current = Object.fromEntries(searchParams.entries());
+    const changed =
+      Object.keys(next).length !== Object.keys(current).length ||
+      Object.entries(next).some(([k, v]) => current[k] !== v);
+    if (changed) setSearchParams(next, { replace: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [debouncedSearch]);
+  }, [debouncedSearch, statusFilter, fromPreset, page]);
 
   // React to the URL changing externally (e.g. header search bar pushes a new query)
   useEffect(() => {
@@ -83,6 +126,24 @@ export function OrdersPage() {
     onError: (err: Error) => toast.error(err.message),
   });
 
+  // Bulk status mutation — used by the floating action bar.
+  const bulkStatusMut = useMutation({
+    mutationFn: ({ status, reason }: { status: OrderStatus; reason?: string }) =>
+      api.adminBulkOrderStatus(Array.from(selectedIds), status, reason),
+    onSuccess: (res) => {
+      const ok = res.succeeded.length;
+      const failed = res.failed.length;
+      if (ok > 0 && failed === 0) toast.success(`تم تحديث ${ok} طلب`);
+      else if (ok > 0 && failed > 0)
+        toast(`تم تحديث ${ok} طلب`, { description: `${failed} طلب فشل تحديثهم` });
+      else toast.error('فشل تحديث الطلبات', { description: res.failed[0]?.reason });
+      setSelectedIds(new Set());
+      setBulkActionFor(null);
+      qc.invalidateQueries({ queryKey: ['admin', 'orders'] });
+    },
+    onError: (err: Error) => toast.error(err.message),
+  });
+
   // Helper: best "next status" suggestion for one-click advance
   const nextStatusFor = (o: OrderRow): OrderStatus | null => {
     const allowed = (ORDER_TRANSITIONS[o.status as OrderStatus] ?? []) as OrderStatus[];
@@ -100,25 +161,101 @@ export function OrdersPage() {
     const p: Record<string, unknown> = { page, pageSize };
     if (statusFilter) p.status = statusFilter; // backend accepts CSV for grouped tabs
     if (debouncedSearch) p.search = debouncedSearch;
+    if (fromPreset === 'today') {
+      const start = new Date();
+      start.setHours(0, 0, 0, 0);
+      p.from = start.toISOString();
+    }
     return p;
-  }, [page, pageSize, statusFilter, debouncedSearch]);
+  }, [page, pageSize, statusFilter, debouncedSearch, fromPreset]);
 
   const { data, isLoading } = useQuery({
     queryKey: ['admin', 'orders', params],
     queryFn: () => api.adminListOrders(params),
   });
 
-  // Socket: auto refresh on order events
+  // Socket: auto refresh + sound + toast action on new orders
   useEffect(() => {
     const socket = connectSocket();
     const refetch = () => qc.invalidateQueries({ queryKey: ['admin', 'orders'] });
-    socket.on('order:new', refetch);
+    const onNew = (order: { id?: string; orderNumber?: string }) => {
+      playNewOrderSound();
+      toast('🆕 طلب جديد وصل', {
+        description: order?.orderNumber ? `رقم ${order.orderNumber}` : undefined,
+        action: order?.id
+          ? { label: 'افتح', onClick: () => navigate(`/orders/${order.id}`) }
+          : undefined,
+      });
+      refetch();
+    };
+    socket.on('order:new', onNew);
     socket.on('order:status', refetch);
     return () => {
-      socket.off('order:new', refetch);
+      socket.off('order:new', onNew);
       socket.off('order:status', refetch);
     };
-  }, [qc]);
+  }, [qc, navigate]);
+
+  // Drop selections that fall outside the current page so the bulk bar
+  // doesn't claim to act on rows the admin can't see anymore.
+  useEffect(() => {
+    if (!data?.items.length) return;
+    const visibleIds = new Set(data.items.map((o: OrderRow) => o.id));
+    setSelectedIds((prev) => {
+      const filtered = new Set(Array.from(prev).filter((id) => visibleIds.has(id)));
+      return filtered.size === prev.size ? prev : filtered;
+    });
+  }, [data]);
+
+  const visibleIds = useMemo(
+    () => (data?.items ?? []).map((o: OrderRow) => o.id as string),
+    [data],
+  );
+  const allSelected = visibleIds.length > 0 && visibleIds.every((id) => selectedIds.has(id));
+  const someSelected = selectedIds.size > 0 && !allSelected;
+
+  const toggleSelectAll = () => {
+    setSelectedIds((prev) => {
+      if (visibleIds.every((id) => prev.has(id))) {
+        // un-select page only — keep selections from other pages? simpler: clear all
+        return new Set();
+      }
+      const next = new Set(prev);
+      visibleIds.forEach((id) => next.add(id));
+      return next;
+    });
+  };
+  const toggleSelectOne = (id: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const selectedOrders = useMemo<OrderRow[]>(
+    () => (data?.items as OrderRow[] | undefined)?.filter((o) => selectedIds.has(o.id)) ?? [],
+    [data, selectedIds],
+  );
+
+  // Which target statuses are valid for ALL currently selected orders?
+  // We intersect the allowed transitions across the selection so admin can't
+  // press a button that would fail on half the orders.
+  const bulkTargets = useMemo<OrderStatus[]>(() => {
+    if (selectedOrders.length === 0) return [];
+    let intersect: OrderStatus[] | null = null;
+    for (const o of selectedOrders) {
+      const allowed = (ORDER_TRANSITIONS[o.status as OrderStatus] ?? []) as readonly OrderStatus[];
+      if (intersect === null) {
+        intersect = [...allowed];
+      } else {
+        const allowedSet = new Set<OrderStatus>(allowed);
+        intersect = intersect.filter((s) => allowedSet.has(s));
+      }
+    }
+    return intersect ?? [];
+  }, [selectedOrders]);
 
   return (
     <div className="space-y-4">
@@ -131,6 +268,47 @@ export function OrdersPage() {
         </div>
       </div>
 
+      {/* Quick filter presets */}
+      <div className="flex flex-wrap gap-2">
+        {QUICK_FILTERS.map((q) => {
+          const isActive =
+            (q.status ?? '') === statusFilter && (q.from ?? undefined) === fromPreset;
+          return (
+            <button
+              key={q.key}
+              onClick={() => {
+                setStatusFilter(q.status ?? '');
+                setFromPreset(q.from);
+                setPage(1);
+              }}
+              className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-bold transition border ${
+                isActive
+                  ? 'bg-brand-red text-white border-brand-red shadow-sm'
+                  : 'bg-white text-brand-dark border-border hover:border-brand-red/50 hover:text-brand-red'
+              }`}
+            >
+              {q.icon}
+              {q.label}
+            </button>
+          );
+        })}
+        {(statusFilter || fromPreset || debouncedSearch) && (
+          <button
+            onClick={() => {
+              setStatusFilter('');
+              setFromPreset(undefined);
+              setSearch('');
+              setDebouncedSearch('');
+              setPage(1);
+            }}
+            className="inline-flex items-center gap-1 px-3 py-1.5 rounded-full text-xs text-muted-foreground hover:text-brand-red"
+          >
+            <X className="w-3 h-3" />
+            مسح الفلاتر
+          </button>
+        )}
+      </div>
+
       {/* Filters */}
       <div className="bg-white rounded-xl border border-border p-4 space-y-3">
         <div className="flex gap-2 flex-wrap">
@@ -139,9 +317,10 @@ export function OrdersPage() {
               key={tab.value}
               onClick={() => {
                 setStatusFilter(tab.value);
+                setFromPreset(undefined);
                 setPage(1);
               }}
-              className={`px-3 py-1.5 rounded-lg text-sm transition ${statusFilter === tab.value ? 'bg-brand-red text-white font-bold' : 'bg-muted hover:bg-muted/80'}`}
+              className={`px-3 py-1.5 rounded-lg text-sm transition ${statusFilter === tab.value && !fromPreset ? 'bg-brand-red text-white font-bold' : 'bg-muted hover:bg-muted/80'}`}
             >
               {tab.label}
             </button>
@@ -159,6 +338,43 @@ export function OrdersPage() {
         </div>
       </div>
 
+      {/* Floating bulk action bar */}
+      {selectedIds.size > 0 && (
+        <div className="sticky top-16 z-20 bg-brand-red text-white rounded-xl shadow-lg flex items-center justify-between gap-3 px-4 py-2.5">
+          <div className="flex items-center gap-3 text-sm">
+            <span className="font-bold">{selectedIds.size} طلب محدد</span>
+            <button
+              onClick={() => setSelectedIds(new Set())}
+              className="opacity-90 hover:opacity-100 inline-flex items-center gap-1"
+            >
+              <X className="w-3.5 h-3.5" />
+              إلغاء التحديد
+            </button>
+          </div>
+          <div className="flex items-center gap-2 flex-wrap justify-end">
+            {bulkTargets.length === 0 ? (
+              <span className="text-xs opacity-80">لا توجد حالة مشتركة متاحة</span>
+            ) : (
+              bulkTargets.map((target) => (
+                <button
+                  key={target}
+                  onClick={() => setBulkActionFor(target)}
+                  disabled={bulkStatusMut.isPending}
+                  className="px-3 py-1.5 rounded-lg bg-white/15 hover:bg-white/25 text-xs font-bold inline-flex items-center gap-1 transition"
+                >
+                  {target === 'CANCELLED' ? (
+                    <XCircle className="w-3.5 h-3.5" />
+                  ) : (
+                    <ArrowRight className="w-3.5 h-3.5" />
+                  )}
+                  {ORDER_STATUS_AR[target]}
+                </button>
+              ))
+            )}
+          </div>
+        </div>
+      )}
+
       {/* Table */}
       <div className="bg-white rounded-xl border border-border overflow-hidden">
         {isLoading ? (
@@ -172,6 +388,18 @@ export function OrdersPage() {
             <table className="w-full text-sm">
               <thead className="bg-muted/50 border-b border-border">
                 <tr className="text-right">
+                  <th className="px-3 py-3 w-10">
+                    <input
+                      type="checkbox"
+                      checked={allSelected}
+                      ref={(el) => {
+                        if (el) el.indeterminate = someSelected;
+                      }}
+                      onChange={toggleSelectAll}
+                      aria-label="تحديد كل الصفحة"
+                      className="w-4 h-4 cursor-pointer accent-brand-red"
+                    />
+                  </th>
                   <th className="px-4 py-3 font-bold">رقم الطلب</th>
                   <th className="px-4 py-3 font-bold">العميل</th>
                   <th className="px-4 py-3 font-bold">الخدمة</th>
@@ -185,12 +413,31 @@ export function OrdersPage() {
               <tbody>
                 {(data.items as OrderRow[]).map((o) => {
                   const next = nextStatusFor(o);
+                  const isSelected = selectedIds.has(o.id);
                   return (
                     <tr
                       key={o.id}
                       onClick={() => navigate(`/orders/${o.id}`)}
-                      className="border-b border-border/50 hover:bg-muted/30 cursor-pointer"
+                      className={`border-b border-border/50 hover:bg-muted/30 cursor-pointer ${
+                        isSelected ? 'bg-brand-red/5' : ''
+                      }`}
                     >
+                      <td
+                        className="px-3 py-3"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          toggleSelectOne(o.id);
+                        }}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={isSelected}
+                          onChange={() => toggleSelectOne(o.id)}
+                          onClick={(e) => e.stopPropagation()}
+                          aria-label="تحديد الطلب"
+                          className="w-4 h-4 cursor-pointer accent-brand-red"
+                        />
+                      </td>
                       <td className="px-4 py-3 font-mono text-xs">{o.orderNumber}</td>
                       <td className="px-4 py-3">
                         <div className="font-medium">{o.customer?.name ?? '—'}</div>
@@ -311,7 +558,71 @@ export function OrdersPage() {
           }}
         />
       )}
+
+      {bulkActionFor && (
+        <BulkConfirmDialog
+          targetStatus={bulkActionFor}
+          count={selectedIds.size}
+          pending={bulkStatusMut.isPending}
+          onCancel={() => setBulkActionFor(null)}
+          onConfirm={(reason) =>
+            bulkStatusMut.mutate({ status: bulkActionFor, reason: reason || undefined })
+          }
+        />
+      )}
     </div>
+  );
+}
+
+function BulkConfirmDialog({
+  targetStatus,
+  count,
+  pending,
+  onCancel,
+  onConfirm,
+}: {
+  targetStatus: OrderStatus;
+  count: number;
+  pending: boolean;
+  onCancel: () => void;
+  onConfirm: (reason: string) => void;
+}) {
+  const [reason, setReason] = useState('');
+  const needsReason = targetStatus === 'CANCELLED' || targetStatus === 'REJECTED';
+  return (
+    <Dialog
+      open
+      onOpenChange={(o) => !o && onCancel()}
+      title={`تأكيد تحديث ${count} طلب → ${ORDER_STATUS_AR[targetStatus]}`}
+    >
+      <p className="text-sm text-muted-foreground mb-3">
+        سيتم تطبيق التغيير على جميع الطلبات المحددة. الطلبات التي حالتها لا تسمح بهذا الانتقال سيتم
+        تخطيها.
+      </p>
+      <Field label={needsReason ? 'السبب' : 'سبب اختياري'} required={needsReason}>
+        <Textarea
+          value={reason}
+          onChange={(e) => setReason(e.target.value)}
+          rows={2}
+          placeholder={needsReason ? 'اكتب السبب...' : 'مثال: دفعة موافقات إدارية'}
+        />
+      </Field>
+      <div className="flex justify-end gap-2 mt-4">
+        <Button variant="outline" size="md" onClick={onCancel}>
+          تراجع
+        </Button>
+        <Button
+          variant={
+            targetStatus === 'CANCELLED' || targetStatus === 'REJECTED' ? 'danger' : 'primary'
+          }
+          disabled={(needsReason && reason.trim().length < 2) || pending}
+          onClick={() => onConfirm(reason.trim())}
+        >
+          {pending && <Loader2 className="w-4 h-4 animate-spin" />}
+          تأكيد على {count} طلب
+        </Button>
+      </div>
+    </Dialog>
   );
 }
 

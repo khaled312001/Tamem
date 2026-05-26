@@ -218,6 +218,19 @@ export class TamemClient {
     });
   }
 
+  /** Bulk status flip — partial success allowed; check `failed[]` in result. */
+  async adminBulkOrderStatus(
+    ids: string[],
+    status: string,
+    reason?: string,
+  ): Promise<{ succeeded: string[]; failed: { id: string; reason: string }[] }> {
+    return this.request({
+      method: 'POST',
+      url: '/admin/orders/bulk-status',
+      data: { ids, status, reason },
+    });
+  }
+
   // ===== Admin Services =====
   async adminListServices(): Promise<unknown[]> {
     return this.request({ method: 'GET', url: '/admin/services' });

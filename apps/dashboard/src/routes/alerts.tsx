@@ -10,6 +10,7 @@ import { Field, Textarea } from '../components/ui/Input.js';
 import { CardSkeleton, EmptyState } from '../components/ui/Skeleton.js';
 import { api } from '../lib/api.js';
 import { connectSocket } from '../lib/socket.js';
+import { playAlertSound } from '../lib/sound.js';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Row = any;
@@ -62,6 +63,7 @@ export function AlertsPage() {
     const socket = connectSocket();
     const onNew = () => {
       qc.invalidateQueries({ queryKey: ['admin', 'alerts'] });
+      playAlertSound();
       toast('⚠️ تنبيه جديد', { description: 'تم إضافة تنبيه إلى المركز' });
     };
     socket.on('alert:new', onNew);

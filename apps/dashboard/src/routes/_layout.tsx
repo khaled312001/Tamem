@@ -15,6 +15,8 @@ import {
   Store,
   Truck,
   Users,
+  Volume2,
+  VolumeX,
   X,
 } from 'lucide-react';
 import { useEffect, useState } from 'react';
@@ -24,6 +26,8 @@ import { Logo } from '../components/Logo.js';
 import { NotificationBell } from '../components/NotificationBell.js';
 import { UserMenu } from '../components/UserMenu.js';
 import { api } from '../lib/api.js';
+import { isSoundEnabled, playNewOrderSound, setSoundEnabled } from '../lib/sound.js';
+import { useSocketStatus } from '../lib/useSocketStatus.js';
 import { cn } from '../lib/utils.js';
 import { NotificationsProvider } from '../providers/NotificationsProvider.js';
 
@@ -226,6 +230,8 @@ export function DashboardLayout() {
                   className="w-56 lg:w-72 px-4 py-2 rounded-full bg-gradient-to-l from-muted/70 to-muted/40 border border-transparent outline-none focus:ring-2 focus:ring-brand-red/30 focus:border-brand-red/30 focus:bg-white text-sm transition-all duration-200"
                 />
               </form>
+              <SocketIndicator />
+              <SoundToggle />
               <NotificationBell />
               <div className="w-px h-8 bg-border/60 hidden md:block" />
               <UserMenu />
@@ -270,5 +276,59 @@ export function DashboardLayout() {
         </main>
       </div>
     </NotificationsProvider>
+  );
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Header indicators
+// ────────────────────────────────────────────────────────────────────────────
+
+function SocketIndicator() {
+  const status = useSocketStatus();
+  const meta = {
+    connected: { color: 'bg-green-500', label: 'متصل', ringClass: 'ring-green-300' },
+    reconnecting: {
+      color: 'bg-amber-400',
+      label: 'جاري إعادة الاتصال',
+      ringClass: 'ring-amber-300 animate-pulse',
+    },
+    connecting: {
+      color: 'bg-amber-400',
+      label: 'جاري الاتصال',
+      ringClass: 'ring-amber-300 animate-pulse',
+    },
+    disconnected: { color: 'bg-red-500', label: 'غير متصل', ringClass: 'ring-red-300' },
+  }[status];
+
+  return (
+    <div
+      className="hidden md:flex items-center gap-1.5 text-xs text-muted-foreground select-none"
+      title={`الاتصال اللحظي: ${meta.label}`}
+    >
+      <span className={`w-2.5 h-2.5 rounded-full ${meta.color} ring-2 ${meta.ringClass}`} />
+      <span className="hidden lg:inline">{meta.label}</span>
+    </div>
+  );
+}
+
+function SoundToggle() {
+  const [on, setOn] = useState(isSoundEnabled());
+  const toggle = () => {
+    const next = !on;
+    setOn(next);
+    setSoundEnabled(next);
+    // Audible feedback the first time it's flipped on so the admin knows it works.
+    if (next) playNewOrderSound();
+  };
+  return (
+    <button
+      onClick={toggle}
+      title={on ? 'كتم تنبيهات الصوت' : 'تفعيل تنبيهات الصوت'}
+      className={`p-2 rounded-lg transition ${
+        on ? 'text-brand-red hover:bg-brand-red/10' : 'text-muted-foreground hover:bg-muted'
+      }`}
+    >
+      {on ? <Volume2 className="w-4 h-4" /> : <VolumeX className="w-4 h-4" />}
+    </button>
   );
 }

@@ -38,6 +38,12 @@ const internalNoteSchema = z.object({
   note: z.string().trim().min(1).max(2000),
 });
 
+const bulkStatusSchema = z.object({
+  ids: z.array(z.string().min(1)).min(1).max(200),
+  status: z.nativeEnum(OrderStatus),
+  reason: z.string().max(500).optional(),
+});
+
 export const adminList: RequestHandler = async (req, res, next) => {
   try {
     const q = listQuerySchema.parse(req.query);
@@ -347,6 +353,75 @@ export const adminCancel: RequestHandler = async (req, res, next) => {
     });
     await dispatchOrderStatusChanged(req.app, updated, updated.status);
     ok(res, updated);
+  } catch (err) {
+    next(err);
+  }
+};
+
+/**
+ * POST /admin/orders/bulk-status — flip many orders to a target status in one
+ * round-trip. Each order is validated individually with assertTransition so the
+ * FSM is still enforced. Invalid transitions are reported back but do not
+ * abort the batch — partial success is fine.
+ */
+export const adminBulkStatus: RequestHandler = async (req, res, next) => {
+  try {
+    const input = bulkStatusSchema.parse(req.body);
+    const orders = await prisma.order.findMany({ where: { id: { in: input.ids } } });
+
+    const succeeded: string[] = [];
+    const failed: { id: string; reason: string }[] = [];
+
+    for (const order of orders) {
+      try {
+        assertTransition(order.status, input.status, req.user!.role);
+      } catch (err) {
+        failed.push({
+          id: order.id,
+          reason: err instanceof Error ? err.message : 'invalid transition',
+        });
+        continue;
+      }
+
+      const lifecycleStamps: Record<string, Date> = {};
+      if (input.status === OrderStatus.PICKED_UP) lifecycleStamps.pickedUpAt = new Date();
+      if (input.status === OrderStatus.DELIVERED) lifecycleStamps.deliveredAt = new Date();
+      if (input.status === OrderStatus.COMPLETED) lifecycleStamps.completedAt = new Date();
+      if (input.status === OrderStatus.CANCELLED) lifecycleStamps.cancelledAt = new Date();
+
+      const updated = await prisma.order.update({
+        where: { id: order.id },
+        data: {
+          status: input.status,
+          ...lifecycleStamps,
+          ...(input.status === OrderStatus.CANCELLED && input.reason
+            ? { cancellationReason: input.reason }
+            : {}),
+        },
+      });
+
+      await prisma.orderStatusHistory.create({
+        data: {
+          orderId: order.id,
+          fromStatus: order.status,
+          toStatus: input.status,
+          changedById: req.user!.id,
+          changedByRole: UserRole.ADMIN,
+          reason: input.reason ?? 'bulk update',
+        },
+      });
+
+      await dispatchOrderStatusChanged(req.app, updated, input.status);
+      succeeded.push(order.id);
+    }
+
+    // Report ids that weren't in the DB at all (caller passed stale ids).
+    const foundIds = new Set(orders.map((o) => o.id));
+    for (const id of input.ids) {
+      if (!foundIds.has(id)) failed.push({ id, reason: 'not found' });
+    }
+
+    ok(res, { succeeded, failed });
   } catch (err) {
     next(err);
   }
