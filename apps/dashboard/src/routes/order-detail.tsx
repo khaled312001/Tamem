@@ -1,28 +1,26 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
-  ArrowRight,
   Check,
   ChevronRight,
   ImageIcon,
-  Loader2,
   MapPin,
   MessageSquare,
   Mic,
   Phone,
   User,
-  X as XIcon,
 } from 'lucide-react';
 import { useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { toast } from 'sonner';
 
-import { ORDER_STATUS_AR, ORDER_TRANSITIONS, type OrderStatus } from '@tamem/types';
+import { type OrderStatus } from '@tamem/types';
 
 import { Badge, StatusBadge } from '../components/ui/Badge.js';
 import { Button } from '../components/ui/Button.js';
 import { Dialog } from '../components/ui/Dialog.js';
 import { Field, Input, Textarea } from '../components/ui/Input.js';
 import { CardSkeleton } from '../components/ui/Skeleton.js';
+import { StatusQuickMenu } from '../components/StatusQuickMenu.js';
 import { api } from '../lib/api.js';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -46,15 +44,6 @@ export function OrderDetailPage() {
     qc.invalidateQueries({ queryKey: ['admin', 'order', id] });
   };
 
-  const updateStatus = useMutation({
-    mutationFn: (status: OrderStatus) => api.adminUpdateOrderStatus(id!, status),
-    onSuccess: () => {
-      toast.success('تم تحديث الحالة');
-      invalidate();
-    },
-    onError: (err: Error) => toast.error(err.message),
-  });
-
   if (isLoading || !order) {
     return (
       <div className="space-y-4">
@@ -64,7 +53,6 @@ export function OrderDetailPage() {
     );
   }
 
-  const allowed = (ORDER_TRANSITIONS[order.status as OrderStatus] ?? []) as OrderStatus[];
   const customData = order.customData as Record<string, unknown> | undefined;
 
   // Auto-scan customData for media attachments. Mobile dynamic forms with
@@ -158,7 +146,7 @@ export function OrderDetailPage() {
         </div>
         <div>
           <div className="text-xs text-muted-foreground mb-1">الحالة</div>
-          <StatusBadge status={order.status as OrderStatus} size="md" />
+          <StatusQuickMenu orderId={id!} status={order.status as OrderStatus} size="md" />
         </div>
         <div>
           <div className="text-xs text-muted-foreground mb-1">السعر</div>
@@ -175,29 +163,9 @@ export function OrderDetailPage() {
           {(order.status === 'ACCEPTED' || order.status === 'PRICED') && (
             <Button onClick={() => setDialog('assign')}>تعيين سائق</Button>
           )}
-          {allowed
-            .filter((s) => s !== 'CANCELLED' && s !== 'REJECTED')
-            .map((s) => (
-              <Button
-                key={s}
-                variant="outline"
-                size="sm"
-                onClick={() => updateStatus.mutate(s)}
-                disabled={updateStatus.isPending}
-              >
-                {updateStatus.isPending ? (
-                  <Loader2 className="w-3 h-3 animate-spin" />
-                ) : (
-                  <ArrowRight className="w-3 h-3" />
-                )}
-                {ORDER_STATUS_AR[s]}
-              </Button>
-            ))}
-          {allowed.includes('CANCELLED' as OrderStatus) && (
-            <Button variant="danger" size="sm" onClick={() => setDialog('cancel')}>
-              <XIcon className="w-3 h-3" /> إلغاء
-            </Button>
-          )}
+          <p className="text-xs text-muted-foreground self-center">
+            أو اضغط على شارة الحالة بالأعلى لتغييرها مباشرة ↑
+          </p>
         </div>
       </div>
 

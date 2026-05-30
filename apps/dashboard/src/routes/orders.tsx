@@ -28,6 +28,7 @@ import { Button } from '../components/ui/Button.js';
 import { Dialog, Drawer } from '../components/ui/Dialog.js';
 import { Field, Input, Textarea } from '../components/ui/Input.js';
 import { OrdersMap, type OrdersMapOrder } from '../components/OrdersMap.js';
+import { StatusQuickMenu } from '../components/StatusQuickMenu.js';
 import { EmptyState, TableSkeleton } from '../components/ui/Skeleton.js';
 import { api } from '../lib/api.js';
 import { connectSocket } from '../lib/socket.js';
@@ -510,8 +511,8 @@ export function OrdersPage() {
                           </div>
                         </td>
                         <td className="px-4 py-3">{o.service?.nameAr ?? '—'}</td>
-                        <td className="px-4 py-3">
-                          <StatusBadge status={o.status as OrderStatus} />
+                        <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
+                          <StatusQuickMenu orderId={o.id} status={o.status as OrderStatus} />
                         </td>
                         <td className="px-4 py-3">
                           {(o.finalPrice ?? o.quotedPrice)
