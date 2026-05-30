@@ -52,14 +52,28 @@ export const overview: RequestHandler = async (req, res, next) => {
         },
       }),
       prisma.order.count({
-        where: { status: 'COMPLETED', completedAt: { gte: from, lte: to } },
+        where: {
+          status: { in: ['COMPLETED', 'DELIVERED'] },
+          OR: [{ completedAt: { gte: from, lte: to } }, { deliveredAt: { gte: from, lte: to } }],
+        },
       }),
       prisma.order.count({
         where: { status: 'CANCELLED', cancelledAt: { gte: from, lte: to } },
       }),
-      prisma.order.aggregate({
-        _sum: { finalPrice: true },
-        where: { status: 'COMPLETED', completedAt: { gte: from, lte: to } },
+      // Revenue = sum of whichever price is set (final preferred, quoted
+      // fallback) for any order that's reached COMPLETED or DELIVERED in the
+      // selected range. Counting DELIVERED keeps the dashboard honest even
+      // when the admin hasn't bothered with the final "complete" tick.
+      prisma.order.findMany({
+        where: {
+          status: { in: ['COMPLETED', 'DELIVERED'] },
+          OR: [
+            { completedAt: { gte: from, lte: to } },
+            { deliveredAt: { gte: from, lte: to } },
+            { createdAt: { gte: from, lte: to } }, // covers same-day fast-pathed orders
+          ],
+        },
+        select: { finalPrice: true, quotedPrice: true },
       }),
       prisma.payment.count({ where: { status: 'PENDING' } }),
       prisma.alert.count({ where: { isResolved: false } }),
@@ -72,12 +86,15 @@ export const overview: RequestHandler = async (req, res, next) => {
       }),
     ]);
 
-    // 7-day trend (always last 7 days regardless of range)
+    // 7-day trend (always last 7 days regardless of range). Revenue counts
+    // any order that reached DELIVERED or COMPLETED that day, using finalPrice
+    // when set otherwise falling back to quotedPrice.
     const trendStart = new Date(Date.now() - 7 * 86_400_000);
     const trendOrders = await prisma.order.findMany({
       where: { createdAt: { gte: trendStart } },
-      select: { createdAt: true, status: true, finalPrice: true },
+      select: { createdAt: true, status: true, finalPrice: true, quotedPrice: true },
     });
+    const isEarning = (s: string) => s === 'COMPLETED' || s === 'DELIVERED';
     const trend: { day: string; orders: number; revenue: number }[] = [];
     for (let i = 6; i >= 0; i--) {
       const d = new Date(Date.now() - i * 86_400_000);
@@ -87,11 +104,16 @@ export const overview: RequestHandler = async (req, res, next) => {
         day: key,
         orders: day.length,
         revenue: day.reduce(
-          (s, o) => s + (o.status === 'COMPLETED' && o.finalPrice ? Number(o.finalPrice) : 0),
+          (s, o) => s + (isEarning(o.status) ? Number(o.finalPrice ?? o.quotedPrice ?? 0) : 0),
           0,
         ),
       });
     }
+
+    const revenue = totalRevenue.reduce(
+      (sum, o) => sum + Number(o.finalPrice ?? o.quotedPrice ?? 0),
+      0,
+    );
 
     ok(res, {
       kpis: {
@@ -101,7 +123,7 @@ export const overview: RequestHandler = async (req, res, next) => {
         activeOrders,
         completedOrders,
         cancelledOrders,
-        revenue: Number(totalRevenue._sum.finalPrice ?? 0),
+        revenue,
         pendingPayments,
         activeAlerts,
         availableDrivers,

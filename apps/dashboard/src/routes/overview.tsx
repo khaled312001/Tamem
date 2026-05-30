@@ -63,9 +63,13 @@ export function OverviewPage() {
     queryFn: () => api.adminOverview(range) as Promise<OverviewResponse>,
   });
 
-  // Realtime: when a new order arrives, refetch + sound + actionable toast.
+  // Realtime: refetch the KPIs on order:new (with toast + sound) AND on every
+  // order:status change, since completing an order is what bumps revenue, and
+  // we don't want the admin to wonder why the numbers stayed put.
+  // Also poll every 30s as a safety net in case a socket event is missed.
   useEffect(() => {
     const socket = connectSocket();
+    const refetchOverview = () => qc.invalidateQueries({ queryKey: ['admin', 'overview'] });
     const onNew = (order: { id?: string; orderNumber?: string }) => {
       playNewOrderSound();
       toast('🆕 طلب جديد وصل', {
@@ -74,11 +78,15 @@ export function OverviewPage() {
           ? { label: 'افتح', onClick: () => navigate(`/orders/${order.id}`) }
           : undefined,
       });
-      qc.invalidateQueries({ queryKey: ['admin', 'overview'] });
+      refetchOverview();
     };
     socket.on('order:new', onNew);
+    socket.on('order:status', refetchOverview);
+    const poll = setInterval(refetchOverview, 30_000);
     return () => {
       socket.off('order:new', onNew);
+      socket.off('order:status', refetchOverview);
+      clearInterval(poll);
     };
   }, [qc, navigate]);
 
