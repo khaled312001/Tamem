@@ -32,9 +32,6 @@ export function AppTabs() {
       initialRouteName="HomeTab"
       screenOptions={{
         headerShown: false,
-        // Freeze inactive tabs so React doesn't waste cycles reconciling them.
-        freezeOnBlur: true,
-        lazy: true,
         tabBarActiveTintColor: colors.brand.red,
         tabBarInactiveTintColor: colors.text.muted,
         tabBarHideOnKeyboard: true,

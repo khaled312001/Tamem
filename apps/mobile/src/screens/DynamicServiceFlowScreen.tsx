@@ -43,18 +43,12 @@ export function DynamicServiceFlowScreen() {
     mutationFn: (payload: Record<string, unknown>) =>
       api.raw.post('/orders', payload).then((r) => r.data.data),
     onSuccess: (order) => {
-      // Navigate immediately — Alert.alert on web is a synchronous window.alert
-      // that doesn't honor button callbacks reliably, so we jump straight to
-      // the tracking screen and let it announce the success.
       try {
         const parent = navigation.getParent();
         if (parent) {
-          parent.navigate('Orders', {
-            screen: 'OrderTracking',
-            params: { orderId: order.id, justCreated: true },
-          } as never);
+          parent.navigate('Orders', { screen: 'OrdersList' } as never);
+          Alert.alert('تم استلام طلبك ✓', `رقم الطلب: ${order.orderNumber ?? '—'}`);
         } else {
-          // Fallback for any nav structure surprise — at least pop back home
           navigation.popToTop();
         }
       } catch {

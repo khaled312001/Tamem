@@ -79,11 +79,13 @@ export function OrderTrackingScreen() {
   const {
     data: order,
     isLoading,
+    error,
     refetch,
     isFetching,
   } = useQuery<OrderDetail>({
     queryKey: ['order', orderId],
     queryFn: () => api.raw.get(`/orders/${orderId}`).then((r) => r.data.data),
+    enabled: !!orderId,
   });
 
   // Realtime: subscribe to this order's room. order:status invalidates the
@@ -115,11 +117,54 @@ export function OrderTrackingScreen() {
     };
   }, [orderId, qc]);
 
-  if (isLoading || !order) {
+  if (isLoading) {
     return (
       <SafeAreaView style={styles.container}>
         <GradientHeader greeting="جاري التحميل" location="" />
         <ActivityIndicator color={colors.brand.red} style={{ marginTop: spacing.xl }} />
+      </SafeAreaView>
+    );
+  }
+
+  if (error || !order) {
+    const msg = error instanceof Error ? error.message : 'تعذّر تحميل الطلب';
+    return (
+      <SafeAreaView style={styles.container}>
+        <GradientHeader greeting="خطأ" location="" />
+        <View style={{ padding: spacing.lg, alignItems: 'center', gap: spacing.md }}>
+          <Text
+            style={{
+              color: colors.text.primary,
+              fontFamily: fontFamilies.body,
+              fontSize: fontSizes.sm,
+              textAlign: 'center',
+            }}
+          >
+            {msg}
+          </Text>
+          <Pressable
+            onPress={() => refetch()}
+            style={({ pressed }) => [
+              {
+                backgroundColor: colors.brand.red,
+                paddingVertical: spacing.sm,
+                paddingHorizontal: spacing.lg,
+                borderRadius: radii.pill,
+              },
+              pressed && { opacity: 0.85 },
+            ]}
+          >
+            <Text
+              style={{
+                color: colors.white,
+                fontFamily: fontFamilies.bodyExtraBold,
+                fontSize: fontSizes.sm,
+              }}
+            >
+              إعادة المحاولة
+            </Text>
+          </Pressable>
+        </View>
       </SafeAreaView>
     );
   }

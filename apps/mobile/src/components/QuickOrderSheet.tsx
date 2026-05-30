@@ -125,14 +125,13 @@ export function QuickOrderSheet({ visible, onClose }: QuickOrderSheetProps) {
       const order = res.data.data;
 
       onClose();
-      // Navigate straight to OrderTracking — Alert button callbacks are
-      // unreliable on web (window.alert collapses to a plain dialog).
+      // Land the customer on the Orders list (طلباتي) — they can tap the new
+      // row at the top to drill into OrderTracking. Lighter on first-render
+      // than going straight to a detail page that may not be loaded yet.
       try {
         const parent = navigation.getParent?.();
-        parent?.navigate('Orders', {
-          screen: 'OrderTracking',
-          params: { orderId: order.id, justCreated: true },
-        });
+        parent?.navigate('Orders', { screen: 'OrdersList' });
+        Alert.alert('تم استلام طلبك ✓', `رقم الطلب: ${order.orderNumber ?? '—'}`);
       } catch {
         // ignore — sheet is already closed
       }

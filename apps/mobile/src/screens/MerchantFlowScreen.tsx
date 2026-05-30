@@ -108,10 +108,8 @@ export function MerchantFlowScreen() {
       try {
         const parent = navigation.getParent();
         if (parent) {
-          parent.navigate('Orders', {
-            screen: 'OrderTracking',
-            params: { orderId: order.id, justCreated: true },
-          } as never);
+          parent.navigate('Orders', { screen: 'OrdersList' } as never);
+          Alert.alert('تم استلام طلبك ✓', `رقم الطلب: ${order.orderNumber ?? '—'}`);
         } else {
           navigation.popToTop();
         }
