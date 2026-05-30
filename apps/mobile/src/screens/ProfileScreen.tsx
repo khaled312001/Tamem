@@ -11,12 +11,13 @@ import {
   User,
   Wallet,
 } from 'lucide-react-native';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Alert, Pressable, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { GradientHeader } from '../components/GradientHeader';
 import { api } from '../lib/api';
+import { isNotificationSoundMuted, setNotificationSoundMuted } from '../lib/notificationSound';
 import type { ProfileStackParamList } from '../navigation/ProfileStack';
 import { useAuth } from '../stores/auth';
 import { colors, fontFamilies, fontSizes, radii, spacing } from '../theme/tokens';
@@ -53,7 +54,24 @@ export function ProfileScreen() {
   const navigation = useNavigation<Nav>();
   const user = useAuth((s) => s.user);
   const clear = useAuth((s) => s.clear);
-  const [notificationsOn, setNotificationsOn] = useState(true);
+  const [soundOn, setSoundOn] = useState(true);
+
+  // Hydrate the in-app sound switch from AsyncStorage so it persists.
+  useEffect(() => {
+    let alive = true;
+    void (async () => {
+      const muted = await isNotificationSoundMuted();
+      if (alive) setSoundOn(!muted);
+    })();
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  const toggleSound = (v: boolean) => {
+    setSoundOn(v);
+    void setNotificationSoundMuted(!v);
+  };
 
   const { data: orderCount } = useQuery<OrdersCountResponse>({
     queryKey: ['my-orders-count'],
@@ -130,14 +148,14 @@ export function ProfileScreen() {
         <Text style={styles.sectionTitle}>الإعدادات</Text>
         <View style={styles.group}>
           <Row
-            label="الإشعارات"
+            label="صوت الإشعارات"
             Icon={Bell}
             trailing={
               <Switch
                 trackColor={{ false: colors.line2, true: colors.brand.red }}
                 thumbColor={colors.white}
-                value={notificationsOn}
-                onValueChange={setNotificationsOn}
+                value={soundOn}
+                onValueChange={toggleSound}
               />
             }
           />

@@ -1,26 +1,37 @@
+import { useNavigation } from '@react-navigation/native';
+import * as Haptics from 'expo-haptics';
 import { LinearGradient } from 'expo-linear-gradient';
-import { Bell, MapPin } from 'lucide-react-native';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Bell, ChevronRight, MapPin } from 'lucide-react-native';
+import { Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { colors, fontFamilies, fontSizes, gradients, radii, spacing } from '../theme/tokens';
 
 interface GradientHeaderProps {
   greeting: string;
   location?: string;
+  /** Force-hide the back button even when the navigation stack can go back. */
+  hideBack?: boolean;
+  /** Force-show the bell. Default: shown only if a handler is provided. */
   hasNotifications?: boolean;
   onPressNotifications?: () => void;
 }
 
 /**
- * Top brand-gradient header used on Home and Map screens.
- * Mirrors the `.ah.grad` block from design-tamem.html.
+ * Top brand-gradient header used on Home, Map, and any "primary" screen.
+ * On stack screens (e.g. OrderTracking) we automatically render a back arrow
+ * on the leading side so the user always has a way out — `hideBack` overrides.
  */
 export function GradientHeader({
   greeting,
   location,
+  hideBack,
   hasNotifications,
   onPressNotifications,
 }: GradientHeaderProps) {
+  const navigation = useNavigation();
+  const showBack = !hideBack && navigation.canGoBack();
+  const showBell = onPressNotifications !== undefined;
+
   return (
     <LinearGradient
       colors={gradients.brand}
@@ -29,7 +40,22 @@ export function GradientHeader({
       style={styles.wrap}
     >
       <View style={styles.row}>
-        <View style={{ flex: 1 }}>
+        {showBack ? (
+          <Pressable
+            onPress={() => {
+              if (Platform.OS !== 'web') void Haptics.selectionAsync();
+              navigation.goBack();
+            }}
+            accessibilityLabel="رجوع للصفحة السابقة"
+            style={({ pressed }) => [styles.iconBtn, pressed && { opacity: 0.7 }]}
+            hitSlop={8}
+          >
+            {/* In RTL the ChevronRight is the natural "back" arrow */}
+            <ChevronRight size={20} color={colors.white} />
+          </Pressable>
+        ) : null}
+
+        <View style={{ flex: 1, marginHorizontal: showBack || showBell ? spacing.sm : 0 }}>
           <Text style={styles.greeting}>{greeting}</Text>
           {location && (
             <View style={styles.locRow}>
@@ -38,10 +64,18 @@ export function GradientHeader({
             </View>
           )}
         </View>
-        <Pressable onPress={onPressNotifications} style={styles.bellBtn}>
-          <Bell size={18} color={colors.white} />
-          {hasNotifications && <View style={styles.bellDot} />}
-        </Pressable>
+
+        {showBell ? (
+          <Pressable
+            onPress={onPressNotifications}
+            accessibilityLabel="الإشعارات"
+            style={styles.iconBtn}
+            hitSlop={6}
+          >
+            <Bell size={18} color={colors.white} />
+            {hasNotifications && <View style={styles.bellDot} />}
+          </Pressable>
+        ) : null}
       </View>
     </LinearGradient>
   );
@@ -68,9 +102,9 @@ const styles = StyleSheet.create({
     opacity: 0.92,
     fontFamily: fontFamilies.body,
   },
-  bellBtn: {
-    width: 38,
-    height: 38,
+  iconBtn: {
+    width: 40,
+    height: 40,
     borderRadius: radii.md,
     backgroundColor: 'rgba(255,255,255,0.18)',
     alignItems: 'center',

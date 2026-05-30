@@ -1,7 +1,8 @@
 import { useNavigation } from '@react-navigation/native';
+import * as Haptics from 'expo-haptics';
 import { LinearGradient } from 'expo-linear-gradient';
 import { ChevronRight } from 'lucide-react-native';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { colors, fontFamilies, fontSizes, gradients, radii, spacing } from '../theme/tokens';
 
@@ -30,7 +31,10 @@ export function ScreenHeader({ title, subtitle, hideBack }: ScreenHeaderProps) {
       <View style={styles.row}>
         {canGoBack ? (
           <Pressable
-            onPress={() => navigation.goBack()}
+            onPress={() => {
+              if (Platform.OS !== 'web') void Haptics.selectionAsync();
+              navigation.goBack();
+            }}
             style={({ pressed }) => [styles.back, pressed && { opacity: 0.7 }]}
             accessibilityLabel="رجوع"
           >

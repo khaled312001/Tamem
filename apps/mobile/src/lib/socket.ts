@@ -2,9 +2,12 @@ import { io, type Socket } from 'socket.io-client';
 
 import { getAccessTokenAsync } from '../stores/auth';
 
+import { playInAppNotification } from './notificationSound';
+
 const wsUrl = process.env.EXPO_PUBLIC_WS_URL ?? 'http://localhost:4000';
 
 let socket: Socket | null = null;
+let soundHandlersAttached = false;
 
 /**
  * Lazily connects (or returns the existing connection) using the cached access token.
@@ -24,12 +27,34 @@ export async function connectSocket(): Promise<Socket> {
     reconnectionAttempts: 10,
     reconnectionDelay: 1500,
   });
+  attachGlobalSoundHandlers(socket);
   return socket;
+}
+
+/**
+ * Attaches one-time global listeners that play the in-app notification sound
+ * whenever a server-pushed event lands. Individual screens still bind their
+ * own listeners for state updates; this layer just owns audible feedback.
+ *
+ * We never want to fire the sound for the chatty `driver:location` stream
+ * (one push every ~10s would be obnoxious).
+ */
+function attachGlobalSoundHandlers(s: Socket): void {
+  if (soundHandlersAttached) return;
+  soundHandlersAttached = true;
+  const play = () => {
+    void playInAppNotification();
+  };
+  s.on('order:new', play);
+  s.on('order:status', play);
+  s.on('alert:new', play);
+  s.on('notification:new', play);
 }
 
 export function disconnectSocket(): void {
   socket?.disconnect();
   socket = null;
+  soundHandlersAttached = false;
 }
 
 export function getSocket(): Socket | null {

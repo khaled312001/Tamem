@@ -1,11 +1,12 @@
 import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import * as Haptics from 'expo-haptics';
 import { Package } from 'lucide-react-native';
-import { useEffect, useState } from 'react';
+import { memo, useEffect, useState } from 'react';
 import {
-  ActivityIndicator,
   FlatList,
+  Platform,
   Pressable,
   RefreshControl,
   StyleSheet,
@@ -16,7 +17,9 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { ORDER_STATUS_AR, type OrderStatus } from '@tamem/types';
 
+import { AnimatedListItem } from '../components/AnimatedListItem';
 import { GradientHeader } from '../components/GradientHeader';
+import { CardListSkeleton } from '../components/Skeleton';
 import { api } from '../lib/api';
 import { connectSocket } from '../lib/socket';
 import type { OrdersStackParamList } from '../navigation/OrdersStack';
@@ -52,6 +55,47 @@ const ACTIVE_STATUSES = new Set<OrderStatus>([
 
 type Nav = NativeStackNavigationProp<OrdersStackParamList, 'OrdersList'>;
 
+const tickHaptic = () => {
+  if (Platform.OS !== 'web') void Haptics.selectionAsync();
+};
+
+interface OrderCardProps {
+  item: OrderListItem;
+  index: number;
+  onPress: (id: string) => void;
+}
+
+const OrderCard = memo(function OrderCard({ item, index, onPress }: OrderCardProps) {
+  return (
+    <AnimatedListItem index={index}>
+      <Pressable
+        onPress={() => onPress(item.id)}
+        style={({ pressed }) => [styles.card, pressed && styles.pressed]}
+      >
+        <View style={styles.cardHeader}>
+          <Text style={styles.orderNum}>#{item.orderNumber}</Text>
+          <View
+            style={[styles.statusBadge, { backgroundColor: colors.status[item.status] + '20' }]}
+          >
+            <Text style={[styles.statusText, { color: colors.status[item.status] }]}>
+              {ORDER_STATUS_AR[item.status]}
+            </Text>
+          </View>
+        </View>
+        <Text style={styles.serviceName}>{item.service?.nameAr ?? item.category}</Text>
+        <View style={styles.cardFooter}>
+          <Text style={styles.timeText}>{new Date(item.createdAt).toLocaleString('ar-EG')}</Text>
+          {(item.finalPrice || item.quotedPrice) && (
+            <Text style={styles.priceText}>
+              {Number(item.finalPrice ?? item.quotedPrice ?? 0).toLocaleString('ar-EG')} ج.م
+            </Text>
+          )}
+        </View>
+      </Pressable>
+    </AnimatedListItem>
+  );
+});
+
 export function OrdersScreen() {
   const [tab, setTab] = useState<'current' | 'completed'>('current');
   const navigation = useNavigation<Nav>();
@@ -62,8 +106,6 @@ export function OrdersScreen() {
     queryFn: () => api.raw.get('/orders/mine').then((r) => r.data.data),
   });
 
-  // Realtime: subscribe to my user:<id> channel so status updates from admin
-  // refresh the list immediately.
   useEffect(() => {
     let cancelled = false;
     void (async () => {
@@ -88,6 +130,8 @@ export function OrdersScreen() {
     return tab === 'current' ? isActive : !isActive;
   });
 
+  const openOrder = (id: string) => navigation.navigate('OrderTracking', { orderId: id });
+
   return (
     <SafeAreaView edges={['top']} style={styles.container}>
       <GradientHeader greeting="طلباتي" location="سجلّ كل طلباتك" />
@@ -98,7 +142,10 @@ export function OrdersScreen() {
           return (
             <Pressable
               key={t.key}
-              onPress={() => setTab(t.key)}
+              onPress={() => {
+                tickHaptic();
+                setTab(t.key);
+              }}
               style={[styles.tab, isOn && styles.tabOn]}
             >
               <Text style={[styles.tabText, isOn && styles.tabTextOn]}>{t.label}</Text>
@@ -108,13 +155,19 @@ export function OrdersScreen() {
       </View>
 
       {isLoading ? (
-        <ActivityIndicator color={colors.brand.red} style={{ marginTop: spacing.xl }} />
+        <View style={styles.list}>
+          <CardListSkeleton count={4} />
+        </View>
       ) : (
         <FlatList
           data={orders}
           keyExtractor={(o) => o.id}
           contentContainerStyle={styles.list}
           refreshControl={<RefreshControl refreshing={isFetching} onRefresh={refetch} />}
+          initialNumToRender={8}
+          maxToRenderPerBatch={8}
+          windowSize={7}
+          removeClippedSubviews
           ListEmptyComponent={
             <View style={styles.empty}>
               <Package size={48} color={colors.text.muted} />
@@ -123,36 +176,8 @@ export function OrdersScreen() {
               </Text>
             </View>
           }
-          renderItem={({ item }) => (
-            <Pressable
-              onPress={() => navigation.navigate('OrderTracking', { orderId: item.id })}
-              style={({ pressed }) => [styles.card, pressed && styles.pressed]}
-            >
-              <View style={styles.cardHeader}>
-                <Text style={styles.orderNum}>#{item.orderNumber}</Text>
-                <View
-                  style={[
-                    styles.statusBadge,
-                    { backgroundColor: colors.status[item.status] + '20' },
-                  ]}
-                >
-                  <Text style={[styles.statusText, { color: colors.status[item.status] }]}>
-                    {ORDER_STATUS_AR[item.status]}
-                  </Text>
-                </View>
-              </View>
-              <Text style={styles.serviceName}>{item.service?.nameAr ?? item.category}</Text>
-              <View style={styles.cardFooter}>
-                <Text style={styles.timeText}>
-                  {new Date(item.createdAt).toLocaleString('ar-EG')}
-                </Text>
-                {(item.finalPrice || item.quotedPrice) && (
-                  <Text style={styles.priceText}>
-                    {Number(item.finalPrice ?? item.quotedPrice ?? 0).toLocaleString('ar-EG')} ج.م
-                  </Text>
-                )}
-              </View>
-            </Pressable>
+          renderItem={({ item, index }) => (
+            <OrderCard item={item} index={index} onPress={openOrder} />
           )}
         />
       )}

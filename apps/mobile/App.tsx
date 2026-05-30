@@ -23,7 +23,15 @@ SplashScreen.preventAutoHideAsync().catch(() => undefined);
 
 const queryClient = new QueryClient({
   defaultOptions: {
-    queries: { retry: 1, staleTime: 30_000, refetchOnWindowFocus: false },
+    queries: {
+      retry: 1,
+      // Generous defaults: data stays fresh for 1m, cached in memory for 5m.
+      // Reduces network thrash when a user bounces between tabs.
+      staleTime: 60_000,
+      gcTime: 5 * 60_000,
+      refetchOnWindowFocus: false,
+      refetchOnReconnect: 'always',
+    },
   },
 });
 

@@ -1,19 +1,13 @@
 import { useNavigation } from '@react-navigation/native';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Bell, CheckCheck } from 'lucide-react-native';
-import { useEffect } from 'react';
-import {
-  ActivityIndicator,
-  FlatList,
-  Pressable,
-  RefreshControl,
-  StyleSheet,
-  Text,
-  View,
-} from 'react-native';
+import { memo, useEffect } from 'react';
+import { FlatList, Pressable, RefreshControl, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { AnimatedListItem } from '../components/AnimatedListItem';
 import { GradientHeader } from '../components/GradientHeader';
+import { CardListSkeleton } from '../components/Skeleton';
 import { api } from '../lib/api';
 import { connectSocket } from '../lib/socket';
 import { colors, fontFamilies, fontSizes, radii, spacing } from '../theme/tokens';
@@ -27,6 +21,37 @@ interface NotificationRow {
   sentAt: string;
   data?: { orderId?: string; orderNumber?: string } | null;
 }
+
+interface NotifCardProps {
+  item: NotificationRow;
+  index: number;
+  onPress: (n: NotificationRow) => void;
+}
+
+const NotifCard = memo(function NotifCard({ item, index, onPress }: NotifCardProps) {
+  return (
+    <AnimatedListItem index={index}>
+      <Pressable
+        onPress={() => onPress(item)}
+        style={({ pressed }) => [
+          styles.card,
+          !item.isRead && styles.unread,
+          pressed && styles.pressed,
+        ]}
+      >
+        <View style={styles.iconWrap}>
+          <Bell size={18} color={colors.brand.red} />
+          {!item.isRead && <View style={styles.dot} />}
+        </View>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.title}>{item.titleAr}</Text>
+          <Text style={styles.body}>{item.bodyAr}</Text>
+          <Text style={styles.time}>{new Date(item.sentAt).toLocaleString('ar-EG')}</Text>
+        </View>
+      </Pressable>
+    </AnimatedListItem>
+  );
+});
 
 export function NotificationsScreen() {
   const qc = useQueryClient();
@@ -85,7 +110,9 @@ export function NotificationsScreen() {
       <GradientHeader greeting="الإشعارات" location="تنبيهات طلباتك والعروض" />
 
       {isLoading ? (
-        <ActivityIndicator color={colors.brand.red} style={{ marginTop: spacing.xl }} />
+        <View style={styles.list}>
+          <CardListSkeleton count={4} />
+        </View>
       ) : !data?.length ? (
         <View style={styles.empty}>
           <Bell size={48} color={colors.text.muted} />
@@ -105,25 +132,12 @@ export function NotificationsScreen() {
             keyExtractor={(n) => n.id}
             contentContainerStyle={styles.list}
             refreshControl={<RefreshControl refreshing={isFetching} onRefresh={refetch} />}
-            renderItem={({ item }) => (
-              <Pressable
-                onPress={() => onPressNotif(item)}
-                style={({ pressed }) => [
-                  styles.card,
-                  !item.isRead && styles.unread,
-                  pressed && styles.pressed,
-                ]}
-              >
-                <View style={styles.iconWrap}>
-                  <Bell size={18} color={colors.brand.red} />
-                  {!item.isRead && <View style={styles.dot} />}
-                </View>
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.title}>{item.titleAr}</Text>
-                  <Text style={styles.body}>{item.bodyAr}</Text>
-                  <Text style={styles.time}>{new Date(item.sentAt).toLocaleString('ar-EG')}</Text>
-                </View>
-              </Pressable>
+            initialNumToRender={10}
+            maxToRenderPerBatch={10}
+            windowSize={7}
+            removeClippedSubviews
+            renderItem={({ item, index }) => (
+              <NotifCard item={item} index={index} onPress={onPressNotif} />
             )}
           />
         </>

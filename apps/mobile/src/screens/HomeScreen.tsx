@@ -1,6 +1,7 @@
 import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useQuery } from '@tanstack/react-query';
+import * as Haptics from 'expo-haptics';
 import { LinearGradient } from 'expo-linear-gradient';
 import {
   Copy,
@@ -14,7 +15,6 @@ import {
 } from 'lucide-react-native';
 import { useState } from 'react';
 import {
-  ActivityIndicator,
   Alert,
   Platform,
   Pressable,
@@ -26,12 +26,18 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { AnimatedListItem } from '../components/AnimatedListItem';
 import { GradientHeader } from '../components/GradientHeader';
 import { QuickOrderFAB } from '../components/QuickOrderFAB';
+import { CardListSkeleton } from '../components/Skeleton';
 import { api } from '../lib/api';
 import type { HomeStackParamList } from '../navigation/HomeStack';
 import { useAuth } from '../stores/auth';
 import { colors, fontFamilies, fontSizes, gradients, radii, spacing } from '../theme/tokens';
+
+const tickHaptic = () => {
+  if (Platform.OS !== 'web') void Haptics.selectionAsync();
+};
 
 type NavProp = NativeStackNavigationProp<HomeStackParamList, 'Home'>;
 
@@ -176,7 +182,10 @@ export function HomeScreen() {
           {SERVICES.map(({ key, label, sub, Icon, color, route }) => (
             <Pressable
               key={key}
-              onPress={() => navigation.navigate(route)}
+              onPress={() => {
+                tickHaptic();
+                navigation.navigate(route);
+              }}
               style={({ pressed }) => [styles.serviceCard, pressed && styles.pressed]}
             >
               <LinearGradient
@@ -204,31 +213,32 @@ export function HomeScreen() {
           </Pressable>
         </View>
         {loadingMerchants ? (
-          <ActivityIndicator color={colors.brand.red} style={{ marginVertical: spacing.lg }} />
+          <CardListSkeleton count={3} />
         ) : topMerchants.length === 0 ? (
           <Text style={styles.empty}>لا توجد متاجر بعد</Text>
         ) : (
-          topMerchants.map((m) => (
-            <Pressable
-              key={m.id}
-              onPress={() => navigation.navigate('MerchantDetail', { merchantId: m.id })}
-              style={({ pressed }) => [styles.merchantCard, pressed && styles.pressed]}
-            >
-              <View style={styles.merchantIcon}>
-                <Store size={20} color={colors.brand.red} />
-              </View>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.merchantName}>{m.storeNameAr}</Text>
-                <Text style={styles.merchantSub}>
-                  ⭐ {Number(m.rating ?? 0).toFixed(1)} · {m.category?.nameAr ?? '—'}
-                </Text>
-              </View>
-              <View style={m.isOpen ? styles.tagOpen : styles.tagClosed}>
-                <Text style={m.isOpen ? styles.tagOpenText : styles.tagClosedText}>
-                  {m.isOpen ? 'مفتوح' : 'مغلق'}
-                </Text>
-              </View>
-            </Pressable>
+          topMerchants.map((m, i) => (
+            <AnimatedListItem key={m.id} index={i}>
+              <Pressable
+                onPress={() => navigation.navigate('MerchantDetail', { merchantId: m.id })}
+                style={({ pressed }) => [styles.merchantCard, pressed && styles.pressed]}
+              >
+                <View style={styles.merchantIcon}>
+                  <Store size={20} color={colors.brand.red} />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.merchantName}>{m.storeNameAr}</Text>
+                  <Text style={styles.merchantSub}>
+                    ⭐ {Number(m.rating ?? 0).toFixed(1)} · {m.category?.nameAr ?? '—'}
+                  </Text>
+                </View>
+                <View style={m.isOpen ? styles.tagOpen : styles.tagClosed}>
+                  <Text style={m.isOpen ? styles.tagOpenText : styles.tagClosedText}>
+                    {m.isOpen ? 'مفتوح' : 'مغلق'}
+                  </Text>
+                </View>
+              </Pressable>
+            </AnimatedListItem>
           ))
         )}
 
