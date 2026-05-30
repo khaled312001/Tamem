@@ -8,6 +8,7 @@ export const adminPaymentsRouter: Router = Router();
 adminPaymentsRouter.get('/', ctrl.list);
 adminPaymentsRouter.patch('/:id/confirm', ctrl.confirm);
 adminPaymentsRouter.patch('/:id/reject', ctrl.reject);
+adminPaymentsRouter.patch('/:id/refund', ctrl.refund);
 
 // Paymob gateway management
 adminPaymentsRouter.get('/gateway', gateway.status);

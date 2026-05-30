@@ -355,14 +355,23 @@ model Order {
   speedTier           SpeedTier?      @default(STANDARD)
   estimatedDistanceKm Decimal?        @db.Decimal(8, 2)
 
-  // pricing
+  // pricing + discounts
   quotedPrice         Decimal?        @db.Decimal(10, 2)
   finalPrice          Decimal?        @db.Decimal(10, 2)
   currency            String          @default("EGP")
+  couponCode          String?         @db.VarChar(40)
+  discountAmount      Decimal?        @db.Decimal(10, 2)
+  walletUsed          Decimal?        @db.Decimal(10, 2)
 
   // payment
   paymentMethod       PaymentMethod?
   paymentStatus       PaymentStatus   @default(PENDING)
+
+  // scheduling — non-null = customer wants this delivered at this future time
+  scheduledFor        DateTime?
+
+  // manual flag — orders created by admin from dashboard (phone-in orders)
+  createdByAdminId    String?
 
   // timestamps for lifecycle
   customerApprovedAt  DateTime?
@@ -383,6 +392,7 @@ model Order {
   payments            Payment[]
   alerts              Alert[]
   review              OrderReview?
+  couponRedemption    CouponRedemption?
 
   @@index([status, createdAt(sort: Desc)])
   @@index([customerId, createdAt(sort: Desc)])
@@ -557,6 +567,12 @@ model Payment {
   notes           String?       @db.VarChar(500)
   createdAt       DateTime      @default(now())
 
+  // refund tracking — set when admin reverses a confirmed payment
+  refundedAt      DateTime?
+  refundedById    String?
+  refundAmount    Decimal?      @db.Decimal(10, 2)
+  refundReason    String?       @db.VarChar(500)
+
   @@index([orderId])
   @@index([status])
 }
@@ -654,4 +670,96 @@ model RefreshToken {
   createdAt DateTime @default(now())
 
   @@index([userId])
+}
+
+// ============================================
+// Coupons (admin-tunable, customer-applied)
+// ============================================
+
+enum CouponType {
+  PERCENTAGE
+  FLAT
+}
+
+model Coupon {
+  id              String       @id @default(cuid())
+  code            String       @unique @db.VarChar(40)
+  type            CouponType
+  /// PERCENTAGE: 0..100. FLAT: amount in EGP.
+  value           Decimal      @db.Decimal(10, 2)
+  /// Order must be at least this much for the coupon to apply.
+  minOrderAmount  Decimal?     @db.Decimal(10, 2)
+  /// For PERCENTAGE, caps the discount at this absolute amount.
+  maxDiscount     Decimal?     @db.Decimal(10, 2)
+  /// Optional time window. Null = no bound.
+  validFrom       DateTime?
+  validTo         DateTime?
+  /// Hard cap on total redemptions across all users. Null = unlimited.
+  usageLimit      Int?
+  /// Per-user cap. Defaults to 1 (single-use per customer) when null.
+  usagePerUser    Int?         @default(1)
+  isActive        Boolean      @default(true)
+  description     String?      @db.VarChar(500)
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+
+  redemptions     CouponRedemption[]
+
+  @@index([isActive, code])
+}
+
+model CouponRedemption {
+  id        String   @id @default(cuid())
+  couponId  String
+  coupon    Coupon   @relation(fields: [couponId], references: [id], onDelete: Cascade)
+  userId    String
+  orderId   String   @unique
+  order     Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  discount  Decimal  @db.Decimal(10, 2)
+  createdAt DateTime @default(now())
+
+  @@index([couponId])
+  @@index([userId])
+}
+
+// ============================================
+// Wallet (customer credit balance)
+// ============================================
+
+enum WalletTxType {
+  EARN
+  SPEND
+  REFUND
+  MANUAL_CREDIT
+  MANUAL_DEBIT
+}
+
+model Wallet {
+  id          String   @id @default(cuid())
+  userId      String   @unique
+  balance     Decimal  @default(0) @db.Decimal(10, 2)
+  totalEarned Decimal  @default(0) @db.Decimal(10, 2)
+  totalSpent  Decimal  @default(0) @db.Decimal(10, 2)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  transactions WalletTransaction[]
+}
+
+model WalletTransaction {
+  id            String       @id @default(cuid())
+  walletId      String
+  wallet        Wallet       @relation(fields: [walletId], references: [id], onDelete: Cascade)
+  type          WalletTxType
+  /// Positive amount; the type field determines the sign.
+  amount        Decimal      @db.Decimal(10, 2)
+  /// Wallet balance after this tx is applied.
+  balanceAfter  Decimal      @db.Decimal(10, 2)
+  orderId       String?      @db.VarChar(40)
+  reason        String?      @db.VarChar(500)
+  createdById   String?
+  createdAt     DateTime     @default(now())
+
+  @@index([walletId, createdAt(sort: Desc)])
+  @@index([orderId])
 }

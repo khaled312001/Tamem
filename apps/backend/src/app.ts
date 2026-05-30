@@ -22,7 +22,9 @@ import { adminDriversRouter } from './modules/drivers/drivers.routes.js';
 import { adminMerchantsRouter } from './modules/merchants/merchants.routes.js';
 import { notificationsRouter } from './modules/notifications/notifications.routes.js';
 import { adminOffersRouter } from './modules/offers/offers.routes.js';
+import { adminCouponsRouter, couponsRouter } from './modules/coupons/coupons.routes.js';
 import { adminOrdersRouter, adminReviewsRouter } from './modules/orders/orders.admin.routes.js';
+import { adminWalletsRouter, meWalletRouter } from './modules/wallet/wallet.routes.js';
 import { ordersRouter, pricingRouter } from './modules/orders/orders.routes.js';
 import {
   paymentsCustomerRouter,
@@ -89,6 +91,8 @@ export function createApp(): Express {
   v1.use('/pricing', pricingRouter);
   v1.use('/uploads', uploadsRouter);
   v1.use('/notifications', notificationsRouter);
+  v1.use('/coupons', couponsRouter);
+  v1.use('/me/wallet', meWalletRouter);
   v1.use('/payments', paymentsPublicRouter);
   v1.use('/payments', paymentsCustomerRouter);
   v1.use('/payments/webhook', paymobWebhookRouter);
@@ -101,6 +105,8 @@ export function createApp(): Express {
   adminRouter.use('/services', adminServicesRouter);
   adminRouter.use('/orders', adminOrdersRouter);
   adminRouter.use('/reviews', adminReviewsRouter);
+  adminRouter.use('/coupons', adminCouponsRouter);
+  adminRouter.use('/wallets', adminWalletsRouter);
   adminRouter.use('/drivers', adminDriversRouter);
   adminRouter.use('/merchants', adminMerchantsRouter);
   adminRouter.use('/customers', adminCustomersRouter);

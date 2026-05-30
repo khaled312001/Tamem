@@ -36,18 +36,43 @@ export const createOrder: RequestHandler = async (req, res, next) => {
     if (!service || !service.isActive) throw new NotFoundError('Service', 'الخدمة غير متاحة');
 
     const orderNumber = generateOrderNumber();
+
+    // ── Discount calculation (coupon + wallet) ─────────────────────────────
+    // We use the service base price as a best-effort "estimated total" for
+    // coupon/wallet validation since the real finalPrice is set by admin
+    // later. For QUOTE services we skip both (no number to discount against).
+    const estimatedAmount = service.basePrice ? Number(service.basePrice) : 0;
+
+    let couponDiscount = 0;
+    let couponId: string | undefined;
+    if (input.couponCode && estimatedAmount > 0) {
+      const { reserveCouponRedemption } = await import('../coupons/coupons.controller.js');
+      const reserved = await reserveCouponRedemption(
+        input.couponCode,
+        req.user.id,
+        estimatedAmount,
+      );
+      if (reserved) {
+        couponDiscount = reserved.discount;
+        couponId = reserved.couponId;
+      }
+    }
+
     const common = {
       orderNumber,
       serviceId: input.serviceId,
       customerId: req.user.id,
       category: input.category,
       status: OrderStatus.NEW,
-      paymentMethod: input.paymentMethod,
+      paymentMethod: 'paymentMethod' in input ? (input.paymentMethod ?? undefined) : undefined,
       notes: input.notes,
       customData: (input.customData ?? undefined) as object | undefined,
+      scheduledFor: input.scheduledFor ?? undefined,
+      couponCode: input.couponCode?.trim().toUpperCase(),
+      discountAmount: couponDiscount > 0 ? couponDiscount : undefined,
     };
 
-    let order;
+    let order: Awaited<ReturnType<typeof prisma.order.create>>;
     if (input.category === 'DELIVERY') {
       order = await prisma.order.create({
         data: {
@@ -125,6 +150,38 @@ export const createOrder: RequestHandler = async (req, res, next) => {
         changedByRole: UserRole.CUSTOMER,
       },
     });
+
+    // ── Record coupon redemption + debit wallet (atomic, best-effort) ─────
+    if (couponId && couponDiscount > 0) {
+      try {
+        await prisma.couponRedemption.create({
+          data: {
+            couponId,
+            userId: req.user.id,
+            orderId: order.id,
+            discount: couponDiscount,
+          },
+        });
+      } catch {
+        /* duplicate / race — ignore, order already saved */
+      }
+    }
+    if (input.walletAmount && input.walletAmount > 0) {
+      try {
+        const { debitWalletForOrder } = await import('../wallet/wallet.controller.js');
+        const used = await prisma.$transaction((tx) =>
+          debitWalletForOrder(tx, req.user!.id, input.walletAmount!, order.id),
+        );
+        if (used > 0) {
+          order = await prisma.order.update({
+            where: { id: order.id },
+            data: { walletUsed: used },
+          });
+        }
+      } catch {
+        /* wallet debit failed — order continues without it */
+      }
+    }
 
     // Realtime broadcast: admin dashboard sees order:new immediately.
     try {

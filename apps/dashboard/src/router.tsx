@@ -18,6 +18,7 @@ import { ProductsPage } from './routes/products.js';
 import { ReportsPage } from './routes/reports.js';
 import { ServiceEditPage } from './routes/service-edit.js';
 import { ServicesPage } from './routes/services.js';
+import { CouponsPage } from './routes/coupons.js';
 import { SettingsPage } from './routes/settings.js';
 import { WhatsAppPage } from './routes/whatsapp.js';
 
@@ -54,6 +55,7 @@ const routes: RouteObject[] = [
       { path: 'reports', element: <ReportsPage /> },
       { path: 'alerts', element: <AlertsPage /> },
       { path: 'whatsapp', element: <WhatsAppPage /> },
+      { path: 'coupons', element: <CouponsPage /> },
       { path: 'settings', element: <SettingsPage /> },
       { path: '*', element: <NotFoundPage /> },
     ],

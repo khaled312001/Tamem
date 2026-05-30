@@ -132,6 +132,90 @@ export class TamemClient {
     });
   }
 
+  // ===== Coupons + Wallet (customer) =====
+  async validateCoupon(
+    code: string,
+    orderAmount: number,
+  ): Promise<{
+    valid: boolean;
+    reason?: string;
+    discount?: number;
+    type?: 'PERCENTAGE' | 'FLAT';
+    finalAmount?: number;
+  }> {
+    return this.request({
+      method: 'POST',
+      url: '/coupons/validate',
+      data: { code, orderAmount },
+    });
+  }
+  async getMyWallet(): Promise<{
+    wallet: {
+      id: string;
+      balance: string | number;
+      totalEarned: string | number;
+      totalSpent: string | number;
+    };
+    transactions: Array<{
+      id: string;
+      type: string;
+      amount: string | number;
+      balanceAfter: string | number;
+      reason?: string | null;
+      createdAt: string;
+      orderId?: string | null;
+    }>;
+  }> {
+    return this.request({ method: 'GET', url: '/me/wallet' });
+  }
+
+  // ===== Admin: Coupons + Wallet + Manual order + Refund =====
+  async adminListCoupons(): Promise<unknown[]> {
+    return this.request({ method: 'GET', url: '/admin/coupons' });
+  }
+  async adminCreateCoupon(data: unknown): Promise<unknown> {
+    return this.request({ method: 'POST', url: '/admin/coupons', data });
+  }
+  async adminUpdateCoupon(id: string, data: unknown): Promise<unknown> {
+    return this.request({ method: 'PATCH', url: `/admin/coupons/${id}`, data });
+  }
+  async adminDeleteCoupon(id: string): Promise<void> {
+    await this.http.request({ method: 'DELETE', url: `/admin/coupons/${id}` });
+  }
+  async adminAdjustWallet(
+    userId: string,
+    payload: { amount: number; type?: 'MANUAL_CREDIT' | 'MANUAL_DEBIT'; reason: string },
+  ): Promise<unknown> {
+    return this.request({
+      method: 'POST',
+      url: `/admin/wallets/${userId}/credit`,
+      data: payload,
+    });
+  }
+  async adminCreateManualOrder(data: {
+    customerId?: string;
+    customerPhone?: string;
+    customerName?: string;
+    serviceId: string;
+    deliveryAddress: string;
+    deliveryLat?: number;
+    deliveryLng?: number;
+    notes?: string;
+    quotedPrice?: number;
+    paymentMethod?: 'CASH' | 'VODAFONE_CASH' | 'INSTAPAY';
+  }): Promise<Order> {
+    return this.request({ method: 'POST', url: '/admin/orders', data });
+  }
+  async adminGetOrderTimeline(id: string): Promise<unknown[]> {
+    return this.request({ method: 'GET', url: `/admin/orders/${id}/timeline` });
+  }
+  async adminRefundPayment(
+    id: string,
+    payload: { amount: number; reason: string; creditToWallet?: boolean },
+  ): Promise<unknown> {
+    return this.request({ method: 'PATCH', url: `/admin/payments/${id}/refund`, data: payload });
+  }
+
   async submitReview(
     orderId: string,
     payload: { rating: number; driverRating?: number; merchantRating?: number; comment?: string },

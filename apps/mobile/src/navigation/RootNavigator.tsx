@@ -2,6 +2,7 @@ import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { useEffect, useState } from 'react';
 
+import { OnboardingTour } from '../components/OnboardingTour';
 import { registerForPushNotifications } from '../lib/push';
 import { connectSocket, disconnectSocket } from '../lib/socket';
 import { CollectPhoneScreen } from '../screens/CollectPhoneScreen';
@@ -70,6 +71,8 @@ export function RootNavigator() {
           <Stack.Screen name="App" component={AppTabs} />
         )}
       </Stack.Navigator>
+      {/* Mounted globally so it overlays whatever screen is active. */}
+      <OnboardingTour />
     </NavigationContainer>
   );
 }

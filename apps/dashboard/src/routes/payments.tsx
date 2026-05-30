@@ -1,12 +1,12 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { CheckCircle2, DollarSign, XCircle } from 'lucide-react';
+import { CheckCircle2, DollarSign, Loader2, XCircle } from 'lucide-react';
 import { useState } from 'react';
 import { toast } from 'sonner';
 
 import { Badge } from '../components/ui/Badge.js';
 import { Button } from '../components/ui/Button.js';
 import { Dialog } from '../components/ui/Dialog.js';
-import { Field, Textarea } from '../components/ui/Input.js';
+import { Field, Input, Textarea } from '../components/ui/Input.js';
 import { EmptyState, TableSkeleton } from '../components/ui/Skeleton.js';
 import { api } from '../lib/api.js';
 
@@ -23,6 +23,7 @@ export function PaymentsPage() {
   const qc = useQueryClient();
   const [status, setStatus] = useState<'PENDING' | 'PAID' | 'FAILED'>('PENDING');
   const [rejectFor, setRejectFor] = useState<Row | null>(null);
+  const [refundFor, setRefundFor] = useState<Row | null>(null);
   const [zoomProof, setZoomProof] = useState<string | null>(null);
 
   const { data, isLoading } = useQuery({
@@ -130,6 +131,13 @@ export function PaymentsPage() {
                         </div>
                       </td>
                     )}
+                    {status === 'PAID' && !p.refundedAt && (
+                      <td className="px-3 py-3">
+                        <Button size="sm" variant="outline" onClick={() => setRefundFor(p)}>
+                          استرداد
+                        </Button>
+                      </td>
+                    )}
                   </tr>
                 ))}
               </tbody>
@@ -144,6 +152,7 @@ export function PaymentsPage() {
         </Dialog>
       )}
       {rejectFor && <RejectDialog payment={rejectFor} onClose={() => setRejectFor(null)} />}
+      {refundFor && <RefundDialog payment={refundFor} onClose={() => setRefundFor(null)} />}
     </div>
   );
 }
@@ -180,6 +189,73 @@ function RejectDialog({ payment, onClose }: { payment: Row; onClose: () => void 
           onClick={() => mut.mutate()}
         >
           تأكيد الرفض
+        </Button>
+      </div>
+    </Dialog>
+  );
+}
+
+function RefundDialog({ payment, onClose }: { payment: Row; onClose: () => void }) {
+  const qc = useQueryClient();
+  const paidAmount = Number(payment.amount);
+  const [amount, setAmount] = useState(String(paidAmount));
+  const [reason, setReason] = useState('');
+  const [creditToWallet, setCreditToWallet] = useState(true);
+  const mut = useMutation({
+    mutationFn: () =>
+      api.adminRefundPayment(payment.id, {
+        amount: Number(amount),
+        reason,
+        creditToWallet,
+      }),
+    onSuccess: () => {
+      toast.success('تم تنفيذ الاسترداد');
+      qc.invalidateQueries({ queryKey: ['admin', 'payments'] });
+      onClose();
+    },
+    onError: (err: Error) => toast.error(err.message),
+  });
+  const canSubmit = Number(amount) > 0 && Number(amount) <= paidAmount && reason.length >= 2;
+  return (
+    <Dialog open onOpenChange={(o) => !o && onClose()} title="استرداد دفعة">
+      <p className="text-sm text-muted-foreground mb-3">
+        المبلغ المدفوع: {paidAmount.toLocaleString('ar-EG')} ج.م. يمكن استرداده كله أو جزء منه.
+      </p>
+      <Field label="مبلغ الاسترداد (ج.م)" required>
+        <Input
+          type="number"
+          value={amount}
+          onChange={(e) => setAmount(e.target.value)}
+          max={paidAmount}
+        />
+      </Field>
+      <Field label="السبب" required>
+        <Textarea
+          value={reason}
+          onChange={(e) => setReason(e.target.value)}
+          rows={3}
+          placeholder="مثال: تم إلغاء الطلب بطلب العميل"
+        />
+      </Field>
+      <label className="flex items-center gap-2 mt-3 text-sm cursor-pointer">
+        <input
+          type="checkbox"
+          checked={creditToWallet}
+          onChange={(e) => setCreditToWallet(e.target.checked)}
+        />
+        <span>أضف المبلغ لمحفظة العميل بدلاً من الاسترداد النقدي</span>
+      </label>
+      <div className="flex justify-end gap-2 mt-4">
+        <Button variant="outline" size="md" onClick={onClose}>
+          إلغاء
+        </Button>
+        <Button
+          variant="danger"
+          onClick={() => canSubmit && mut.mutate()}
+          disabled={!canSubmit || mut.isPending}
+        >
+          {mut.isPending && <Loader2 className="w-4 h-4 animate-spin" />}
+          تنفيذ الاسترداد
         </Button>
       </div>
     </Dialog>

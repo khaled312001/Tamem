@@ -53,6 +53,17 @@ export const orderDeliveryPointInputSchema = z.object({
  * - SHIPPING: from/to with cargo details for price calculator
  * - MERCHANT: multi-pickup/delivery + items
  */
+// Common opt-in fields that any order type may include. Kept as a shape so
+// each variant can spread them without repeating.
+const optionsShape = {
+  /** Apply a promo code to discount the order amount. Backend validates it. */
+  couponCode: z.string().trim().min(1).max(40).optional(),
+  /** How much of the customer's wallet balance to spend on this order. */
+  walletAmount: z.number().nonnegative().max(100_000).optional(),
+  /** If set, the order is scheduled for this future timestamp instead of "now". */
+  scheduledFor: z.coerce.date().optional(),
+};
+
 export const createOrderSchema = z.discriminatedUnion('category', [
   z.object({
     category: z.literal(serviceCategorySchema.enum.DELIVERY),
@@ -65,6 +76,7 @@ export const createOrderSchema = z.discriminatedUnion('category', [
     deliveryLng: z.number(),
     paymentMethod: paymentMethodSchema,
     customData: z.record(z.string(), z.unknown()).optional(),
+    ...optionsShape,
   }),
   z.object({
     category: z.literal(serviceCategorySchema.enum.SHIPPING),
@@ -82,6 +94,7 @@ export const createOrderSchema = z.discriminatedUnion('category', [
     notes: z.string().max(2000).optional(),
     paymentMethod: paymentMethodSchema,
     customData: z.record(z.string(), z.unknown()).optional(),
+    ...optionsShape,
   }),
   z.object({
     category: z.literal(serviceCategorySchema.enum.MERCHANT),
@@ -92,6 +105,7 @@ export const createOrderSchema = z.discriminatedUnion('category', [
     notes: z.string().max(2000).optional(),
     paymentMethod: paymentMethodSchema.optional(),
     customData: z.record(z.string(), z.unknown()).optional(),
+    ...optionsShape,
   }),
 ]);
 

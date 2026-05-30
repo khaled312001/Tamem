@@ -118,6 +118,7 @@ export function ProfileScreen() {
             Icon={MapPin}
             onPress={() => navigation.navigate('SavedAddresses')}
           />
+          <Row label="محفظتي" Icon={Wallet} onPress={() => navigation.navigate('Wallet')} />
           <Row
             label="طرق الدفع"
             Icon={Wallet}

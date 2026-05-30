@@ -5,12 +5,14 @@ import { PaymentMethodsScreen } from '../screens/PaymentMethodsScreen';
 import { ProfileScreen } from '../screens/ProfileScreen';
 import { SavedAddressesScreen } from '../screens/SavedAddressesScreen';
 import { SupportScreen } from '../screens/SupportScreen';
+import { WalletScreen } from '../screens/WalletScreen';
 
 export type ProfileStackParamList = {
   Profile: undefined;
   EditProfile: undefined;
   SavedAddresses: undefined;
   PaymentMethods: undefined;
+  Wallet: undefined;
   Support: undefined;
 };
 
@@ -23,6 +25,7 @@ export function ProfileStack() {
       <Stack.Screen name="EditProfile" component={EditProfileScreen} />
       <Stack.Screen name="SavedAddresses" component={SavedAddressesScreen} />
       <Stack.Screen name="PaymentMethods" component={PaymentMethodsScreen} />
+      <Stack.Screen name="Wallet" component={WalletScreen} />
       <Stack.Screen name="Support" component={SupportScreen} />
     </Stack.Navigator>
   );

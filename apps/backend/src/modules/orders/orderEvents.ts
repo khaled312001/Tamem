@@ -155,6 +155,16 @@ export async function dispatchOrderStatusChanged(
   order: Order,
   newStatus: OrderStatus,
 ): Promise<void> {
+  // 0. Loyalty credit on COMPLETED — best-effort, idempotent
+  if (newStatus === 'COMPLETED' && order.finalPrice && order.customerId) {
+    try {
+      const { creditLoyaltyForCompletedOrder } = await import('../wallet/wallet.controller.js');
+      await creditLoyaltyForCompletedOrder(order.customerId, order.id, Number(order.finalPrice));
+    } catch (err) {
+      logger.warn({ err, orderId: order.id }, 'loyalty credit failed');
+    }
+  }
+
   // 1. Realtime — fan out to admin:orders, user:<customerId>, user:<driverId>, order:<id>
   emitOrderStatusChange(app.locals.io, order);
 
