@@ -1,7 +1,19 @@
 import { useNavigation, useRoute, type RouteProp } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { CheckCircle2, MessageCircle, Phone, RotateCcw, Star, X } from 'lucide-react-native';
+import {
+  AlertCircle,
+  CheckCircle2,
+  Clock,
+  MapPin,
+  MessageCircle,
+  Phone,
+  Receipt,
+  RotateCcw,
+  ShieldCheck,
+  Star,
+  X as XIcon,
+} from 'lucide-react-native';
 import { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
@@ -13,17 +25,25 @@ import {
   ScrollView,
   StyleSheet,
   Text,
+  TextInput,
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { ORDER_STATUS_AR, type OrderStatus } from '@tamem/types';
 
-import { GradientHeader } from '../components/GradientHeader';
+import { ScreenHeader } from '../components/ScreenHeader';
+import {
+  EmptyState,
+  GhostButton,
+  PrimaryButton,
+  SecondaryButton,
+  StatusPill,
+} from '../components/ui';
 import { api } from '../lib/api';
 import { connectSocket, subscribeToOrder, unsubscribeFromOrder } from '../lib/socket';
 import type { OrdersStackParamList } from '../navigation/OrdersStack';
-import { colors, fontFamilies, fontSizes, radii, spacing } from '../theme/tokens';
+import { colors, fontFamilies, fontSizes, radii, shadows, spacing } from '../theme/tokens';
 
 type Route = RouteProp<OrdersStackParamList, 'OrderTracking'>;
 
@@ -62,6 +82,51 @@ interface DriverLocation {
   at: string;
 }
 
+const STAGE_ORDER: OrderStatus[] = [
+  'NEW',
+  'UNDER_REVIEW',
+  'PRICED',
+  'ACCEPTED',
+  'DRIVER_ASSIGNED',
+  'IN_ROUTE',
+  'DELIVERED',
+];
+const STAGE_LABEL: Record<OrderStatus, string> = {
+  NEW: 'تم استلام الطلب',
+  UNDER_REVIEW: 'قيد المراجعة',
+  PRICED: 'تم التسعير',
+  AWAITING_CUSTOMER_APPROVAL: 'بانتظار موافقتك',
+  ACCEPTED: 'تم التأكيد',
+  DRIVER_ASSIGNED: 'تعيين سائق',
+  PICKED_UP: 'تم استلام الطلب من المتجر',
+  IN_ROUTE: 'في الطريق إليك',
+  DELIVERED: 'تم التسليم',
+  COMPLETED: 'مكتمل',
+  CANCELLED: 'تم الإلغاء',
+  REJECTED: 'تم الرفض',
+};
+
+const STAGE_HINT: Partial<Record<OrderStatus, string>> = {
+  NEW: 'وصلك إشعار التأكيد. هنبدأ المراجعة فوراً.',
+  UNDER_REVIEW: 'فريقنا بيراجع تفاصيل الطلب. خلال دقائق هنبعت لك السعر.',
+  PRICED: 'تم تسعير الطلب. شوف التفاصيل وأكّد للبدء.',
+  AWAITING_CUSTOMER_APPROVAL: 'بانتظار موافقتك على السعر للبدء.',
+  ACCEPTED: 'تم تأكيد الطلب. السائق هيتعيّن خلال دقايق.',
+  DRIVER_ASSIGNED: 'السائق في طريقه لاستلام الطلب.',
+  PICKED_UP: 'الطلب مع السائق ومتجه إليك.',
+  IN_ROUTE: 'الطلب في الطريق. هتلاقيه عندك قريب.',
+  DELIVERED: 'تم تسليم الطلب بنجاح ✓',
+  COMPLETED: 'الطلب مكتمل. شكراً لك ❤️',
+};
+
+const CATEGORY_LABEL = {
+  DELIVERY: 'دليفري داخل المدينة',
+  SHIPPING: 'شحن بين المحافظات',
+  MERCHANT: 'طلب تاجر',
+} as const;
+
+const TERMINAL_BAD: OrderStatus[] = ['CANCELLED', 'REJECTED'];
+
 export function OrderTrackingScreen() {
   const route = useRoute<Route>();
   const qc = useQueryClient();
@@ -88,14 +153,11 @@ export function OrderTrackingScreen() {
     enabled: !!orderId,
   });
 
-  // Realtime: subscribe to this order's room. order:status invalidates the
-  // query so any field changes are picked up; driver:location updates the
-  // local "last seen" indicator without re-fetching.
   useEffect(() => {
     let mounted = true;
     void (async () => {
       const s = await connectSocket();
-      const refetch = () => {
+      const refetchLocal = () => {
         if (mounted) qc.invalidateQueries({ queryKey: ['order', orderId] });
       };
       const onLoc = (msg: { orderId?: string; lat: number; lng: number; at: string }) => {
@@ -103,11 +165,11 @@ export function OrderTrackingScreen() {
           setDriverLoc({ lat: msg.lat, lng: msg.lng, at: msg.at });
         }
       };
-      s.on('order:status', refetch);
+      s.on('order:status', refetchLocal);
       s.on('driver:location', onLoc);
       await subscribeToOrder(orderId);
       return () => {
-        s.off('order:status', refetch);
+        s.off('order:status', refetchLocal);
         s.off('driver:location', onLoc);
       };
     })();
@@ -119,64 +181,36 @@ export function OrderTrackingScreen() {
 
   if (isLoading) {
     return (
-      <SafeAreaView style={styles.container}>
-        <GradientHeader greeting="جاري التحميل" location="" />
-        <ActivityIndicator color={colors.brand.red} style={{ marginTop: spacing.xl }} />
+      <SafeAreaView edges={['top']} style={styles.container}>
+        <ScreenHeader title="تتبع الطلب" />
+        <ActivityIndicator color={colors.brand.red} style={{ marginTop: spacing.xxl }} />
       </SafeAreaView>
     );
   }
 
   if (error || !order) {
-    const msg = error instanceof Error ? error.message : 'تعذّر تحميل الطلب';
     return (
-      <SafeAreaView style={styles.container}>
-        <GradientHeader greeting="خطأ" location="" />
-        <View style={{ padding: spacing.lg, alignItems: 'center', gap: spacing.md }}>
-          <Text
-            style={{
-              color: colors.text.primary,
-              fontFamily: fontFamilies.body,
-              fontSize: fontSizes.sm,
-              textAlign: 'center',
-            }}
-          >
-            {msg}
-          </Text>
-          <Pressable
-            onPress={() => refetch()}
-            style={({ pressed }) => [
-              {
-                backgroundColor: colors.brand.red,
-                paddingVertical: spacing.sm,
-                paddingHorizontal: spacing.lg,
-                borderRadius: radii.pill,
-              },
-              pressed && { opacity: 0.85 },
-            ]}
-          >
-            <Text
-              style={{
-                color: colors.white,
-                fontFamily: fontFamilies.bodyExtraBold,
-                fontSize: fontSizes.sm,
-              }}
-            >
-              إعادة المحاولة
-            </Text>
-          </Pressable>
-        </View>
+      <SafeAreaView edges={['top']} style={styles.container}>
+        <ScreenHeader title="تتبع الطلب" />
+        <EmptyState
+          icon={<AlertCircle size={36} color={colors.danger} />}
+          title="تعذّر تحميل الطلب"
+          subtitle={error instanceof Error ? error.message : 'حدث خطأ غير متوقع'}
+          actionLabel="إعادة المحاولة"
+          onAction={() => refetch()}
+        />
       </SafeAreaView>
     );
   }
 
   const price = order.finalPrice ?? order.quotedPrice;
+  const isTerminalBad = TERMINAL_BAD.includes(order.status);
+  const isCompleted = order.status === 'COMPLETED' || order.status === 'DELIVERED';
+  const stageHint = STAGE_HINT[order.status];
 
   return (
     <SafeAreaView edges={['top']} style={styles.container}>
-      <GradientHeader
-        greeting={`طلب #${order.orderNumber}`}
-        location={ORDER_STATUS_AR[order.status]}
-      />
+      <ScreenHeader title={`طلب #${order.orderNumber}`} subtitle={CATEGORY_LABEL[order.category]} />
 
       <ScrollView
         contentContainerStyle={styles.scroll}
@@ -186,56 +220,89 @@ export function OrderTrackingScreen() {
             refreshing={isFetching && !isLoading}
             onRefresh={() => refetch()}
             tintColor={colors.brand.red}
-            colors={[colors.brand.red]}
           />
         }
       >
+        {/* ─────── Just-created confirmation banner ─────── */}
         {showWaBanner && (
-          <View style={styles.waBanner}>
+          <View style={[styles.waBanner, shadows.sm]}>
             <View style={styles.waIconWrap}>
-              <CheckCircle2 size={22} color={colors.white} />
+              <CheckCircle2 size={20} color={colors.white} />
             </View>
             <View style={{ flex: 1 }}>
               <Text style={styles.waTitle}>تم استلام طلبك بنجاح</Text>
-              <Text style={styles.waBody}>
-                هنبعتلك تأكيد فوري على واتساب بكل التفاصيل بمجرد ما الإدارة تراجع الطلب وتسعّره.
-              </Text>
+              <Text style={styles.waBody}>هنبعت لك تأكيد على واتساب وبنبدأ المراجعة فوراً.</Text>
             </View>
             <Pressable onPress={() => setShowWaBanner(false)} style={styles.waClose} hitSlop={8}>
-              <X size={16} color={colors.white} />
+              <XIcon size={14} color={colors.white} />
             </Pressable>
           </View>
         )}
 
-        <View style={styles.statusCard}>
-          <View
-            style={[
-              styles.statusBadge,
-              { backgroundColor: (colors.status[order.status] ?? colors.brand.red) + '20' },
-            ]}
-          >
-            <Text
-              style={[
-                styles.statusText,
-                { color: colors.status[order.status] ?? colors.brand.red },
-              ]}
-            >
-              {ORDER_STATUS_AR[order.status]}
-            </Text>
+        {/* ─────── Hero status card ─────── */}
+        <View style={[styles.statusCard, shadows.md]}>
+          <View style={styles.statusHeader}>
+            <StatusPill
+              label={ORDER_STATUS_AR[order.status]}
+              color={colors.status[order.status]}
+              dot
+            />
+            <View style={styles.statusEtaRow}>
+              <Clock size={14} color={colors.text.muted} />
+              <Text style={styles.statusEtaText}>
+                {new Date(order.createdAt).toLocaleString('ar-EG')}
+              </Text>
+            </View>
           </View>
-          <Text style={styles.serviceName}>{order.service?.nameAr ?? order.category}</Text>
-          {price !== null && price !== undefined && (
-            <Text style={styles.price}>{Number(price).toLocaleString('ar-EG')} ج.م</Text>
-          )}
+          <Text style={styles.statusHeadline}>
+            {STAGE_LABEL[order.status] ?? ORDER_STATUS_AR[order.status]}
+          </Text>
+          {stageHint ? <Text style={styles.statusHint}>{stageHint}</Text> : null}
+          <View style={styles.statusFooter}>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.statusFooterLabel}>السعر</Text>
+              {price !== null && price !== undefined ? (
+                <Text style={styles.statusFooterValue}>
+                  {Number(price).toLocaleString('ar-EG')} ج.م
+                </Text>
+              ) : (
+                <Text style={styles.statusFooterPending}>قيد التسعير</Text>
+              )}
+            </View>
+            {order.service?.nameAr ? (
+              <View>
+                <Text style={styles.statusFooterLabel}>الخدمة</Text>
+                <Text style={styles.statusFooterService}>{order.service.nameAr}</Text>
+              </View>
+            ) : null}
+          </View>
         </View>
 
-        {/* Status progress bar — shows the 7-stage happy path with the current
-            stage highlighted. Cancelled/Rejected orders skip this and show a
-            terminal indicator instead. */}
-        <OrderStageProgress status={order.status} />
+        {/* ─────── Vertical stage timeline (more RTL-resilient than horizontal) ─────── */}
+        {!isTerminalBad && (
+          <View style={[styles.section, shadows.sm]}>
+            <Text style={styles.sectionTitle}>مراحل الطلب</Text>
+            <StageTimeline status={order.status} />
+          </View>
+        )}
 
+        {isTerminalBad && (
+          <View style={[styles.terminalCard, shadows.sm]}>
+            <XIcon size={22} color={colors.danger} />
+            <View style={{ flex: 1 }}>
+              <Text style={styles.terminalTitle}>
+                {order.status === 'CANCELLED' ? 'تم إلغاء الطلب' : 'تم رفض الطلب'}
+              </Text>
+              <Text style={styles.terminalSub}>
+                لو محتاج توضيح، تقدر تتواصل مع الإدارة عبر واتساب من زر التواصل بالأسفل.
+              </Text>
+            </View>
+          </View>
+        )}
+
+        {/* ─────── Driver card ─────── */}
         {order.assignedDriver && (
-          <View style={styles.driverCard}>
+          <View style={[styles.section, shadows.sm]}>
             <Text style={styles.sectionTitle}>السائق</Text>
             <View style={styles.driverRow}>
               <View style={styles.avatar}>
@@ -250,7 +317,8 @@ export function OrderTrackingScreen() {
               </View>
               <Pressable
                 onPress={() => Linking.openURL(`tel:${order.assignedDriver!.phone}`)}
-                style={styles.callBtn}
+                style={({ pressed }) => [styles.callBtn, pressed && { opacity: 0.85 }]}
+                accessibilityLabel="اتصال بالسائق"
               >
                 <Phone size={16} color={colors.white} />
                 <Text style={styles.callBtnText}>اتصال</Text>
@@ -259,92 +327,217 @@ export function OrderTrackingScreen() {
           </View>
         )}
 
+        {/* ─────── Route ─────── */}
         {(order.pickupAddress || order.deliveryAddress) && (
-          <View style={styles.section}>
+          <View style={[styles.section, shadows.sm]}>
             <Text style={styles.sectionTitle}>المسار</Text>
-            {order.pickupAddress && (
-              <View style={styles.row}>
-                <Text style={styles.label}>الاستلام</Text>
-                <Text style={styles.value}>{order.pickupAddress}</Text>
+            {order.pickupAddress ? (
+              <View style={styles.routeRow}>
+                <View style={[styles.routeDot, { backgroundColor: colors.success }]} />
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.routeLabel}>الاستلام من</Text>
+                  <Text style={styles.routeAddress}>{order.pickupAddress}</Text>
+                </View>
+                <MapPin size={16} color={colors.text.muted} />
               </View>
-            )}
-            {order.deliveryAddress && (
-              <View style={styles.row}>
-                <Text style={styles.label}>التوصيل</Text>
-                <Text style={styles.value}>{order.deliveryAddress}</Text>
+            ) : null}
+            {order.pickupAddress && order.deliveryAddress ? (
+              <View style={styles.routeConnector} />
+            ) : null}
+            {order.deliveryAddress ? (
+              <View style={styles.routeRow}>
+                <View style={[styles.routeDot, { backgroundColor: colors.brand.red }]} />
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.routeLabel}>التوصيل إلى</Text>
+                  <Text style={styles.routeAddress}>{order.deliveryAddress}</Text>
+                </View>
+                <MapPin size={16} color={colors.text.muted} />
               </View>
-            )}
+            ) : null}
           </View>
         )}
 
-        {order.notes && (
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>تفاصيل الطلب</Text>
-            <Text style={styles.notes}>{order.notes}</Text>
-          </View>
-        )}
-
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>السجل</Text>
-          {(order.statusHistory ?? []).map((h) => (
-            <View key={h.id} style={styles.historyItem}>
-              <View
-                style={[
-                  styles.historyDot,
-                  { backgroundColor: colors.status[h.toStatus] ?? colors.brand.red },
-                ]}
-              />
-              <View style={{ flex: 1 }}>
-                <Text style={styles.historyTitle}>{ORDER_STATUS_AR[h.toStatus]}</Text>
-                {h.reason && <Text style={styles.historyReason}>{h.reason}</Text>}
-                <Text style={styles.historyTime}>
-                  {new Date(h.createdAt).toLocaleString('ar-EG')}
-                </Text>
-              </View>
+        {/* ─────── Order notes ─────── */}
+        {order.notes ? (
+          <View style={[styles.section, shadows.sm]}>
+            <View style={styles.sectionTitleRow}>
+              <Receipt size={16} color={colors.text.secondary} />
+              <Text style={styles.sectionTitle}>تفاصيل الطلب</Text>
             </View>
-          ))}
-        </View>
+            <Text style={styles.notesText}>{order.notes}</Text>
+          </View>
+        ) : null}
 
-        {/* Review prompt — only shown for delivered/completed orders without a
-            review yet. Once submitted, it collapses into a "تم تقييم الطلب"
-            badge so the customer doesn't get nagged. */}
-        {['DELIVERED', 'COMPLETED'].includes(order.status) && (
+        {/* ─────── Activity log ─────── */}
+        {Array.isArray(order.statusHistory) && order.statusHistory.length > 0 ? (
+          <View style={[styles.section, shadows.sm]}>
+            <Text style={styles.sectionTitle}>سجل النشاط</Text>
+            {order.statusHistory.map((h, i) => (
+              <View key={h.id} style={styles.logRow}>
+                <View style={styles.logDotCol}>
+                  <View
+                    style={[
+                      styles.logDot,
+                      { backgroundColor: colors.status[h.toStatus] ?? colors.brand.red },
+                    ]}
+                  />
+                  {i < order.statusHistory!.length - 1 ? (
+                    <View style={styles.logConnector} />
+                  ) : null}
+                </View>
+                <View style={{ flex: 1, paddingBottom: spacing.md }}>
+                  <Text style={styles.logTitle}>{ORDER_STATUS_AR[h.toStatus]}</Text>
+                  {h.reason ? <Text style={styles.logReason}>{h.reason}</Text> : null}
+                  <Text style={styles.logTime}>
+                    {new Date(h.createdAt).toLocaleString('ar-EG')}
+                  </Text>
+                </View>
+              </View>
+            ))}
+          </View>
+        ) : null}
+
+        {/* ─────── Review prompt ─────── */}
+        {isCompleted ? (
           <ReviewPrompt
             orderId={order.id}
             hasDriver={!!order.assignedDriver}
-            hasMerchant={false /* could be derived from order.merchantId */}
             existingReview={order.review ?? null}
           />
-        )}
+        ) : null}
 
-        {/* Reorder — clones this order's content into a brand new NEW order.
-            Only useful once the original has reached a terminal state. */}
-        {['COMPLETED', 'DELIVERED', 'CANCELLED'].includes(order.status) && (
-          <ReorderButton orderId={order.id} orderNumber={order.orderNumber} />
-        )}
+        {/* ─────── Footer actions ─────── */}
+        <View style={styles.actions}>
+          {(isCompleted || isTerminalBad) && (
+            <View style={{ marginBottom: spacing.md }}>
+              <ReorderButton orderId={order.id} orderNumber={order.orderNumber} />
+            </View>
+          )}
+          <SecondaryButton
+            label="تواصل مع الإدارة"
+            Icon={MessageCircle}
+            onPress={() =>
+              openWhatsApp(
+                `استفسار عن طلب ${order.orderNumber}${price ? ` (${Number(price).toLocaleString('ar-EG')} ج.م)` : ''} — الحالة: ${ORDER_STATUS_AR[order.status]}`,
+              )
+            }
+          />
 
-        {/* تواصل مع الإدارة — WhatsApp deep-link with order context */}
-        <Pressable
-          onPress={() =>
-            openWhatsApp(
-              `استفسار عن طلب ${order.orderNumber}${price ? ` (${Number(price).toLocaleString('ar-EG')} ج.م)` : ''} — الحالة: ${ORDER_STATUS_AR[order.status]}`,
-            )
-          }
-          style={({ pressed }) => [styles.contactBtn, pressed && { opacity: 0.85 }]}
-        >
-          <MessageCircle size={18} color={colors.white} />
-          <Text style={styles.contactBtnText}>تواصل مع الإدارة</Text>
-        </Pressable>
-
-        <View style={{ height: spacing.xl }} />
+          <View style={styles.trustRow}>
+            <ShieldCheck size={14} color={colors.success} />
+            <Text style={styles.trustText}>
+              الطلبات مؤمَّنة بالكامل. لو حصل أي مشكلة، الإدارة جاهزة على واتساب.
+            </Text>
+          </View>
+        </View>
       </ScrollView>
     </SafeAreaView>
   );
 }
 
-// ────────────────────────────────────────────────────────────────────────────
-// Driver "last seen" indicator — re-renders every 10s with relative timeago.
-// ────────────────────────────────────────────────────────────────────────────
+// ════════════════════════════════════════════════════════════════════════════
+// Stage timeline (vertical) — visually RTL-safe (no horizontal connectors).
+// ════════════════════════════════════════════════════════════════════════════
+
+function StageTimeline({ status }: { status: OrderStatus }) {
+  const aliasMap: Partial<Record<OrderStatus, OrderStatus>> = {
+    AWAITING_CUSTOMER_APPROVAL: 'PRICED',
+    PICKED_UP: 'DRIVER_ASSIGNED',
+    COMPLETED: 'DELIVERED',
+  };
+  const effective = aliasMap[status] ?? status;
+  const currentIdx = Math.max(0, STAGE_ORDER.indexOf(effective));
+
+  return (
+    <View style={{ marginTop: spacing.sm }}>
+      {STAGE_ORDER.map((stage, i) => {
+        const done = i < currentIdx;
+        const current = i === currentIdx;
+        const dotColor = done ? colors.success : current ? colors.brand.red : colors.line2;
+        const labelColor = done || current ? colors.ink : colors.text.muted;
+        return (
+          <View key={stage} style={timelineStyles.row}>
+            <View style={timelineStyles.dotCol}>
+              <View
+                style={[
+                  timelineStyles.dot,
+                  { backgroundColor: dotColor },
+                  current && timelineStyles.dotCurrent,
+                ]}
+              >
+                {done ? <CheckCircle2 size={14} color={colors.white} /> : null}
+              </View>
+              {i < STAGE_ORDER.length - 1 ? (
+                <View
+                  style={[
+                    timelineStyles.connector,
+                    { backgroundColor: done ? colors.success : colors.line2 },
+                  ]}
+                />
+              ) : null}
+            </View>
+            <View style={{ flex: 1, paddingBottom: spacing.md }}>
+              <Text
+                style={[
+                  timelineStyles.label,
+                  {
+                    color: labelColor,
+                    fontFamily: current ? fontFamilies.headingBold : fontFamilies.bodyBold,
+                  },
+                ]}
+              >
+                {STAGE_LABEL[stage]}
+              </Text>
+              {current && STAGE_HINT[stage] ? (
+                <Text style={timelineStyles.hint}>{STAGE_HINT[stage]}</Text>
+              ) : null}
+            </View>
+          </View>
+        );
+      })}
+    </View>
+  );
+}
+
+const timelineStyles = StyleSheet.create({
+  row: { flexDirection: 'row', gap: spacing.md, alignItems: 'flex-start' },
+  dotCol: { alignItems: 'center' },
+  dot: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  dotCurrent: {
+    transform: [{ scale: 1.12 }],
+    shadowColor: colors.brand.red,
+    shadowOpacity: 0.4,
+    shadowRadius: 6,
+    elevation: 6,
+  },
+  connector: {
+    width: 2,
+    flex: 1,
+    minHeight: 24,
+    marginVertical: 2,
+  },
+  label: {
+    fontSize: fontSizes.sm,
+    marginTop: 2,
+  },
+  hint: {
+    fontSize: fontSizes.xs,
+    color: colors.text.secondary,
+    fontFamily: fontFamilies.body,
+    marginTop: 4,
+    lineHeight: 18,
+  },
+});
+
+// ════════════════════════════════════════════════════════════════════════════
+// Driver last-seen
+// ════════════════════════════════════════════════════════════════════════════
 
 function DriverLastSeen({ at }: { at: string }) {
   const [, setTick] = useState(0);
@@ -357,117 +550,26 @@ function DriverLastSeen({ at }: { at: string }) {
     seconds < 60
       ? 'الآن'
       : seconds < 3600
-        ? `منذ ${Math.floor(seconds / 60)} د`
-        : `منذ ${Math.floor(seconds / 3600)} س`;
+        ? `منذ ${Math.floor(seconds / 60)} دقيقة`
+        : `منذ ${Math.floor(seconds / 3600)} ساعة`;
   const fresh = seconds < 90;
   return (
     <Text
       style={{
         fontSize: 10,
-        marginTop: 2,
+        marginTop: 4,
         color: fresh ? colors.success : colors.text.muted,
         fontFamily: fontFamilies.bodyBold,
       }}
     >
-      📍 آخر موقع: {label}
+      📍 آخر تحديث للموقع: {label}
     </Text>
   );
 }
 
-// ────────────────────────────────────────────────────────────────────────────
-// Progress bar + Reorder helpers
-// ────────────────────────────────────────────────────────────────────────────
-
-const STAGE_ORDER: OrderStatus[] = [
-  'NEW',
-  'UNDER_REVIEW',
-  'PRICED',
-  'ACCEPTED',
-  'DRIVER_ASSIGNED',
-  'IN_ROUTE',
-  'DELIVERED',
-];
-const STAGE_LABEL: Record<OrderStatus, string> = {
-  NEW: 'استلمنا',
-  UNDER_REVIEW: 'مراجعة',
-  PRICED: 'تسعير',
-  AWAITING_CUSTOMER_APPROVAL: 'موافقة',
-  ACCEPTED: 'تأكيد',
-  DRIVER_ASSIGNED: 'سائق',
-  PICKED_UP: 'استلام',
-  IN_ROUTE: 'الطريق',
-  DELIVERED: 'سُلِّم',
-  COMPLETED: 'مكتمل',
-  CANCELLED: 'ملغي',
-  REJECTED: 'مرفوض',
-};
-
-function OrderStageProgress({ status }: { status: OrderStatus }) {
-  if (status === 'CANCELLED' || status === 'REJECTED') {
-    return (
-      <View style={progressStyles.terminal}>
-        <Text style={progressStyles.terminalText}>
-          {status === 'CANCELLED' ? '🚫 تم إلغاء الطلب' : '❌ تم رفض الطلب'}
-        </Text>
-      </View>
-    );
-  }
-  // Treat AWAITING_CUSTOMER_APPROVAL as still on the "PRICED" stage,
-  // PICKED_UP as same group as DRIVER_ASSIGNED, COMPLETED as DELIVERED+1.
-  const aliasMap: Partial<Record<OrderStatus, OrderStatus>> = {
-    AWAITING_CUSTOMER_APPROVAL: 'PRICED',
-    PICKED_UP: 'DRIVER_ASSIGNED',
-    COMPLETED: 'DELIVERED',
-  };
-  const effective = aliasMap[status] ?? status;
-  const currentIdx = Math.max(0, STAGE_ORDER.indexOf(effective));
-  return (
-    <View style={progressStyles.row}>
-      {STAGE_ORDER.map((stage, i) => {
-        const done = i < currentIdx;
-        const current = i === currentIdx;
-        return (
-          <View key={stage} style={progressStyles.stage}>
-            <View style={progressStyles.dotRow}>
-              {i > 0 && (
-                <View
-                  style={[
-                    progressStyles.line,
-                    (done || current) && { backgroundColor: colors.brand.red },
-                  ]}
-                />
-              )}
-              <View
-                style={[
-                  progressStyles.dot,
-                  done && progressStyles.dotDone,
-                  current && progressStyles.dotCurrent,
-                ]}
-              />
-              {i < STAGE_ORDER.length - 1 && (
-                <View
-                  style={[progressStyles.line, done && { backgroundColor: colors.brand.red }]}
-                />
-              )}
-            </View>
-            <Text
-              style={[
-                progressStyles.label,
-                (done || current) && {
-                  color: colors.brand.red,
-                  fontFamily: fontFamilies.bodyExtraBold,
-                },
-              ]}
-              numberOfLines={1}
-            >
-              {STAGE_LABEL[stage]}
-            </Text>
-          </View>
-        );
-      })}
-    </View>
-  );
-}
+// ════════════════════════════════════════════════════════════════════════════
+// Reorder
+// ════════════════════════════════════════════════════════════════════════════
 
 function ReorderButton({ orderId, orderNumber }: { orderId: string; orderNumber: string }) {
   const navigation =
@@ -478,42 +580,27 @@ function ReorderButton({ orderId, orderNumber }: { orderId: string; orderNumber:
         .post(`/orders/from/${orderId}`)
         .then((r) => r.data.data as { id: string; orderNumber: string }),
     onSuccess: (newOrder) => {
-      // replace so the back button goes to the orders list, not the old order
       navigation.replace('OrderTracking', { orderId: newOrder.id, justCreated: true });
     },
     onError: (err) => Alert.alert('خطأ', err instanceof Error ? err.message : 'فشل إعادة الطلب'),
   });
   return (
-    <Pressable
+    <GhostButton
+      label={reorderMut.isPending ? 'جاري الإنشاء…' : `اطلب نفس الطلب (#${orderNumber}) مرة أخرى`}
       onPress={() => reorderMut.mutate()}
       disabled={reorderMut.isPending}
-      style={({ pressed }) => [
-        progressStyles.reorderBtn,
-        pressed && { opacity: 0.85 },
-        reorderMut.isPending && { opacity: 0.6 },
-      ]}
-    >
-      {reorderMut.isPending ? (
-        <ActivityIndicator size="small" color={colors.brand.red} />
-      ) : (
-        <>
-          <RotateCcw size={16} color={colors.brand.red} />
-          <Text style={progressStyles.reorderText}>اطلب نفس الطلب مرة أخرى</Text>
-          <Text style={progressStyles.reorderSubtext}>{orderNumber}</Text>
-        </>
-      )}
-    </Pressable>
+      Icon={RotateCcw}
+    />
   );
 }
 
-// ────────────────────────────────────────────────────────────────────────────
-// Review prompt — 5-star rating + driver rating + optional comment
-// ────────────────────────────────────────────────────────────────────────────
+// ════════════════════════════════════════════════════════════════════════════
+// Review prompt
+// ════════════════════════════════════════════════════════════════════════════
 
 interface ReviewPromptProps {
   orderId: string;
   hasDriver: boolean;
-  hasMerchant: boolean;
   existingReview: { rating: number; comment?: string | null } | null;
 }
 
@@ -538,59 +625,51 @@ function ReviewPrompt({ orderId, hasDriver, existingReview }: ReviewPromptProps)
 
   if (existingReview) {
     return (
-      <View style={reviewStyles.done}>
+      <View style={[reviewStyles.done, shadows.sm]}>
         <View style={reviewStyles.doneRow}>
           {[1, 2, 3, 4, 5].map((i) => (
             <Star
               key={i}
-              size={16}
+              size={18}
               color={colors.brand.gold}
               fill={i <= existingReview.rating ? colors.brand.gold : 'transparent'}
             />
           ))}
         </View>
-        <Text style={reviewStyles.doneText}>تم تقييم الطلب — شكراً لك على ملاحظاتك ❤️</Text>
+        <Text style={reviewStyles.doneText}>تم تقييم الطلب — شكراً ❤️</Text>
       </View>
     );
   }
 
   return (
-    <View style={reviewStyles.card}>
-      <Text style={reviewStyles.cardTitle}>قيّم تجربتك</Text>
+    <View style={[reviewStyles.card, shadows.md]}>
+      <Text style={reviewStyles.cardTitle}>قيّم تجربتك معنا</Text>
       <Text style={reviewStyles.cardSub}>ملاحظاتك تساعدنا نقدّم خدمة أفضل</Text>
 
       <StarRow value={rating} onChange={setRating} label="التقييم العام" />
-      {hasDriver && (
+      {hasDriver ? (
         <StarRow value={driverRating} onChange={setDriverRating} label="تقييم السائق" />
-      )}
+      ) : null}
 
-      <View style={reviewStyles.commentField}>
-        <Text style={reviewStyles.commentLabel}>تعليق (اختياري)</Text>
-        <View style={reviewStyles.commentBox}>
-          <Text
-            // Use TextInput when available — fallback to display-only is fine
-            // since the component below is the real input.
-            style={{ display: 'none' }}
-          />
-          <CommentInput value={comment} onChange={setComment} />
-        </View>
+      <Text style={reviewStyles.commentLabel}>تعليق (اختياري)</Text>
+      <TextInput
+        value={comment}
+        onChangeText={setComment}
+        placeholder="ايه اللي عجبك أو ممكن نحسنه؟"
+        placeholderTextColor={colors.text.muted}
+        multiline
+        maxLength={1000}
+        style={reviewStyles.textArea}
+      />
+
+      <View style={{ marginTop: spacing.md }}>
+        <PrimaryButton
+          label="إرسال التقييم"
+          onPress={() => rating > 0 && submitMut.mutate()}
+          disabled={rating === 0}
+          loading={submitMut.isPending}
+        />
       </View>
-
-      <Pressable
-        onPress={() => rating > 0 && !submitMut.isPending && submitMut.mutate()}
-        disabled={rating === 0 || submitMut.isPending}
-        style={({ pressed }) => [
-          reviewStyles.submitBtn,
-          (rating === 0 || submitMut.isPending) && { opacity: 0.5 },
-          pressed && { opacity: 0.85 },
-        ]}
-      >
-        {submitMut.isPending ? (
-          <ActivityIndicator color={colors.white} size="small" />
-        ) : (
-          <Text style={reviewStyles.submitText}>إرسال التقييم</Text>
-        )}
-      </Pressable>
     </View>
   );
 }
@@ -607,11 +686,11 @@ function StarRow({
   return (
     <View style={reviewStyles.starRow}>
       <Text style={reviewStyles.starLabel}>{label}</Text>
-      <View style={{ flexDirection: 'row', gap: 4 }}>
+      <View style={{ flexDirection: 'row', gap: 6 }}>
         {[1, 2, 3, 4, 5].map((i) => (
           <Pressable key={i} onPress={() => onChange(i)} hitSlop={6}>
             <Star
-              size={22}
+              size={26}
               color={colors.brand.gold}
               fill={i <= value ? colors.brand.gold : 'transparent'}
             />
@@ -622,54 +701,314 @@ function StarRow({
   );
 }
 
-function CommentInput({ value, onChange }: { value: string; onChange: (v: string) => void }) {
-  // Importing TextInput inline keeps the top imports lean and avoids dragging
-  // platform-specific keyboard avoiding behavior into the prompt.
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const { TextInput } = require('react-native') as typeof import('react-native');
-  return (
-    <TextInput
-      value={value}
-      onChangeText={onChange}
-      placeholder="إيه الحاجة اللي أعجبتك أو ممكن تتحسن؟"
-      placeholderTextColor={colors.text.muted}
-      multiline
-      maxLength={1000}
-      style={{
-        backgroundColor: colors.surface,
-        borderRadius: 8,
-        padding: spacing.sm,
-        fontFamily: fontFamilies.body,
-        fontSize: fontSizes.sm,
-        textAlign: 'right',
-        minHeight: 60,
-        textAlignVertical: 'top',
-        color: colors.text.primary,
-      }}
-    />
-  );
-}
+// ════════════════════════════════════════════════════════════════════════════
+// Styles
+// ════════════════════════════════════════════════════════════════════════════
+
+const styles = StyleSheet.create({
+  container: { flex: 1, backgroundColor: colors.surface },
+  scroll: { padding: spacing.lg, paddingBottom: spacing.xxl },
+  // WA banner
+  waBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
+    backgroundColor: '#1A9F6E',
+    padding: spacing.md,
+    borderRadius: radii.lg,
+    marginBottom: spacing.lg,
+  },
+  waIconWrap: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: 'rgba(255,255,255,0.18)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  waTitle: {
+    color: colors.white,
+    fontFamily: fontFamilies.headingBold,
+    fontSize: fontSizes.sm,
+  },
+  waBody: {
+    color: 'rgba(255,255,255,0.92)',
+    fontFamily: fontFamilies.body,
+    fontSize: fontSizes.xs,
+    marginTop: 2,
+    lineHeight: 18,
+  },
+  waClose: {
+    width: 26,
+    height: 26,
+    borderRadius: 13,
+    backgroundColor: 'rgba(255,255,255,0.20)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  // Status hero
+  statusCard: {
+    backgroundColor: colors.white,
+    borderRadius: radii.xl,
+    borderWidth: 1,
+    borderColor: colors.line,
+    padding: spacing.lg,
+    marginBottom: spacing.md,
+  },
+  statusHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing.sm,
+  },
+  statusEtaRow: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  statusEtaText: {
+    fontSize: fontSizes.xs,
+    color: colors.text.muted,
+    fontFamily: fontFamilies.body,
+  },
+  statusHeadline: {
+    fontSize: fontSizes.lg,
+    color: colors.ink,
+    fontFamily: fontFamilies.headingBlack,
+    marginTop: spacing.md,
+  },
+  statusHint: {
+    fontSize: fontSizes.sm,
+    color: colors.text.secondary,
+    fontFamily: fontFamilies.body,
+    marginTop: 4,
+    lineHeight: 22,
+  },
+  statusFooter: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginTop: spacing.lg,
+    paddingTop: spacing.md,
+    borderTopWidth: 1,
+    borderTopColor: colors.line,
+  },
+  statusFooterLabel: {
+    fontSize: fontSizes.xs,
+    color: colors.text.muted,
+    fontFamily: fontFamilies.body,
+  },
+  statusFooterValue: {
+    fontSize: fontSizes.xl,
+    color: colors.brand.red,
+    fontFamily: fontFamilies.headingBlack,
+    marginTop: 2,
+  },
+  statusFooterPending: {
+    fontSize: fontSizes.sm,
+    color: colors.warning,
+    fontFamily: fontFamilies.bodyExtraBold,
+    marginTop: 2,
+  },
+  statusFooterService: {
+    fontSize: fontSizes.sm,
+    color: colors.ink,
+    fontFamily: fontFamilies.bodyExtraBold,
+    marginTop: 2,
+  },
+  // Generic section card
+  section: {
+    backgroundColor: colors.white,
+    borderRadius: radii.xl,
+    borderWidth: 1,
+    borderColor: colors.line,
+    padding: spacing.lg,
+    marginBottom: spacing.md,
+  },
+  sectionTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginBottom: 4,
+  },
+  sectionTitle: {
+    fontSize: fontSizes.sm,
+    color: colors.text.muted,
+    fontFamily: fontFamilies.bodyExtraBold,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  // Terminal
+  terminalCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
+    backgroundColor: colors.dangerLight,
+    borderColor: colors.danger,
+    borderWidth: 1,
+    borderRadius: radii.lg,
+    padding: spacing.md,
+    marginBottom: spacing.md,
+  },
+  terminalTitle: {
+    fontSize: fontSizes.sm,
+    color: colors.danger,
+    fontFamily: fontFamilies.headingBold,
+  },
+  terminalSub: {
+    fontSize: fontSizes.xs,
+    color: colors.danger,
+    fontFamily: fontFamilies.body,
+    marginTop: 2,
+    lineHeight: 18,
+  },
+  // Driver
+  driverRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
+    marginTop: spacing.sm,
+  },
+  avatar: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: colors.brand.red,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  avatarText: {
+    color: colors.white,
+    fontFamily: fontFamilies.headingBlack,
+    fontSize: fontSizes.lg,
+  },
+  driverName: {
+    fontFamily: fontFamilies.bodyExtraBold,
+    color: colors.ink,
+    fontSize: fontSizes.md,
+  },
+  driverPhone: {
+    fontFamily: fontFamilies.body,
+    color: colors.text.muted,
+    fontSize: fontSizes.xs,
+    marginTop: 2,
+  },
+  callBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: colors.brand.red,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    borderRadius: radii.pill,
+  },
+  callBtnText: {
+    color: colors.white,
+    fontFamily: fontFamilies.bodyExtraBold,
+    fontSize: fontSizes.xs,
+  },
+  // Route
+  routeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
+    marginTop: spacing.sm,
+  },
+  routeDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+  },
+  routeConnector: {
+    width: 2,
+    height: 16,
+    backgroundColor: colors.line2,
+    marginVertical: 2,
+    marginStart: 4,
+  },
+  routeLabel: {
+    fontSize: fontSizes.xs,
+    color: colors.text.muted,
+    fontFamily: fontFamilies.body,
+  },
+  routeAddress: {
+    fontSize: fontSizes.sm,
+    color: colors.ink,
+    fontFamily: fontFamilies.bodyBold,
+    marginTop: 2,
+  },
+  // Notes
+  notesText: {
+    fontSize: fontSizes.sm,
+    color: colors.text.primary,
+    fontFamily: fontFamilies.body,
+    marginTop: spacing.sm,
+    lineHeight: 22,
+  },
+  // Log
+  logRow: {
+    flexDirection: 'row',
+    gap: spacing.md,
+    marginTop: spacing.sm,
+  },
+  logDotCol: { alignItems: 'center', width: 14 },
+  logDot: { width: 12, height: 12, borderRadius: 6, marginTop: 4 },
+  logConnector: { width: 2, flex: 1, backgroundColor: colors.line2, marginTop: 2 },
+  logTitle: {
+    fontSize: fontSizes.sm,
+    color: colors.ink,
+    fontFamily: fontFamilies.bodyExtraBold,
+  },
+  logReason: {
+    fontSize: fontSizes.xs,
+    color: colors.text.secondary,
+    fontFamily: fontFamilies.body,
+    marginTop: 2,
+    lineHeight: 18,
+  },
+  logTime: {
+    fontSize: 10,
+    color: colors.text.muted,
+    fontFamily: fontFamilies.body,
+    marginTop: 2,
+  },
+  // Actions
+  actions: { marginTop: spacing.md },
+  trustRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginTop: spacing.lg,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    backgroundColor: colors.successLight,
+    borderRadius: radii.md,
+  },
+  trustText: {
+    flex: 1,
+    fontSize: fontSizes.xs,
+    color: colors.success,
+    fontFamily: fontFamilies.bodyBold,
+    lineHeight: 18,
+  },
+});
 
 const reviewStyles = StyleSheet.create({
   card: {
     backgroundColor: colors.white,
-    borderRadius: radii.lg,
-    padding: spacing.md,
-    marginTop: spacing.md,
+    borderRadius: radii.xl,
     borderWidth: 1,
-    borderColor: colors.brand.gold + '60',
-    shadowColor: colors.brand.gold,
-    shadowOpacity: 0.1,
-    shadowRadius: 8,
-    shadowOffset: { width: 0, height: 2 },
+    borderColor: colors.brand.gold + '50',
+    padding: spacing.lg,
+    marginBottom: spacing.md,
   },
-  cardTitle: { fontFamily: fontFamilies.headingBold, color: colors.ink, fontSize: fontSizes.md },
+  cardTitle: {
+    fontFamily: fontFamilies.headingBold,
+    color: colors.ink,
+    fontSize: fontSizes.md,
+  },
   cardSub: {
     fontFamily: fontFamilies.body,
     color: colors.text.muted,
     fontSize: fontSizes.xs,
     marginTop: 2,
-    marginBottom: spacing.sm,
+    marginBottom: spacing.md,
   },
   starRow: {
     flexDirection: 'row',
@@ -684,282 +1023,40 @@ const reviewStyles = StyleSheet.create({
     color: colors.text.primary,
     fontSize: fontSizes.sm,
   },
-  commentField: { marginTop: spacing.xs },
   commentLabel: {
     fontFamily: fontFamilies.bodyBold,
     color: colors.text.secondary,
     fontSize: fontSizes.xs,
-    marginBottom: 4,
+    marginTop: spacing.sm,
+    marginBottom: 6,
   },
-  commentBox: {},
-  submitBtn: {
-    backgroundColor: colors.brand.red,
+  textArea: {
+    backgroundColor: colors.surface,
     borderRadius: radii.md,
-    paddingVertical: spacing.sm,
-    alignItems: 'center',
-    marginTop: spacing.md,
+    padding: spacing.md,
+    fontFamily: fontFamilies.body,
+    fontSize: fontSizes.sm,
+    color: colors.ink,
+    textAlign: 'right',
+    minHeight: 80,
+    textAlignVertical: 'top',
+    borderWidth: 1,
+    borderColor: colors.line,
   },
-  submitText: { color: colors.white, fontFamily: fontFamilies.headingBold, fontSize: fontSizes.sm },
   done: {
     backgroundColor: colors.brand.gold + '14',
     borderRadius: radii.lg,
     padding: spacing.md,
-    marginTop: spacing.md,
+    marginBottom: spacing.md,
     alignItems: 'center',
     borderWidth: 1,
     borderColor: colors.brand.gold + '40',
   },
   doneRow: { flexDirection: 'row', gap: 2 },
   doneText: {
-    fontFamily: fontFamilies.bodyBold,
+    fontFamily: fontFamilies.bodyExtraBold,
     color: colors.ink,
     fontSize: fontSizes.sm,
-    marginTop: 4,
-  },
-});
-
-const progressStyles = StyleSheet.create({
-  row: {
-    flexDirection: 'row',
-    backgroundColor: colors.white,
-    padding: spacing.md,
-    borderRadius: radii.lg,
-    borderWidth: 1,
-    borderColor: colors.line,
-    marginTop: spacing.md,
-  },
-  stage: { flex: 1, alignItems: 'center' },
-  dotRow: { flexDirection: 'row', alignItems: 'center', width: '100%' },
-  line: { flex: 1, height: 2, backgroundColor: colors.line2 },
-  dot: {
-    width: 12,
-    height: 12,
-    borderRadius: 6,
-    backgroundColor: colors.line2,
-    borderWidth: 2,
-    borderColor: colors.white,
-  },
-  dotDone: { backgroundColor: colors.brand.red },
-  dotCurrent: {
-    backgroundColor: colors.brand.red,
-    transform: [{ scale: 1.4 }],
-  },
-  label: {
-    fontSize: 10,
-    fontFamily: fontFamilies.body,
-    color: colors.text.muted,
-    marginTop: 4,
-    textAlign: 'center',
-  },
-  terminal: {
-    backgroundColor: colors.soft,
-    padding: spacing.md,
-    borderRadius: radii.lg,
-    marginTop: spacing.md,
-    alignItems: 'center',
-  },
-  terminalText: {
-    fontFamily: fontFamilies.bodyExtraBold,
-    color: colors.text.muted,
-    fontSize: fontSizes.sm,
-  },
-  reorderBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: spacing.sm,
-    backgroundColor: colors.brand.redLight,
-    borderRadius: radii.lg,
-    paddingVertical: spacing.md,
-    paddingHorizontal: spacing.lg,
-    marginTop: spacing.md,
-    borderWidth: 1,
-    borderColor: colors.brand.red,
-  },
-  reorderText: {
-    color: colors.brand.red,
-    fontFamily: fontFamilies.bodyExtraBold,
-    fontSize: fontSizes.sm,
-  },
-  reorderSubtext: {
-    color: colors.brand.red,
-    opacity: 0.7,
-    fontFamily: fontFamilies.body,
-    fontSize: fontSizes.xs,
-  },
-});
-
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: colors.surface },
-  scroll: { padding: spacing.lg },
-  statusCard: {
-    backgroundColor: colors.white,
-    borderRadius: radii.lg,
-    padding: spacing.lg,
-    alignItems: 'center',
-    gap: spacing.sm,
-    borderWidth: 1,
-    borderColor: colors.line,
-  },
-  statusBadge: {
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.xs,
-    borderRadius: radii.pill,
-  },
-  statusText: { fontFamily: fontFamilies.bodyExtraBold, fontSize: fontSizes.sm },
-  serviceName: {
-    fontFamily: fontFamilies.headingBold,
-    color: colors.ink,
-    fontSize: fontSizes.md,
-  },
-  price: { fontFamily: fontFamilies.headingBlack, fontSize: fontSizes.xl, color: colors.brand.red },
-  driverCard: {
-    backgroundColor: colors.white,
-    borderRadius: radii.lg,
-    padding: spacing.md,
-    marginTop: spacing.md,
-    borderWidth: 1,
-    borderColor: colors.line,
-  },
-  driverRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, marginTop: spacing.sm },
-  avatar: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: colors.brand.red,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  avatarText: { color: colors.white, fontFamily: fontFamilies.headingBold, fontSize: fontSizes.md },
-  driverName: { fontFamily: fontFamilies.bodyExtraBold, color: colors.ink, fontSize: fontSizes.sm },
-  driverPhone: { fontFamily: fontFamilies.body, color: colors.text.muted, fontSize: fontSizes.xs },
-  callBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.xs,
-    backgroundColor: colors.brand.red,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
-    borderRadius: radii.pill,
-  },
-  callBtnText: {
-    color: colors.white,
-    fontFamily: fontFamilies.bodyExtraBold,
-    fontSize: fontSizes.xs,
-  },
-  section: {
-    backgroundColor: colors.white,
-    borderRadius: radii.lg,
-    padding: spacing.md,
-    marginTop: spacing.md,
-    borderWidth: 1,
-    borderColor: colors.line,
-  },
-  sectionTitle: {
-    fontFamily: fontFamilies.bodyExtraBold,
-    color: colors.text.muted,
-    fontSize: fontSizes.xs,
-    marginBottom: spacing.sm,
-    textTransform: 'uppercase',
-    letterSpacing: 1,
-  },
-  row: { flexDirection: 'row', gap: spacing.sm, marginBottom: spacing.xs },
-  label: {
-    color: colors.text.muted,
-    fontFamily: fontFamilies.bodyBold,
-    fontSize: fontSizes.xs,
-    width: 60,
-  },
-  value: {
-    flex: 1,
-    fontFamily: fontFamilies.body,
-    color: colors.text.primary,
-    fontSize: fontSizes.sm,
-  },
-  notes: {
-    fontFamily: fontFamilies.body,
-    color: colors.text.primary,
-    fontSize: fontSizes.sm,
-    lineHeight: 22,
-  },
-  historyItem: {
-    flexDirection: 'row',
-    gap: spacing.sm,
-    marginBottom: spacing.sm,
-    alignItems: 'flex-start',
-  },
-  historyDot: {
-    width: 10,
-    height: 10,
-    borderRadius: 5,
-    marginTop: 5,
-  },
-  historyTitle: {
-    fontFamily: fontFamilies.bodyExtraBold,
-    fontSize: fontSizes.sm,
-    color: colors.ink,
-  },
-  historyReason: {
-    fontFamily: fontFamilies.body,
-    fontSize: fontSizes.xs,
-    color: colors.text.muted,
-    marginTop: 2,
-  },
-  historyTime: {
-    fontFamily: fontFamilies.body,
-    fontSize: 10,
-    color: colors.text.muted,
-    marginTop: 2,
-  },
-  // WhatsApp confirmation banner (justCreated)
-  waBanner: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: spacing.sm,
-    backgroundColor: '#1A9F6E',
-    padding: spacing.md,
-    borderRadius: radii.lg,
-    marginBottom: spacing.md,
-  },
-  waIconWrap: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: 'rgba(255,255,255,0.18)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  waTitle: {
-    color: colors.white,
-    fontFamily: fontFamilies.headingBold,
-    fontSize: fontSizes.sm,
-    marginBottom: 2,
-  },
-  waBody: {
-    color: 'rgba(255,255,255,0.9)',
-    fontFamily: fontFamilies.body,
-    fontSize: fontSizes.xs,
-    lineHeight: 18,
-  },
-  waClose: {
-    padding: 4,
-  },
-  // Contact admin CTA
-  contactBtn: {
-    marginTop: spacing.lg,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: spacing.sm,
-    backgroundColor: '#25D366',
-    borderRadius: radii.lg,
-    paddingVertical: spacing.md,
-    boxShadow: '0 8px 20px rgba(37,211,102,0.30)',
-    elevation: 6,
-  },
-  contactBtnText: {
-    color: colors.white,
-    fontFamily: fontFamilies.headingBold,
-    fontSize: fontSizes.sm,
+    marginTop: 6,
   },
 });

@@ -1,5 +1,7 @@
 import { useNavigation, useRoute, type RouteProp } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
+import { LinearGradient } from 'expo-linear-gradient';
+import { MessageSquare, ShieldCheck } from 'lucide-react-native';
 import { useEffect, useRef, useState } from 'react';
 import {
   Alert,
@@ -14,10 +16,20 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { PrimaryButton } from '../components/ui';
+import { BackChevron } from '../theme/rtl';
 import { api } from '../lib/api';
 import type { AuthStackParamList } from '../navigation/AuthStack';
 import { useAuth } from '../stores/auth';
-import { colors, fontFamilies, fontSizes, radii, spacing } from '../theme/tokens';
+import {
+  colors,
+  fontFamilies,
+  fontSizes,
+  gradients,
+  radii,
+  shadows,
+  spacing,
+} from '../theme/tokens';
 
 type NavProp = NativeStackNavigationProp<AuthStackParamList, 'OtpVerify'>;
 type RouteParam = RouteProp<AuthStackParamList, 'OtpVerify'>;
@@ -44,13 +56,11 @@ export function OtpVerifyScreen() {
   }, [secondsLeft]);
 
   const handleChange = (text: string, index: number) => {
-    // Only accept digits, single char
     const clean = text.replace(/\D/g, '').slice(-1);
     const next = [...digits];
     next[index] = clean;
     setDigits(next);
     if (clean && index < OTP_LENGTH - 1) inputs.current[index + 1]?.focus();
-    // Auto-submit when complete
     if (next.every((d) => d) && index === OTP_LENGTH - 1) {
       void onSubmit(next.join(''));
     }
@@ -88,7 +98,7 @@ export function OtpVerifyScreen() {
     try {
       await api.raw.post('/auth/otp/request', { phone });
       setSecondsLeft(RESEND_SECONDS);
-      Alert.alert('تم', 'تم إرسال كود جديد');
+      Alert.alert('تم ✓', 'تم إرسال كود جديد إلى رقم هاتفك');
     } catch {
       Alert.alert('خطأ', 'فشل إرسال الكود، حاول مرة أخرى');
     } finally {
@@ -96,61 +106,75 @@ export function OtpVerifyScreen() {
     }
   };
 
-  // Order indices visually right-to-left in RTL so first digit appears on the right
+  // In Arabic RTL the first digit must visually appear on the RIGHT.
+  // flex-row already flips, but the cursor focus order needs to follow visually
+  // — we render indices 0..N-1 in the array we want focus to follow.
   const orderedIndices = I18nManager.isRTL
     ? Array.from({ length: OTP_LENGTH }, (_, i) => OTP_LENGTH - 1 - i)
     : Array.from({ length: OTP_LENGTH }, (_, i) => i);
 
+  const allFilled = digits.every((d) => d);
+
   return (
-    <SafeAreaView style={styles.container}>
+    <SafeAreaView edges={['top']} style={styles.container}>
       <KeyboardAvoidingView
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
         style={styles.flex}
       >
-        <View style={styles.content}>
-          <Text style={styles.title}>تأكيد رقم الهاتف</Text>
-          <Text style={styles.subtitle}>
-            أرسلنا كود تحقق إلى{'\n'}
-            <Text style={styles.phone}>{phone}</Text>
-          </Text>
-
-          <View style={styles.otpRow}>
-            {orderedIndices.map((idx) => (
-              <TextInput
-                key={idx}
-                ref={(r) => {
-                  inputs.current[idx] = r;
-                }}
-                value={digits[idx]}
-                onChangeText={(t) => handleChange(t, idx)}
-                onKeyPress={({ nativeEvent }) => handleKeyPress(nativeEvent.key, idx)}
-                keyboardType="number-pad"
-                maxLength={1}
-                style={styles.otpInput}
-                textAlign="center"
-                selectTextOnFocus
-                returnKeyType={idx === OTP_LENGTH - 1 ? 'done' : 'next'}
-              />
-            ))}
-          </View>
-
+        {/* ─────── Brand hero ─────── */}
+        <LinearGradient
+          colors={gradients.brand}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 1 }}
+          style={styles.hero}
+        >
           <Pressable
-            onPress={() => onSubmit()}
-            disabled={loading || digits.some((d) => !d)}
-            style={({ pressed }) => [
-              styles.button,
-              pressed && styles.buttonPressed,
-              (loading || digits.some((d) => !d)) && styles.buttonDisabled,
-            ]}
+            onPress={() => navigation.goBack()}
+            style={({ pressed }) => [styles.backBtn, pressed && { opacity: 0.7 }]}
+            hitSlop={8}
+            accessibilityLabel="رجوع"
           >
-            <Text style={styles.buttonText}>{loading ? 'جاري التحقق…' : 'تأكيد'}</Text>
+            <BackChevron size={20} color={colors.white} />
           </Pressable>
+
+          <View style={styles.heroIconWrap}>
+            <MessageSquare size={28} color={colors.white} />
+          </View>
+          <Text style={styles.heroTitle}>أدخل كود التحقق</Text>
+          <Text style={styles.heroSubtitle}>أرسلنا كود مكوّن من {OTP_LENGTH} أرقام إلى</Text>
+          <Text style={styles.heroPhone}>{phone}</Text>
+        </LinearGradient>
+
+        <View style={[styles.card, shadows.md]}>
+          <Text style={styles.fieldLabel}>الكود</Text>
+          <View style={styles.otpRow}>
+            {orderedIndices.map((idx) => {
+              const filled = !!digits[idx];
+              return (
+                <TextInput
+                  key={idx}
+                  ref={(r) => {
+                    inputs.current[idx] = r;
+                  }}
+                  value={digits[idx]}
+                  onChangeText={(t) => handleChange(t, idx)}
+                  onKeyPress={({ nativeEvent }) => handleKeyPress(nativeEvent.key, idx)}
+                  keyboardType="number-pad"
+                  maxLength={1}
+                  style={[styles.otpInput, filled && styles.otpInputFilled]}
+                  textAlign="center"
+                  selectTextOnFocus
+                  returnKeyType={idx === OTP_LENGTH - 1 ? 'done' : 'next'}
+                />
+              );
+            })}
+          </View>
 
           <View style={styles.resendRow}>
             {secondsLeft > 0 ? (
-              <Text style={styles.resendDim}>إعادة الإرسال خلال {secondsLeft}ث</Text>
+              <Text style={styles.resendDim}>إعادة الإرسال خلال {secondsLeft} ثانية</Text>
             ) : (
-              <Pressable onPress={onResend} disabled={resending}>
+              <Pressable onPress={onResend} disabled={resending} hitSlop={6}>
                 <Text style={styles.resendActive}>
                   {resending ? 'جاري الإرسال…' : 'إعادة إرسال الكود'}
                 </Text>
@@ -158,70 +182,126 @@ export function OtpVerifyScreen() {
             )}
           </View>
 
-          <Pressable onPress={() => navigation.goBack()} style={styles.backLink}>
-            <Text style={styles.backText}>تغيير رقم الهاتف</Text>
-          </Pressable>
+          <View style={{ marginTop: spacing.lg }}>
+            <PrimaryButton
+              label="تأكيد ودخول"
+              onPress={() => onSubmit()}
+              disabled={!allFilled}
+              loading={loading}
+            />
+          </View>
+
+          <View style={styles.trustRow}>
+            <ShieldCheck size={14} color={colors.success} />
+            <Text style={styles.trustText}>
+              لن نشارك رقمك مع أي طرف ثالث. الكود صالح لـ 10 دقائق فقط.
+            </Text>
+          </View>
         </View>
+
+        <Pressable
+          onPress={() => navigation.goBack()}
+          style={({ pressed }) => [styles.backLink, pressed && { opacity: 0.8 }]}
+        >
+          <Text style={styles.backText}>
+            الرقم غير صحيح؟ <Text style={styles.backCta}>غيّر الرقم</Text>
+          </Text>
+        </Pressable>
       </KeyboardAvoidingView>
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: colors.white },
+  container: { flex: 1, backgroundColor: colors.surface },
   flex: { flex: 1 },
-  content: { flex: 1, padding: spacing.xl, justifyContent: 'center' },
-  title: {
+  hero: {
+    paddingHorizontal: spacing.xl,
+    paddingTop: spacing.md,
+    paddingBottom: spacing.xxl,
+    borderBottomLeftRadius: radii.xxl,
+    borderBottomRightRadius: radii.xxl,
+    alignItems: 'center',
+  },
+  backBtn: {
+    alignSelf: 'flex-start',
+    width: 40,
+    height: 40,
+    borderRadius: radii.md,
+    backgroundColor: 'rgba(255,255,255,0.18)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: spacing.sm,
+  },
+  heroIconWrap: {
+    width: 72,
+    height: 72,
+    borderRadius: 36,
+    backgroundColor: 'rgba(255,255,255,0.18)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: spacing.md,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.25)',
+  },
+  heroTitle: {
+    color: colors.white,
     fontSize: fontSizes.xxl,
     fontFamily: fontFamilies.headingBlack,
-    color: colors.text.primary,
-    textAlign: 'center',
   },
-  subtitle: {
+  heroSubtitle: {
+    color: 'rgba(255,255,255,0.85)',
     fontSize: fontSizes.sm,
-    color: colors.text.muted,
-    marginTop: spacing.sm,
-    marginBottom: spacing.xxl,
-    textAlign: 'center',
     fontFamily: fontFamilies.body,
-    lineHeight: 22,
+    marginTop: 6,
+    textAlign: 'center',
   },
-  phone: {
-    color: colors.text.primary,
-    fontFamily: fontFamilies.bodyBold,
+  heroPhone: {
+    color: colors.white,
     fontSize: fontSizes.md,
+    fontFamily: fontFamilies.bodyExtraBold,
+    marginTop: 2,
+    letterSpacing: 1,
+  },
+  card: {
+    backgroundColor: colors.white,
+    borderRadius: radii.xl,
+    borderWidth: 1,
+    borderColor: colors.line,
+    margin: spacing.lg,
+    padding: spacing.lg,
+    marginTop: -spacing.xl,
+  },
+  fieldLabel: {
+    fontSize: fontSizes.sm,
+    color: colors.ink,
+    fontFamily: fontFamilies.bodyBold,
+    marginBottom: spacing.md,
   },
   otpRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    marginBottom: spacing.xxl,
     gap: spacing.sm,
   },
   otpInput: {
     flex: 1,
     height: 56,
     borderWidth: 2,
-    borderColor: colors.border,
+    borderColor: colors.line2,
     borderRadius: radii.md,
     fontSize: fontSizes.xl,
-    fontFamily: fontFamilies.bodyExtraBold,
-    color: colors.text.primary,
+    fontFamily: fontFamilies.headingBlack,
+    color: colors.ink,
     backgroundColor: colors.surface,
   },
-  button: {
-    backgroundColor: colors.brand.red,
-    paddingVertical: spacing.md,
-    borderRadius: radii.md,
+  otpInputFilled: {
+    borderColor: colors.brand.red,
+    backgroundColor: colors.white,
+  },
+  resendRow: {
     alignItems: 'center',
+    marginTop: spacing.lg,
   },
-  buttonPressed: { opacity: 0.85 },
-  buttonDisabled: { opacity: 0.5 },
-  buttonText: {
-    color: colors.white,
-    fontFamily: fontFamilies.bodyBold,
-    fontSize: fontSizes.md,
-  },
-  resendRow: { alignItems: 'center', marginTop: spacing.lg },
   resendDim: {
     color: colors.text.muted,
     fontFamily: fontFamilies.body,
@@ -229,14 +309,30 @@ const styles = StyleSheet.create({
   },
   resendActive: {
     color: colors.brand.red,
-    fontFamily: fontFamilies.bodyBold,
+    fontFamily: fontFamilies.bodyExtraBold,
     fontSize: fontSizes.sm,
   },
-  backLink: { alignItems: 'center', marginTop: spacing.xl },
+  trustRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginTop: spacing.md,
+    padding: spacing.sm,
+    backgroundColor: colors.successLight,
+    borderRadius: radii.md,
+  },
+  trustText: {
+    flex: 1,
+    fontSize: fontSizes.xs,
+    color: colors.success,
+    fontFamily: fontFamilies.body,
+    lineHeight: 18,
+  },
+  backLink: { alignItems: 'center', marginVertical: spacing.lg },
   backText: {
     color: colors.text.secondary,
     fontSize: fontSizes.sm,
     fontFamily: fontFamilies.body,
-    textDecorationLine: 'underline',
   },
+  backCta: { color: colors.brand.red, fontFamily: fontFamilies.bodyExtraBold },
 });

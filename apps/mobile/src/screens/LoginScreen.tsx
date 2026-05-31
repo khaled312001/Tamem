@@ -2,7 +2,7 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { LinearGradient } from 'expo-linear-gradient';
-import { Lock, Phone, Truck } from 'lucide-react-native';
+import { Lock, LogIn, Phone, Truck } from 'lucide-react-native';
 import { useState } from 'react';
 import { Controller, useForm } from 'react-hook-form';
 import {
@@ -21,33 +21,33 @@ import { TamemApiError } from '@tamem/api-client';
 import { type LoginInput, loginSchema } from '@tamem/validators';
 
 import { GoogleSignInButton } from '../components/GoogleSignInButton';
-import { GradientButton } from '../components/GradientButton';
 import { IconField } from '../components/IconField';
+import { PrimaryButton } from '../components/ui';
 import { api } from '../lib/api';
 import type { AuthStackParamList } from '../navigation/AuthStack';
 import { useAuth } from '../stores/auth';
-import { colors, fontFamilies, fontSizes, gradients, radii, spacing } from '../theme/tokens';
+import {
+  colors,
+  fontFamilies,
+  fontSizes,
+  gradients,
+  radii,
+  shadows,
+  spacing,
+} from '../theme/tokens';
 
 type NavProp = NativeStackNavigationProp<AuthStackParamList, 'Login'>;
 
-// Maps backend / network errors to a friendly Arabic message for the alert.
 function loginErrorMessage(err: unknown): string {
   if (err instanceof TamemApiError) {
     if (err.status === 401) {
       return 'رقم الهاتف أو كلمة المرور غير صحيحة. تأكد منهما وحاول مرة أخرى.';
     }
-    if (err.status === 422) {
-      return err.messageAr ?? 'بيانات الدخول غير صحيحة.';
-    }
-    if (err.status === 403) {
-      return err.messageAr ?? 'الحساب غير مفعّل.';
-    }
-    if (err.status >= 500) {
-      return 'خطأ في الخادم. حاول مرة أخرى بعد قليل.';
-    }
+    if (err.status === 422) return err.messageAr ?? 'بيانات الدخول غير صحيحة.';
+    if (err.status === 403) return err.messageAr ?? 'الحساب غير مفعّل.';
+    if (err.status >= 500) return 'خطأ في الخادم. حاول مرة أخرى بعد قليل.';
     return err.messageAr ?? err.message;
   }
-  // Axios / fetch network failure (e.g. backend not running, CORS)
   if (err instanceof Error && /network|fetch|ECONN|timeout/i.test(err.message)) {
     return 'تعذّر الاتصال بالخادم. تأكد من اتصالك بالإنترنت ثم حاول مرة أخرى.';
   }
@@ -81,92 +81,98 @@ export function LoginScreen() {
   };
 
   return (
-    <SafeAreaView style={styles.container}>
+    <SafeAreaView edges={['top']} style={styles.container}>
       <KeyboardAvoidingView
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
         style={styles.flex}
       >
+        {/* ─────── Brand hero ─────── */}
+        <LinearGradient
+          colors={gradients.brand}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 1 }}
+          style={styles.hero}
+        >
+          <View style={styles.heroLogoCircle}>
+            <Truck size={28} color={colors.white} />
+          </View>
+          <Text style={styles.heroTitle}>أهلاً بعودتك</Text>
+          <Text style={styles.heroSubtitle}>
+            سجّل دخولك لمتابعة طلباتك وإنشاء طلبات جديدة بسهولة
+          </Text>
+        </LinearGradient>
+
         <ScrollView
-          contentContainerStyle={styles.content}
+          contentContainerStyle={styles.scroll}
           keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={false}
         >
-          {/* Brand header */}
-          <View style={styles.brandRow}>
-            <LinearGradient
-              colors={gradients.brand}
-              start={{ x: 0, y: 0 }}
-              end={{ x: 1, y: 1 }}
-              style={styles.brandIcon}
-            >
-              <Truck size={22} color={colors.white} />
-            </LinearGradient>
-            <View>
-              <Text style={styles.title}>أهلاً بك من جديد</Text>
-              <Text style={styles.subtitle}>سجّل دخولك لتبدأ الطلب</Text>
-            </View>
-          </View>
+          <View style={[styles.card, shadows.md]}>
+            <Text style={styles.fieldLabel}>رقم الهاتف</Text>
+            <Controller
+              control={control}
+              name="phone"
+              render={({ field: { value, onChange, onBlur } }) => (
+                <IconField
+                  Icon={Phone}
+                  placeholder="مثال: 01010254819"
+                  keyboardType="phone-pad"
+                  value={value}
+                  onChangeText={onChange}
+                  onBlur={onBlur}
+                  error={errors.phone?.message}
+                  autoComplete="tel"
+                />
+              )}
+            />
 
-          {/* Fields */}
-          <Controller
-            control={control}
-            name="phone"
-            render={({ field: { value, onChange, onBlur } }) => (
-              <IconField
-                Icon={Phone}
-                placeholder="رقم الهاتف"
-                keyboardType="phone-pad"
-                value={value}
-                onChangeText={onChange}
-                onBlur={onBlur}
-                error={errors.phone?.message}
-                autoComplete="tel"
+            <View style={styles.fieldHeader}>
+              <Text style={styles.fieldLabel}>كلمة المرور</Text>
+              <Pressable onPress={() => navigation.navigate('ForgotPassword')} hitSlop={8}>
+                <Text style={styles.forgotText}>نسيت كلمة المرور؟</Text>
+              </Pressable>
+            </View>
+            <Controller
+              control={control}
+              name="password"
+              render={({ field: { value, onChange, onBlur } }) => (
+                <IconField
+                  Icon={Lock}
+                  placeholder="••••••••"
+                  secureTextEntry
+                  value={value}
+                  onChangeText={onChange}
+                  onBlur={onBlur}
+                  error={errors.password?.message}
+                  autoComplete="password"
+                />
+              )}
+            />
+
+            <View style={{ marginTop: spacing.lg }}>
+              <PrimaryButton
+                label="تسجيل الدخول"
+                onPress={handleSubmit(onSubmit)}
+                loading={loading}
+                Icon={LogIn}
               />
-            )}
-          />
-          <Controller
-            control={control}
-            name="password"
-            render={({ field: { value, onChange, onBlur } }) => (
-              <IconField
-                Icon={Lock}
-                placeholder="كلمة المرور"
-                secureTextEntry
-                value={value}
-                onChangeText={onChange}
-                onBlur={onBlur}
-                error={errors.password?.message}
-                autoComplete="password"
-              />
-            )}
-          />
+            </View>
+
+            <View style={styles.divider}>
+              <View style={styles.dividerLine} />
+              <Text style={styles.dividerText}>أو سجّل دخول بحساب</Text>
+              <View style={styles.dividerLine} />
+            </View>
+
+            <GoogleSignInButton onError={(msg) => Alert.alert('خطأ', msg)} />
+          </View>
 
           <Pressable
-            style={styles.forgotLink}
-            onPress={() => navigation.navigate('ForgotPassword')}
+            onPress={() => navigation.navigate('Register')}
+            style={({ pressed }) => [styles.registerLink, pressed && { opacity: 0.8 }]}
           >
-            <Text style={styles.forgotText}>نسيت كلمة المرور؟</Text>
-          </Pressable>
-
-          <GradientButton
-            label={loading ? 'جاري الدخول…' : 'تسجيل الدخول'}
-            onPress={handleSubmit(onSubmit)}
-            loading={loading}
-          />
-
-          {/* Divider */}
-          <View style={styles.divider}>
-            <View style={styles.dividerLine} />
-            <Text style={styles.dividerText}>أو سجّل بـ</Text>
-            <View style={styles.dividerLine} />
-          </View>
-
-          {/* Official Google Sign-In button (Google branding guidelines) */}
-          <GoogleSignInButton onError={(msg) => Alert.alert('خطأ', msg)} />
-
-          <Pressable onPress={() => navigation.navigate('Register')} style={styles.registerLink}>
             <Text style={styles.registerText}>
-              ليس لديك حساب؟ <Text style={styles.registerCta}>أنشئ حساب</Text>
+              ليس لديك حساب؟ <Text style={styles.registerCta}>أنشئ حساب جديد</Text>
             </Text>
           </Pressable>
         </ScrollView>
@@ -178,37 +184,71 @@ export function LoginScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.surface },
   flex: { flex: 1 },
-  content: { flexGrow: 1, padding: spacing.xl, paddingTop: spacing.xxl, justifyContent: 'center' },
-  brandRow: {
-    flexDirection: 'row',
+  // Hero
+  hero: {
+    paddingHorizontal: spacing.xl,
+    paddingTop: spacing.xl,
+    paddingBottom: spacing.xxl,
+    borderBottomLeftRadius: radii.xxl,
+    borderBottomRightRadius: radii.xxl,
     alignItems: 'center',
-    gap: spacing.md,
-    marginBottom: spacing.xl,
   },
-  brandIcon: {
-    width: 48,
-    height: 48,
-    borderRadius: radii.md,
+  heroLogoCircle: {
+    width: 72,
+    height: 72,
+    borderRadius: 36,
+    backgroundColor: 'rgba(255,255,255,0.18)',
     alignItems: 'center',
     justifyContent: 'center',
+    marginBottom: spacing.md,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.25)',
   },
-  title: {
-    fontSize: fontSizes.xl,
-    fontFamily: fontFamilies.headingBold,
-    color: colors.ink,
-    lineHeight: 34,
+  heroTitle: {
+    color: colors.white,
+    fontSize: fontSizes.xxl,
+    fontFamily: fontFamilies.headingBlack,
   },
-  subtitle: {
+  heroSubtitle: {
+    color: 'rgba(255,255,255,0.88)',
     fontSize: fontSizes.sm,
-    color: colors.text.muted,
     fontFamily: fontFamilies.body,
-    marginTop: 4,
-    lineHeight: 20,
+    textAlign: 'center',
+    marginTop: 6,
+    lineHeight: 22,
+    paddingHorizontal: spacing.md,
   },
-  forgotLink: { alignSelf: 'flex-start', marginVertical: spacing.sm },
+  // Scroll
+  scroll: {
+    padding: spacing.lg,
+    paddingTop: spacing.lg,
+    paddingBottom: spacing.xxl,
+  },
+  card: {
+    backgroundColor: colors.white,
+    borderRadius: radii.xl,
+    borderWidth: 1,
+    borderColor: colors.line,
+    padding: spacing.lg,
+    marginTop: -spacing.xl,
+  },
+  fieldLabel: {
+    fontSize: fontSizes.sm,
+    color: colors.ink,
+    fontFamily: fontFamilies.bodyBold,
+    marginBottom: 6,
+    marginTop: spacing.sm,
+  },
+  fieldHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 6,
+    marginTop: spacing.md,
+  },
   forgotText: {
     color: colors.brand.red,
-    fontSize: fontSizes.sm,
+    fontSize: fontSizes.xs,
     fontFamily: fontFamilies.bodyBold,
   },
   divider: { flexDirection: 'row', alignItems: 'center', marginVertical: spacing.lg },
@@ -219,12 +259,11 @@ const styles = StyleSheet.create({
     fontSize: fontSizes.xs,
     fontFamily: fontFamilies.body,
   },
-  pressed: { opacity: 0.85 },
   registerLink: { alignItems: 'center', marginTop: spacing.xl },
   registerText: {
     color: colors.text.secondary,
     fontSize: fontSizes.sm,
     fontFamily: fontFamilies.body,
   },
-  registerCta: { color: colors.brand.red, fontFamily: fontFamilies.bodyBold },
+  registerCta: { color: colors.brand.red, fontFamily: fontFamilies.bodyExtraBold },
 });

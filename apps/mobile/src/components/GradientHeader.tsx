@@ -1,9 +1,10 @@
 import { useNavigation } from '@react-navigation/native';
 import * as Haptics from 'expo-haptics';
 import { LinearGradient } from 'expo-linear-gradient';
-import { Bell, ChevronRight, MapPin } from 'lucide-react-native';
+import { Bell, MapPin } from 'lucide-react-native';
 import { Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 
+import { BackChevron } from '../theme/rtl';
 import { colors, fontFamilies, fontSizes, gradients, radii, spacing } from '../theme/tokens';
 
 interface GradientHeaderProps {
@@ -17,9 +18,14 @@ interface GradientHeaderProps {
 }
 
 /**
- * Top brand-gradient header used on Home, Map, and any "primary" screen.
- * On stack screens (e.g. OrderTracking) we automatically render a back arrow
- * on the leading side so the user always has a way out — `hideBack` overrides.
+ * Brand-gradient header used on Home, Map, and any primary stack screen.
+ *
+ * - On stack screens, a back chevron pointing the natural Arabic-RTL way
+ *   (right for "you came from the right") appears automatically. `hideBack`
+ *   overrides.
+ * - Bell appears only when `onPressNotifications` is provided.
+ * - `location` renders under the greeting with a pin icon — used for the
+ *   "delivering to: X" affordance on the home screen.
  */
 export function GradientHeader({
   greeting,
@@ -50,26 +56,29 @@ export function GradientHeader({
             style={({ pressed }) => [styles.iconBtn, pressed && { opacity: 0.7 }]}
             hitSlop={8}
           >
-            {/* In RTL the ChevronRight is the natural "back" arrow */}
-            <ChevronRight size={20} color={colors.white} />
+            <BackChevron size={22} color={colors.white} />
           </Pressable>
         ) : null}
 
         <View style={{ flex: 1, marginHorizontal: showBack || showBell ? spacing.sm : 0 }}>
-          <Text style={styles.greeting}>{greeting}</Text>
-          {location && (
+          <Text style={styles.greeting} numberOfLines={1}>
+            {greeting}
+          </Text>
+          {location ? (
             <View style={styles.locRow}>
               <MapPin size={11} color={colors.white} />
-              <Text style={styles.location}>{location}</Text>
+              <Text style={styles.location} numberOfLines={1}>
+                {location}
+              </Text>
             </View>
-          )}
+          ) : null}
         </View>
 
         {showBell ? (
           <Pressable
             onPress={onPressNotifications}
             accessibilityLabel="الإشعارات"
-            style={styles.iconBtn}
+            style={({ pressed }) => [styles.iconBtn, pressed && { opacity: 0.7 }]}
             hitSlop={6}
           >
             <Bell size={18} color={colors.white} />
@@ -114,7 +123,7 @@ const styles = StyleSheet.create({
   bellDot: {
     position: 'absolute',
     top: 8,
-    right: 9,
+    end: 9,
     width: 7,
     height: 7,
     borderRadius: 4,

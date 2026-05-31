@@ -3,48 +3,31 @@ import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useQuery } from '@tanstack/react-query';
 import {
   Bell,
-  ChevronLeft,
+  CreditCard,
   HeadphonesIcon,
+  Heart,
   LogOut,
   MapPin,
+  Package,
+  Settings,
+  Shield,
   Star,
   User,
   Wallet,
 } from 'lucide-react-native';
 import { useEffect, useState } from 'react';
-import { Alert, Pressable, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
+import { Alert, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { GradientHeader } from '../components/GradientHeader';
+import { Divider, ListItem, SecondaryButton } from '../components/ui';
 import { api } from '../lib/api';
 import { isNotificationSoundMuted, setNotificationSoundMuted } from '../lib/notificationSound';
 import type { ProfileStackParamList } from '../navigation/ProfileStack';
 import { useAuth } from '../stores/auth';
-import { colors, fontFamilies, fontSizes, radii, spacing } from '../theme/tokens';
+import { colors, fontFamilies, fontSizes, radii, shadows, spacing } from '../theme/tokens';
 
 type Nav = NativeStackNavigationProp<ProfileStackParamList, 'Profile'>;
-
-interface RowProps {
-  label: string;
-  Icon: typeof User;
-  onPress?: () => void;
-  trailing?: React.ReactNode;
-}
-
-function Row({ label, Icon, onPress, trailing }: RowProps) {
-  return (
-    <Pressable
-      onPress={onPress}
-      style={({ pressed }) => [styles.row, pressed && { opacity: 0.85 }]}
-    >
-      <View style={styles.rowIcon}>
-        <Icon size={18} color={colors.brand.red} />
-      </View>
-      <Text style={styles.rowLabel}>{label}</Text>
-      {trailing ?? <ChevronLeft size={16} color={colors.text.muted} />}
-    </Pressable>
-  );
-}
 
 interface OrdersCountResponse {
   total: number;
@@ -56,7 +39,6 @@ export function ProfileScreen() {
   const clear = useAuth((s) => s.clear);
   const [soundOn, setSoundOn] = useState(true);
 
-  // Hydrate the in-app sound switch from AsyncStorage so it persists.
   useEffect(() => {
     let alive = true;
     void (async () => {
@@ -82,30 +64,39 @@ export function ProfileScreen() {
   });
 
   const onLogout = () => {
-    Alert.alert('تأكيد', 'هل تريد تسجيل الخروج؟', [
+    Alert.alert('تأكيد تسجيل الخروج', 'هل تريد بالفعل تسجيل الخروج من حسابك؟', [
       { text: 'إلغاء', style: 'cancel' },
-      { text: 'خروج', style: 'destructive', onPress: () => void clear() },
+      { text: 'تسجيل الخروج', style: 'destructive', onPress: () => void clear() },
     ]);
   };
 
   return (
     <SafeAreaView edges={['top']} style={styles.container}>
-      <GradientHeader greeting="حسابي" location={user?.phone ?? ''} />
+      <GradientHeader greeting="حسابي" location={user?.phone ?? ''} hideBack />
 
       <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
-        {/* Profile card */}
-        <View style={styles.profileCard}>
-          <View style={styles.avatar}>
-            <Text style={styles.avatarText}>{user?.name?.charAt(0).toUpperCase() ?? 'ت'}</Text>
+        {/* ─────── Profile hero card ─────── */}
+        <View style={[styles.profileCard, shadows.md]}>
+          <View style={styles.avatarWrap}>
+            <View style={styles.avatar}>
+              <Text style={styles.avatarText}>{user?.name?.charAt(0).toUpperCase() ?? 'ت'}</Text>
+            </View>
+            <View style={styles.verifiedBadge}>
+              <Shield size={10} color={colors.white} />
+            </View>
           </View>
           <Text style={styles.userName}>{user?.name ?? 'مستخدم'}</Text>
+          <Text style={styles.userPhone}>{user?.phone ?? ''}</Text>
           <View style={styles.badgeRow}>
             <View style={styles.badge}>
+              <Star size={12} color="#9A6B16" fill="#9A6B16" />
               <Text style={styles.badgeText}>عميل مميز</Text>
             </View>
           </View>
+
           <View style={styles.statsRow}>
             <View style={styles.statItem}>
+              <Package size={14} color={colors.brand.red} />
               <Text style={styles.statValue}>{orderCount?.total ?? 0}</Text>
               <Text style={styles.statLabel}>طلباتي</Text>
             </View>
@@ -117,38 +108,51 @@ export function ProfileScreen() {
             </View>
             <View style={styles.statDivider} />
             <View style={styles.statItem}>
+              <MapPin size={14} color={colors.info} />
               <Text style={styles.statValue}>1</Text>
               <Text style={styles.statLabel}>عناوين</Text>
             </View>
           </View>
         </View>
 
-        {/* Account */}
+        {/* ─────── Account section ─────── */}
         <Text style={styles.sectionTitle}>الحساب</Text>
-        <View style={styles.group}>
-          <Row
-            label="تعديل البيانات الشخصية"
+        <View style={[styles.group, shadows.sm]}>
+          <ListItem
+            label="البيانات الشخصية"
+            sublabel="تعديل الاسم والبريد"
             Icon={User}
             onPress={() => navigation.navigate('EditProfile')}
           />
-          <Row
+          <Divider inset />
+          <ListItem
             label="عناويني المحفوظة"
+            sublabel="المنزل، العمل، وغيرها"
             Icon={MapPin}
             onPress={() => navigation.navigate('SavedAddresses')}
           />
-          <Row label="محفظتي" Icon={Wallet} onPress={() => navigation.navigate('Wallet')} />
-          <Row
-            label="طرق الدفع"
+          <Divider inset />
+          <ListItem
+            label="محفظتي"
+            sublabel="رصيدك وحركات المحفظة"
             Icon={Wallet}
+            onPress={() => navigation.navigate('Wallet')}
+          />
+          <Divider inset />
+          <ListItem
+            label="طرق الدفع"
+            sublabel="فيزا، فودافون كاش، انستاباي"
+            Icon={CreditCard}
             onPress={() => navigation.navigate('PaymentMethods')}
           />
         </View>
 
-        {/* Preferences */}
+        {/* ─────── Preferences section ─────── */}
         <Text style={styles.sectionTitle}>الإعدادات</Text>
-        <View style={styles.group}>
-          <Row
+        <View style={[styles.group, shadows.sm]}>
+          <ListItem
             label="صوت الإشعارات"
+            sublabel="تشغيل أو إيقاف الصوت داخل التطبيق"
             Icon={Bell}
             trailing={
               <Switch
@@ -156,24 +160,51 @@ export function ProfileScreen() {
                 thumbColor={colors.white}
                 value={soundOn}
                 onValueChange={toggleSound}
+                ios_backgroundColor={colors.line2}
               />
             }
           />
-          <Row
-            label="الدعم والمساعدة"
-            Icon={HeadphonesIcon}
-            onPress={() => navigation.navigate('Support')}
+          <Divider inset />
+          <ListItem
+            label="الإعدادات العامة"
+            sublabel="اللغة، الإشعارات، الخصوصية"
+            Icon={Settings}
+            onPress={() => {
+              // Future: settings screen
+              Alert.alert('قريباً', 'صفحة الإعدادات قيد التطوير');
+            }}
           />
         </View>
 
-        {/* Logout */}
-        <Pressable
-          onPress={onLogout}
-          style={({ pressed }) => [styles.logoutBtn, pressed && { opacity: 0.85 }]}
-        >
-          <LogOut size={18} color={colors.brand.red} />
-          <Text style={styles.logoutText}>تسجيل الخروج</Text>
-        </Pressable>
+        {/* ─────── Help section ─────── */}
+        <Text style={styles.sectionTitle}>الدعم والمساعدة</Text>
+        <View style={[styles.group, shadows.sm]}>
+          <ListItem
+            label="مركز المساعدة"
+            sublabel="أسئلة شائعة وطرق التواصل"
+            Icon={HeadphonesIcon}
+            onPress={() => navigation.navigate('Support')}
+          />
+          <Divider inset />
+          <ListItem
+            label="عن تَميم"
+            sublabel="معرفة المزيد عن منصتنا"
+            Icon={Heart}
+            onPress={() => {
+              Alert.alert(
+                'عن تَميم',
+                'منصة تَميم للتوصيل والشحن — نوصّل طلباتك بأمان وسرعة داخل وخارج المدينة.',
+              );
+            }}
+          />
+        </View>
+
+        {/* ─────── Logout + version ─────── */}
+        <View style={{ marginTop: spacing.xl }}>
+          <SecondaryButton label="تسجيل الخروج" Icon={LogOut} onPress={onLogout} />
+        </View>
+
+        <Text style={styles.versionText}>الإصدار 0.1.0 — تَميم للتوصيل</Text>
       </ScrollView>
     </SafeAreaView>
   );
@@ -181,7 +212,8 @@ export function ProfileScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.surface },
-  scroll: { padding: spacing.lg, paddingBottom: spacing.xl },
+  scroll: { padding: spacing.lg, paddingBottom: spacing.xxl },
+  // Profile hero
   profileCard: {
     backgroundColor: colors.white,
     borderRadius: radii.xl,
@@ -189,31 +221,64 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     borderColor: colors.line,
     borderWidth: 1,
-    marginBottom: spacing.lg,
+    marginTop: -spacing.md,
+  },
+  avatarWrap: {
+    position: 'relative',
+    marginBottom: spacing.sm,
   },
   avatar: {
-    width: 76,
-    height: 76,
-    borderRadius: 38,
+    width: 88,
+    height: 88,
+    borderRadius: 44,
     backgroundColor: colors.brand.red,
     alignItems: 'center',
     justifyContent: 'center',
-    marginBottom: spacing.sm,
   },
   avatarText: {
     color: colors.white,
-    fontSize: 30,
+    fontSize: 34,
     fontFamily: fontFamilies.headingBlack,
   },
-  userName: { fontSize: fontSizes.lg, fontFamily: fontFamilies.headingBlack, color: colors.ink },
-  badgeRow: { marginTop: spacing.xs, marginBottom: spacing.md },
+  verifiedBadge: {
+    position: 'absolute',
+    bottom: 2,
+    end: 2,
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: colors.success,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 2,
+    borderColor: colors.white,
+  },
+  userName: {
+    fontSize: fontSizes.xl,
+    fontFamily: fontFamilies.headingBlack,
+    color: colors.ink,
+  },
+  userPhone: {
+    fontSize: fontSizes.xs,
+    color: colors.text.muted,
+    fontFamily: fontFamilies.body,
+    marginTop: 4,
+  },
+  badgeRow: { marginTop: spacing.sm, marginBottom: spacing.md },
   badge: {
-    backgroundColor: colors.brand.gold + '30',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: colors.brand.gold + '20',
     paddingHorizontal: spacing.md,
-    paddingVertical: 4,
+    paddingVertical: 5,
     borderRadius: radii.pill,
   },
-  badgeText: { color: '#9A6B16', fontSize: fontSizes.xs, fontFamily: fontFamilies.bodyExtraBold },
+  badgeText: {
+    color: '#9A6B16',
+    fontSize: fontSizes.xs,
+    fontFamily: fontFamilies.bodyExtraBold,
+  },
   statsRow: {
     flexDirection: 'row',
     width: '100%',
@@ -221,16 +286,28 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     borderTopColor: colors.line,
   },
-  statItem: { flex: 1, alignItems: 'center', gap: 2 },
-  statValue: { fontSize: fontSizes.lg, fontFamily: fontFamilies.headingBlack, color: colors.ink },
-  statLabel: { fontSize: fontSizes.xs, color: colors.text.muted, fontFamily: fontFamilies.body },
-  statDivider: { width: 1, backgroundColor: colors.line },
-  sectionTitle: {
-    fontSize: fontSizes.sm,
+  statItem: { flex: 1, alignItems: 'center', gap: 4 },
+  statValue: {
+    fontSize: fontSizes.lg,
     fontFamily: fontFamilies.headingBlack,
-    color: colors.text.secondary,
+    color: colors.ink,
+  },
+  statLabel: {
+    fontSize: fontSizes.xs,
+    color: colors.text.muted,
+    fontFamily: fontFamilies.body,
+  },
+  statDivider: { width: 1, backgroundColor: colors.line },
+  // Sections
+  sectionTitle: {
+    fontSize: fontSizes.xs,
+    fontFamily: fontFamilies.headingBlack,
+    color: colors.text.muted,
     marginBottom: spacing.sm,
-    marginTop: spacing.md,
+    marginTop: spacing.lg,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+    paddingHorizontal: spacing.xs,
   },
   group: {
     backgroundColor: colors.white,
@@ -239,43 +316,11 @@ const styles = StyleSheet.create({
     borderRadius: radii.lg,
     overflow: 'hidden',
   },
-  row: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.md,
-    padding: spacing.md,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.line,
-  },
-  rowIcon: {
-    width: 36,
-    height: 36,
-    borderRadius: radii.md,
-    backgroundColor: colors.soft,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  rowLabel: {
-    flex: 1,
-    fontSize: fontSizes.sm,
-    fontFamily: fontFamilies.bodyBold,
-    color: colors.ink,
-  },
-  logoutBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: spacing.sm,
-    backgroundColor: colors.white,
-    borderColor: colors.brand.red,
-    borderWidth: 1,
-    borderRadius: radii.lg,
-    padding: spacing.md,
+  versionText: {
+    textAlign: 'center',
+    fontSize: fontSizes.xxs,
+    color: colors.text.muted,
+    fontFamily: fontFamilies.body,
     marginTop: spacing.xl,
-  },
-  logoutText: {
-    color: colors.brand.red,
-    fontFamily: fontFamilies.bodyExtraBold,
-    fontSize: fontSizes.sm,
   },
 });

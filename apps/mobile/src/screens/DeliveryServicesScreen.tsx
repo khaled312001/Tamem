@@ -1,32 +1,26 @@
-import { useQuery } from '@tanstack/react-query';
 import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
-import { ChevronLeft, ShoppingBag, Star } from 'lucide-react-native';
-import {
-  ActivityIndicator,
-  FlatList,
-  Image,
-  Pressable,
-  StyleSheet,
-  Text,
-  View,
-} from 'react-native';
+import { useQuery } from '@tanstack/react-query';
+import { ShoppingBag, Tag } from 'lucide-react-native';
+import { FlatList, Image, Pressable, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import type { Service } from '@tamem/types';
 
-import { GradientHeader } from '../components/GradientHeader';
+import { ScreenHeader } from '../components/ScreenHeader';
+import { AnimatedListItem, CardListSkeleton, EmptyState, ForwardChevron } from '../components/ui';
 import { api } from '../lib/api';
 import type { HomeStackParamList } from '../navigation/HomeStack';
-import { colors, fontFamilies, fontSizes, radii, spacing } from '../theme/tokens';
+import { colors, fontFamilies, fontSizes, radii, shadows, spacing } from '../theme/tokens';
 
 type Nav = NativeStackNavigationProp<HomeStackParamList, 'DeliveryServices'>;
 
-/**
- * Lists every active service of category=DELIVERY so the customer can pick
- * (e.g. supermarket / pharmacy / restaurant / laundry / etc).
- * Each card → opens DynamicServiceFlow with the chosen serviceId.
- */
+function pricingLabel(s: Service): string {
+  if (s.pricingMethod === 'FIXED') return `سعر ثابت ${Number(s.basePrice ?? 0)} ج.م`;
+  if (s.pricingMethod === 'QUOTE') return 'تسعير حسب الطلب';
+  return 'تسعير حسب المسافة';
+}
+
 export function DeliveryServicesScreen() {
   const navigation = useNavigation<Nav>();
 
@@ -39,43 +33,50 @@ export function DeliveryServicesScreen() {
 
   return (
     <SafeAreaView edges={['top']} style={styles.container}>
-      <GradientHeader greeting="خدمات الدليفري" location="داخل المدينة" />
+      <ScreenHeader title="خدمات الدليفري" subtitle="اختر الخدمة المناسبة لطلبك" />
 
       {isLoading ? (
-        <ActivityIndicator color={colors.brand.red} style={{ marginTop: spacing.xl }} />
+        <View style={styles.list}>
+          <CardListSkeleton count={4} />
+        </View>
       ) : (
         <FlatList
           data={deliveryServices}
           keyExtractor={(s) => s.id}
-          contentContainerStyle={styles.list}
-          ListEmptyComponent={<Text style={styles.empty}>لا توجد خدمات دليفري متاحة حالياً</Text>}
-          renderItem={({ item }) => (
-            <Pressable
-              onPress={() => navigation.navigate('DynamicServiceFlow', { serviceId: item.id })}
-              style={({ pressed }) => [styles.card, pressed && styles.pressed]}
-            >
-              <View style={styles.iconWrap}>
-                {item.imageUrl ? (
-                  <Image source={{ uri: item.imageUrl }} style={styles.iconImg} />
-                ) : (
-                  <ShoppingBag size={26} color={colors.brand.red} />
-                )}
-              </View>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.title}>{item.nameAr}</Text>
-                <View style={styles.metaRow}>
-                  <Star size={11} color={colors.brand.gold} fill={colors.brand.gold} />
-                  <Text style={styles.metaText}>
-                    {item.pricingMethod === 'FIXED'
-                      ? `سعر ثابت ${Number(item.basePrice ?? 0)} ج.م`
-                      : item.pricingMethod === 'QUOTE'
-                        ? 'تسعير حسب الطلب'
-                        : 'تسعير حسب المسافة'}
-                  </Text>
+          contentContainerStyle={[
+            styles.list,
+            deliveryServices.length === 0 && { flexGrow: 1, justifyContent: 'center' },
+          ]}
+          ListEmptyComponent={
+            <EmptyState
+              icon={<ShoppingBag size={36} color={colors.brand.red} />}
+              title="لا توجد خدمات متاحة حالياً"
+              subtitle="جرّب لاحقاً أو تواصل مع الدعم لو محتاج طلب خاص."
+            />
+          }
+          renderItem={({ item, index }) => (
+            <AnimatedListItem index={index}>
+              <Pressable
+                onPress={() => navigation.navigate('DynamicServiceFlow', { serviceId: item.id })}
+                style={({ pressed }) => [styles.card, shadows.sm, pressed && { opacity: 0.92 }]}
+              >
+                <View style={styles.iconWrap}>
+                  {item.imageUrl ? (
+                    <Image source={{ uri: item.imageUrl }} style={styles.iconImg} />
+                  ) : (
+                    <ShoppingBag size={26} color={colors.brand.red} />
+                  )}
                 </View>
-              </View>
-              <ChevronLeft size={18} color={colors.text.muted} />
-            </Pressable>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.title}>{item.nameAr}</Text>
+                  <View style={styles.metaRow}>
+                    <Tag size={11} color={colors.brand.gold} />
+                    <Text style={styles.metaText}>{pricingLabel(item)}</Text>
+                  </View>
+                </View>
+                <ForwardChevron size={18} color={colors.text.muted} />
+              </Pressable>
+            </AnimatedListItem>
           )}
         />
       )}
@@ -85,13 +86,7 @@ export function DeliveryServicesScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.surface },
-  list: { padding: spacing.lg, paddingBottom: spacing.xl },
-  empty: {
-    textAlign: 'center',
-    color: colors.text.muted,
-    fontFamily: fontFamilies.body,
-    marginTop: spacing.xxl,
-  },
+  list: { padding: spacing.lg, paddingBottom: spacing.xxl },
   card: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -101,14 +96,13 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderRadius: radii.lg,
     padding: spacing.md,
-    marginBottom: spacing.sm,
+    marginBottom: spacing.md,
   },
-  pressed: { opacity: 0.85 },
   iconWrap: {
     width: 56,
     height: 56,
     borderRadius: radii.md,
-    backgroundColor: colors.soft,
+    backgroundColor: colors.brand.redLight,
     alignItems: 'center',
     justifyContent: 'center',
     overflow: 'hidden',

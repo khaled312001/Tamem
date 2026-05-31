@@ -3,7 +3,7 @@ import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import * as Haptics from 'expo-haptics';
 import { Package } from 'lucide-react-native';
-import { memo, useEffect, useState } from 'react';
+import { memo, useEffect, useMemo, useState } from 'react';
 import {
   FlatList,
   Platform,
@@ -17,13 +17,18 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { ORDER_STATUS_AR, type OrderStatus } from '@tamem/types';
 
-import { AnimatedListItem } from '../components/AnimatedListItem';
 import { GradientHeader } from '../components/GradientHeader';
-import { CardListSkeleton } from '../components/Skeleton';
+import {
+  AnimatedListItem,
+  CardListSkeleton,
+  EmptyState,
+  ForwardChevron,
+  StatusPill,
+} from '../components/ui';
 import { api } from '../lib/api';
 import { connectSocket } from '../lib/socket';
 import type { OrdersStackParamList } from '../navigation/OrdersStack';
-import { colors, fontFamilies, fontSizes, radii, spacing } from '../theme/tokens';
+import { colors, fontFamilies, fontSizes, radii, shadows, spacing } from '../theme/tokens';
 
 interface OrderListItem {
   id: string;
@@ -36,10 +41,14 @@ interface OrderListItem {
   service?: { nameAr: string };
 }
 
+type Nav = NativeStackNavigationProp<OrdersStackParamList, 'OrdersList'>;
+
 const TABS = [
   { key: 'current', label: 'الحالية' },
   { key: 'completed', label: 'المكتملة' },
+  { key: 'cancelled', label: 'الملغاة' },
 ] as const;
+type TabKey = (typeof TABS)[number]['key'];
 
 const ACTIVE_STATUSES = new Set<OrderStatus>([
   'NEW',
@@ -50,13 +59,18 @@ const ACTIVE_STATUSES = new Set<OrderStatus>([
   'DRIVER_ASSIGNED',
   'PICKED_UP',
   'IN_ROUTE',
-  'DELIVERED',
 ]);
-
-type Nav = NativeStackNavigationProp<OrdersStackParamList, 'OrdersList'>;
+const COMPLETED_STATUSES = new Set<OrderStatus>(['DELIVERED', 'COMPLETED']);
+const CANCELLED_STATUSES = new Set<OrderStatus>(['CANCELLED', 'REJECTED']);
 
 const tickHaptic = () => {
   if (Platform.OS !== 'web') void Haptics.selectionAsync();
+};
+
+const CATEGORY_LABEL: Record<OrderListItem['category'], string> = {
+  DELIVERY: 'دليفري',
+  SHIPPING: 'شحن',
+  MERCHANT: 'تاجر',
 };
 
 interface OrderCardProps {
@@ -66,30 +80,44 @@ interface OrderCardProps {
 }
 
 const OrderCard = memo(function OrderCard({ item, index, onPress }: OrderCardProps) {
+  const priceValue = item.finalPrice ?? item.quotedPrice;
   return (
     <AnimatedListItem index={index}>
       <Pressable
         onPress={() => onPress(item.id)}
-        style={({ pressed }) => [styles.card, pressed && styles.pressed]}
+        style={({ pressed }) => [
+          styles.card,
+          shadows.sm,
+          pressed && { opacity: 0.92, transform: [{ scale: 0.997 }] },
+        ]}
       >
         <View style={styles.cardHeader}>
-          <Text style={styles.orderNum}>#{item.orderNumber}</Text>
-          <View
-            style={[styles.statusBadge, { backgroundColor: colors.status[item.status] + '20' }]}
-          >
-            <Text style={[styles.statusText, { color: colors.status[item.status] }]}>
-              {ORDER_STATUS_AR[item.status]}
+          <View style={styles.cardOrderNumberWrap}>
+            <Text style={styles.cardOrderLabel}>طلب</Text>
+            <Text style={styles.cardOrderNumber}>#{item.orderNumber}</Text>
+          </View>
+          <StatusPill label={ORDER_STATUS_AR[item.status]} color={colors.status[item.status]} dot />
+        </View>
+
+        <Text style={styles.cardService} numberOfLines={1}>
+          {item.service?.nameAr ?? CATEGORY_LABEL[item.category]}
+        </Text>
+
+        <View style={styles.cardFooter}>
+          <View style={styles.cardCategoryChip}>
+            <Text style={styles.cardCategoryText}>{CATEGORY_LABEL[item.category]}</Text>
+          </View>
+          <View style={styles.cardFooterRight}>
+            {priceValue ? (
+              <Text style={styles.cardPrice}>{Number(priceValue).toLocaleString('ar-EG')} ج.م</Text>
+            ) : (
+              <Text style={styles.cardNoPrice}>قيد التسعير</Text>
+            )}
+            <Text style={styles.cardDate}>
+              {new Date(item.createdAt).toLocaleDateString('ar-EG')}
             </Text>
           </View>
-        </View>
-        <Text style={styles.serviceName}>{item.service?.nameAr ?? item.category}</Text>
-        <View style={styles.cardFooter}>
-          <Text style={styles.timeText}>{new Date(item.createdAt).toLocaleString('ar-EG')}</Text>
-          {(item.finalPrice || item.quotedPrice) && (
-            <Text style={styles.priceText}>
-              {Number(item.finalPrice ?? item.quotedPrice ?? 0).toLocaleString('ar-EG')} ج.م
-            </Text>
-          )}
+          <ForwardChevron size={16} color={colors.text.muted} />
         </View>
       </Pressable>
     </AnimatedListItem>
@@ -97,7 +125,7 @@ const OrderCard = memo(function OrderCard({ item, index, onPress }: OrderCardPro
 });
 
 export function OrdersScreen() {
-  const [tab, setTab] = useState<'current' | 'completed'>('current');
+  const [tab, setTab] = useState<TabKey>('current');
   const navigation = useNavigation<Nav>();
   const qc = useQueryClient();
 
@@ -125,10 +153,21 @@ export function OrdersScreen() {
     };
   }, [qc]);
 
-  const orders = (data ?? []).filter((o) => {
-    const isActive = ACTIVE_STATUSES.has(o.status);
-    return tab === 'current' ? isActive : !isActive;
-  });
+  const filtered = useMemo(() => {
+    const list = data ?? [];
+    if (tab === 'current') return list.filter((o) => ACTIVE_STATUSES.has(o.status));
+    if (tab === 'completed') return list.filter((o) => COMPLETED_STATUSES.has(o.status));
+    return list.filter((o) => CANCELLED_STATUSES.has(o.status));
+  }, [data, tab]);
+
+  const counts = useMemo(() => {
+    const list = data ?? [];
+    return {
+      current: list.filter((o) => ACTIVE_STATUSES.has(o.status)).length,
+      completed: list.filter((o) => COMPLETED_STATUSES.has(o.status)).length,
+      cancelled: list.filter((o) => CANCELLED_STATUSES.has(o.status)).length,
+    };
+  }, [data]);
 
   const openOrder = (id: string) => navigation.navigate('OrderTracking', { orderId: id });
 
@@ -139,6 +178,7 @@ export function OrdersScreen() {
       <View style={styles.tabsRow}>
         {TABS.map((t) => {
           const isOn = t.key === tab;
+          const count = counts[t.key];
           return (
             <Pressable
               key={t.key}
@@ -149,32 +189,57 @@ export function OrdersScreen() {
               style={[styles.tab, isOn && styles.tabOn]}
             >
               <Text style={[styles.tabText, isOn && styles.tabTextOn]}>{t.label}</Text>
+              {count > 0 && (
+                <View style={[styles.tabBadge, isOn && styles.tabBadgeOn]}>
+                  <Text style={[styles.tabBadgeText, isOn && styles.tabBadgeTextOn]}>{count}</Text>
+                </View>
+              )}
             </Pressable>
           );
         })}
       </View>
 
       {isLoading ? (
-        <View style={styles.list}>
+        <View style={styles.listPad}>
           <CardListSkeleton count={4} />
         </View>
       ) : (
         <FlatList
-          data={orders}
+          data={filtered}
           keyExtractor={(o) => o.id}
-          contentContainerStyle={styles.list}
-          refreshControl={<RefreshControl refreshing={isFetching} onRefresh={refetch} />}
+          contentContainerStyle={[
+            styles.listPad,
+            filtered.length === 0 && { flexGrow: 1, justifyContent: 'center' },
+          ]}
+          refreshControl={
+            <RefreshControl
+              refreshing={isFetching}
+              onRefresh={refetch}
+              tintColor={colors.brand.red}
+            />
+          }
           initialNumToRender={8}
           maxToRenderPerBatch={8}
           windowSize={7}
           removeClippedSubviews
           ListEmptyComponent={
-            <View style={styles.empty}>
-              <Package size={48} color={colors.text.muted} />
-              <Text style={styles.emptyText}>
-                {tab === 'current' ? 'لا توجد طلبات حالية' : 'لا توجد طلبات مكتملة'}
-              </Text>
-            </View>
+            <EmptyState
+              icon={<Package size={36} color={colors.brand.red} />}
+              title={
+                tab === 'current'
+                  ? 'لا توجد طلبات نشطة الآن'
+                  : tab === 'completed'
+                    ? 'لا توجد طلبات مكتملة بعد'
+                    : 'لا توجد طلبات ملغاة'
+              }
+              subtitle={
+                tab === 'current'
+                  ? 'ابدأ طلب جديد من الصفحة الرئيسية وسيظهر هنا.'
+                  : tab === 'completed'
+                    ? 'الطلبات اللي وصلت بنجاح هتلاقيها هنا.'
+                    : undefined
+              }
+            />
           }
           renderItem={({ item, index }) => (
             <OrderCard item={item} index={index} onPress={openOrder} />
@@ -187,48 +252,80 @@ export function OrdersScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.surface },
+  // Tabs
   tabsRow: {
     flexDirection: 'row',
     gap: spacing.xs,
-    backgroundColor: colors.soft,
-    margin: spacing.lg,
-    borderRadius: radii.md,
+    backgroundColor: colors.white,
+    marginHorizontal: spacing.lg,
+    marginTop: spacing.lg,
+    marginBottom: spacing.md,
+    borderRadius: radii.lg,
     padding: 4,
+    borderWidth: 1,
+    borderColor: colors.line,
   },
-  tab: { flex: 1, paddingVertical: spacing.sm, alignItems: 'center', borderRadius: radii.md },
-  tabOn: { backgroundColor: colors.white },
+  tab: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    paddingVertical: 10,
+    borderRadius: radii.md,
+  },
+  tabOn: { backgroundColor: colors.brand.red },
   tabText: {
     fontSize: fontSizes.sm,
     color: colors.text.muted,
     fontFamily: fontFamilies.bodyBold,
   },
-  tabTextOn: { color: colors.brand.red },
-  list: { paddingHorizontal: spacing.lg, paddingBottom: spacing.xl },
-  empty: {
+  tabTextOn: { color: colors.white, fontFamily: fontFamilies.headingBold },
+  tabBadge: {
+    minWidth: 20,
+    paddingHorizontal: 6,
+    height: 18,
+    borderRadius: 9,
+    backgroundColor: colors.brand.redLight,
     alignItems: 'center',
     justifyContent: 'center',
-    padding: spacing.xxl,
-    gap: spacing.md,
   },
-  emptyText: { color: colors.text.muted, fontFamily: fontFamilies.body, fontSize: fontSizes.sm },
+  tabBadgeOn: { backgroundColor: 'rgba(255,255,255,0.25)' },
+  tabBadgeText: {
+    fontSize: 10,
+    fontFamily: fontFamilies.bodyExtraBold,
+    color: colors.brand.red,
+  },
+  tabBadgeTextOn: { color: colors.white },
+  // List
+  listPad: { paddingHorizontal: spacing.lg, paddingBottom: spacing.xl },
+  // Card
   card: {
     backgroundColor: colors.white,
     borderColor: colors.line,
     borderWidth: 1,
     borderRadius: radii.lg,
     padding: spacing.md,
-    marginBottom: spacing.sm,
+    marginBottom: spacing.md,
   },
-  pressed: { opacity: 0.85 },
-  cardHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  orderNum: { fontFamily: fontFamilies.bodyExtraBold, fontSize: fontSizes.sm, color: colors.ink },
-  statusBadge: {
-    paddingHorizontal: spacing.sm,
-    paddingVertical: 3,
-    borderRadius: radii.pill,
+  cardHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing.sm,
   },
-  statusText: { fontSize: 10, fontFamily: fontFamilies.bodyExtraBold },
-  serviceName: {
+  cardOrderNumberWrap: { flexDirection: 'row', alignItems: 'baseline', gap: 4 },
+  cardOrderLabel: {
+    fontSize: fontSizes.xs,
+    color: colors.text.muted,
+    fontFamily: fontFamilies.body,
+  },
+  cardOrderNumber: {
+    fontSize: fontSizes.md,
+    color: colors.ink,
+    fontFamily: fontFamilies.bodyExtraBold,
+  },
+  cardService: {
     fontSize: fontSizes.sm,
     color: colors.text.secondary,
     fontFamily: fontFamilies.body,
@@ -236,14 +333,39 @@ const styles = StyleSheet.create({
   },
   cardFooter: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
     alignItems: 'center',
-    marginTop: spacing.sm,
+    gap: spacing.sm,
+    marginTop: spacing.md,
+    paddingTop: spacing.sm,
+    borderTopWidth: 1,
+    borderTopColor: colors.line,
   },
-  timeText: { fontSize: fontSizes.xs, color: colors.text.muted, fontFamily: fontFamilies.body },
-  priceText: {
+  cardCategoryChip: {
+    backgroundColor: colors.surface,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 3,
+    borderRadius: radii.pill,
+  },
+  cardCategoryText: {
+    fontSize: 10,
+    color: colors.text.secondary,
+    fontFamily: fontFamilies.bodyExtraBold,
+  },
+  cardFooterRight: { flex: 1, alignItems: 'flex-end' },
+  cardPrice: {
     fontSize: fontSizes.sm,
     color: colors.brand.red,
     fontFamily: fontFamilies.bodyExtraBold,
+  },
+  cardNoPrice: {
+    fontSize: fontSizes.xs,
+    color: colors.warning,
+    fontFamily: fontFamilies.bodyBold,
+  },
+  cardDate: {
+    fontSize: 10,
+    color: colors.text.muted,
+    fontFamily: fontFamilies.body,
+    marginTop: 2,
   },
 });

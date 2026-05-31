@@ -1,14 +1,24 @@
-import { useQuery } from '@tanstack/react-query';
 import { useNavigation, useRoute, type RouteProp } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
-import { ChevronRight, Clock, MapPin, Star, Store } from 'lucide-react-native';
-import { ActivityIndicator, Image, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { useQuery } from '@tanstack/react-query';
+import { LinearGradient } from 'expo-linear-gradient';
+import { Clock, MapPin, Phone, Star, Store } from 'lucide-react-native';
+import {
+  ActivityIndicator,
+  Image,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
+} from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { GradientButton } from '../components/GradientButton';
+import { EmptyState, ForwardChevron, PrimaryButton, StatusPill } from '../components/ui';
 import { api } from '../lib/api';
 import type { HomeStackParamList } from '../navigation/HomeStack';
-import { colors, fontFamilies, fontSizes, radii, spacing } from '../theme/tokens';
+import { BackChevron } from '../theme/rtl';
+import { colors, fontFamilies, fontSizes, radii, shadows, spacing } from '../theme/tokens';
 
 interface MerchantDetail {
   id: string;
@@ -31,7 +41,7 @@ export function MerchantDetailScreen() {
   const navigation = useNavigation<NavProp>();
   const { merchantId } = route.params;
 
-  const { data, isLoading } = useQuery<MerchantDetail>({
+  const { data, isLoading, error, refetch } = useQuery<MerchantDetail>({
     queryKey: ['merchant', merchantId],
     queryFn: () => api.raw.get(`/merchants/${merchantId}`).then((r) => r.data.data),
   });
@@ -44,37 +54,75 @@ export function MerchantDetailScreen() {
     );
   }
 
-  if (!data) {
+  if (error || !data) {
     return (
-      <SafeAreaView style={styles.container}>
-        <Text style={styles.empty}>المتجر غير موجود</Text>
+      <SafeAreaView edges={['top']} style={styles.container}>
+        <View style={styles.errorHeader}>
+          <Pressable
+            onPress={() => navigation.goBack()}
+            style={({ pressed }) => [styles.floatingBack, pressed && { opacity: 0.7 }]}
+            hitSlop={8}
+            accessibilityLabel="رجوع"
+          >
+            <BackChevron size={20} color={colors.ink} />
+          </Pressable>
+        </View>
+        <EmptyState
+          icon={<Store size={36} color={colors.brand.red} />}
+          title="المتجر غير موجود"
+          subtitle="حاول مرة أخرى أو ارجع للقائمة"
+          actionLabel="إعادة المحاولة"
+          onAction={() => refetch()}
+        />
       </SafeAreaView>
     );
   }
 
   return (
-    <SafeAreaView edges={['top']} style={styles.container}>
-      <ScrollView showsVerticalScrollIndicator={false}>
-        {/* Cover */}
+    <SafeAreaView edges={[]} style={styles.container}>
+      <ScrollView
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={{ paddingBottom: 120 }}
+      >
+        {/* ─────── Cover with floating back ─────── */}
         <View style={styles.cover}>
           {data.coverUrl ? (
             <Image source={{ uri: data.coverUrl }} style={styles.coverImage} resizeMode="cover" />
           ) : (
-            <View style={styles.coverPlaceholder}>
-              <Store size={48} color={colors.white} />
-            </View>
+            <LinearGradient
+              colors={['#E0301E', '#EC7A2C']}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 1 }}
+              style={styles.coverPlaceholder}
+            >
+              <Store size={56} color={colors.white} />
+            </LinearGradient>
           )}
+          <LinearGradient
+            colors={['rgba(36,19,16,0.6)', 'transparent']}
+            style={styles.coverOverlay}
+          />
+          <SafeAreaView edges={['top']} style={styles.coverHeader}>
+            <Pressable
+              onPress={() => navigation.goBack()}
+              style={({ pressed }) => [styles.floatingBack, pressed && { opacity: 0.7 }]}
+              hitSlop={8}
+              accessibilityLabel="رجوع"
+            >
+              <BackChevron size={20} color={colors.ink} />
+            </Pressable>
+          </SafeAreaView>
         </View>
 
-        {/* Info card */}
-        <View style={styles.card}>
+        {/* ─────── Info card ─────── */}
+        <View style={[styles.card, shadows.md]}>
           <View style={styles.titleRow}>
             <Text style={styles.title}>{data.storeNameAr}</Text>
-            <View style={data.isOpen ? styles.tagOpen : styles.tagClosed}>
-              <Text style={data.isOpen ? styles.tagOpenText : styles.tagClosedText}>
-                {data.isOpen ? 'مفتوح' : 'مغلق'}
-              </Text>
-            </View>
+            <StatusPill
+              label={data.isOpen ? 'مفتوح' : 'مغلق'}
+              color={data.isOpen ? colors.success : colors.text.muted}
+              dot
+            />
           </View>
           {data.category && <Text style={styles.subtitle}>{data.category.nameAr}</Text>}
 
@@ -83,11 +131,13 @@ export function MerchantDetailScreen() {
               <Star size={14} color={colors.brand.gold} fill={colors.brand.gold} />
               <Text style={styles.metaText}>{Number(data.rating ?? 0).toFixed(1)}</Text>
             </View>
+            <View style={styles.metaDivider} />
             <View style={styles.metaItem}>
               <Clock size={14} color={colors.text.muted} />
               <Text style={styles.metaText}>20-40 دقيقة</Text>
             </View>
-            <View style={styles.metaItem}>
+            <View style={styles.metaDivider} />
+            <View style={[styles.metaItem, { flex: 1 }]}>
               <MapPin size={14} color={colors.text.muted} />
               <Text style={styles.metaText} numberOfLines={1}>
                 {data.addressLine}
@@ -98,12 +148,12 @@ export function MerchantDetailScreen() {
           {data.description && <Text style={styles.description}>{data.description}</Text>}
         </View>
 
-        {/* Products */}
+        {/* ─────── Products ─────── */}
         {data.products && data.products.length > 0 && (
           <View style={styles.section}>
-            <Text style={styles.sectionTitle}>المنتجات</Text>
+            <Text style={styles.sectionTitle}>المنتجات المتاحة</Text>
             {data.products.map((p) => (
-              <View key={p.id} style={styles.productRow}>
+              <View key={p.id} style={[styles.productRow, shadows.sm]}>
                 <View style={styles.productImg}>
                   {p.imageUrl ? (
                     <Image source={{ uri: p.imageUrl }} style={{ width: '100%', height: '100%' }} />
@@ -113,52 +163,95 @@ export function MerchantDetailScreen() {
                 </View>
                 <View style={{ flex: 1 }}>
                   <Text style={styles.productName}>{p.nameAr}</Text>
-                  <Text style={styles.productPrice}>{p.price} ج.م</Text>
+                  <Text style={styles.productPrice}>
+                    {Number(p.price).toLocaleString('ar-EG')} ج.م
+                  </Text>
                 </View>
-                <ChevronRight size={16} color={colors.text.muted} />
+                <ForwardChevron size={16} color={colors.text.muted} />
               </View>
             ))}
           </View>
         )}
+
+        {(!data.products || data.products.length === 0) && (
+          <View style={styles.emptyProductsCard}>
+            <Phone size={20} color={colors.brand.red} />
+            <Text style={styles.emptyProductsTitle}>اطلب أي حاجة من المتجر</Text>
+            <Text style={styles.emptyProductsSub}>
+              مفيش قائمة محددة هنا — كل اللي تطلبه هنوصّله من المتجر مباشرة.
+            </Text>
+          </View>
+        )}
       </ScrollView>
 
-      {/* Order CTA */}
-      <View style={styles.cta}>
-        <GradientButton
-          label="اطلب الآن"
-          onPress={() => {
-            // Open dynamic service flow for "supermarket delivery" by default
-            navigation.navigate('DynamicServiceFlow', {
-              serviceKey: 'delivery-supermarket',
-              merchantId: data.id,
-            });
-          }}
-        />
-      </View>
+      {/* ─────── Sticky Order CTA ─────── */}
+      <SafeAreaView edges={['bottom']} style={styles.ctaBar}>
+        <View style={styles.ctaInner}>
+          <PrimaryButton
+            label={data.isOpen ? 'اطلب الآن' : 'المتجر مغلق حالياً'}
+            disabled={!data.isOpen}
+            onPress={() => {
+              navigation.navigate('DynamicServiceFlow', {
+                serviceKey: 'delivery-supermarket',
+                merchantId: data.id,
+              });
+            }}
+          />
+        </View>
+      </SafeAreaView>
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.surface },
-  cover: { height: 180, backgroundColor: colors.brand.red },
+  errorHeader: {
+    padding: spacing.lg,
+  },
+  cover: {
+    height: 240,
+    backgroundColor: colors.brand.red,
+    position: 'relative',
+  },
   coverImage: { width: '100%', height: '100%' },
   coverPlaceholder: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+  coverOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    height: 100,
+  },
+  coverHeader: {
+    position: 'absolute',
+    top: 0,
+    start: 0,
+    end: 0,
+    paddingHorizontal: spacing.lg,
+    paddingTop: spacing.md,
+  },
+  floatingBack: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: colors.white,
+    alignItems: 'center',
+    justifyContent: 'center',
+    ...shadows.md,
+  },
   card: {
     backgroundColor: colors.white,
-    margin: spacing.lg,
-    marginTop: -32,
+    marginHorizontal: spacing.lg,
+    marginTop: -40,
     borderRadius: radii.xl,
     padding: spacing.lg,
     borderColor: colors.line,
     borderWidth: 1,
-    boxShadow: '0 6px 14px rgba(0,0,0,0.06)',
-    elevation: 3,
   },
   titleRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
   title: {
     flex: 1,
-    fontSize: fontSizes.lg,
+    fontSize: fontSizes.xl,
     fontFamily: fontFamilies.headingBlack,
     color: colors.ink,
   },
@@ -170,16 +263,20 @@ const styles = StyleSheet.create({
   },
   metaRow: {
     flexDirection: 'row',
-    gap: spacing.md,
+    alignItems: 'center',
+    gap: spacing.sm,
     marginTop: spacing.md,
-    flexWrap: 'wrap',
+    paddingTop: spacing.md,
+    borderTopWidth: 1,
+    borderTopColor: colors.line,
   },
   metaItem: { flexDirection: 'row', alignItems: 'center', gap: 4 },
   metaText: {
     fontSize: fontSizes.xs,
     color: colors.text.secondary,
-    fontFamily: fontFamilies.body,
+    fontFamily: fontFamilies.bodyBold,
   },
+  metaDivider: { width: 1, height: 14, backgroundColor: colors.line },
   description: {
     fontSize: fontSizes.sm,
     color: colors.text.secondary,
@@ -187,9 +284,9 @@ const styles = StyleSheet.create({
     lineHeight: 22,
     fontFamily: fontFamilies.body,
   },
-  section: { paddingHorizontal: spacing.lg, paddingBottom: spacing.xl },
+  section: { paddingHorizontal: spacing.lg, paddingTop: spacing.xl },
   sectionTitle: {
-    fontSize: fontSizes.md,
+    fontSize: fontSizes.lg,
     fontFamily: fontFamilies.headingBlack,
     color: colors.ink,
     marginBottom: spacing.md,
@@ -206,10 +303,10 @@ const styles = StyleSheet.create({
     marginBottom: spacing.sm,
   },
   productImg: {
-    width: 48,
-    height: 48,
+    width: 56,
+    height: 56,
     borderRadius: radii.md,
-    backgroundColor: colors.soft,
+    backgroundColor: colors.brand.redLight,
     alignItems: 'center',
     justifyContent: 'center',
     overflow: 'hidden',
@@ -220,43 +317,45 @@ const styles = StyleSheet.create({
     color: colors.ink,
   },
   productPrice: {
-    fontSize: fontSizes.xs,
+    fontSize: fontSizes.sm,
     color: colors.brand.red,
-    fontFamily: fontFamilies.bodyBold,
+    fontFamily: fontFamilies.bodyExtraBold,
     marginTop: 2,
   },
-  cta: {
+  emptyProductsCard: {
+    alignItems: 'center',
+    backgroundColor: colors.white,
+    margin: spacing.lg,
     padding: spacing.lg,
+    borderRadius: radii.lg,
+    borderWidth: 1,
+    borderColor: colors.line,
+    gap: 6,
+  },
+  emptyProductsTitle: {
+    fontSize: fontSizes.md,
+    fontFamily: fontFamilies.headingBold,
+    color: colors.ink,
+    marginTop: 4,
+  },
+  emptyProductsSub: {
+    fontSize: fontSizes.sm,
+    color: colors.text.muted,
+    fontFamily: fontFamilies.body,
+    textAlign: 'center',
+    lineHeight: 22,
+  },
+  ctaBar: {
+    position: 'absolute',
+    bottom: 0,
+    start: 0,
+    end: 0,
     backgroundColor: colors.white,
     borderTopWidth: 1,
     borderTopColor: colors.line,
+    ...shadows.md,
   },
-  empty: {
-    textAlign: 'center',
-    color: colors.text.muted,
-    fontFamily: fontFamilies.body,
-    marginTop: spacing.xxl,
-  },
-  tagOpen: {
-    backgroundColor: colors.successLight,
-    paddingHorizontal: spacing.sm,
-    paddingVertical: 3,
-    borderRadius: radii.pill,
-  },
-  tagOpenText: {
-    color: colors.success,
-    fontSize: 10,
-    fontFamily: fontFamilies.bodyExtraBold,
-  },
-  tagClosed: {
-    backgroundColor: '#F3F3F3',
-    paddingHorizontal: spacing.sm,
-    paddingVertical: 3,
-    borderRadius: radii.pill,
-  },
-  tagClosedText: {
-    color: colors.text.muted,
-    fontSize: 10,
-    fontFamily: fontFamilies.bodyExtraBold,
+  ctaInner: {
+    padding: spacing.lg,
   },
 });
