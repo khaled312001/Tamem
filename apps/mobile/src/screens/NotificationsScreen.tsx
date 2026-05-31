@@ -200,7 +200,7 @@ const styles = StyleSheet.create({
   dot: {
     position: 'absolute',
     top: 0,
-    right: 0,
+    end: 0,
     width: 8,
     height: 8,
     borderRadius: 4,

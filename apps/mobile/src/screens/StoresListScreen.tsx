@@ -151,7 +151,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.md,
     paddingVertical: 6,
     borderRadius: radii.pill,
-    marginRight: spacing.xs,
+    marginEnd: spacing.xs,
   },
   chipOn: { backgroundColor: colors.brand.red },
   chipText: {

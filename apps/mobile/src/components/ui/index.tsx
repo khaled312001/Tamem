@@ -142,7 +142,12 @@ export function StatusPill({
   dot?: boolean;
 }) {
   return (
-    <View style={[styles.statusPill, { backgroundColor: tint ?? color + '20' }]}>
+    <View
+      style={[
+        styles.statusPill,
+        { backgroundColor: tint ?? color + '18', borderColor: color + '40' },
+      ]}
+    >
       {dot && <View style={[styles.statusDot, { backgroundColor: color }]} />}
       <Text style={[styles.statusPillText, { color }]}>{label}</Text>
     </View>
@@ -589,20 +594,21 @@ const styles = StyleSheet.create({
   },
   chipSm: { paddingHorizontal: spacing.sm, paddingVertical: 4 },
   chipText: { fontSize: fontSizes.sm, fontFamily: fontFamilies.bodyExtraBold },
-  // Status pill
+  // Status pill — stronger visual prominence (border + bolder text)
   statusPill: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
-    paddingHorizontal: spacing.sm,
-    paddingVertical: 4,
+    gap: 5,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
     borderRadius: radii.pill,
     alignSelf: 'flex-start',
+    borderWidth: 1,
   },
   statusDot: { width: 6, height: 6, borderRadius: 3 },
   statusPillText: {
     fontSize: fontSizes.xs,
-    fontFamily: fontFamilies.bodyExtraBold,
+    fontFamily: fontFamilies.headingBold,
   },
   // Buttons
   btnWrap: { borderRadius: radii.lg, overflow: 'hidden' },

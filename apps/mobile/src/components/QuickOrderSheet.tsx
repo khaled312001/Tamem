@@ -708,7 +708,7 @@ const styles = StyleSheet.create({
   thumbRemove: {
     position: 'absolute',
     top: 4,
-    left: 4,
+    end: 4,
     width: 22,
     height: 22,
     borderRadius: 11,

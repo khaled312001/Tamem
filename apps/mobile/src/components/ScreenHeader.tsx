@@ -12,20 +12,16 @@ interface ScreenHeaderProps {
   title: string;
   subtitle?: string;
   hideBack?: boolean;
-  /** Optional right-side icon button (e.g. share, settings). */
   rightIcon?: LucideIcon;
   onPressRight?: () => void;
   rightLabel?: string;
-  /** When set, renders a non-button node on the right side (e.g. cart badge). */
   rightContent?: ReactNode;
 }
 
 /**
- * Branded header strip with a back chevron — used inside nested stacks
- * where the rich GradientHeader's "greeting/location" layout doesn't fit.
- *
- * RTL: leading edge (right in Arabic) shows the back chevron pointing right,
- * matching the user's natural sense of "I came from the right, so back is right."
+ * RTL-correct stack header. Back-button absolutely anchored to the start
+ * (right in Arabic), title perfectly centered, optional action on the end
+ * (left). Works identically on native and web.
  */
 export function ScreenHeader({
   title,
@@ -38,6 +34,7 @@ export function ScreenHeader({
 }: ScreenHeaderProps) {
   const navigation = useNavigation();
   const canGoBack = !hideBack && navigation.canGoBack();
+  const showRight = !!rightContent || !!RightIcon;
 
   return (
     <LinearGradient
@@ -46,45 +43,53 @@ export function ScreenHeader({
       end={{ x: 1, y: 0 }}
       style={styles.wrap}
     >
-      <View style={styles.row}>
-        {canGoBack ? (
-          <Pressable
-            onPress={() => {
-              if (Platform.OS !== 'web') void Haptics.selectionAsync();
-              navigation.goBack();
-            }}
-            style={({ pressed }) => [styles.iconBtn, pressed && { opacity: 0.7 }]}
-            accessibilityLabel="رجوع"
-            hitSlop={8}
-          >
-            <BackChevron size={22} color={colors.white} />
-          </Pressable>
-        ) : (
-          <View style={styles.iconBtn} />
-        )}
-        <View style={{ flex: 1 }}>
-          <Text style={styles.title} numberOfLines={1}>
-            {title}
-          </Text>
-          {subtitle ? (
-            <Text style={styles.subtitle} numberOfLines={1}>
-              {subtitle}
-            </Text>
-          ) : null}
+      {canGoBack ? (
+        <Pressable
+          onPress={() => {
+            if (Platform.OS !== 'web') void Haptics.selectionAsync();
+            navigation.goBack();
+          }}
+          style={({ pressed }) => [
+            styles.iconBtn,
+            styles.iconBtnStart,
+            pressed && { opacity: 0.7 },
+          ]}
+          accessibilityLabel="رجوع"
+          hitSlop={8}
+        >
+          <BackChevron size={22} color={colors.white} />
+        </Pressable>
+      ) : null}
+
+      {rightContent ? (
+        <View style={[styles.iconBtn, styles.iconBtnEnd, { backgroundColor: 'transparent' }]}>
+          {rightContent}
         </View>
-        {rightContent ??
-          (RightIcon ? (
-            <Pressable
-              onPress={onPressRight}
-              style={({ pressed }) => [styles.iconBtn, pressed && { opacity: 0.7 }]}
-              accessibilityLabel={rightLabel ?? 'إجراء'}
-              hitSlop={8}
-            >
-              <RightIcon size={20} color={colors.white} />
-            </Pressable>
-          ) : (
-            <View style={styles.iconBtn} />
-          ))}
+      ) : RightIcon ? (
+        <Pressable
+          onPress={onPressRight}
+          style={({ pressed }) => [styles.iconBtn, styles.iconBtnEnd, pressed && { opacity: 0.7 }]}
+          accessibilityLabel={rightLabel ?? 'إجراء'}
+          hitSlop={8}
+        >
+          <RightIcon size={20} color={colors.white} />
+        </Pressable>
+      ) : null}
+
+      <View
+        style={[
+          styles.center,
+          { paddingStart: canGoBack ? 60 : spacing.lg, paddingEnd: showRight ? 60 : spacing.lg },
+        ]}
+      >
+        <Text style={styles.title} numberOfLines={1}>
+          {title}
+        </Text>
+        {subtitle ? (
+          <Text style={styles.subtitle} numberOfLines={1}>
+            {subtitle}
+          </Text>
+        ) : null}
       </View>
     </LinearGradient>
   );
@@ -97,9 +102,16 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.lg,
     borderBottomLeftRadius: radii.lg,
     borderBottomRightRadius: radii.lg,
+    position: 'relative',
   },
-  row: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
+  center: {
+    alignItems: 'center',
+    minHeight: 40,
+    justifyContent: 'center',
+  },
   iconBtn: {
+    position: 'absolute',
+    top: spacing.md,
     width: 40,
     height: 40,
     borderRadius: radii.md,
@@ -107,11 +119,14 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  iconBtnStart: { start: spacing.lg },
+  iconBtnEnd: { end: spacing.lg },
   title: {
     color: colors.white,
     fontSize: fontSizes.lg,
     fontFamily: fontFamilies.headingBold,
     textAlign: 'center',
+    writingDirection: 'rtl',
   },
   subtitle: {
     color: colors.white,

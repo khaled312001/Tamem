@@ -18,6 +18,16 @@ if (!I18nManager.isRTL) {
   I18nManager.forceRTL(true);
 }
 
+// On RN-Web, I18nManager.forceRTL does NOT automatically set the document
+// direction. Without `dir="rtl"` on <html>, flexDirection: 'row' renders LTR
+// even though I18nManager says it's RTL — every screen looks like a half-flipped
+// translation. Set it explicitly so flex, logical properties (start/end), and
+// inline text alignment all behave naturally for Arabic users.
+if (typeof document !== 'undefined') {
+  document.documentElement.setAttribute('dir', 'rtl');
+  document.documentElement.setAttribute('lang', 'ar');
+}
+
 // Keep the splash visible while we load fonts + restore session
 SplashScreen.preventAutoHideAsync().catch(() => undefined);
 

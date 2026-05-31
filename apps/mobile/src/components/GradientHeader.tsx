@@ -10,22 +10,19 @@ import { colors, fontFamilies, fontSizes, gradients, radii, spacing } from '../t
 interface GradientHeaderProps {
   greeting: string;
   location?: string;
-  /** Force-hide the back button even when the navigation stack can go back. */
   hideBack?: boolean;
-  /** Force-show the bell. Default: shown only if a handler is provided. */
   hasNotifications?: boolean;
   onPressNotifications?: () => void;
 }
 
 /**
- * Brand-gradient header used on Home, Map, and any primary stack screen.
+ * Brand-gradient header for primary screens.
  *
- * - On stack screens, a back chevron pointing the natural Arabic-RTL way
- *   (right for "you came from the right") appears automatically. `hideBack`
- *   overrides.
- * - Bell appears only when `onPressNotifications` is provided.
- * - `location` renders under the greeting with a pin icon — used for the
- *   "delivering to: X" affordance on the home screen.
+ * RTL: back button is absolutely positioned to the START side (right in
+ * Arabic) regardless of platform. RN-Web doesn't always honor forceRTL for
+ * flexDirection, so we anchor with `start`/`end` to guarantee the layout
+ * matches what an Arabic user expects: title centered/right, back-right,
+ * actions-left.
  */
 export function GradientHeader({
   greeting,
@@ -38,6 +35,8 @@ export function GradientHeader({
   const showBack = !hideBack && navigation.canGoBack();
   const showBell = onPressNotifications !== undefined;
 
+  const sidePad = showBack || showBell ? 60 : spacing.lg;
+
   return (
     <LinearGradient
       colors={gradients.brand}
@@ -45,45 +44,47 @@ export function GradientHeader({
       end={{ x: 1, y: 1 }}
       style={styles.wrap}
     >
-      <View style={styles.row}>
-        {showBack ? (
-          <Pressable
-            onPress={() => {
-              if (Platform.OS !== 'web') void Haptics.selectionAsync();
-              navigation.goBack();
-            }}
-            accessibilityLabel="رجوع للصفحة السابقة"
-            style={({ pressed }) => [styles.iconBtn, pressed && { opacity: 0.7 }]}
-            hitSlop={8}
-          >
-            <BackChevron size={22} color={colors.white} />
-          </Pressable>
-        ) : null}
+      {showBack ? (
+        <Pressable
+          onPress={() => {
+            if (Platform.OS !== 'web') void Haptics.selectionAsync();
+            navigation.goBack();
+          }}
+          accessibilityLabel="رجوع للصفحة السابقة"
+          style={({ pressed }) => [
+            styles.iconBtn,
+            styles.iconBtnStart,
+            pressed && { opacity: 0.7 },
+          ]}
+          hitSlop={8}
+        >
+          <BackChevron size={22} color={colors.white} />
+        </Pressable>
+      ) : null}
 
-        <View style={{ flex: 1, marginHorizontal: showBack || showBell ? spacing.sm : 0 }}>
-          <Text style={styles.greeting} numberOfLines={1}>
-            {greeting}
-          </Text>
-          {location ? (
-            <View style={styles.locRow}>
-              <MapPin size={11} color={colors.white} />
-              <Text style={styles.location} numberOfLines={1}>
-                {location}
-              </Text>
-            </View>
-          ) : null}
-        </View>
+      {showBell ? (
+        <Pressable
+          onPress={onPressNotifications}
+          accessibilityLabel="الإشعارات"
+          style={({ pressed }) => [styles.iconBtn, styles.iconBtnEnd, pressed && { opacity: 0.7 }]}
+          hitSlop={6}
+        >
+          <Bell size={18} color={colors.white} />
+          {hasNotifications && <View style={styles.bellDot} />}
+        </Pressable>
+      ) : null}
 
-        {showBell ? (
-          <Pressable
-            onPress={onPressNotifications}
-            accessibilityLabel="الإشعارات"
-            style={({ pressed }) => [styles.iconBtn, pressed && { opacity: 0.7 }]}
-            hitSlop={6}
-          >
-            <Bell size={18} color={colors.white} />
-            {hasNotifications && <View style={styles.bellDot} />}
-          </Pressable>
+      <View style={[styles.center, { paddingStart: sidePad, paddingEnd: sidePad }]}>
+        <Text style={styles.greeting} numberOfLines={1}>
+          {greeting}
+        </Text>
+        {location ? (
+          <View style={styles.locRow}>
+            <MapPin size={11} color={colors.white} />
+            <Text style={styles.location} numberOfLines={1}>
+              {location}
+            </Text>
+          </View>
         ) : null}
       </View>
     </LinearGradient>
@@ -92,34 +93,48 @@ export function GradientHeader({
 
 const styles = StyleSheet.create({
   wrap: {
-    paddingHorizontal: spacing.lg,
     paddingTop: spacing.lg,
     paddingBottom: spacing.xl,
+    paddingHorizontal: spacing.lg,
     borderBottomLeftRadius: radii.xl,
     borderBottomRightRadius: radii.xl,
+    position: 'relative',
   },
-  row: { flexDirection: 'row', alignItems: 'center' },
+  center: {
+    alignItems: 'flex-end', // RTL natural — title right-aligned
+  },
   greeting: {
     color: colors.white,
     fontSize: fontSizes.lg,
     fontFamily: fontFamilies.headingBold,
+    textAlign: 'right',
+    writingDirection: 'rtl',
   },
-  locRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 4 },
+  locRow: {
+    flexDirection: 'row-reverse', // pin icon on RIGHT next to text in RTL
+    alignItems: 'center',
+    gap: 4,
+    marginTop: 4,
+  },
   location: {
     color: colors.white,
     fontSize: fontSizes.xs,
     opacity: 0.92,
     fontFamily: fontFamilies.body,
+    textAlign: 'right',
   },
   iconBtn: {
+    position: 'absolute',
+    top: spacing.lg,
     width: 40,
     height: 40,
     borderRadius: radii.md,
     backgroundColor: 'rgba(255,255,255,0.18)',
     alignItems: 'center',
     justifyContent: 'center',
-    position: 'relative',
   },
+  iconBtnStart: { start: spacing.lg },
+  iconBtnEnd: { end: spacing.lg },
   bellDot: {
     position: 'absolute',
     top: 8,
