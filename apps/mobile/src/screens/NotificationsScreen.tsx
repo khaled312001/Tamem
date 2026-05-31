@@ -107,7 +107,7 @@ export function NotificationsScreen() {
 
   return (
     <SafeAreaView edges={['top']} style={styles.container}>
-      <GradientHeader greeting="الإشعارات" location="تنبيهات طلباتك والعروض" />
+      <GradientHeader greeting="الإشعارات" location="تنبيهات طلباتك والعروض" hideBack />
 
       {isLoading ? (
         <View style={styles.list}>

@@ -19,9 +19,9 @@ interface ScreenHeaderProps {
 }
 
 /**
- * RTL-correct stack header. Back-button absolutely anchored to the start
- * (right in Arabic), title perfectly centered, optional action on the end
- * (left). Works identically on native and web.
+ * Stack header. The app is RTL-only, so the back button is anchored on the
+ * physical RIGHT edge (`right: X`) and optional action lives on the LEFT
+ * (`left: X`). High zIndex keeps them clickable above the centered title.
  */
 export function ScreenHeader({
   title,
@@ -34,7 +34,10 @@ export function ScreenHeader({
 }: ScreenHeaderProps) {
   const navigation = useNavigation();
   const canGoBack = !hideBack && navigation.canGoBack();
-  const showRight = !!rightContent || !!RightIcon;
+  const showAction = !!rightContent || !!RightIcon;
+  // Mirror the side padding so the title stays optically centered no matter
+  // which button is shown.
+  const sidePad = canGoBack || showAction ? 60 : spacing.lg;
 
   return (
     <LinearGradient
@@ -43,6 +46,17 @@ export function ScreenHeader({
       end={{ x: 1, y: 0 }}
       style={styles.wrap}
     >
+      <View style={[styles.center, { paddingHorizontal: sidePad }]}>
+        <Text style={styles.title} numberOfLines={1}>
+          {title}
+        </Text>
+        {subtitle ? (
+          <Text style={styles.subtitle} numberOfLines={1}>
+            {subtitle}
+          </Text>
+        ) : null}
+      </View>
+
       {canGoBack ? (
         <Pressable
           onPress={() => {
@@ -51,7 +65,7 @@ export function ScreenHeader({
           }}
           style={({ pressed }) => [
             styles.iconBtn,
-            styles.iconBtnStart,
+            styles.iconBtnRight,
             pressed && { opacity: 0.7 },
           ]}
           accessibilityLabel="رجوع"
@@ -62,35 +76,19 @@ export function ScreenHeader({
       ) : null}
 
       {rightContent ? (
-        <View style={[styles.iconBtn, styles.iconBtnEnd, { backgroundColor: 'transparent' }]}>
+        <View style={[styles.iconBtn, styles.iconBtnLeft, { backgroundColor: 'transparent' }]}>
           {rightContent}
         </View>
       ) : RightIcon ? (
         <Pressable
           onPress={onPressRight}
-          style={({ pressed }) => [styles.iconBtn, styles.iconBtnEnd, pressed && { opacity: 0.7 }]}
+          style={({ pressed }) => [styles.iconBtn, styles.iconBtnLeft, pressed && { opacity: 0.7 }]}
           accessibilityLabel={rightLabel ?? 'إجراء'}
           hitSlop={8}
         >
           <RightIcon size={20} color={colors.white} />
         </Pressable>
       ) : null}
-
-      <View
-        style={[
-          styles.center,
-          { paddingStart: canGoBack ? 60 : spacing.lg, paddingEnd: showRight ? 60 : spacing.lg },
-        ]}
-      >
-        <Text style={styles.title} numberOfLines={1}>
-          {title}
-        </Text>
-        {subtitle ? (
-          <Text style={styles.subtitle} numberOfLines={1}>
-            {subtitle}
-          </Text>
-        ) : null}
-      </View>
     </LinearGradient>
   );
 }
@@ -112,6 +110,8 @@ const styles = StyleSheet.create({
   iconBtn: {
     position: 'absolute',
     top: spacing.md,
+    zIndex: 10,
+    elevation: 10,
     width: 40,
     height: 40,
     borderRadius: radii.md,
@@ -119,8 +119,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  iconBtnStart: { start: spacing.lg },
-  iconBtnEnd: { end: spacing.lg },
+  iconBtnRight: { right: spacing.lg },
+  iconBtnLeft: { left: spacing.lg },
   title: {
     color: colors.white,
     fontSize: fontSizes.lg,

@@ -61,23 +61,16 @@ export function AppTabs() {
         },
       }}
     >
-      {/* RTL visual order: tabs render in declaration order (LTR on web), so we
-          declare them in reverse — الرئيسية goes last to land on the right.
-          The deepLink-friendly `name` props don't change, only their order. */}
+      {/* Match Talabat / Careem / Jahez convention for Arabic apps:
+          Home on the LEFT (first visual position), Account on the RIGHT.
+          The bottom-tab navigator renders children in declaration order on
+          web (no RTL flip), so we declare them in that exact order. */}
       <Tabs.Screen
-        name="ProfileTab"
-        component={ProfileStack}
+        name="HomeTab"
+        component={HomeStack}
         options={{
-          title: 'حسابي',
-          tabBarIcon: ({ color }) => <User size={TAB_ICON_SIZE} color={color} />,
-        }}
-      />
-      <Tabs.Screen
-        name="Notifications"
-        component={NotificationsScreen}
-        options={{
-          title: 'الإشعارات',
-          tabBarIcon: ({ color }) => <Bell size={TAB_ICON_SIZE} color={color} />,
+          title: 'الرئيسية',
+          tabBarIcon: ({ color }) => <Home size={TAB_ICON_SIZE} color={color} />,
         }}
       />
       <Tabs.Screen
@@ -89,11 +82,19 @@ export function AppTabs() {
         }}
       />
       <Tabs.Screen
-        name="HomeTab"
-        component={HomeStack}
+        name="Notifications"
+        component={NotificationsScreen}
         options={{
-          title: 'الرئيسية',
-          tabBarIcon: ({ color }) => <Home size={TAB_ICON_SIZE} color={color} />,
+          title: 'الإشعارات',
+          tabBarIcon: ({ color }) => <Bell size={TAB_ICON_SIZE} color={color} />,
+        }}
+      />
+      <Tabs.Screen
+        name="ProfileTab"
+        component={ProfileStack}
+        options={{
+          title: 'حسابي',
+          tabBarIcon: ({ color }) => <User size={TAB_ICON_SIZE} color={color} />,
         }}
       />
     </Tabs.Navigator>

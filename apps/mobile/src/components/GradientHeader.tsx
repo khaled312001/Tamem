@@ -18,11 +18,11 @@ interface GradientHeaderProps {
 /**
  * Brand-gradient header for primary screens.
  *
- * RTL: back button is absolutely positioned to the START side (right in
- * Arabic) regardless of platform. RN-Web doesn't always honor forceRTL for
- * flexDirection, so we anchor with `start`/`end` to guarantee the layout
- * matches what an Arabic user expects: title centered/right, back-right,
- * actions-left.
+ * The app is RTL-only, so we position the back button physically on the RIGHT
+ * with `right: X` and the action button physically on the LEFT with `left: X`.
+ * Using `start`/`end` is unreliable on RN-Web and was leaving the back button
+ * on the wrong side. Plain left/right + a high zIndex keeps the buttons
+ * clickable above the centered title block.
  */
 export function GradientHeader({
   greeting,
@@ -44,37 +44,7 @@ export function GradientHeader({
       end={{ x: 1, y: 1 }}
       style={styles.wrap}
     >
-      {showBack ? (
-        <Pressable
-          onPress={() => {
-            if (Platform.OS !== 'web') void Haptics.selectionAsync();
-            navigation.goBack();
-          }}
-          accessibilityLabel="رجوع للصفحة السابقة"
-          style={({ pressed }) => [
-            styles.iconBtn,
-            styles.iconBtnStart,
-            pressed && { opacity: 0.7 },
-          ]}
-          hitSlop={8}
-        >
-          <BackChevron size={22} color={colors.white} />
-        </Pressable>
-      ) : null}
-
-      {showBell ? (
-        <Pressable
-          onPress={onPressNotifications}
-          accessibilityLabel="الإشعارات"
-          style={({ pressed }) => [styles.iconBtn, styles.iconBtnEnd, pressed && { opacity: 0.7 }]}
-          hitSlop={6}
-        >
-          <Bell size={18} color={colors.white} />
-          {hasNotifications && <View style={styles.bellDot} />}
-        </Pressable>
-      ) : null}
-
-      <View style={[styles.center, { paddingStart: sidePad, paddingEnd: sidePad }]}>
+      <View style={[styles.center, { paddingRight: sidePad, paddingLeft: sidePad }]}>
         <Text style={styles.greeting} numberOfLines={1}>
           {greeting}
         </Text>
@@ -87,6 +57,39 @@ export function GradientHeader({
           </View>
         ) : null}
       </View>
+
+      {/* Buttons rendered LAST so they sit on top of the title and stay
+          clickable. Positioned with literal left/right because the app is
+          RTL-only: back = physical right, action = physical left. */}
+      {showBack ? (
+        <Pressable
+          onPress={() => {
+            if (Platform.OS !== 'web') void Haptics.selectionAsync();
+            navigation.goBack();
+          }}
+          accessibilityLabel="رجوع للصفحة السابقة"
+          style={({ pressed }) => [
+            styles.iconBtn,
+            styles.iconBtnRight,
+            pressed && { opacity: 0.7 },
+          ]}
+          hitSlop={8}
+        >
+          <BackChevron size={22} color={colors.white} />
+        </Pressable>
+      ) : null}
+
+      {showBell ? (
+        <Pressable
+          onPress={onPressNotifications}
+          accessibilityLabel="الإشعارات"
+          style={({ pressed }) => [styles.iconBtn, styles.iconBtnLeft, pressed && { opacity: 0.7 }]}
+          hitSlop={6}
+        >
+          <Bell size={18} color={colors.white} />
+          {hasNotifications && <View style={styles.bellDot} />}
+        </Pressable>
+      ) : null}
     </LinearGradient>
   );
 }
@@ -101,7 +104,7 @@ const styles = StyleSheet.create({
     position: 'relative',
   },
   center: {
-    // alignItems flex-start follows the writing direction → right edge in RTL.
+    // The header writes Arabic, so titles read from the right edge.
     alignItems: 'flex-start',
   },
   greeting: {
@@ -124,6 +127,8 @@ const styles = StyleSheet.create({
   iconBtn: {
     position: 'absolute',
     top: spacing.lg,
+    zIndex: 10,
+    elevation: 10,
     width: 40,
     height: 40,
     borderRadius: radii.md,
@@ -131,12 +136,12 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  iconBtnStart: { start: spacing.lg },
-  iconBtnEnd: { end: spacing.lg },
+  iconBtnRight: { right: spacing.lg },
+  iconBtnLeft: { left: spacing.lg },
   bellDot: {
     position: 'absolute',
     top: 8,
-    end: 9,
+    right: 8,
     width: 7,
     height: 7,
     borderRadius: 4,

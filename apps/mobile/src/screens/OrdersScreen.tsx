@@ -161,7 +161,7 @@ export function OrdersScreen() {
 
   return (
     <SafeAreaView edges={['top']} style={styles.container}>
-      <GradientHeader greeting="طلباتي" location="سجلّ كل طلباتك" />
+      <GradientHeader greeting="طلباتي" location="سجلّ كل طلباتك" hideBack />
 
       <View style={styles.tabsRow}>
         {TABS.map((t) => {
