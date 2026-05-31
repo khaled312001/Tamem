@@ -1,17 +1,26 @@
-import { Banknote, CreditCard, Info, Smartphone } from 'lucide-react-native';
-import { ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Banknote, Copy, CreditCard, Info, Smartphone } from 'lucide-react-native';
+import type { LucideIcon } from 'lucide-react-native';
+import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { ScreenHeader } from '../components/ScreenHeader';
+import { copyToClipboard } from '../lib/clipboard';
+import { showToast } from '../lib/toast';
 import { colors, fontFamilies, fontSizes, radii, spacing } from '../theme/tokens';
+
+const VODAFONE_CASH_NUMBER = '01010254819';
+const INSTAPAY_HANDLE = 'tamem@instapay';
 
 interface Method {
   key: string;
   label: string;
   badge: string;
-  Icon: typeof Banknote;
+  Icon: LucideIcon;
   desc: string;
   available: boolean;
+  /** Optional value to expose with a copy button (e.g. wallet number). */
+  copyLabel?: string;
+  copyValue?: string;
 }
 
 const METHODS: Method[] = [
@@ -28,16 +37,20 @@ const METHODS: Method[] = [
     label: 'فودافون كاش',
     badge: 'متاح',
     Icon: Smartphone,
-    desc: 'حوّل قيمة الطلب على رقم تميم وارفع لقطة شاشة للإيصال.',
+    desc: 'حوّل قيمة الطلب على محفظة تَميم وارفع لقطة شاشة للإيصال عند تأكيد الطلب.',
     available: true,
+    copyLabel: 'رقم محفظة تَميم',
+    copyValue: VODAFONE_CASH_NUMBER,
   },
   {
     key: 'INSTAPAY',
     label: 'إنستا باي',
     badge: 'متاح',
     Icon: Smartphone,
-    desc: 'حوّل على Tamem@instapay وأرفق إثبات التحويل من التطبيق.',
+    desc: 'حوّل لحساب تَميم على إنستا باي وأرفق إثبات التحويل.',
     available: true,
+    copyLabel: 'حساب إنستا باي',
+    copyValue: INSTAPAY_HANDLE,
   },
   {
     key: 'CARD',
@@ -50,19 +63,28 @@ const METHODS: Method[] = [
 ];
 
 export function PaymentMethodsScreen() {
+  const onCopy = async (label: string, value: string) => {
+    const ok = await copyToClipboard(value);
+    showToast({
+      title: ok ? `${label} ✓` : value,
+      message: ok ? 'تم نسخ القيمة' : 'انسخ القيمة يدوياً من فوق',
+      tone: ok ? 'success' : 'info',
+    });
+  };
+
   return (
     <SafeAreaView edges={['top']} style={styles.container}>
-      <ScreenHeader title="طرق الدفع" subtitle="اختر طريقة الدفع عند إنشاء كل طلب" />
+      <ScreenHeader title="طرق الدفع" subtitle="طرق الدفع المتاحة عند تأكيد الطلب" />
 
       <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
         <View style={styles.infoBanner}>
           <Info size={18} color={colors.brand.red} />
           <Text style={styles.infoText}>
-            طرق الدفع تظهر لك في صفحة تأكيد الطلب. يمكنك تغيير الطريقة لكل طلب على حدة.
+            بتختار طريقة الدفع عند تأكيد كل طلب. تقدر تنسخ أرقام التحويل من هنا قبل ما تطلب.
           </Text>
         </View>
 
-        {METHODS.map(({ key, label, badge, Icon, desc, available }) => (
+        {METHODS.map(({ key, label, badge, Icon, desc, available, copyLabel, copyValue }) => (
           <View key={key} style={[styles.card, !available && { opacity: 0.55 }]}>
             <View style={styles.cardHead}>
               <View style={styles.iconWrap}>
@@ -76,6 +98,22 @@ export function PaymentMethodsScreen() {
               </View>
             </View>
             <Text style={styles.cardDesc}>{desc}</Text>
+
+            {copyValue && copyLabel ? (
+              <Pressable
+                onPress={() => void onCopy(copyLabel, copyValue)}
+                style={({ pressed }) => [styles.copyRow, pressed && { opacity: 0.85 }]}
+              >
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.copyLabel}>{copyLabel}</Text>
+                  <Text style={styles.copyValue}>{copyValue}</Text>
+                </View>
+                <View style={styles.copyBtn}>
+                  <Copy size={14} color={colors.brand.red} />
+                  <Text style={styles.copyBtnText}>نسخ</Text>
+                </View>
+              </Pressable>
+            ) : null}
           </View>
         ))}
 
@@ -139,6 +177,44 @@ const styles = StyleSheet.create({
     fontFamily: fontFamilies.body,
     fontSize: fontSizes.xs,
     lineHeight: 20,
+  },
+  copyRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    marginTop: spacing.md,
+    backgroundColor: colors.surface,
+    borderRadius: radii.md,
+    borderWidth: 1,
+    borderColor: colors.line,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+  },
+  copyLabel: {
+    fontFamily: fontFamilies.body,
+    color: colors.text.muted,
+    fontSize: 10,
+  },
+  copyValue: {
+    fontFamily: fontFamilies.headingBold,
+    color: colors.ink,
+    fontSize: fontSizes.sm,
+    marginTop: 2,
+    letterSpacing: 0.5,
+  },
+  copyBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: colors.brand.redLight,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 6,
+    borderRadius: radii.pill,
+  },
+  copyBtnText: {
+    color: colors.brand.red,
+    fontFamily: fontFamilies.bodyExtraBold,
+    fontSize: fontSizes.xs,
   },
   footnote: {
     marginTop: spacing.md,

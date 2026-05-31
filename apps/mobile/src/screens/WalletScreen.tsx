@@ -7,10 +7,12 @@ import {
   Gift,
   Wallet as WalletIcon,
 } from 'lucide-react-native';
-import { FlatList, RefreshControl, StyleSheet, Text, View } from 'react-native';
+import { useNavigation } from '@react-navigation/native';
+import { FlatList, Pressable, RefreshControl, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { ScreenHeader } from '../components/ScreenHeader';
+import { ForwardChevron } from '../theme/rtl';
 import { CardListSkeleton, EmptyState } from '../components/ui';
 import { api } from '../lib/api';
 import {
@@ -53,6 +55,8 @@ const TX_META: Record<
 };
 
 export function WalletScreen() {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const navigation = useNavigation<any>();
   const { data, isLoading, error, refetch, isFetching } = useQuery<WalletResponse>({
     queryKey: ['my-wallet'],
     queryFn: () => api.raw.get('/me/wallet').then((r) => r.data.data),
@@ -61,7 +65,7 @@ export function WalletScreen() {
   if (isLoading) {
     return (
       <SafeAreaView edges={['top']} style={styles.container}>
-        <ScreenHeader title="محفظتي" />
+        <ScreenHeader title="محفظة المكافآت" />
         <View style={styles.skelPad}>
           <View style={styles.skelBalance} />
           <CardListSkeleton count={4} />
@@ -73,7 +77,7 @@ export function WalletScreen() {
   if (error || !data) {
     return (
       <SafeAreaView edges={['top']} style={styles.container}>
-        <ScreenHeader title="محفظتي" />
+        <ScreenHeader title="محفظة المكافآت" />
         <EmptyState
           icon={<AlertCircle size={36} color={colors.danger} />}
           title="تعذّر تحميل المحفظة"
@@ -91,7 +95,7 @@ export function WalletScreen() {
 
   return (
     <SafeAreaView edges={['top']} style={styles.container}>
-      <ScreenHeader title="محفظتي" subtitle="رصيدك وحركاتك المالية" />
+      <ScreenHeader title="محفظة المكافآت" subtitle="نقاط ولائك تُستخدم في طلباتك القادمة" />
 
       <FlatList
         data={data.transactions}
@@ -138,7 +142,8 @@ export function WalletScreen() {
             <View style={styles.infoBox}>
               <Gift size={16} color={colors.brand.gold} />
               <Text style={styles.infoText}>
-                احصل على 5% مكافأة ولاء على كل طلب تكمله. الرصيد يُستخدم تلقائياً في طلبك التالي.
+                احصل على 5% مكافأة ولاء على كل طلب تكمله. الرصيد ده نقاط ولاء بتقدر تستخدمها في
+                طلباتك القادمة فقط — مش قابل للسحب نقدي.
               </Text>
             </View>
 
@@ -154,8 +159,23 @@ export function WalletScreen() {
         }
         renderItem={({ item }) => {
           const meta = TX_META[item.type] ?? TX_META.SPEND!;
+          const openOrder = item.orderId
+            ? () =>
+                navigation.getParent()?.navigate('Orders', {
+                  screen: 'OrderTracking',
+                  params: { orderId: item.orderId },
+                })
+            : undefined;
           return (
-            <View style={[styles.txCard, shadows.sm]}>
+            <Pressable
+              onPress={openOrder}
+              disabled={!openOrder}
+              style={({ pressed }) => [
+                styles.txCard,
+                shadows.sm,
+                pressed && openOrder && { opacity: 0.92 },
+              ]}
+            >
               <View style={[styles.txIcon, { backgroundColor: meta.color + '18' }]}>
                 <meta.icon size={20} color={meta.color} />
               </View>
@@ -184,7 +204,8 @@ export function WalletScreen() {
                   رصيد: {Number(item.balanceAfter).toLocaleString('ar-EG')}
                 </Text>
               </View>
-            </View>
+              {openOrder ? <ForwardChevron size={14} color={colors.text.muted} /> : null}
+            </Pressable>
           );
         }}
       />

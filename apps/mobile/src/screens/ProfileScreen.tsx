@@ -12,6 +12,7 @@ import {
   Package,
   Shield,
   Star,
+  Trash2,
   User,
   Wallet,
 } from 'lucide-react-native';
@@ -19,6 +20,7 @@ import { useCallback, useEffect, useState } from 'react';
 import {
   Alert,
   Image,
+  Pressable,
   RefreshControl,
   ScrollView,
   StyleSheet,
@@ -45,6 +47,7 @@ interface UserExt {
   phone?: string | null;
   email?: string | null;
   avatarUrl?: string | null;
+  isPhoneVerified?: boolean | null;
 }
 
 interface OrdersListResponse {
@@ -190,6 +193,41 @@ export function ProfileScreen() {
     ]);
   };
 
+  const onDeleteAccount = () => {
+    // Two-step confirmation per platform store requirements.
+    Alert.alert(
+      'حذف الحساب نهائياً',
+      'هتم حذف بياناتك (الاسم، الإيميل، الصورة، العناوين) ومش هتقدر تسجّل دخول بنفس الرقم. الطلبات السابقة هتفضل محفوظة عند الإدارة للأغراض المحاسبية.',
+      [
+        { text: 'تراجع', style: 'cancel' },
+        {
+          text: 'تأكيد الحذف',
+          style: 'destructive',
+          onPress: () => {
+            Alert.alert('تأكيد نهائي', 'إجراء لا يمكن التراجع عنه. متأكد؟', [
+              { text: 'لا', style: 'cancel' },
+              {
+                text: 'احذف الحساب',
+                style: 'destructive',
+                onPress: async () => {
+                  try {
+                    await api.raw.delete('/me');
+                    await clear();
+                  } catch (err) {
+                    Alert.alert(
+                      'تعذّر الحذف',
+                      err instanceof Error ? err.message : 'حاول مرة أخرى لاحقاً',
+                    );
+                  }
+                },
+              },
+            ]);
+          },
+        },
+      ],
+    );
+  };
+
   const initial = (user?.name?.charAt(0) || 'ت').toUpperCase();
 
   return (
@@ -217,21 +255,25 @@ export function ProfileScreen() {
                 <Text style={styles.avatarText}>{initial}</Text>
               )}
             </View>
-            <View style={styles.verifiedBadge}>
-              <Shield size={10} color={colors.white} />
-            </View>
+            {user?.isPhoneVerified ? (
+              <View style={styles.verifiedBadge}>
+                <Shield size={10} color={colors.white} />
+              </View>
+            ) : null}
           </View>
 
           <Text style={styles.userName}>{user?.name ?? 'مستخدم'}</Text>
           <Text style={styles.userPhone}>{user?.phone ?? ''}</Text>
           {user?.email ? <Text style={styles.userEmail}>{user.email}</Text> : null}
 
-          <View style={styles.badgeRow}>
-            <View style={styles.badge}>
-              <Star size={12} color="#9A6B16" fill="#9A6B16" />
-              <Text style={styles.badgeText}>عميل مميز</Text>
+          {orderCount >= 10 ? (
+            <View style={styles.badgeRow}>
+              <View style={styles.badge}>
+                <Star size={12} color="#9A6B16" fill="#9A6B16" />
+                <Text style={styles.badgeText}>عميل مميز</Text>
+              </View>
             </View>
-          </View>
+          ) : null}
 
           <View style={styles.statsRow}>
             <View style={styles.statItem}>
@@ -349,10 +391,20 @@ export function ProfileScreen() {
           />
         </View>
 
-        {/* ─────── Logout + version ─────── */}
+        {/* ─────── Logout + delete account + version ─────── */}
         <View style={{ marginTop: spacing.xl }}>
           <SecondaryButton label="تسجيل الخروج" Icon={LogOut} onPress={onLogout} />
         </View>
+
+        {/* Destructive: delete account. Required by Play / App Store. */}
+        <Pressable
+          onPress={onDeleteAccount}
+          style={({ pressed }) => [styles.deleteLink, pressed && { opacity: 0.6 }]}
+          hitSlop={6}
+        >
+          <Trash2 size={14} color={colors.danger} />
+          <Text style={styles.deleteText}>حذف الحساب نهائياً</Text>
+        </Pressable>
 
         <Text style={styles.versionText}>الإصدار 0.1.0 — تَميم للتوصيل</Text>
       </ScrollView>
@@ -484,5 +536,18 @@ const styles = StyleSheet.create({
     color: colors.text.muted,
     fontFamily: fontFamilies.body,
     marginTop: spacing.xl,
+  },
+  deleteLink: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 4,
+    paddingVertical: spacing.md,
+    marginTop: spacing.md,
+  },
+  deleteText: {
+    color: colors.danger,
+    fontFamily: fontFamilies.bodyBold,
+    fontSize: fontSizes.xs,
   },
 });

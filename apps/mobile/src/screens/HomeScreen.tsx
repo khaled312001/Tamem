@@ -39,6 +39,7 @@ import {
   StatusPill,
 } from '../components/ui';
 import { api } from '../lib/api';
+import { copyToClipboard } from '../lib/clipboard';
 import type { HomeStackParamList } from '../navigation/HomeStack';
 import { useAuth } from '../stores/auth';
 import {
@@ -59,7 +60,9 @@ interface Offer {
   id: string;
   title: string;
   titleAr: string;
-  imageUrl: string;
+  imageUrl?: string;
+  code?: string | null;
+  termsAr?: string | null;
 }
 
 interface Merchant {
@@ -118,19 +121,8 @@ const ACTIVE_STATUSES: OrderStatus[] = [
   'IN_ROUTE',
 ];
 
-const PROMO_CODE = 'TAMEM20';
-
-async function copyToClipboard(text: string): Promise<boolean> {
-  try {
-    if (Platform.OS === 'web' && typeof navigator !== 'undefined' && navigator.clipboard) {
-      await navigator.clipboard.writeText(text);
-      return true;
-    }
-  } catch {
-    /* ignore */
-  }
-  return false;
-}
+// Fallback when the backend hasn't returned a real code on the offer.
+const FALLBACK_PROMO_CODE = 'TAMEM20';
 
 const tickHaptic = () => {
   if (Platform.OS !== 'web') void Haptics.selectionAsync();
@@ -148,12 +140,13 @@ export function HomeScreen() {
   };
 
   const onPromo = async () => {
-    const copied = await copyToClipboard(PROMO_CODE);
+    const code = topOffer?.code || FALLBACK_PROMO_CODE;
+    const copied = await copyToClipboard(code);
     Alert.alert(
-      copied ? 'تم نسخ الكود ✓' : `كود الخصم: ${PROMO_CODE}`,
+      copied ? 'تم نسخ الكود ✓' : `كود الخصم: ${code}`,
       copied
-        ? `استخدم "${PROMO_CODE}" عند تأكيد طلبك للحصول على خصم 20%.`
-        : 'انسخه واستخدمه عند تأكيد الطلب — خصم 20% على أول طلب.',
+        ? `استخدم "${code}" عند تأكيد طلبك للحصول على الخصم.`
+        : 'انسخه واستخدمه عند تأكيد الطلب.',
     );
   };
 
@@ -309,7 +302,8 @@ export function HomeScreen() {
               <View style={{ flex: 1 }}>
                 <Text style={styles.bannerTitle}>{topOffer.titleAr}</Text>
                 <Text style={styles.bannerSub}>
-                  كود الخصم: <Text style={styles.bannerCode}>{PROMO_CODE}</Text>
+                  كود الخصم:{' '}
+                  <Text style={styles.bannerCode}>{topOffer?.code || FALLBACK_PROMO_CODE}</Text>
                 </Text>
               </View>
               <View style={styles.bannerCopy}>

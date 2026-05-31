@@ -8,6 +8,7 @@ import {
   Alert,
   Image,
   KeyboardAvoidingView,
+  Linking,
   Platform,
   Pressable,
   ScrollView,
@@ -167,7 +168,20 @@ export function EditProfileScreen() {
             autoCapitalize="none"
           />
 
-          <Text style={styles.hint}>رقم الهاتف لا يمكن تعديله — تواصل مع الإدارة لتغييره.</Text>
+          <Pressable
+            onPress={() => {
+              const msg = encodeURIComponent('السلام عليكم، أرغب في تغيير رقم هاتفي المسجَّل:');
+              const phone =
+                (typeof process !== 'undefined' && process.env?.EXPO_PUBLIC_TAMEM_WHATSAPP) ||
+                '+201010254819';
+              void Linking.openURL(`https://wa.me/${phone.replace(/\D/g, '')}?text=${msg}`);
+            }}
+          >
+            <Text style={styles.hint}>
+              رقم الهاتف لا يمكن تعديله من هنا.{' '}
+              <Text style={styles.hintLink}>تواصل مع الإدارة لتغييره</Text>
+            </Text>
+          </Pressable>
 
           <GradientButton
             label={save.isPending ? 'جاري الحفظ…' : 'حفظ التغييرات'}
@@ -230,6 +244,11 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     marginBottom: spacing.lg,
     marginTop: spacing.xs,
+  },
+  hintLink: {
+    color: colors.brand.red,
+    fontFamily: fontFamilies.bodyExtraBold,
+    textDecorationLine: 'underline',
   },
   cancel: { alignItems: 'center', marginTop: spacing.md, padding: spacing.sm },
   cancelText: {

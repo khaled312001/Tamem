@@ -1,19 +1,12 @@
 import { useQuery } from '@tanstack/react-query';
 import { Copy, Gift, Sparkles, Tag } from 'lucide-react-native';
-import {
-  FlatList,
-  Platform,
-  Pressable,
-  RefreshControl,
-  StyleSheet,
-  Text,
-  View,
-} from 'react-native';
+import { FlatList, Pressable, RefreshControl, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { ScreenHeader } from '../components/ScreenHeader';
 import { AnimatedListItem, CardListSkeleton, EmptyState } from '../components/ui';
 import { api } from '../lib/api';
+import { copyToClipboard } from '../lib/clipboard';
 import { showToast } from '../lib/toast';
 import { colors, fontFamilies, fontSizes, radii, shadows, spacing } from '../theme/tokens';
 
@@ -28,18 +21,6 @@ interface Coupon {
   description?: string | null;
 }
 
-async function copyText(text: string): Promise<boolean> {
-  try {
-    if (Platform.OS === 'web' && typeof navigator !== 'undefined' && navigator.clipboard) {
-      await navigator.clipboard.writeText(text);
-      return true;
-    }
-  } catch {
-    /* fall through */
-  }
-  return false;
-}
-
 export function CouponsScreen() {
   const { data, isLoading, refetch, isFetching, error } = useQuery<Coupon[]>({
     queryKey: ['available-coupons'],
@@ -47,10 +28,10 @@ export function CouponsScreen() {
   });
 
   const onCopy = async (code: string) => {
-    const ok = await copyText(code);
+    const ok = await copyToClipboard(code);
     showToast({
       title: ok ? 'تم نسخ الكود ✓' : `الكود: ${code}`,
-      message: ok ? 'استخدمه عند تأكيد طلبك للحصول على الخصم' : undefined,
+      message: ok ? 'استخدمه عند تأكيد طلبك للحصول على الخصم' : 'انسخ الكود واستخدمه يدوياً',
       tone: 'success',
     });
   };
