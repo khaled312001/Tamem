@@ -1,20 +1,28 @@
-import { useQuery, useMutation } from '@tanstack/react-query';
 import { useNavigation, useRoute, type RouteProp } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
-import { useState } from 'react';
-import { ActivityIndicator, Alert, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { useMutation, useQuery } from '@tanstack/react-query';
+import { useRef, useState } from 'react';
+import { Alert, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import type { Service } from '@tamem/types';
 
+import { CouponInput } from '../components/CouponInput';
 import { DynamicForm } from '../components/DynamicForm/DynamicForm';
-import { GradientButton } from '../components/GradientButton';
+import { ScreenHeader } from '../components/ScreenHeader';
+import { CardListSkeleton, EmptyState, PrimaryButton } from '../components/ui';
 import { api } from '../lib/api';
 import type { HomeStackParamList } from '../navigation/HomeStack';
-import { colors, fontFamilies, fontSizes, radii, spacing } from '../theme/tokens';
+import { colors, fontFamilies, fontSizes, radii, shadows, spacing } from '../theme/tokens';
 
 type RouteParam = RouteProp<HomeStackParamList, 'DynamicServiceFlow'>;
 type NavProp = NativeStackNavigationProp<HomeStackParamList, 'DynamicServiceFlow'>;
+
+interface AppliedCoupon {
+  code: string;
+  discount: number;
+  finalAmount: number;
+}
 
 export function DynamicServiceFlowScreen() {
   const route = useRoute<RouteParam>();
@@ -22,6 +30,9 @@ export function DynamicServiceFlowScreen() {
   const { serviceKey, serviceId, merchantId } = route.params;
 
   const [estimatedPrice, setEstimatedPrice] = useState<number | null>(null);
+  const [coupon, setCoupon] = useState<AppliedCoupon | null>(null);
+  const formValuesRef = useRef<Record<string, unknown>>({});
+  const submitFormRef = useRef<() => void>(() => {});
 
   // Find the service by key or id
   const { data: services, isLoading: loadingServices } = useQuery<Service[]>({
@@ -62,31 +73,33 @@ export function DynamicServiceFlowScreen() {
 
   if (loadingServices || loadingFields) {
     return (
-      <SafeAreaView style={styles.container}>
-        <ActivityIndicator color={colors.brand.red} style={{ marginTop: 80 }} />
+      <SafeAreaView edges={['top']} style={styles.container}>
+        <ScreenHeader title="جاري التحميل" />
+        <View style={styles.skelPad}>
+          <CardListSkeleton count={4} />
+        </View>
       </SafeAreaView>
     );
   }
 
   if (!service) {
     return (
-      <SafeAreaView style={styles.container}>
-        <Text style={styles.empty}>الخدمة غير موجودة</Text>
+      <SafeAreaView edges={['top']} style={styles.container}>
+        <ScreenHeader title="خطأ" />
+        <EmptyState title="الخدمة غير موجودة" subtitle="حاول الرجوع واختيار خدمة أخرى." />
       </SafeAreaView>
     );
   }
 
-  let formValues: Record<string, unknown> = {};
-  let submitForm = () => {};
-
-  // Default Qift center — real coords are taken from the dynamic form if the
-  // service exposes a LOCATION field, otherwise we fall back to these so the
-  // backend's required deliveryLat/Lng/address validation passes.
+  // Qift center fallback — used when the dynamic form doesn't expose a
+  // LOCATION field so the backend's required deliveryLat/Lng/address checks
+  // still pass.
   const QIFT_LAT = 26.0297;
   const QIFT_LNG = 32.8146;
 
   const handleSubmit = async (values: Record<string, unknown>) => {
-    // Pull standard fields out of customData if present — they map 1:1 to top-level
+    formValuesRef.current = values;
+
     const notes =
       typeof values.notes === 'string'
         ? values.notes
@@ -119,60 +132,84 @@ export function DynamicServiceFlowScreen() {
         paymentMethod: 'CASH',
         customData: values,
         ...(merchantId ? { merchantId } : {}),
+        ...(coupon ? { couponCode: coupon.code } : {}),
       };
     } else {
-      // SHIPPING and MERCHANT flows have their own dedicated screens. If we land
-      // here for them, send a minimal best-effort payload.
       payload = {
         category: service.category,
         serviceId: service.id,
         paymentMethod: 'CASH',
         customData: values,
+        ...(coupon ? { couponCode: coupon.code } : {}),
       };
     }
     await createOrder.mutateAsync(payload);
   };
 
+  const basePrice = estimatedPrice ?? Number(service.basePrice ?? 0);
+  const finalPrice = coupon ? coupon.finalAmount : basePrice;
+
   return (
     <SafeAreaView edges={['top']} style={styles.container}>
-      <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
-        <Text style={styles.title}>{service.nameAr}</Text>
-        {service.descriptionAr && <Text style={styles.subtitle}>{service.descriptionAr}</Text>}
+      <ScreenHeader title={service.nameAr} subtitle={service.descriptionAr ?? undefined} />
 
-        <View style={styles.formCard}>
+      <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+        <View style={[styles.formCard, shadows.sm]}>
           <DynamicForm
             fields={service.fields ?? []}
             onSubmit={handleSubmit}
             onChange={(v) => {
-              formValues = v;
-              // Live pricing preview (debounced via React Query staleTime)
+              formValuesRef.current = v;
               if (service.pricingMethod === 'FIXED' && service.basePrice) {
                 setEstimatedPrice(Number(service.basePrice));
               }
             }}
             formRef={(handle) => {
-              submitForm = handle.submit;
+              submitFormRef.current = handle.submit;
             }}
           />
         </View>
+
+        {/* ─────── Coupon ─────── */}
+        <Text style={styles.sectionTitle}>كوبون الخصم</Text>
+        <CouponInput
+          orderAmount={basePrice}
+          onApplied={(code, discount, finalAmount) => setCoupon({ code, discount, finalAmount })}
+          onCleared={() => setCoupon(null)}
+        />
+
+        {/* ─────── Price breakdown ─────── */}
+        {basePrice > 0 ? (
+          <View style={[styles.priceCard, shadows.sm]}>
+            <View style={styles.priceLine}>
+              <Text style={styles.priceLineLabel}>سعر الخدمة</Text>
+              <Text style={styles.priceLineValue}>{basePrice.toLocaleString('ar-EG')} ج.م</Text>
+            </View>
+            {coupon ? (
+              <View style={styles.priceLine}>
+                <Text style={styles.priceLineDiscountLabel}>خصم الكوبون ({coupon.code})</Text>
+                <Text style={styles.priceLineDiscount}>
+                  -{coupon.discount.toLocaleString('ar-EG')} ج.م
+                </Text>
+              </View>
+            ) : null}
+            <View style={styles.priceDivider} />
+            <View style={styles.priceLine}>
+              <Text style={styles.priceTotalLabel}>الإجمالي</Text>
+              <Text style={styles.priceTotal}>{finalPrice.toLocaleString('ar-EG')} ج.م</Text>
+            </View>
+          </View>
+        ) : null}
+
+        <View style={{ height: 120 }} />
       </ScrollView>
 
-      <View style={styles.footer}>
-        {estimatedPrice !== null && (
-          <View style={styles.priceRow}>
-            <Text style={styles.priceLabel}>السعر التقديري</Text>
-            <Text style={styles.price}>{estimatedPrice.toLocaleString('ar-EG')} ج.م</Text>
-          </View>
-        )}
-        <GradientButton
+      <View style={[styles.footer, shadows.lg]}>
+        <PrimaryButton
           label={createOrder.isPending ? 'جاري الإرسال…' : 'تأكيد الطلب'}
-          onPress={() => submitForm()}
+          onPress={() => submitFormRef.current()}
           loading={createOrder.isPending}
         />
-      </View>
-      {/* keep unused warning quiet */}
-      <View style={{ display: 'none' }}>
-        <Text>{Object.keys(formValues).length}</Text>
       </View>
     </SafeAreaView>
   );
@@ -180,23 +217,74 @@ export function DynamicServiceFlowScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.surface },
-  content: { padding: spacing.lg, paddingBottom: spacing.xxl * 2 },
-  title: {
-    fontSize: fontSizes.xl,
-    fontFamily: fontFamilies.headingBlack,
-    color: colors.ink,
-  },
-  subtitle: {
-    fontSize: fontSizes.sm,
-    color: colors.text.muted,
-    marginTop: spacing.xs,
-    marginBottom: spacing.lg,
-    fontFamily: fontFamilies.body,
-  },
+  content: { padding: spacing.lg },
+  skelPad: { padding: spacing.lg, gap: spacing.md },
   formCard: {
-    backgroundColor: colors.surface,
+    backgroundColor: colors.white,
     borderRadius: radii.lg,
+    borderWidth: 1,
+    borderColor: colors.line,
+    paddingHorizontal: spacing.md,
     paddingTop: spacing.md,
+    paddingBottom: spacing.sm,
+    marginBottom: spacing.lg,
+  },
+  sectionTitle: {
+    fontSize: fontSizes.xs,
+    fontFamily: fontFamilies.headingBlack,
+    color: colors.text.muted,
+    marginBottom: spacing.sm,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  priceCard: {
+    backgroundColor: colors.white,
+    borderRadius: radii.lg,
+    borderWidth: 1,
+    borderColor: colors.line,
+    padding: spacing.md,
+    marginTop: spacing.lg,
+  },
+  priceLine: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 4,
+  },
+  priceLineLabel: {
+    fontFamily: fontFamilies.body,
+    color: colors.text.secondary,
+    fontSize: fontSizes.sm,
+  },
+  priceLineValue: {
+    fontFamily: fontFamilies.bodyBold,
+    color: colors.ink,
+    fontSize: fontSizes.sm,
+  },
+  priceLineDiscountLabel: {
+    fontFamily: fontFamilies.body,
+    color: colors.success,
+    fontSize: fontSizes.sm,
+  },
+  priceLineDiscount: {
+    fontFamily: fontFamilies.bodyExtraBold,
+    color: colors.success,
+    fontSize: fontSizes.sm,
+  },
+  priceDivider: {
+    height: 1,
+    backgroundColor: colors.line,
+    marginVertical: spacing.sm,
+  },
+  priceTotalLabel: {
+    fontFamily: fontFamilies.headingBold,
+    color: colors.ink,
+    fontSize: fontSizes.md,
+  },
+  priceTotal: {
+    fontFamily: fontFamilies.headingBlack,
+    color: colors.brand.red,
+    fontSize: fontSizes.xl,
   },
   footer: {
     position: 'absolute',
@@ -207,27 +295,5 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     borderTopColor: colors.line,
     padding: spacing.lg,
-    gap: spacing.sm,
-  },
-  priceRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
-  priceLabel: {
-    fontSize: fontSizes.sm,
-    color: colors.text.muted,
-    fontFamily: fontFamilies.body,
-  },
-  price: {
-    fontSize: fontSizes.lg,
-    color: colors.brand.red,
-    fontFamily: fontFamilies.headingBlack,
-  },
-  empty: {
-    textAlign: 'center',
-    color: colors.text.muted,
-    marginTop: spacing.xxl,
-    fontFamily: fontFamilies.body,
   },
 });

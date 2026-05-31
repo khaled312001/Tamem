@@ -127,6 +127,16 @@ const CATEGORY_LABEL = {
 
 const TERMINAL_BAD: OrderStatus[] = ['CANCELLED', 'REJECTED'];
 
+// Customer can cancel any time before the driver gets involved. Past this
+// point cancellation has to go through Admin because there's a driver, cash,
+// or merchandise already in motion.
+const CUSTOMER_CANCELLABLE: OrderStatus[] = [
+  'NEW',
+  'UNDER_REVIEW',
+  'PRICED',
+  'AWAITING_CUSTOMER_APPROVAL',
+];
+
 export function OrderTrackingScreen() {
   const route = useRoute<Route>();
   const qc = useQueryClient();
@@ -206,6 +216,7 @@ export function OrderTrackingScreen() {
   const price = order.finalPrice ?? order.quotedPrice;
   const isTerminalBad = TERMINAL_BAD.includes(order.status);
   const isCompleted = order.status === 'COMPLETED' || order.status === 'DELIVERED';
+  const canCustomerCancel = CUSTOMER_CANCELLABLE.includes(order.status);
   const stageHint = STAGE_HINT[order.status];
 
   return (
@@ -423,6 +434,12 @@ export function OrderTrackingScreen() {
             }
           />
 
+          {canCustomerCancel ? (
+            <View style={{ marginTop: spacing.md }}>
+              <CancelOrderButton orderId={order.id} orderNumber={order.orderNumber} />
+            </View>
+          ) : null}
+
           <View style={styles.trustRow}>
             <ShieldCheck size={14} color={colors.success} />
             <Text style={styles.trustText}>
@@ -593,6 +610,159 @@ function ReorderButton({ orderId, orderNumber }: { orderId: string; orderNumber:
     />
   );
 }
+
+// ════════════════════════════════════════════════════════════════════════════
+// Cancel order — only shown while the order is still in early stages
+// ════════════════════════════════════════════════════════════════════════════
+
+function CancelOrderButton({ orderId, orderNumber }: { orderId: string; orderNumber: string }) {
+  const qc = useQueryClient();
+  const [open, setOpen] = useState(false);
+  const [reason, setReason] = useState('');
+
+  const cancelMut = useMutation({
+    mutationFn: () =>
+      api.raw.post(`/orders/${orderId}/cancel`, { reason: reason.trim() || 'لا يوجد سبب محدد' }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['order', orderId] });
+      qc.invalidateQueries({ queryKey: ['orders-mine'] });
+      setOpen(false);
+      setReason('');
+    },
+    onError: (err) =>
+      Alert.alert('تعذّر الإلغاء', err instanceof Error ? err.message : 'حصلت مشكلة'),
+  });
+
+  if (!open) {
+    return (
+      <GhostButton
+        label={`إلغاء الطلب #${orderNumber}`}
+        onPress={() => setOpen(true)}
+        Icon={XIcon}
+        tone="danger"
+      />
+    );
+  }
+
+  return (
+    <View style={cancelStyles.card}>
+      <Text style={cancelStyles.title}>تأكيد إلغاء الطلب</Text>
+      <Text style={cancelStyles.sub}>
+        هل أنت متأكد من إلغاء طلب #{orderNumber}؟ ده الإجراء نهائي ومش هتقدر ترجعه.
+      </Text>
+
+      <Text style={cancelStyles.label}>سبب الإلغاء (اختياري)</Text>
+      <TextInput
+        value={reason}
+        onChangeText={setReason}
+        placeholder="مثلاً: غيّرت رأيي، السعر مش مناسب…"
+        placeholderTextColor={colors.text.muted}
+        multiline
+        maxLength={300}
+        style={cancelStyles.input}
+      />
+
+      <View style={cancelStyles.actions}>
+        <Pressable
+          onPress={() => {
+            setOpen(false);
+            setReason('');
+          }}
+          style={({ pressed }) => [cancelStyles.cancelBtn, pressed && { opacity: 0.7 }]}
+        >
+          <Text style={cancelStyles.cancelBtnText}>تراجع</Text>
+        </Pressable>
+        <Pressable
+          onPress={() => cancelMut.mutate()}
+          disabled={cancelMut.isPending}
+          style={({ pressed }) => [
+            cancelStyles.confirmBtn,
+            (pressed || cancelMut.isPending) && { opacity: 0.85 },
+          ]}
+        >
+          {cancelMut.isPending ? (
+            <ActivityIndicator size="small" color={colors.white} />
+          ) : (
+            <Text style={cancelStyles.confirmBtnText}>تأكيد الإلغاء</Text>
+          )}
+        </Pressable>
+      </View>
+    </View>
+  );
+}
+
+const cancelStyles = StyleSheet.create({
+  card: {
+    backgroundColor: colors.dangerLight,
+    borderRadius: radii.lg,
+    borderWidth: 1,
+    borderColor: colors.danger,
+    padding: spacing.md,
+  },
+  title: {
+    fontFamily: fontFamilies.headingBold,
+    color: colors.danger,
+    fontSize: fontSizes.md,
+  },
+  sub: {
+    fontFamily: fontFamilies.body,
+    color: colors.danger,
+    fontSize: fontSizes.xs,
+    marginTop: 4,
+    lineHeight: 20,
+  },
+  label: {
+    fontFamily: fontFamilies.bodyBold,
+    color: colors.ink,
+    fontSize: fontSizes.xs,
+    marginTop: spacing.md,
+    marginBottom: 6,
+  },
+  input: {
+    backgroundColor: colors.white,
+    borderRadius: radii.md,
+    borderWidth: 1,
+    borderColor: colors.danger + '60',
+    padding: spacing.sm,
+    fontFamily: fontFamilies.body,
+    fontSize: fontSizes.sm,
+    color: colors.ink,
+    minHeight: 60,
+    textAlignVertical: 'top',
+  },
+  actions: {
+    flexDirection: 'row',
+    gap: spacing.sm,
+    marginTop: spacing.md,
+  },
+  cancelBtn: {
+    flex: 1,
+    paddingVertical: 12,
+    borderRadius: radii.md,
+    backgroundColor: colors.white,
+    borderWidth: 1,
+    borderColor: colors.line2,
+    alignItems: 'center',
+  },
+  cancelBtnText: {
+    fontFamily: fontFamilies.bodyBold,
+    color: colors.ink,
+    fontSize: fontSizes.sm,
+  },
+  confirmBtn: {
+    flex: 1,
+    paddingVertical: 12,
+    borderRadius: radii.md,
+    backgroundColor: colors.danger,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  confirmBtnText: {
+    fontFamily: fontFamilies.headingBold,
+    color: colors.white,
+    fontSize: fontSizes.sm,
+  },
+});
 
 // ════════════════════════════════════════════════════════════════════════════
 // Review prompt

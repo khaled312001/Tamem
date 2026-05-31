@@ -68,6 +68,19 @@ export function AppTabs() {
       <Tabs.Screen
         name="HomeTab"
         component={HomeStack}
+        listeners={({ navigation }) => ({
+          // Tapping a tab while you're already inside its nested stack should
+          // jump you back to the stack root, not leave you on the deep page.
+          // (The default `popToTop` behavior is unreliable on web.)
+          tabPress: (e) => {
+            const state = navigation.getState();
+            if (state?.routes[state.index]?.name === 'HomeTab') {
+              e.preventDefault();
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              (navigation as any).navigate('HomeTab', { screen: 'Home' });
+            }
+          },
+        })}
         options={{
           title: 'الرئيسية',
           tabBarIcon: ({ color }) => <Home size={TAB_ICON_SIZE} color={color} />,
@@ -76,6 +89,16 @@ export function AppTabs() {
       <Tabs.Screen
         name="Orders"
         component={OrdersStack}
+        listeners={({ navigation }) => ({
+          tabPress: (e) => {
+            const state = navigation.getState();
+            if (state?.routes[state.index]?.name === 'Orders') {
+              e.preventDefault();
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              (navigation as any).navigate('Orders', { screen: 'OrdersList' });
+            }
+          },
+        })}
         options={{
           title: 'طلباتي',
           tabBarIcon: ({ color }) => <Package size={TAB_ICON_SIZE} color={color} />,
@@ -92,6 +115,16 @@ export function AppTabs() {
       <Tabs.Screen
         name="ProfileTab"
         component={ProfileStack}
+        listeners={({ navigation }) => ({
+          tabPress: (e) => {
+            const state = navigation.getState();
+            if (state?.routes[state.index]?.name === 'ProfileTab') {
+              e.preventDefault();
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              (navigation as any).navigate('ProfileTab', { screen: 'Profile' });
+            }
+          },
+        })}
         options={{
           title: 'حسابي',
           tabBarIcon: ({ color }) => <User size={TAB_ICON_SIZE} color={color} />,
