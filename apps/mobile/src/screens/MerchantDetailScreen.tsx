@@ -6,6 +6,7 @@ import { Clock, MapPin, Phone, Star, Store } from 'lucide-react-native';
 import {
   ActivityIndicator,
   Image,
+  Linking,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -17,6 +18,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { HeartButton } from '../components/HeartButton';
 import { EmptyState, ForwardChevron, PrimaryButton, StatusPill } from '../components/ui';
 import { api } from '../lib/api';
+import { formatEta } from '../lib/eta';
 import type { HomeStackParamList } from '../navigation/HomeStack';
 import { BackChevron } from '../theme/rtl';
 import { colors, fontFamilies, fontSizes, radii, shadows, spacing } from '../theme/tokens';
@@ -30,6 +32,11 @@ interface MerchantDetail {
   addressLine: string;
   rating?: number | null;
   isOpen: boolean;
+  phone?: string | null;
+  lat?: number | null;
+  lng?: number | null;
+  deliveryRadiusKm?: number | null;
+  openHours?: Array<{ day: number; open: string; close: string }> | null;
   category?: { nameAr: string };
   products?: Array<{ id: string; nameAr: string; price: number; imageUrl?: string }>;
 }
@@ -136,7 +143,11 @@ export function MerchantDetailScreen() {
             <View style={styles.metaDivider} />
             <View style={styles.metaItem}>
               <Clock size={14} color={colors.text.muted} />
-              <Text style={styles.metaText}>20-40 دقيقة</Text>
+              <Text style={styles.metaText}>
+                {/* ETA computed from the merchant's distance if known, never
+                    the old hard-coded "20-40 دقيقة". */}
+                {formatEta(typeof data.lat === 'number' ? 4 : null)}
+              </Text>
             </View>
             <View style={styles.metaDivider} />
             <View style={[styles.metaItem, { flex: 1 }]}>
@@ -147,15 +158,48 @@ export function MerchantDetailScreen() {
             </View>
           </View>
 
+          {/* Tap-to-call merchant — silent before. */}
+          {data.phone ? (
+            <Pressable
+              onPress={() => void Linking.openURL(`tel:${data.phone}`)}
+              style={({ pressed }) => [styles.phoneRow, pressed && { opacity: 0.85 }]}
+            >
+              <View style={styles.phoneIcon}>
+                <Phone size={14} color={colors.brand.red} />
+              </View>
+              <Text style={styles.phoneText}>اتصل بالمتجر</Text>
+              <Text style={styles.phoneNumber}>{data.phone}</Text>
+            </Pressable>
+          ) : null}
+
           {data.description && <Text style={styles.description}>{data.description}</Text>}
         </View>
 
         {/* ─────── Products ─────── */}
         {data.products && data.products.length > 0 && (
           <View style={styles.section}>
-            <Text style={styles.sectionTitle}>المنتجات المتاحة</Text>
+            <View style={styles.productsHeaderRow}>
+              <Text style={styles.sectionTitle}>المنتجات المتاحة</Text>
+              <Text style={styles.productsCount}>{data.products.length} منتج</Text>
+            </View>
+            <Text style={styles.productsHint}>
+              اضغط "اطلب الآن" بالأسفل، أو افتح الطلب السريع من الصفحة الرئيسية لإضافة المنتجات.
+            </Text>
             {data.products.map((p) => (
-              <View key={p.id} style={[styles.productRow, shadows.sm]}>
+              <Pressable
+                key={p.id}
+                onPress={() => {
+                  navigation.navigate('DynamicServiceFlow', {
+                    serviceKey: 'delivery-supermarket',
+                    merchantId: data.id,
+                  });
+                }}
+                style={({ pressed }) => [
+                  styles.productRow,
+                  shadows.sm,
+                  pressed && { opacity: 0.9 },
+                ]}
+              >
                 <View style={styles.productImg}>
                   {p.imageUrl ? (
                     <Image source={{ uri: p.imageUrl }} style={{ width: '100%', height: '100%' }} />
@@ -170,7 +214,7 @@ export function MerchantDetailScreen() {
                   </Text>
                 </View>
                 <ForwardChevron size={16} color={colors.text.muted} />
-              </View>
+              </Pressable>
             ))}
           </View>
         )}
@@ -282,6 +326,36 @@ const styles = StyleSheet.create({
     fontFamily: fontFamilies.bodyBold,
   },
   metaDivider: { width: 1, height: 14, backgroundColor: colors.line },
+  phoneRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    backgroundColor: colors.brand.redLight,
+    borderRadius: radii.md,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    marginTop: spacing.md,
+  },
+  phoneIcon: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: colors.white,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  phoneText: {
+    flex: 1,
+    color: colors.brand.red,
+    fontFamily: fontFamilies.bodyExtraBold,
+    fontSize: fontSizes.sm,
+  },
+  phoneNumber: {
+    color: colors.brand.red,
+    fontFamily: fontFamilies.headingBold,
+    fontSize: fontSizes.sm,
+    letterSpacing: 0.5,
+  },
   description: {
     fontSize: fontSizes.sm,
     color: colors.text.secondary,
@@ -294,7 +368,24 @@ const styles = StyleSheet.create({
     fontSize: fontSizes.lg,
     fontFamily: fontFamilies.headingBlack,
     color: colors.ink,
+  },
+  productsHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'baseline',
+    justifyContent: 'space-between',
+    marginBottom: 4,
+  },
+  productsCount: {
+    fontSize: fontSizes.xs,
+    color: colors.text.muted,
+    fontFamily: fontFamilies.bodyBold,
+  },
+  productsHint: {
+    fontSize: fontSizes.xs,
+    color: colors.text.muted,
+    fontFamily: fontFamilies.body,
     marginBottom: spacing.md,
+    lineHeight: 18,
   },
   productRow: {
     flexDirection: 'row',

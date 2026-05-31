@@ -114,17 +114,38 @@ export function QuickOrderSheet({ visible, onClose }: QuickOrderSheetProps) {
   }) {
     setSubmitting(true);
     try {
-      const hostedImages = payload.imageUrls
-        ? await Promise.all(
-            payload.imageUrls.map((u) => uploadFile(u, { mime: 'image/jpeg' }).then((r) => r.url)),
-          )
-        : undefined;
+      // Upload images / audio first — if any upload returns a non-hosted URL
+      // (uploaded:false), fail loud so we never send file:// to the dispatcher.
+      let hostedImages: string[] | undefined;
+      if (payload.imageUrls && payload.imageUrls.length > 0) {
+        const results = await Promise.all(
+          payload.imageUrls.map((u) => uploadFile(u, { mime: 'image/jpeg' })),
+        );
+        const failed = results.filter((r) => !r?.url || !/^https?:/.test(r.url));
+        if (failed.length > 0) {
+          showToast({
+            title: `فشل رفع ${failed.length} صورة`,
+            message: 'تأكد من اتصالك بالإنترنت وأعد المحاولة',
+            tone: 'error',
+          });
+          return;
+        }
+        hostedImages = results.map((r) => r.url);
+      }
       let hostedAudio = payload.audioUri;
       if (payload.audioUri) {
         const r = await uploadFile(payload.audioUri, {
           mime: payload.audioMime ?? 'audio/webm',
           name: `voice-${Date.now()}.${(payload.audioMime ?? 'audio/webm').split('/')[1]}`,
         });
+        if (!r?.url || !/^https?:/.test(r.url)) {
+          showToast({
+            title: 'تعذّر رفع التسجيل الصوتي',
+            message: 'حاول تاني أو ابعت طلب نصي بدلاً منه',
+            tone: 'error',
+          });
+          return;
+        }
         hostedAudio = r.url;
       }
 
@@ -179,7 +200,11 @@ export function QuickOrderSheet({ visible, onClose }: QuickOrderSheetProps) {
       onClose();
       try {
         const parent = navigation.getParent?.();
-        parent?.navigate('Orders', { screen: 'OrdersList' });
+        // Land on live tracking — was OrdersList before.
+        parent?.navigate('Orders', {
+          screen: 'OrderTracking',
+          params: { orderId: order.id, justCreated: true },
+        });
       } catch {
         /* ignore */
       }

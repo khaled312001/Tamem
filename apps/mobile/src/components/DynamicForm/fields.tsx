@@ -260,6 +260,7 @@ export function SelectFieldInput({ field, control, errors }: BaseProps) {
 export function ImageFieldInput({ field, control, errors }: BaseProps) {
   const err = errors[field.key]?.message as string | undefined;
   const maxImages = field.validation?.maxImages ?? 5;
+  const [uploading, setUploading] = useState(false);
 
   return (
     <View style={styles.wrap}>
@@ -271,15 +272,31 @@ export function ImageFieldInput({ field, control, errors }: BaseProps) {
         render={({ field: { value, onChange } }) => {
           const urls = (value as string[] | undefined) ?? [];
           const addImage = async () => {
-            // Lazy import to keep startup light
             const ImagePicker = await import('expo-image-picker');
             const result = await ImagePicker.launchImageLibraryAsync({
               mediaTypes: ['images'],
               quality: 0.85,
             });
             if (result.canceled || !result.assets?.[0]) return;
-            // TODO: actual upload via api.raw.post('/uploads', ...) — store local URI for now
-            onChange([...urls, result.assets[0].uri]);
+            setUploading(true);
+            try {
+              // Actually host the file via /uploads — the previous TODO let
+              // local file:// URIs reach the dispatcher, where they couldn't
+              // be opened. Lazy import so this module stays cheap to load.
+              const { uploadFile } = await import('../../lib/uploadFile');
+              const uploaded = await uploadFile(result.assets[0].uri, { mime: 'image/jpeg' });
+              if (!uploaded?.url) throw new Error('فشل رفع الصورة');
+              onChange([...urls, uploaded.url]);
+            } catch (e) {
+              const { showToast } = await import('../../lib/toast');
+              showToast({
+                title: 'تعذّر رفع الصورة',
+                message: e instanceof Error ? e.message : undefined,
+                tone: 'error',
+              });
+            } finally {
+              setUploading(false);
+            }
           };
 
           return (
@@ -287,15 +304,17 @@ export function ImageFieldInput({ field, control, errors }: BaseProps) {
               <ScrollView horizontal showsHorizontalScrollIndicator={false}>
                 <Pressable
                   onPress={addImage}
-                  disabled={urls.length >= maxImages}
+                  disabled={urls.length >= maxImages || uploading}
                   style={({ pressed }) => [
                     styles.imageAdd,
                     pressed && { opacity: 0.85 },
-                    urls.length >= maxImages && { opacity: 0.4 },
+                    (urls.length >= maxImages || uploading) && { opacity: 0.4 },
                   ]}
                 >
                   <Camera size={28} color={colors.brand.red} />
-                  <Text style={styles.imageAddText}>إضافة صورة</Text>
+                  <Text style={styles.imageAddText}>
+                    {uploading ? 'جاري الرفع…' : 'إضافة صورة'}
+                  </Text>
                   <Text style={styles.imageAddCount}>
                     {urls.length}/{maxImages}
                   </Text>

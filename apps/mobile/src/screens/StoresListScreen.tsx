@@ -1,21 +1,20 @@
+import { useNavigation } from '@react-navigation/native';
+import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useQuery } from '@tanstack/react-query';
-import { Search, Star, Store } from 'lucide-react-native';
-import { useState } from 'react';
-import {
-  ActivityIndicator,
-  FlatList,
-  Pressable,
-  ScrollView,
-  StyleSheet,
-  Text,
-  TextInput,
-  View,
-} from 'react-native';
+import { ArrowDownUp, Search, Star, Store } from 'lucide-react-native';
+import { useMemo, useState } from 'react';
+import { FlatList, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { GradientHeader } from '../components/GradientHeader';
+import { HeartButton } from '../components/HeartButton';
+import { CardListSkeleton, EmptyState } from '../components/ui';
 import { api } from '../lib/api';
+import type { HomeStackParamList } from '../navigation/HomeStack';
 import { colors, fontFamilies, fontSizes, radii, spacing } from '../theme/tokens';
+
+type Nav = NativeStackNavigationProp<HomeStackParamList, 'StoresList'>;
+type SortKey = 'recommended' | 'rating' | 'open';
 
 interface Merchant {
   id: string;
@@ -35,8 +34,10 @@ const FILTERS = [
 ];
 
 export function StoresListScreen() {
+  const navigation = useNavigation<Nav>();
   const [activeFilter, setActiveFilter] = useState<string>('all');
   const [search, setSearch] = useState('');
+  const [sortKey, setSortKey] = useState<SortKey>('recommended');
 
   const { data: merchants, isLoading } = useQuery<Merchant[]>({
     queryKey: ['merchants', activeFilter, search],
@@ -48,6 +49,22 @@ export function StoresListScreen() {
       return api.raw.get('/merchants', { params }).then((r) => r.data.data);
     },
   });
+
+  const sorted = useMemo(() => {
+    const list = (merchants ?? []).slice();
+    if (sortKey === 'rating') {
+      list.sort((a, b) => Number(b.rating ?? 0) - Number(a.rating ?? 0));
+    } else if (sortKey === 'open') {
+      list.sort((a, b) => Number(b.isOpen) - Number(a.isOpen));
+    }
+    return list;
+  }, [merchants, sortKey]);
+
+  const cycleSort = () => {
+    setSortKey((k) => (k === 'recommended' ? 'rating' : k === 'rating' ? 'open' : 'recommended'));
+  };
+  const sortLabel =
+    sortKey === 'rating' ? 'الأعلى تقييماً' : sortKey === 'open' ? 'المفتوحة أولاً' : 'الموصى بها';
 
   return (
     <SafeAreaView edges={['top']} style={styles.container}>
@@ -64,35 +81,60 @@ export function StoresListScreen() {
         />
       </View>
 
-      <ScrollView
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        contentContainerStyle={styles.chipsRow}
-      >
-        {FILTERS.map((f) => {
-          const isOn = activeFilter === f.key;
-          return (
-            <Pressable
-              key={f.key}
-              onPress={() => setActiveFilter(f.key)}
-              style={[styles.chip, isOn && styles.chipOn]}
-            >
-              <Text style={[styles.chipText, isOn && styles.chipTextOn]}>{f.label}</Text>
-            </Pressable>
-          );
-        })}
-      </ScrollView>
+      <View style={styles.toolbar}>
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={styles.chipsRow}
+        >
+          {FILTERS.map((f) => {
+            const isOn = activeFilter === f.key;
+            return (
+              <Pressable
+                key={f.key}
+                onPress={() => setActiveFilter(f.key)}
+                style={[styles.chip, isOn && styles.chipOn]}
+              >
+                <Text style={[styles.chipText, isOn && styles.chipTextOn]}>{f.label}</Text>
+              </Pressable>
+            );
+          })}
+        </ScrollView>
+        <Pressable
+          onPress={cycleSort}
+          style={({ pressed }) => [styles.sortBtn, pressed && { opacity: 0.7 }]}
+          hitSlop={6}
+          accessibilityLabel="ترتيب القائمة"
+        >
+          <ArrowDownUp size={14} color={colors.brand.red} />
+          <Text style={styles.sortText}>{sortLabel}</Text>
+        </Pressable>
+      </View>
 
       {isLoading ? (
-        <ActivityIndicator color={colors.brand.red} style={{ marginTop: spacing.xl }} />
+        <View style={styles.listContent}>
+          <CardListSkeleton count={5} />
+        </View>
       ) : (
         <FlatList
-          data={merchants ?? []}
+          data={sorted}
           keyExtractor={(m) => m.id}
-          contentContainerStyle={styles.listContent}
-          ListEmptyComponent={<Text style={styles.empty}>لا توجد محلات بهذا الفلتر</Text>}
+          contentContainerStyle={[
+            styles.listContent,
+            sorted.length === 0 && { flexGrow: 1, justifyContent: 'center' },
+          ]}
+          ListEmptyComponent={
+            <EmptyState
+              icon={<Store size={36} color={colors.brand.red} />}
+              title="لا توجد محلات بهذا الفلتر"
+              subtitle="جرّب فلتر مختلف أو امسح البحث"
+            />
+          }
           renderItem={({ item }) => (
-            <Pressable style={({ pressed }) => [styles.card, pressed && styles.pressed]}>
+            <Pressable
+              onPress={() => navigation.navigate('MerchantDetail', { merchantId: item.id })}
+              style={({ pressed }) => [styles.card, pressed && styles.pressed]}
+            >
               <View style={styles.cardIcon}>
                 <Store size={22} color={colors.brand.red} />
               </View>
@@ -111,6 +153,7 @@ export function StoresListScreen() {
                   {item.isOpen ? 'مفتوح' : 'مغلق'}
                 </Text>
               </View>
+              <HeartButton merchantId={item.id} merchantName={item.storeNameAr} size="sm" />
             </Pressable>
           )}
         />
@@ -141,10 +184,30 @@ const styles = StyleSheet.create({
     textAlign: 'right',
     fontFamily: fontFamilies.body,
   },
+  toolbar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    paddingEnd: spacing.lg,
+  },
   chipsRow: {
     paddingHorizontal: spacing.lg,
     paddingVertical: spacing.md,
     gap: spacing.xs,
+  },
+  sortBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: colors.brand.redLight,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 6,
+    borderRadius: radii.pill,
+  },
+  sortText: {
+    color: colors.brand.red,
+    fontFamily: fontFamilies.bodyExtraBold,
+    fontSize: fontSizes.xs,
   },
   chip: {
     backgroundColor: colors.soft,
