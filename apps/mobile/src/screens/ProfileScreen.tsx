@@ -9,14 +9,22 @@ import {
   LogOut,
   MapPin,
   Package,
-  Settings,
   Shield,
   Star,
   User,
   Wallet,
 } from 'lucide-react-native';
 import { useEffect, useState } from 'react';
-import { Alert, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
+import {
+  Alert,
+  Image,
+  RefreshControl,
+  ScrollView,
+  StyleSheet,
+  Switch,
+  Text,
+  View,
+} from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { GradientHeader } from '../components/GradientHeader';
@@ -29,13 +37,32 @@ import { colors, fontFamilies, fontSizes, radii, shadows, spacing } from '../the
 
 type Nav = NativeStackNavigationProp<ProfileStackParamList, 'Profile'>;
 
-interface OrdersCountResponse {
-  total: number;
+interface UserExt {
+  id?: string;
+  name?: string | null;
+  phone?: string | null;
+  email?: string | null;
+  avatarUrl?: string | null;
+}
+
+interface OrdersListResponse {
+  meta?: { total?: number };
+  data: Array<{ id: string }>;
+}
+
+interface AddressItem {
+  id: string;
+  label: string;
+}
+
+interface WalletInfo {
+  wallet?: { balance?: string | number | null };
 }
 
 export function ProfileScreen() {
   const navigation = useNavigation<Nav>();
-  const user = useAuth((s) => s.user);
+  const storedUser = useAuth((s) => s.user) as UserExt | null;
+  const setStoredUser = useAuth((s) => s.setUser);
   const clear = useAuth((s) => s.clear);
   const [soundOn, setSoundOn] = useState(true);
 
@@ -55,13 +82,65 @@ export function ProfileScreen() {
     void setNotificationSoundMuted(!v);
   };
 
-  const { data: orderCount } = useQuery<OrdersCountResponse>({
-    queryKey: ['my-orders-count'],
+  // Refresh from /me so stats stay accurate even if the stored session is
+  // stale (e.g. after a profile edit from another device).
+  const meQuery = useQuery({
+    queryKey: ['profile', 'me'],
     queryFn: async () => {
-      const res = await api.raw.get('/orders/mine', { params: { pageSize: 1 } });
-      return { total: res.data.meta?.total ?? res.data.data?.length ?? 0 };
+      const res = await api.raw.get('/me');
+      const fresh = res.data.data as UserExt;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      if (fresh) void setStoredUser(fresh as any);
+      return fresh;
     },
   });
+
+  const user = (meQuery.data ?? storedUser) as UserExt | null;
+
+  // Total orders count — pageSize 1 so we only fetch the meta.total counter.
+  const ordersQuery = useQuery({
+    queryKey: ['profile', 'orders-count'],
+    queryFn: async () => {
+      const res = await api.raw.get('/orders/mine', { params: { pageSize: 1 } });
+      const body = res.data as OrdersListResponse;
+      return body.meta?.total ?? body.data?.length ?? 0;
+    },
+  });
+
+  // Saved addresses count.
+  const addressesQuery = useQuery({
+    queryKey: ['profile', 'addresses'],
+    queryFn: async () => {
+      const res = await api.raw.get('/me/addresses');
+      return (res.data.data as AddressItem[]) ?? [];
+    },
+  });
+
+  // Wallet balance.
+  const walletQuery = useQuery({
+    queryKey: ['profile', 'wallet'],
+    queryFn: async () => {
+      const res = await api.raw.get('/me/wallet');
+      return res.data.data as WalletInfo;
+    },
+  });
+
+  const refetchAll = () => {
+    void meQuery.refetch();
+    void ordersQuery.refetch();
+    void addressesQuery.refetch();
+    void walletQuery.refetch();
+  };
+
+  const isRefreshing =
+    meQuery.isFetching ||
+    ordersQuery.isFetching ||
+    addressesQuery.isFetching ||
+    walletQuery.isFetching;
+
+  const orderCount = ordersQuery.data ?? 0;
+  const addressesCount = addressesQuery.data?.length ?? 0;
+  const walletBalance = Number(walletQuery.data?.wallet?.balance ?? 0);
 
   const onLogout = () => {
     Alert.alert('تأكيد تسجيل الخروج', 'هل تريد بالفعل تسجيل الخروج من حسابك؟', [
@@ -70,23 +149,42 @@ export function ProfileScreen() {
     ]);
   };
 
+  const initial = (user?.name?.charAt(0) || 'ت').toUpperCase();
+
   return (
     <SafeAreaView edges={['top']} style={styles.container}>
       <GradientHeader greeting="حسابي" location={user?.phone ?? ''} hideBack />
 
-      <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
+      <ScrollView
+        contentContainerStyle={styles.scroll}
+        showsVerticalScrollIndicator={false}
+        refreshControl={
+          <RefreshControl
+            refreshing={isRefreshing}
+            onRefresh={refetchAll}
+            tintColor={colors.brand.red}
+          />
+        }
+      >
         {/* ─────── Profile hero card ─────── */}
         <View style={[styles.profileCard, shadows.md]}>
           <View style={styles.avatarWrap}>
             <View style={styles.avatar}>
-              <Text style={styles.avatarText}>{user?.name?.charAt(0).toUpperCase() ?? 'ت'}</Text>
+              {user?.avatarUrl ? (
+                <Image source={{ uri: user.avatarUrl }} style={styles.avatarImg} />
+              ) : (
+                <Text style={styles.avatarText}>{initial}</Text>
+              )}
             </View>
             <View style={styles.verifiedBadge}>
               <Shield size={10} color={colors.white} />
             </View>
           </View>
+
           <Text style={styles.userName}>{user?.name ?? 'مستخدم'}</Text>
           <Text style={styles.userPhone}>{user?.phone ?? ''}</Text>
+          {user?.email ? <Text style={styles.userEmail}>{user.email}</Text> : null}
+
           <View style={styles.badgeRow}>
             <View style={styles.badge}>
               <Star size={12} color="#9A6B16" fill="#9A6B16" />
@@ -96,20 +194,26 @@ export function ProfileScreen() {
 
           <View style={styles.statsRow}>
             <View style={styles.statItem}>
-              <Package size={14} color={colors.brand.red} />
-              <Text style={styles.statValue}>{orderCount?.total ?? 0}</Text>
+              <View style={[styles.statIconWrap, { backgroundColor: colors.brand.redLight }]}>
+                <Package size={16} color={colors.brand.red} />
+              </View>
+              <Text style={styles.statValue}>{orderCount}</Text>
               <Text style={styles.statLabel}>طلباتي</Text>
             </View>
             <View style={styles.statDivider} />
             <View style={styles.statItem}>
-              <Star size={14} color={colors.brand.gold} fill={colors.brand.gold} />
-              <Text style={styles.statValue}>5.0</Text>
-              <Text style={styles.statLabel}>التقييم</Text>
+              <View style={[styles.statIconWrap, { backgroundColor: colors.successLight }]}>
+                <Wallet size={16} color={colors.success} />
+              </View>
+              <Text style={styles.statValue}>{walletBalance.toLocaleString('ar-EG')}</Text>
+              <Text style={styles.statLabel}>رصيد ج.م</Text>
             </View>
             <View style={styles.statDivider} />
             <View style={styles.statItem}>
-              <MapPin size={14} color={colors.info} />
-              <Text style={styles.statValue}>1</Text>
+              <View style={[styles.statIconWrap, { backgroundColor: colors.infoLight }]}>
+                <MapPin size={16} color={colors.info} />
+              </View>
+              <Text style={styles.statValue}>{addressesCount}</Text>
               <Text style={styles.statLabel}>عناوين</Text>
             </View>
           </View>
@@ -120,28 +224,30 @@ export function ProfileScreen() {
         <View style={[styles.group, shadows.sm]}>
           <ListItem
             label="البيانات الشخصية"
-            sublabel="تعديل الاسم والبريد"
+            sublabel="الاسم، الصورة، البريد"
             Icon={User}
             onPress={() => navigation.navigate('EditProfile')}
           />
           <Divider inset />
           <ListItem
             label="عناويني المحفوظة"
-            sublabel="المنزل، العمل، وغيرها"
+            sublabel={
+              addressesCount > 0 ? `${addressesCount} عنوان محفوظ` : 'أضف عنوان لتسريع الطلبات'
+            }
             Icon={MapPin}
             onPress={() => navigation.navigate('SavedAddresses')}
           />
           <Divider inset />
           <ListItem
             label="محفظتي"
-            sublabel="رصيدك وحركات المحفظة"
+            sublabel={`الرصيد ${walletBalance.toLocaleString('ar-EG')} ج.م`}
             Icon={Wallet}
             onPress={() => navigation.navigate('Wallet')}
           />
           <Divider inset />
           <ListItem
             label="طرق الدفع"
-            sublabel="فيزا، فودافون كاش، انستاباي"
+            sublabel="كاش، فودافون كاش، إنستا باي"
             Icon={CreditCard}
             onPress={() => navigation.navigate('PaymentMethods')}
           />
@@ -163,16 +269,6 @@ export function ProfileScreen() {
                 ios_backgroundColor={colors.line2}
               />
             }
-          />
-          <Divider inset />
-          <ListItem
-            label="الإعدادات العامة"
-            sublabel="اللغة، الإشعارات، الخصوصية"
-            Icon={Settings}
-            onPress={() => {
-              // Future: settings screen
-              Alert.alert('قريباً', 'صفحة الإعدادات قيد التطوير');
-            }}
           />
         </View>
 
@@ -223,10 +319,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     marginTop: -spacing.md,
   },
-  avatarWrap: {
-    position: 'relative',
-    marginBottom: spacing.sm,
-  },
+  avatarWrap: { position: 'relative', marginBottom: spacing.sm },
   avatar: {
     width: 88,
     height: 88,
@@ -234,7 +327,9 @@ const styles = StyleSheet.create({
     backgroundColor: colors.brand.red,
     alignItems: 'center',
     justifyContent: 'center',
+    overflow: 'hidden',
   },
+  avatarImg: { width: '100%', height: '100%' },
   avatarText: {
     color: colors.white,
     fontSize: 34,
@@ -243,7 +338,7 @@ const styles = StyleSheet.create({
   verifiedBadge: {
     position: 'absolute',
     bottom: 2,
-    end: 2,
+    right: 2,
     width: 24,
     height: 24,
     borderRadius: 12,
@@ -263,6 +358,12 @@ const styles = StyleSheet.create({
     color: colors.text.muted,
     fontFamily: fontFamilies.body,
     marginTop: 4,
+  },
+  userEmail: {
+    fontSize: fontSizes.xs,
+    color: colors.text.muted,
+    fontFamily: fontFamilies.body,
+    marginTop: 2,
   },
   badgeRow: { marginTop: spacing.sm, marginBottom: spacing.md },
   badge: {
@@ -286,9 +387,16 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     borderTopColor: colors.line,
   },
-  statItem: { flex: 1, alignItems: 'center', gap: 4 },
+  statItem: { flex: 1, alignItems: 'center', gap: 6 },
+  statIconWrap: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   statValue: {
-    fontSize: fontSizes.lg,
+    fontSize: fontSizes.md,
     fontFamily: fontFamilies.headingBlack,
     color: colors.ink,
   },
@@ -297,7 +405,7 @@ const styles = StyleSheet.create({
     color: colors.text.muted,
     fontFamily: fontFamilies.body,
   },
-  statDivider: { width: 1, backgroundColor: colors.line },
+  statDivider: { width: 1, backgroundColor: colors.line, marginVertical: 8 },
   // Sections
   sectionTitle: {
     fontSize: fontSizes.xs,
