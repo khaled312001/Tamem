@@ -126,7 +126,6 @@ const styles = StyleSheet.create({
     fontSize: fontSizes.lg,
     fontFamily: fontFamilies.headingBold,
     textAlign: 'center',
-    writingDirection: 'rtl',
   },
   subtitle: {
     color: colors.white,

@@ -18,13 +18,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { ORDER_STATUS_AR, type OrderStatus } from '@tamem/types';
 
 import { GradientHeader } from '../components/GradientHeader';
-import {
-  AnimatedListItem,
-  CardListSkeleton,
-  EmptyState,
-  ForwardChevron,
-  StatusPill,
-} from '../components/ui';
+import { AnimatedListItem, CardListSkeleton, EmptyState, StatusPill } from '../components/ui';
 import { api } from '../lib/api';
 import { connectSocket } from '../lib/socket';
 import type { OrdersStackParamList } from '../navigation/OrdersStack';
@@ -85,48 +79,33 @@ const OrderCard = memo(function OrderCard({ item, index, onPress }: OrderCardPro
   const dateLabel = new Date(item.createdAt).toLocaleDateString('ar-EG', {
     day: 'numeric',
     month: 'short',
+    year: 'numeric',
   });
   return (
     <AnimatedListItem index={index}>
       <Pressable
         onPress={() => onPress(item.id)}
-        style={({ pressed }) => [
-          styles.card,
-          shadows.sm,
-          pressed && { opacity: 0.92, transform: [{ scale: 0.997 }] },
-        ]}
+        style={({ pressed }) => [styles.card, shadows.sm, pressed && { opacity: 0.94 }]}
       >
-        {/* Top: service name (primary headline) + status pill on the END side */}
-        <View style={styles.cardHeader}>
-          <View style={styles.cardHeaderText}>
-            <Text style={styles.cardServiceName} numberOfLines={1}>
-              {serviceName}
-            </Text>
-            <View style={styles.cardMetaRow}>
-              <Text style={styles.cardOrderNumber}>#{item.orderNumber}</Text>
-              <Text style={styles.cardMetaDot}>•</Text>
-              <Text style={styles.cardDate}>{dateLabel}</Text>
-            </View>
-          </View>
+        {/* Top row: service name + status pill */}
+        <View style={styles.cardTop}>
+          <Text style={styles.cardServiceName} numberOfLines={1}>
+            {serviceName}
+          </Text>
           <StatusPill label={ORDER_STATUS_AR[item.status]} color={colors.status[item.status]} dot />
         </View>
 
-        {/* Divider */}
-        <View style={styles.cardDivider} />
+        {/* Order number sub-line */}
+        <Text style={styles.cardOrderNumber}>#{item.orderNumber}</Text>
 
-        {/* Footer: category chip + price + chevron */}
-        <View style={styles.cardFooter}>
-          <View style={styles.cardCategoryChip}>
-            <Text style={styles.cardCategoryText}>{CATEGORY_LABEL[item.category]}</Text>
-          </View>
-          <View style={styles.cardFooterEnd}>
-            {priceValue ? (
-              <Text style={styles.cardPrice}>{Number(priceValue).toLocaleString('ar-EG')} ج.م</Text>
-            ) : (
-              <Text style={styles.cardNoPrice}>قيد التسعير</Text>
-            )}
-            <ForwardChevron size={16} color={colors.text.muted} />
-          </View>
+        {/* Bottom row: date + price */}
+        <View style={styles.cardBottom}>
+          <Text style={styles.cardDate}>{dateLabel}</Text>
+          {priceValue ? (
+            <Text style={styles.cardPrice}>{Number(priceValue).toLocaleString('ar-EG')} ج.م</Text>
+          ) : (
+            <Text style={styles.cardNoPrice}>قيد التسعير</Text>
+          )}
         </View>
       </Pressable>
     </AnimatedListItem>
@@ -308,80 +287,49 @@ const styles = StyleSheet.create({
   tabBadgeTextOn: { color: colors.white },
   // List
   listPad: { paddingHorizontal: spacing.lg, paddingBottom: spacing.xl },
-  // Card — denser, service-name-primary, RTL-natural reading order
+  // Card — Talabat-style: clean, no chevron, hierarchy by typography weight
   card: {
     backgroundColor: colors.white,
     borderColor: colors.line,
     borderWidth: 1,
     borderRadius: radii.lg,
-    paddingVertical: spacing.md,
-    paddingHorizontal: spacing.md,
+    padding: spacing.md,
     marginBottom: spacing.sm,
   },
-  cardHeader: {
+  cardTop: {
     flexDirection: 'row',
-    alignItems: 'flex-start',
+    alignItems: 'center',
     justifyContent: 'space-between',
     gap: spacing.sm,
   },
-  cardHeaderText: { flex: 1 },
   cardServiceName: {
+    flex: 1,
     fontSize: fontSizes.md,
     color: colors.ink,
     fontFamily: fontFamilies.headingBold,
-    textAlign: 'right',
-    writingDirection: 'rtl',
-  },
-  cardMetaRow: {
-    flexDirection: 'row-reverse',
-    flexWrap: 'wrap',
-    alignItems: 'center',
-    gap: 4,
-    marginTop: 2,
   },
   cardOrderNumber: {
     fontSize: fontSizes.xs,
     color: colors.text.muted,
     fontFamily: fontFamilies.body,
+    marginTop: 2,
   },
-  cardMetaDot: {
-    fontSize: fontSizes.xs,
-    color: colors.text.muted,
+  cardBottom: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginTop: spacing.sm,
+    paddingTop: spacing.sm,
+    borderTopWidth: 1,
+    borderTopColor: colors.line,
   },
   cardDate: {
     fontSize: fontSizes.xs,
     color: colors.text.muted,
     fontFamily: fontFamilies.body,
   },
-  cardDivider: {
-    height: 1,
-    backgroundColor: colors.line,
-    marginVertical: spacing.sm,
-  },
-  cardFooter: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: spacing.sm,
-  },
-  cardCategoryChip: {
-    backgroundColor: colors.brand.redLight,
-    paddingHorizontal: spacing.sm,
-    paddingVertical: 4,
-    borderRadius: radii.pill,
-  },
-  cardCategoryText: {
-    fontSize: fontSizes.xs,
-    color: colors.brand.red,
-    fontFamily: fontFamilies.bodyExtraBold,
-  },
-  cardFooterEnd: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-  },
   cardPrice: {
-    fontSize: fontSizes.md,
+    fontSize: fontSizes.lg,
     color: colors.brand.red,
     fontFamily: fontFamilies.headingBlack,
   },

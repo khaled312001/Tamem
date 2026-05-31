@@ -101,17 +101,16 @@ const styles = StyleSheet.create({
     position: 'relative',
   },
   center: {
-    alignItems: 'flex-end', // RTL natural — title right-aligned
+    // alignItems flex-start follows the writing direction → right edge in RTL.
+    alignItems: 'flex-start',
   },
   greeting: {
     color: colors.white,
     fontSize: fontSizes.lg,
     fontFamily: fontFamilies.headingBold,
-    textAlign: 'right',
-    writingDirection: 'rtl',
   },
   locRow: {
-    flexDirection: 'row-reverse', // pin icon on RIGHT next to text in RTL
+    flexDirection: 'row',
     alignItems: 'center',
     gap: 4,
     marginTop: 4,
@@ -121,7 +120,6 @@ const styles = StyleSheet.create({
     fontSize: fontSizes.xs,
     opacity: 0.92,
     fontFamily: fontFamilies.body,
-    textAlign: 'right',
   },
   iconBtn: {
     position: 'absolute',
