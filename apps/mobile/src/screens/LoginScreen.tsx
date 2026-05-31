@@ -17,13 +17,14 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { TamemApiError } from '@tamem/api-client';
 import { type LoginInput, loginSchema } from '@tamem/validators';
 
 import { GoogleSignInButton } from '../components/GoogleSignInButton';
 import { IconField } from '../components/IconField';
+import { PasswordField } from '../components/PasswordField';
 import { PrimaryButton } from '../components/ui';
 import { api } from '../lib/api';
+import { authErrorMessage } from '../lib/authErrors';
 import type { AuthStackParamList } from '../navigation/AuthStack';
 import { useAuth } from '../stores/auth';
 import {
@@ -38,21 +39,7 @@ import {
 
 type NavProp = NativeStackNavigationProp<AuthStackParamList, 'Login'>;
 
-function loginErrorMessage(err: unknown): string {
-  if (err instanceof TamemApiError) {
-    if (err.status === 401) {
-      return 'رقم الهاتف أو كلمة المرور غير صحيحة. تأكد منهما وحاول مرة أخرى.';
-    }
-    if (err.status === 422) return err.messageAr ?? 'بيانات الدخول غير صحيحة.';
-    if (err.status === 403) return err.messageAr ?? 'الحساب غير مفعّل.';
-    if (err.status >= 500) return 'خطأ في الخادم. حاول مرة أخرى بعد قليل.';
-    return err.messageAr ?? err.message;
-  }
-  if (err instanceof Error && /network|fetch|ECONN|timeout/i.test(err.message)) {
-    return 'تعذّر الاتصال بالخادم. تأكد من اتصالك بالإنترنت ثم حاول مرة أخرى.';
-  }
-  return err instanceof Error ? err.message : 'فشل تسجيل الدخول';
-}
+// Errors now go through the shared lib/authErrors helper.
 
 export function LoginScreen() {
   const navigation = useNavigation<NavProp>();
@@ -74,7 +61,7 @@ export function LoginScreen() {
       const res = await api.login(values.phone, values.password);
       await setSession(res.user, res.tokens);
     } catch (err: unknown) {
-      Alert.alert('تعذّر تسجيل الدخول', loginErrorMessage(err));
+      Alert.alert('تعذّر تسجيل الدخول', authErrorMessage(err, 'login'));
     } finally {
       setLoading(false);
     }
@@ -136,10 +123,9 @@ export function LoginScreen() {
               control={control}
               name="password"
               render={({ field: { value, onChange, onBlur } }) => (
-                <IconField
+                <PasswordField
                   Icon={Lock}
                   placeholder="••••••••"
-                  secureTextEntry
                   value={value}
                   onChangeText={onChange}
                   onBlur={onBlur}
@@ -160,7 +146,7 @@ export function LoginScreen() {
 
             <View style={styles.divider}>
               <View style={styles.dividerLine} />
-              <Text style={styles.dividerText}>أو سجّل دخول بحساب</Text>
+              <Text style={styles.dividerText}>أو سجّل دخول بحساب جوجل</Text>
               <View style={styles.dividerLine} />
             </View>
 

@@ -108,8 +108,10 @@ export const shadows = {
 } as const;
 
 export const fontSizes = {
-  xxs: 10,
-  xs: 11,
+  // Bumped xs/xxs by 1pt — Tajawal at 10-11 was rough on older readers in
+  // Arabic, and the audit flagged it as the most common accessibility miss.
+  xxs: 11,
+  xs: 12,
   sm: 13,
   md: 15,
   lg: 18,

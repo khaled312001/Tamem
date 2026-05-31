@@ -489,7 +489,7 @@ const styles = StyleSheet.create({
   // Scroll content
   scroll: {
     paddingHorizontal: spacing.lg,
-    paddingBottom: spacing.xxl,
+    paddingBottom: 120, // room for floating QuickOrderFAB without overlap
   },
   // Active order strip
   activeOrderCard: {

@@ -56,7 +56,21 @@ export function OtpVerifyScreen() {
   }, [secondsLeft]);
 
   const handleChange = (text: string, index: number) => {
-    const clean = text.replace(/\D/g, '').slice(-1);
+    // When the user pastes a 6-digit code, distribute the digits across
+    // all the boxes — typing slice(-1) used to drop 5 of the 6 digits.
+    const cleanAll = text.replace(/\D/g, '');
+    if (cleanAll.length > 1) {
+      const next = [...digits];
+      const start = index;
+      const room = Math.min(cleanAll.length, OTP_LENGTH - start);
+      for (let i = 0; i < room; i++) next[start + i] = cleanAll[i]!;
+      setDigits(next);
+      const focusIdx = Math.min(start + room, OTP_LENGTH - 1);
+      inputs.current[focusIdx]?.focus();
+      if (next.every((d) => d)) void onSubmit(next.join(''));
+      return;
+    }
+    const clean = cleanAll.slice(-1);
     const next = [...digits];
     next[index] = clean;
     setDigits(next);
@@ -160,11 +174,13 @@ export function OtpVerifyScreen() {
                   onChangeText={(t) => handleChange(t, idx)}
                   onKeyPress={({ nativeEvent }) => handleKeyPress(nativeEvent.key, idx)}
                   keyboardType="number-pad"
-                  maxLength={1}
+                  maxLength={OTP_LENGTH}
                   style={[styles.otpInput, filled && styles.otpInputFilled]}
                   textAlign="center"
                   selectTextOnFocus
                   returnKeyType={idx === OTP_LENGTH - 1 ? 'done' : 'next'}
+                  textContentType="oneTimeCode"
+                  autoComplete="sms-otp"
                 />
               );
             })}

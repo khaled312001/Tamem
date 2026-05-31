@@ -8,6 +8,7 @@ import { Controller, useForm } from 'react-hook-form';
 import {
   Alert,
   KeyboardAvoidingView,
+  Linking,
   Platform,
   Pressable,
   ScrollView,
@@ -21,8 +22,10 @@ import { type RegisterInput, registerSchema } from '@tamem/validators';
 
 import { BackChevron } from '../theme/rtl';
 import { IconField } from '../components/IconField';
+import { PasswordField } from '../components/PasswordField';
 import { PrimaryButton } from '../components/ui';
 import { api } from '../lib/api';
+import { authErrorMessage } from '../lib/authErrors';
 import type { AuthStackParamList } from '../navigation/AuthStack';
 import {
   colors,
@@ -55,8 +58,7 @@ export function RegisterScreen() {
       await api.raw.post('/auth/register', values);
       navigation.replace('OtpVerify', { phone: values.phone });
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : 'فشل إنشاء الحساب';
-      Alert.alert('خطأ', msg);
+      Alert.alert('تعذّر إنشاء الحساب', authErrorMessage(err, 'register'));
     } finally {
       setLoading(false);
     }
@@ -170,14 +172,14 @@ export function RegisterScreen() {
               control={control}
               name="password"
               render={({ field: { value, onChange, onBlur } }) => (
-                <IconField
+                <PasswordField
                   Icon={Lock}
                   placeholder="8 أحرف على الأقل"
-                  secureTextEntry
                   value={value}
                   onChangeText={onChange}
                   onBlur={onBlur}
                   error={errors.password?.message}
+                  autoComplete="new-password"
                 />
               )}
             />
@@ -197,8 +199,20 @@ export function RegisterScreen() {
           </View>
 
           <Text style={styles.hint}>
-            بإنشاء الحساب أنت توافق على <Text style={styles.hintLink}>الشروط والأحكام</Text> و{' '}
-            <Text style={styles.hintLink}>سياسة الخصوصية</Text>
+            بإنشاء الحساب أنت توافق على{' '}
+            <Text
+              style={styles.hintLink}
+              onPress={() => void Linking.openURL('https://tamem-delivery.com/terms')}
+            >
+              الشروط والأحكام
+            </Text>{' '}
+            و{' '}
+            <Text
+              style={styles.hintLink}
+              onPress={() => void Linking.openURL('https://tamem-delivery.com/privacy')}
+            >
+              سياسة الخصوصية
+            </Text>
           </Text>
 
           <Pressable

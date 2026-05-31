@@ -1,6 +1,6 @@
 import { useNavigation } from '@react-navigation/native';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Bell, CheckCheck } from 'lucide-react-native';
+import { AlertCircle, Bell, CheckCheck } from 'lucide-react-native';
 import { memo, useEffect } from 'react';
 import { FlatList, Pressable, RefreshControl, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -8,8 +8,12 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { AnimatedListItem } from '../components/AnimatedListItem';
 import { GradientHeader } from '../components/GradientHeader';
 import { CardListSkeleton } from '../components/Skeleton';
+import { EmptyState } from '../components/ui';
 import { api } from '../lib/api';
+import { formatRelative } from '../lib/eta';
+import { clearAppBadge } from '../lib/push';
 import { connectSocket } from '../lib/socket';
+import { showToast } from '../lib/toast';
 import { colors, fontFamilies, fontSizes, radii, spacing } from '../theme/tokens';
 
 interface NotificationRow {
@@ -38,6 +42,7 @@ const NotifCard = memo(function NotifCard({ item, index, onPress }: NotifCardPro
           !item.isRead && styles.unread,
           pressed && styles.pressed,
         ]}
+        accessibilityLabel={`${item.titleAr}. ${item.bodyAr}. ${formatRelative(item.sentAt)}`}
       >
         <View style={styles.iconWrap}>
           <Bell size={18} color={colors.brand.red} />
@@ -46,7 +51,7 @@ const NotifCard = memo(function NotifCard({ item, index, onPress }: NotifCardPro
         <View style={{ flex: 1 }}>
           <Text style={styles.title}>{item.titleAr}</Text>
           <Text style={styles.body}>{item.bodyAr}</Text>
-          <Text style={styles.time}>{new Date(item.sentAt).toLocaleString('ar-EG')}</Text>
+          <Text style={styles.time}>{formatRelative(item.sentAt)}</Text>
         </View>
       </Pressable>
     </AnimatedListItem>
@@ -57,52 +62,108 @@ export function NotificationsScreen() {
   const qc = useQueryClient();
   const navigation = useNavigation();
 
-  const { data, isLoading, refetch, isFetching } = useQuery<NotificationRow[]>({
+  const { data, isLoading, isError, refetch, isFetching, error } = useQuery<NotificationRow[]>({
     queryKey: ['notifications'],
     queryFn: () =>
       api.raw.get('/notifications', { params: { pageSize: 30 } }).then((r) => r.data.data),
   });
 
-  // Live update: when admin acts, the backend creates a Notification AND emits a
-  // socket event for the order. Listening to order:status is the simplest signal
-  // that a new notification has likely arrived.
+  // Live updates — listener attached to the singleton socket. Cleanup uses
+  // the outer useEffect's return so we never leak a listener on unmount
+  // (the previous nested IIFE return was unreachable).
   useEffect(() => {
     let cancelled = false;
+    let socketRef: Awaited<ReturnType<typeof connectSocket>> | null = null;
+    const refresh = () => {
+      if (!cancelled) {
+        void qc.invalidateQueries({ queryKey: ['notifications'] });
+        void qc.invalidateQueries({ queryKey: ['notifications', 'unread-count'] });
+      }
+    };
     void (async () => {
-      const s = await connectSocket();
-      const refresh = () => {
-        if (!cancelled) qc.invalidateQueries({ queryKey: ['notifications'] });
-      };
-      s.on('order:status', refresh);
-      return () => {
-        s.off('order:status', refresh);
-      };
+      socketRef = await connectSocket();
+      if (!cancelled) {
+        socketRef.on('order:status', refresh);
+        socketRef.on('order:new', refresh);
+        socketRef.on('notification:new', refresh);
+      }
     })();
+    // Clear the OS badge as soon as the user looks at the list.
+    void clearAppBadge();
     return () => {
       cancelled = true;
+      if (socketRef) {
+        socketRef.off('order:status', refresh);
+        socketRef.off('order:new', refresh);
+        socketRef.off('notification:new', refresh);
+      }
     };
   }, [qc]);
 
   const markRead = useMutation({
     mutationFn: (id: string) => api.raw.patch(`/notifications/${id}/read`),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['notifications'] }),
+    // Optimistic — flip isRead locally so the unread strip disappears
+    // immediately; revert on error.
+    onMutate: async (id: string) => {
+      await qc.cancelQueries({ queryKey: ['notifications'] });
+      const prev = qc.getQueryData<NotificationRow[]>(['notifications']);
+      if (prev) {
+        qc.setQueryData<NotificationRow[]>(
+          ['notifications'],
+          prev.map((n) => (n.id === id ? { ...n, isRead: true } : n)),
+        );
+      }
+      return { prev };
+    },
+    onError: (_e, _v, ctx) => {
+      if (ctx?.prev) qc.setQueryData(['notifications'], ctx.prev);
+    },
+    onSettled: () => qc.invalidateQueries({ queryKey: ['notifications'] }),
   });
 
   const markAllRead = useMutation({
     mutationFn: () => api.raw.patch('/notifications/read-all'),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['notifications'] }),
+    onMutate: async () => {
+      await qc.cancelQueries({ queryKey: ['notifications'] });
+      const prev = qc.getQueryData<NotificationRow[]>(['notifications']);
+      if (prev) {
+        qc.setQueryData<NotificationRow[]>(
+          ['notifications'],
+          prev.map((n) => ({ ...n, isRead: true })),
+        );
+      }
+      return { prev };
+    },
+    onSuccess: () => showToast({ title: 'تم تعليم الكل كمقروء ✓', tone: 'success' }),
+    onError: (e, _v, ctx) => {
+      if (ctx?.prev) qc.setQueryData(['notifications'], ctx.prev);
+      showToast({
+        title: 'تعذّر تعليم الإشعارات',
+        message: e instanceof Error ? e.message : undefined,
+        tone: 'error',
+      });
+    },
+    onSettled: () => qc.invalidateQueries({ queryKey: ['notifications'] }),
   });
 
   const onPressNotif = (n: NotificationRow) => {
     if (!n.isRead) markRead.mutate(n.id);
     if (n.data?.orderId) {
-      // Navigate to the Orders tab's OrderTracking screen
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       (navigation as any).navigate('Orders', {
         screen: 'OrderTracking',
         params: { orderId: n.data.orderId },
       });
+      return;
     }
+    if (n.type === 'PROMO' || n.type === 'promo') {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (navigation as any).navigate('ProfileTab', { screen: 'Coupons' });
+      return;
+    }
+    // Generic system notification — show the full body as a toast so the
+    // user can at least read it without an upgrade path.
+    showToast({ title: n.titleAr, message: n.bodyAr, tone: 'info' });
   };
 
   return (
@@ -113,6 +174,14 @@ export function NotificationsScreen() {
         <View style={styles.list}>
           <CardListSkeleton count={4} />
         </View>
+      ) : isError ? (
+        <EmptyState
+          icon={<AlertCircle size={36} color={colors.danger} />}
+          title="تعذّر تحميل الإشعارات"
+          subtitle={error instanceof Error ? error.message : 'تأكد من اتصالك بالإنترنت'}
+          actionLabel="إعادة المحاولة"
+          onAction={() => refetch()}
+        />
       ) : !data?.length ? (
         <View style={styles.empty}>
           <Bell size={48} color={colors.text.muted} />
@@ -122,7 +191,14 @@ export function NotificationsScreen() {
       ) : (
         <>
           {data.some((n) => !n.isRead) && (
-            <Pressable onPress={() => markAllRead.mutate()} style={styles.markAll}>
+            <Pressable
+              onPress={() => markAllRead.mutate()}
+              disabled={markAllRead.isPending}
+              style={({ pressed }) => [
+                styles.markAll,
+                (pressed || markAllRead.isPending) && { opacity: 0.7 },
+              ]}
+            >
               <CheckCheck size={14} color={colors.brand.red} />
               <Text style={styles.markAllText}>تعليم الكل كمقروء</Text>
             </Pressable>
@@ -214,5 +290,5 @@ const styles = StyleSheet.create({
     marginTop: 2,
     lineHeight: 20,
   },
-  time: { fontFamily: fontFamilies.body, color: colors.text.muted, fontSize: 10, marginTop: 4 },
+  time: { fontFamily: fontFamilies.body, color: colors.text.muted, fontSize: 12, marginTop: 4 },
 });
