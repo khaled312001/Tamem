@@ -1,6 +1,6 @@
-import { useNavigation } from '@react-navigation/native';
+import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Bell,
   CreditCard,
@@ -15,7 +15,7 @@ import {
   User,
   Wallet,
 } from 'lucide-react-native';
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import {
   Alert,
   Image,
@@ -32,6 +32,7 @@ import { GradientHeader } from '../components/GradientHeader';
 import { Divider, ListItem, SecondaryButton } from '../components/ui';
 import { api } from '../lib/api';
 import { isNotificationSoundMuted, setNotificationSoundMuted } from '../lib/notificationSound';
+import { connectSocket } from '../lib/socket';
 import type { ProfileStackParamList } from '../navigation/ProfileStack';
 import { useAuth } from '../stores/auth';
 import { colors, fontFamilies, fontSizes, radii, shadows, spacing } from '../theme/tokens';
@@ -62,6 +63,7 @@ interface WalletInfo {
 
 export function ProfileScreen() {
   const navigation = useNavigation<Nav>();
+  const qc = useQueryClient();
   const storedUser = useAuth((s) => s.user) as UserExt | null;
   const setStoredUser = useAuth((s) => s.setUser);
   const clear = useAuth((s) => s.clear);
@@ -99,6 +101,8 @@ export function ProfileScreen() {
   const user = (meQuery.data ?? storedUser) as UserExt | null;
 
   // Total orders count — pageSize 1 so we only fetch the meta.total counter.
+  // staleTime 0 so coming back to this tab always refetches; the count needs
+  // to be current after a new order or cancellation.
   const ordersQuery = useQuery({
     queryKey: ['profile', 'orders-count'],
     queryFn: async () => {
@@ -106,6 +110,7 @@ export function ProfileScreen() {
       const body = res.data as OrdersListResponse;
       return body.meta?.total ?? body.data?.length ?? 0;
     },
+    staleTime: 0,
   });
 
   // Saved addresses count.
@@ -115,6 +120,7 @@ export function ProfileScreen() {
       const res = await api.raw.get('/me/addresses');
       return (res.data.data as AddressItem[]) ?? [];
     },
+    staleTime: 0,
   });
 
   // Wallet balance.
@@ -124,7 +130,41 @@ export function ProfileScreen() {
       const res = await api.raw.get('/me/wallet');
       return res.data.data as WalletInfo;
     },
+    staleTime: 0,
   });
+
+  // Refresh whenever the Profile tab gets focus (cheap — pageSize:1 queries).
+  useFocusEffect(
+    useCallback(() => {
+      void ordersQuery.refetch();
+      void addressesQuery.refetch();
+      void walletQuery.refetch();
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []),
+  );
+
+  // Live updates: when a new order arrives or a status changes anywhere in
+  // the app, the count/balance becomes stale — invalidate the trio.
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      const s = await connectSocket();
+      const refresh = () => {
+        if (cancelled) return;
+        void qc.invalidateQueries({ queryKey: ['profile', 'orders-count'] });
+        void qc.invalidateQueries({ queryKey: ['profile', 'wallet'] });
+      };
+      s.on('order:new', refresh);
+      s.on('order:status', refresh);
+      return () => {
+        s.off('order:new', refresh);
+        s.off('order:status', refresh);
+      };
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [qc]);
 
   const refetchAll = () => {
     void meQuery.refetch();
@@ -303,14 +343,9 @@ export function ProfileScreen() {
           <Divider inset />
           <ListItem
             label="عن تَميم"
-            sublabel="معرفة المزيد عن منصتنا"
+            sublabel="مهمتنا، فريقنا، وطرق التواصل"
             Icon={Shield}
-            onPress={() => {
-              Alert.alert(
-                'عن تَميم',
-                'منصة تَميم للتوصيل والشحن — نوصّل طلباتك بأمان وسرعة داخل وخارج المدينة.',
-              );
-            }}
+            onPress={() => navigation.navigate('About')}
           />
         </View>
 

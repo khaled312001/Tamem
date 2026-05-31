@@ -15,6 +15,7 @@ import {
   categoriesRouter,
   merchantsRouter,
   offersRouter,
+  productsRouter,
 } from './modules/catalog/catalog.routes.js';
 import { adminCategoriesRouter } from './modules/categories/categories.routes.js';
 import { adminCustomersRouter } from './modules/customers/customers.routes.js';
@@ -85,6 +86,7 @@ export function createApp(): Express {
   v1.use('/services', publicServicesRouter);
   v1.use('/categories', categoriesRouter);
   v1.use('/merchants', merchantsRouter);
+  v1.use('/products', productsRouter);
   v1.use('/offers', offersRouter);
   v1.use('/me', meRouter);
   v1.use('/orders', ordersRouter);

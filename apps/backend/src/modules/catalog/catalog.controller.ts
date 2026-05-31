@@ -118,6 +118,29 @@ export const getMerchantProducts: RequestHandler = async (req, res, next) => {
   }
 };
 
+/**
+ * GET /products — every available product across every active merchant.
+ * Used by the QuickOrder products picker so the customer can browse without
+ * picking a merchant first.
+ */
+export const listAllProducts: RequestHandler = async (_req, res, next) => {
+  try {
+    const products = await prisma.product.findMany({
+      where: { isAvailable: true },
+      orderBy: [{ sortOrder: 'asc' }, { nameAr: 'asc' }],
+      include: {
+        merchant: {
+          select: { id: true, storeNameAr: true, isOpen: true },
+        },
+      },
+      take: 200,
+    });
+    ok(res, products);
+  } catch (err) {
+    next(err);
+  }
+};
+
 export const listOffers: RequestHandler = async (_req, res, next) => {
   try {
     const now = new Date();

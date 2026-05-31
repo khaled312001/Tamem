@@ -10,5 +10,9 @@ merchantsRouter.get('/', ctrl.listMerchants);
 merchantsRouter.get('/:id', ctrl.getMerchant);
 merchantsRouter.get('/:id/products', ctrl.getMerchantProducts);
 
+/** Public catalog of every available product, across all merchants. */
+export const productsRouter: Router = Router();
+productsRouter.get('/', ctrl.listAllProducts);
+
 export const offersRouter: Router = Router();
 offersRouter.get('/', ctrl.listOffers);

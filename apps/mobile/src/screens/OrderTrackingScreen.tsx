@@ -127,14 +127,22 @@ const CATEGORY_LABEL = {
 
 const TERMINAL_BAD: OrderStatus[] = ['CANCELLED', 'REJECTED'];
 
-// Customer can cancel any time before the driver gets involved. Past this
-// point cancellation has to go through Admin because there's a driver, cash,
-// or merchandise already in motion.
-const CUSTOMER_CANCELLABLE: OrderStatus[] = [
-  'NEW',
-  'UNDER_REVIEW',
+// Customer can only self-cancel before pricing kicks in. Once the admin has
+// quoted a price the cancellation has to go through them — they've already
+// done the discovery/sourcing work, and PRICED orders may have committed
+// inventory.
+const CUSTOMER_CANCELLABLE: OrderStatus[] = ['NEW', 'UNDER_REVIEW'];
+
+// Statuses where the customer THINKS they can still cancel but actually
+// need admin approval. We surface an explanatory banner instead of silently
+// hiding the cancel button.
+const CANCEL_LOCKED_BUT_ACTIVE: OrderStatus[] = [
   'PRICED',
   'AWAITING_CUSTOMER_APPROVAL',
+  'ACCEPTED',
+  'DRIVER_ASSIGNED',
+  'PICKED_UP',
+  'IN_ROUTE',
 ];
 
 export function OrderTrackingScreen() {
@@ -217,6 +225,7 @@ export function OrderTrackingScreen() {
   const isTerminalBad = TERMINAL_BAD.includes(order.status);
   const isCompleted = order.status === 'COMPLETED' || order.status === 'DELIVERED';
   const canCustomerCancel = CUSTOMER_CANCELLABLE.includes(order.status);
+  const cancelLocked = CANCEL_LOCKED_BUT_ACTIVE.includes(order.status);
   const stageHint = STAGE_HINT[order.status];
 
   return (
@@ -437,6 +446,14 @@ export function OrderTrackingScreen() {
           {canCustomerCancel ? (
             <View style={{ marginTop: spacing.md }}>
               <CancelOrderButton orderId={order.id} orderNumber={order.orderNumber} />
+            </View>
+          ) : cancelLocked ? (
+            <View style={styles.cancelLockedNote}>
+              <ShieldCheck size={14} color={colors.warning} />
+              <Text style={styles.cancelLockedText}>
+                الطلب بقى في مرحلة التسعير ومش هتقدر تلغيه من التطبيق. لو محتاج إلغاء أو تعديل،
+                تواصل مع الإدارة عبر واتساب من الزر أعلاه.
+              </Text>
             </View>
           ) : null}
 
@@ -1154,6 +1171,25 @@ const styles = StyleSheet.create({
     flex: 1,
     fontSize: fontSizes.xs,
     color: colors.success,
+    fontFamily: fontFamilies.bodyBold,
+    lineHeight: 18,
+  },
+  cancelLockedNote: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginTop: spacing.md,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    backgroundColor: colors.warningLight,
+    borderRadius: radii.md,
+    borderWidth: 1,
+    borderColor: colors.warning + '60',
+  },
+  cancelLockedText: {
+    flex: 1,
+    fontSize: fontSizes.xs,
+    color: '#9A6B16',
     fontFamily: fontFamilies.bodyBold,
     lineHeight: 18,
   },

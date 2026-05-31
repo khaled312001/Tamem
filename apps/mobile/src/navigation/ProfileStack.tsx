@@ -1,5 +1,6 @@
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 
+import { AboutScreen } from '../screens/AboutScreen';
 import { CouponsScreen } from '../screens/CouponsScreen';
 import { EditProfileScreen } from '../screens/EditProfileScreen';
 import { FavoritesScreen } from '../screens/FavoritesScreen';
@@ -18,6 +19,7 @@ export type ProfileStackParamList = {
   Support: undefined;
   Favorites: undefined;
   Coupons: undefined;
+  About: undefined;
 };
 
 const Stack = createNativeStackNavigator<ProfileStackParamList>();
@@ -33,6 +35,7 @@ export function ProfileStack() {
       <Stack.Screen name="Support" component={SupportScreen} />
       <Stack.Screen name="Favorites" component={FavoritesScreen} />
       <Stack.Screen name="Coupons" component={CouponsScreen} />
+      <Stack.Screen name="About" component={AboutScreen} />
     </Stack.Navigator>
   );
 }
