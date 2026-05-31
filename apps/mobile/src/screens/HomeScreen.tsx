@@ -28,6 +28,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { HeartButton } from '../components/HeartButton';
 import { QuickOrderFAB } from '../components/QuickOrderFAB';
 import {
   AnimatedListItem,
@@ -361,6 +362,7 @@ export function HomeScreen() {
                     {m.isOpen ? 'مفتوح' : 'مغلق'}
                   </Text>
                 </View>
+                <HeartButton merchantId={m.id} merchantName={m.storeNameAr} size="sm" />
               </Pressable>
             </AnimatedListItem>
           ))

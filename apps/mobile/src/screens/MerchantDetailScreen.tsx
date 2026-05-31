@@ -14,6 +14,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { HeartButton } from '../components/HeartButton';
 import { EmptyState, ForwardChevron, PrimaryButton, StatusPill } from '../components/ui';
 import { api } from '../lib/api';
 import type { HomeStackParamList } from '../navigation/HomeStack';
@@ -111,6 +112,7 @@ export function MerchantDetailScreen() {
             >
               <BackChevron size={20} color={colors.ink} />
             </Pressable>
+            <HeartButton merchantId={data.id} merchantName={data.storeNameAr} floating />
           </SafeAreaView>
         </View>
 
@@ -225,8 +227,11 @@ const styles = StyleSheet.create({
   coverHeader: {
     position: 'absolute',
     top: 0,
-    start: 0,
-    end: 0,
+    left: 0,
+    right: 0,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
     paddingHorizontal: spacing.lg,
     paddingTop: spacing.md,
   },

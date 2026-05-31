@@ -40,6 +40,54 @@ const validateSchema = z.object({
   orderAmount: z.number().nonnegative(),
 });
 
+/**
+ * GET /coupons/available — list public, currently-valid coupons the
+ * customer hasn't already maxed-out. Used by the customer Coupons screen so
+ * users can discover promo codes without admin sharing them out-of-band.
+ */
+export const listAvailable: RequestHandler = async (req, res, next) => {
+  try {
+    if (!req.user) throw new UnauthorizedError();
+    const now = new Date();
+    const rows = await prisma.coupon.findMany({
+      where: {
+        isActive: true,
+        OR: [{ validFrom: null }, { validFrom: { lte: now } }],
+        AND: [{ OR: [{ validTo: null }, { validTo: { gte: now } }] }],
+      },
+      orderBy: { createdAt: 'desc' },
+      include: {
+        _count: { select: { redemptions: true } },
+        redemptions: { where: { userId: req.user.id }, select: { id: true } },
+      },
+    });
+
+    // Filter out coupons the customer has already used up.
+    const usable = rows.filter((c) => {
+      if (c.usageLimit && c._count.redemptions >= c.usageLimit) return false;
+      const userUsage = c.redemptions.length;
+      const perUserCap = c.usagePerUser ?? 1;
+      return userUsage < perUserCap;
+    });
+
+    ok(
+      res,
+      usable.map((c) => ({
+        id: c.id,
+        code: c.code,
+        type: c.type,
+        value: Number(c.value),
+        minOrderAmount: c.minOrderAmount ? Number(c.minOrderAmount) : null,
+        maxDiscount: c.maxDiscount ? Number(c.maxDiscount) : null,
+        validTo: c.validTo,
+        description: c.description,
+      })),
+    );
+  } catch (err) {
+    next(err);
+  }
+};
+
 // ────────────────────────────────────────────────────────────────────────────
 // Admin CRUD
 // ────────────────────────────────────────────────────────────────────────────

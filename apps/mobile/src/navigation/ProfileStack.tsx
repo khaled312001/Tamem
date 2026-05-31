@@ -1,6 +1,8 @@
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 
+import { CouponsScreen } from '../screens/CouponsScreen';
 import { EditProfileScreen } from '../screens/EditProfileScreen';
+import { FavoritesScreen } from '../screens/FavoritesScreen';
 import { PaymentMethodsScreen } from '../screens/PaymentMethodsScreen';
 import { ProfileScreen } from '../screens/ProfileScreen';
 import { SavedAddressesScreen } from '../screens/SavedAddressesScreen';
@@ -14,6 +16,8 @@ export type ProfileStackParamList = {
   PaymentMethods: undefined;
   Wallet: undefined;
   Support: undefined;
+  Favorites: undefined;
+  Coupons: undefined;
 };
 
 const Stack = createNativeStackNavigator<ProfileStackParamList>();
@@ -27,6 +31,8 @@ export function ProfileStack() {
       <Stack.Screen name="PaymentMethods" component={PaymentMethodsScreen} />
       <Stack.Screen name="Wallet" component={WalletScreen} />
       <Stack.Screen name="Support" component={SupportScreen} />
+      <Stack.Screen name="Favorites" component={FavoritesScreen} />
+      <Stack.Screen name="Coupons" component={CouponsScreen} />
     </Stack.Navigator>
   );
 }

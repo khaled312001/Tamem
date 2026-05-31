@@ -2,7 +2,7 @@ import { useNavigation, useRoute, type RouteProp } from '@react-navigation/nativ
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { useRef, useState } from 'react';
-import { Alert, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import type { Service } from '@tamem/types';
@@ -12,6 +12,7 @@ import { DynamicForm } from '../components/DynamicForm/DynamicForm';
 import { ScreenHeader } from '../components/ScreenHeader';
 import { CardListSkeleton, EmptyState, PrimaryButton } from '../components/ui';
 import { api } from '../lib/api';
+import { showToast } from '../lib/toast';
 import type { HomeStackParamList } from '../navigation/HomeStack';
 import { colors, fontFamilies, fontSizes, radii, shadows, spacing } from '../theme/tokens';
 
@@ -58,16 +59,24 @@ export function DynamicServiceFlowScreen() {
         const parent = navigation.getParent();
         if (parent) {
           parent.navigate('Orders', { screen: 'OrdersList' } as never);
-          Alert.alert('تم استلام طلبك ✓', `رقم الطلب: ${order.orderNumber ?? '—'}`);
         } else {
           navigation.popToTop();
         }
       } catch {
         navigation.popToTop();
       }
+      showToast({
+        title: 'تم استلام طلبك ✓',
+        message: `رقم الطلب: #${order.orderNumber ?? '—'}`,
+        tone: 'success',
+      });
     },
     onError: (err) => {
-      Alert.alert('خطأ', err instanceof Error ? err.message : 'فشل إرسال الطلب');
+      showToast({
+        title: 'تعذّر إرسال الطلب',
+        message: err instanceof Error ? err.message : 'حصلت مشكلة',
+        tone: 'error',
+      });
     },
   });
 

@@ -4,6 +4,7 @@ import { useQuery } from '@tanstack/react-query';
 import {
   Bell,
   CreditCard,
+  Gift,
   HeadphonesIcon,
   Heart,
   LogOut,
@@ -253,6 +254,24 @@ export function ProfileScreen() {
           />
         </View>
 
+        {/* ─────── Discovery section ─────── */}
+        <Text style={styles.sectionTitle}>المفضلة والعروض</Text>
+        <View style={[styles.group, shadows.sm]}>
+          <ListItem
+            label="المتاجر المفضلة"
+            sublabel="المتاجر اللي اخترتها من ❤️"
+            Icon={Heart}
+            onPress={() => navigation.navigate('Favorites')}
+          />
+          <Divider inset />
+          <ListItem
+            label="العروض والكوبونات"
+            sublabel="أكواد خصم حصرية لطلباتك"
+            Icon={Gift}
+            onPress={() => navigation.navigate('Coupons')}
+          />
+        </View>
+
         {/* ─────── Preferences section ─────── */}
         <Text style={styles.sectionTitle}>الإعدادات</Text>
         <View style={[styles.group, shadows.sm]}>
@@ -285,7 +304,7 @@ export function ProfileScreen() {
           <ListItem
             label="عن تَميم"
             sublabel="معرفة المزيد عن منصتنا"
-            Icon={Heart}
+            Icon={Shield}
             onPress={() => {
               Alert.alert(
                 'عن تَميم',

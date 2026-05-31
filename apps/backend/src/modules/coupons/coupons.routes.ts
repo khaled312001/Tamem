@@ -4,9 +4,10 @@ import { requireAuth } from '../../middleware/auth.js';
 
 import * as ctrl from './coupons.controller.js';
 
-/** Customer-facing — POST /coupons/validate */
+/** Customer-facing — GET /coupons/available + POST /coupons/validate */
 export const couponsRouter: Router = Router();
 couponsRouter.use(requireAuth);
+couponsRouter.get('/available', ctrl.listAvailable);
 couponsRouter.post('/validate', ctrl.validateCoupon);
 
 /** Admin CRUD — /admin/coupons */

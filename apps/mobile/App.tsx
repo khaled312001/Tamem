@@ -9,6 +9,7 @@ import { I18nManager, View } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
+import { ToastHost } from './src/components/ToastHost';
 import { useBrandFonts } from './src/lib/fonts';
 import { RootNavigator } from './src/navigation/RootNavigator';
 
@@ -67,6 +68,7 @@ export default function App() {
           <StatusBar style="light" />
           <View style={{ flex: 1 }}>
             <RootNavigator />
+            <ToastHost />
           </View>
         </QueryClientProvider>
       </SafeAreaProvider>
