@@ -32,15 +32,22 @@ const envSchema = z.object({
 
   DRIVER_CASH_LIMIT: z.coerce.number().nonnegative().default(1000),
 
-  // Paymob (Egyptian payment gateway — only Vodafone Cash + InstaPay enabled)
-  // Variable names match Nafezly/Paymob conventions so credentials can be copied
-  // straight from the Paymob dashboard or a Nafezly-shaped .env.
-  // Leave empty to disable online payments; cash-on-delivery still works.
-  PAYMOB_API_KEY: z.string().optional(),
-  PAYMOB_WALLET_INTEGRATION_ID: z.coerce.number().int().positive().optional(),
-  PAYMOB_INSTAPAY_INTEGRATION_ID: z.coerce.number().int().positive().optional(),
-  PAYMOB_IFRAME_ID: z.coerce.number().int().positive().optional(),
-  PAYMOB_HMAC: z.string().optional(),
+  // EasyKash — the single payment gateway used by Tamem.
+  // Supports Vodafone Cash, InstaPay, Visa, MasterCard, and Meeza through
+  // one hosted page; the customer picks the method on EasyKash's site.
+  // Leave EASYKASH_API_KEY empty to disable online payments — cash on
+  // delivery still works.
+  EASYKASH_API_KEY: z.string().optional(),
+  EASYKASH_HMAC_SECRET: z.string().optional(),
+  /**
+   * Comma-separated EasyKash payment-options enum, e.g. "2,3,4,5,6".
+   * Empty / unset → falls back to the full set [2,3,4,5,6].
+   */
+  EASYKASH_PAYMENT_OPTIONS: z.string().optional(),
+  /** The URL EasyKash redirects the customer to after they finish paying.
+   *  Defaults to API_BASE_URL/redirects/payment which renders a simple
+   *  closing-tab page. */
+  EASYKASH_REDIRECT_URL: z.string().url().optional(),
 });
 
 const parsed = envSchema.safeParse(process.env);

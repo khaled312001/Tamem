@@ -7,7 +7,6 @@ import {
   EyeOff,
   Loader2,
   Save,
-  Smartphone,
   TestTube2,
   XCircle,
 } from 'lucide-react';
@@ -18,6 +17,19 @@ import { Button } from '../components/ui/Button.js';
 import { Field, Input } from '../components/ui/Input.js';
 import { CardSkeleton } from '../components/ui/Skeleton.js';
 import { api } from '../lib/api.js';
+
+/**
+ * The EasyKash payment-options enum, with the labels we surface in the
+ * dashboard checklist. Numbers come from EasyKash's docs example
+ * `paymentOptions: [2,3,4,5,6]`. Admin checks the ones they want enabled.
+ */
+const ALL_METHODS: Array<{ value: number; label: string; note: string }> = [
+  { value: 2, label: 'Visa / MasterCard (بطاقة)', note: 'الدفع المباشر بالبطاقة' },
+  { value: 3, label: 'فودافون كاش', note: 'محفظة Vodafone Cash' },
+  { value: 4, label: 'InstaPay', note: 'تحويل بنكي عبر InstaPay' },
+  { value: 5, label: 'Meeza', note: 'بطاقة ميزة الوطنية' },
+  { value: 6, label: 'Visa Premium', note: 'بطاقات Visa المتميزة' },
+];
 
 export function PaymentGatewayPage() {
   const qc = useQueryClient();
@@ -42,9 +54,9 @@ export function PaymentGatewayPage() {
   return (
     <div className="space-y-4 max-w-4xl">
       <div>
-        <h1 className="text-2xl font-black text-brand-dark">بوابة الدفع</h1>
+        <h1 className="text-2xl font-black text-brand-dark">بوابة الدفع — EasyKash</h1>
         <p className="text-sm text-muted-foreground mt-1">
-          فعّل فودافون كاش وإنستاباي عن طريق ربط حساب Paymob الخاص بشركتك
+          فعّل فودافون كاش، InstaPay، فيزا، ماستركارد وميزة عبر EasyKash
         </p>
       </div>
 
@@ -59,12 +71,11 @@ export function PaymentGatewayPage() {
             testResult={test.data}
           />
           <EditCard
-            initial={data!.keys}
+            initial={data!}
             onSaved={() => {
               qc.invalidateQueries({ queryKey: ['admin', 'gateway'] });
             }}
           />
-          <MethodsCard methods={data!.methods} />
           <SetupGuide />
         </>
       )}
@@ -89,13 +100,13 @@ function StatusCard({
     <div className="bg-white rounded-xl border border-border p-5 space-y-4">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
-          <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-purple-500 to-pink-500 grid place-items-center shadow-md shadow-purple-300/40">
+          <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-fuchsia-500 to-amber-500 grid place-items-center shadow-md shadow-fuchsia-300/40">
             <CreditCard className="w-6 h-6 text-white" />
           </div>
           <div>
-            <div className="font-bold">حالة الاتصال بـ Paymob</div>
+            <div className="font-bold">حالة الاتصال بـ EasyKash</div>
             <div className="text-xs text-muted-foreground">
-              المزود الفعلي لفودافون كاش وإنستاباي في مصر
+              المزود الوحيد للدفع الإلكتروني في تميم
             </div>
           </div>
         </div>
@@ -127,10 +138,17 @@ function StatusCard({
           </div>
           <div className="mt-1 text-xs">
             {testResult.message ?? testResult.reason}
-            {testResult.tokenPreview && (
-              <span className="font-mono ms-2" dir="ltr">
-                token: {testResult.tokenPreview}
-              </span>
+            {testResult.preview && (
+              <a
+                href={testResult.preview}
+                target="_blank"
+                rel="noreferrer"
+                className="underline ms-2 inline-flex items-center gap-1"
+                dir="ltr"
+              >
+                معاينة الرابط
+                <ExternalLink className="w-3 h-3" />
+              </a>
             )}
           </div>
         </div>
@@ -144,56 +162,54 @@ function EditCard({
   onSaved,
 }: {
   initial: {
-    apiKey: string | null;
-    walletIntegrationId: number | null;
-    instapayIntegrationId: number | null;
-    iframeId: number | null;
-    hmac: string | null;
+    paymentOptions: number[];
+    keys: { apiKey: string | null; hmacSecret: string | null };
   };
   onSaved: () => void;
 }) {
   const [apiKey, setApiKey] = useState('');
-  const [wallet, setWallet] = useState('');
-  const [insta, setInsta] = useState('');
-  const [iframe, setIframe] = useState('');
-  const [hmac, setHmac] = useState('');
+  const [hmacSecret, setHmacSecret] = useState('');
+  const [paymentOptions, setPaymentOptions] = useState<number[]>(initial.paymentOptions ?? []);
   const [showSecrets, setShowSecrets] = useState(false);
 
-  // Prefill the integer fields from the current stored values
-  // (sensitive secrets remain blank — user re-types only to change them).
   useEffect(() => {
-    if (initial.walletIntegrationId != null) setWallet(String(initial.walletIntegrationId));
-    if (initial.instapayIntegrationId != null) setInsta(String(initial.instapayIntegrationId));
-    if (initial.iframeId != null) setIframe(String(initial.iframeId));
-  }, [initial]);
+    setPaymentOptions(initial.paymentOptions ?? []);
+  }, [initial.paymentOptions]);
+
+  const toggleMethod = (value: number) => {
+    setPaymentOptions((prev) =>
+      prev.includes(value)
+        ? prev.filter((v) => v !== value)
+        : [...prev, value].sort((a, b) => a - b),
+    );
+  };
 
   const save = useMutation({
     mutationFn: () => {
-      const body: Record<string, string | number> = {};
+      const body: { apiKey?: string; hmacSecret?: string; paymentOptions?: number[] } = {};
       if (apiKey) body.apiKey = apiKey;
-      if (wallet) body.walletIntegrationId = wallet;
-      if (insta) body.instapayIntegrationId = insta;
-      if (iframe) body.iframeId = iframe;
-      if (hmac) body.hmac = hmac;
+      if (hmacSecret) body.hmacSecret = hmacSecret;
+      // Always send paymentOptions so toggling a method off persists.
+      body.paymentOptions = paymentOptions;
       return api.adminGatewaySave(body);
     },
     onSuccess: () => {
-      toast.success('تم الحفظ بنجاح ✓');
+      toast.success('تم الحفظ ✓');
       setApiKey('');
-      setHmac('');
+      setHmacSecret('');
       onSaved();
     },
     onError: (err: Error) => toast.error(err.message || 'فشل الحفظ'),
   });
 
-  const apiKeyHas = !!initial.apiKey;
-  const hmacHas = !!initial.hmac;
+  const apiKeyHas = !!initial.keys.apiKey;
+  const hmacHas = !!initial.keys.hmacSecret;
 
   return (
     <div className="bg-white rounded-xl border border-border p-5 space-y-4">
       <div className="flex items-center justify-between">
         <div>
-          <div className="font-bold">إدخال بيانات Paymob</div>
+          <div className="font-bold">إدخال بيانات EasyKash</div>
           <div className="text-xs text-muted-foreground mt-1">
             تتخزن في قاعدة البيانات وتسري فوراً بدون إعادة تشغيل
           </div>
@@ -210,60 +226,69 @@ function EditCard({
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
         <Field
           label="API Key"
-          hint={
-            apiKeyHas ? `محفوظ: ${initial.apiKey}` : 'انسخه من Paymob → Settings → Account Info'
-          }
+          hint={apiKeyHas ? `محفوظ: ${initial.keys.apiKey}` : 'من EasyKash → Integration Settings'}
         >
           <Input
             type={showSecrets ? 'text' : 'password'}
             value={apiKey}
             onChange={(e) => setApiKey(e.target.value)}
-            placeholder={apiKeyHas ? '— اتركه فارغ للإبقاء —' : 'ZXlKaGJHY2lPaUpJ...'}
+            placeholder={apiKeyHas ? '— اتركه فارغ للإبقاء —' : '1si4c9...'}
             dir="ltr"
           />
         </Field>
-        <Field label="HMAC Secret" hint={hmacHas ? `محفوظ: ${initial.hmac}` : 'لتأكيد webhooks'}>
+        <Field
+          label="HMAC Secret"
+          hint={
+            hmacHas
+              ? `محفوظ: ${initial.keys.hmacSecret}`
+              : 'يظهر بعد اختيار طرق الدفع وحفظها في EasyKash'
+          }
+        >
           <Input
             type={showSecrets ? 'text' : 'password'}
-            value={hmac}
-            onChange={(e) => setHmac(e.target.value)}
+            value={hmacSecret}
+            onChange={(e) => setHmacSecret(e.target.value)}
             placeholder={hmacHas ? '— اتركه فارغ للإبقاء —' : '••••••••••'}
-            dir="ltr"
-          />
-        </Field>
-        <Field label="Wallet Integration ID" hint="فودافون كاش / أورنج / إيتيسالات">
-          <Input
-            type="number"
-            value={wallet}
-            onChange={(e) => setWallet(e.target.value)}
-            placeholder="123456"
-            dir="ltr"
-          />
-        </Field>
-        <Field label="InstaPay Integration ID" hint="من Paymob → Integrations">
-          <Input
-            type="number"
-            value={insta}
-            onChange={(e) => setInsta(e.target.value)}
-            placeholder="123456"
-            dir="ltr"
-          />
-        </Field>
-        <Field label="Iframe ID (لـ InstaPay)" hint="من Paymob → Iframes">
-          <Input
-            type="number"
-            value={iframe}
-            onChange={(e) => setIframe(e.target.value)}
-            placeholder="999999"
             dir="ltr"
           />
         </Field>
       </div>
 
+      <div>
+        <div className="font-bold text-sm mb-2">طرق الدفع المُفعّلة</div>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+          {ALL_METHODS.map((m) => {
+            const on = paymentOptions.includes(m.value);
+            return (
+              <button
+                key={m.value}
+                type="button"
+                onClick={() => toggleMethod(m.value)}
+                className={`flex items-start gap-3 p-3 rounded-lg border text-start ${
+                  on ? 'border-green-300 bg-green-50' : 'border-border bg-gray-50/50'
+                }`}
+              >
+                <div
+                  className={`w-5 h-5 rounded border grid place-items-center mt-0.5 ${
+                    on ? 'bg-green-600 border-green-600 text-white' : 'bg-white border-border'
+                  }`}
+                >
+                  {on && <CheckCircle2 className="w-3 h-3" />}
+                </div>
+                <div>
+                  <div className="font-bold text-sm">{m.label}</div>
+                  <div className="text-xs text-muted-foreground">{m.note}</div>
+                </div>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
       <div className="flex justify-end pt-3 border-t border-border">
         <Button
           onClick={() => save.mutate()}
-          disabled={save.isPending || (!apiKey && !wallet && !insta && !iframe && !hmac)}
+          disabled={save.isPending || (!apiKey && !hmacSecret && paymentOptions.length === 0)}
         >
           {save.isPending ? (
             <Loader2 className="w-4 h-4 animate-spin" />
@@ -292,101 +317,50 @@ function StatusPill({ ok }: { ok: boolean }) {
   );
 }
 
-function MethodsCard({ methods }: { methods: { vodafoneCash: boolean; instapay: boolean } }) {
-  return (
-    <div className="bg-white rounded-xl border border-border p-5">
-      <div className="font-bold mb-3">طرق الدفع المتاحة للعميل</div>
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-        <MethodTile label="كاش عند الاستلام" enabled icon="💵" hint="دايماً متاح" />
-        <MethodTile
-          label="فودافون كاش"
-          enabled={methods.vodafoneCash}
-          icon={<Smartphone className="w-5 h-5" />}
-          hint={methods.vodafoneCash ? 'مفعّل' : 'محتاج Wallet Integration ID'}
-        />
-        <MethodTile
-          label="InstaPay"
-          enabled={methods.instapay}
-          icon={<Smartphone className="w-5 h-5" />}
-          hint={methods.instapay ? 'مفعّل' : 'محتاج InstaPay Integration ID'}
-        />
-      </div>
-    </div>
-  );
-}
-
-function MethodTile({
-  label,
-  enabled,
-  icon,
-  hint,
-}: {
-  label: string;
-  enabled: boolean;
-  icon: React.ReactNode;
-  hint: string;
-}) {
-  return (
-    <div
-      className={`rounded-lg border p-3 ${
-        enabled ? 'border-green-200 bg-green-50' : 'border-gray-200 bg-gray-50/50'
-      }`}
-    >
-      <div className="flex items-center gap-2 font-bold">
-        <span className={enabled ? 'text-green-700' : 'text-gray-500'}>{icon}</span>
-        <span className={enabled ? 'text-green-800' : 'text-gray-700'}>{label}</span>
-      </div>
-      <div className="text-xs text-muted-foreground mt-1">{hint}</div>
-    </div>
-  );
-}
-
 function SetupGuide() {
   return (
     <div className="bg-blue-50 border border-blue-100 rounded-xl p-5 space-y-3 text-sm">
-      <div className="font-bold text-blue-900">إزاي أربط Paymob؟</div>
+      <div className="font-bold text-blue-900">خطوات تفعيل EasyKash</div>
       <ol className="list-decimal list-inside space-y-1.5 text-blue-800">
         <li>
-          سجّل حساب على{' '}
+          ادخل على{' '}
           <a
-            href="https://accept.paymob.com/portal2/en/login"
+            href="https://back.easykash.net"
             target="_blank"
             rel="noreferrer"
             className="underline inline-flex items-center gap-1"
           >
-            accept.paymob.com <ExternalLink className="w-3 h-3" />
+            back.easykash.net <ExternalLink className="w-3 h-3" />
           </a>{' '}
-          ورفع السجل التجاري (تستغرق المراجعة 1-3 أيام).
+          واتبع الـ{' '}
+          <a
+            href="https://easykash.gitbook.io/easykash-apis-documentation"
+            target="_blank"
+            rel="noreferrer"
+            className="underline inline-flex items-center gap-1"
+          >
+            Documentation <ExternalLink className="w-3 h-3" />
+          </a>
+          .
         </li>
         <li>
-          من لوحة Paymob، روح <strong>Developers ← API Keys</strong> وانسخ الـ API Key.
+          من <strong>Integration Settings</strong> انسخ الـ <strong>API Key</strong> والصقه أعلاه.
         </li>
         <li>
-          من <strong>Integrations</strong>، فعّل <strong>Mobile Wallets</strong> (لفودافون كاش) و{' '}
-          <strong>InstaPay</strong>، وكل واحد منهم هيدّيك Integration ID.
+          في خانة <strong>Callback URL</strong> في EasyKash، أدخل:
+          <code className="font-mono text-xs ms-1 bg-blue-100 px-1 rounded" dir="ltr">
+            https://api.tamem-delivery.com/api/v1/payments/webhook/easykash
+          </code>
+        </li>
+        <li>اختر طرق الدفع المطلوبة (Visa / فودافون كاش / InstaPay / Meeza) واضغط حفظ.</li>
+        <li>
+          بعد الحفظ سيظهر <strong>HMAC Secret Key</strong> — انسخه والصقه أعلاه.
         </li>
         <li>
-          من <strong>Settings ← HMAC</strong>، انسخ الـ HMAC Secret (لازم لتأكيد webhooks).
+          أجب على أسئلة الـ <em>fees</em> والـ <em>VAT</em> حسب الاتفاق مع العميل (تضاف على العميل
+          أو على المشتري).
         </li>
-        <li>
-          ضع كل القيم دي في ملف <code className="font-mono text-xs">apps/backend/.env</code>:
-          <pre
-            className="bg-blue-100 text-blue-900 p-2 mt-1 rounded text-xs overflow-x-auto"
-            dir="ltr"
-          >{`PAYMOB_API_KEY=<your-key>
-PAYMOB_WALLET_INTEGRATION_ID=<id-from-wallet-integration>
-PAYMOB_INSTAPAY_INTEGRATION_ID=<id-from-instapay-integration>
-PAYMOB_HMAC=<your-hmac-secret>`}</pre>
-        </li>
-        <li>
-          أعد تشغيل الخادم (
-          <code className="font-mono text-xs">pnpm --filter @tamem/backend dev</code>) ثم اضغط{' '}
-          <strong>اختبار الاتصال</strong> أعلى الصفحة.
-        </li>
-        <li>
-          الفلوس بتروح للحساب البنكي اللى ربطته في Paymob، التحويل خلال 1-2 يوم عمل، Paymob بتاخد
-          عمولة تقريباً 2.5-3%.
-        </li>
+        <li>اضغط Submit في EasyKash ثم اضغط "اختبار الاتصال" أعلى الصفحة للتأكد.</li>
       </ol>
     </div>
   );

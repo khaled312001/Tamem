@@ -576,16 +576,14 @@ export class TamemClient {
     });
   }
 
-  // ===== Admin Payment Gateway (Paymob) =====
+  // ===== Admin Payment Gateway (EasyKash) =====
   async adminGatewayStatus(): Promise<{
+    gateway: 'easykash';
     configured: boolean;
-    methods: { vodafoneCash: boolean; instapay: boolean };
+    paymentOptions: number[];
     keys: {
       apiKey: string | null;
-      walletIntegrationId: number | null;
-      instapayIntegrationId: number | null;
-      iframeId: number | null;
-      hmac: string | null;
+      hmacSecret: string | null;
     };
   }> {
     return this.request({ method: 'GET', url: '/admin/payments/gateway' });
@@ -594,16 +592,14 @@ export class TamemClient {
     ok: boolean;
     reason?: string;
     message?: string;
-    tokenPreview?: string;
+    preview?: string;
   }> {
     return this.request({ method: 'POST', url: '/admin/payments/gateway/test' });
   }
   async adminGatewaySave(input: {
     apiKey?: string;
-    walletIntegrationId?: string | number;
-    instapayIntegrationId?: string | number;
-    iframeId?: string | number;
-    hmac?: string;
+    hmacSecret?: string;
+    paymentOptions?: number[];
   }): Promise<{ saved: boolean }> {
     return this.request({ method: 'PUT', url: '/admin/payments/gateway', data: input });
   }

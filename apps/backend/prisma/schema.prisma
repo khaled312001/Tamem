@@ -763,3 +763,52 @@ model WalletTransaction {
   @@index([walletId, createdAt(sort: Desc)])
   @@index([orderId])
 }
+
+// ============================================
+// OTP codes — phone verification + auth flows
+// ============================================
+// One-time codes sent over WhatsApp / SMS. We never store the code in clear:
+// we hash with SHA-256 and compare hash-to-hash on verify. Expiry is short
+// (5 min) and attempts capped at 5 to defeat brute force. Old rows are
+// hard-deleted by the daily auth cleanup cron, not by row-level TTL.
+model OtpCode {
+  id         String   @id @default(cuid())
+  phone      String   @db.VarChar(20)
+  codeHash   String   @db.VarChar(64)
+  /// Purpose — distinguishes a registration OTP from a password-reset OTP.
+  purpose    String   @default("VERIFY") @db.VarChar(20)
+  attempts   Int      @default(0)
+  consumedAt DateTime?
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
+
+  @@index([phone, createdAt(sort: Desc)])
+  @@index([expiresAt])
+}
+
+// ============================================
+// AdminAuditLog — durable trail of admin writes
+// ============================================
+// Persists every state-changing /admin/* action so we can answer "who
+// changed X, when, and to what value?" months later. Read endpoints
+// (GET) are excluded — only POST/PATCH/PUT/DELETE land here, captured
+// by the audit middleware in src/middleware/audit.ts.
+model AdminAuditLog {
+  id         String   @id @default(cuid())
+  actorId    String
+  actorRole  UserRole
+  method     String   @db.VarChar(10)
+  path       String   @db.VarChar(255)
+  targetType String?  @db.VarChar(60)
+  targetId   String?  @db.VarChar(80)
+  /// Sanitized request body (no passwords / tokens). Useful for diff replay.
+  payload    Json?
+  ip         String?  @db.VarChar(45)
+  userAgent  String?  @db.VarChar(500)
+  status     Int?
+  createdAt  DateTime @default(now())
+
+  @@index([actorId, createdAt(sort: Desc)])
+  @@index([path, createdAt(sort: Desc)])
+  @@index([createdAt(sort: Desc)])
+}

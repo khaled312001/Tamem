@@ -20,45 +20,46 @@ const METHODS: Method[] = [
     label: 'الدفع كاش عند الاستلام',
     badge: 'متاح',
     Icon: Banknote,
-    desc: 'ادفع نقداً للسائق عند تسليم طلبك. أكثر طريقة استخداماً.',
+    desc: 'ادفع نقداً للسائق عند تسليم طلبك. الطريقة الأكثر استخداماً.',
     available: true,
   },
   {
     key: 'VODAFONE_CASH',
     label: 'فودافون كاش',
-    badge: 'متاح',
+    badge: 'إلكتروني',
     Icon: Smartphone,
-    desc: 'حوّل قيمة الطلب على رقم تميم وارفع لقطة شاشة للإيصال.',
+    desc: 'حوّل قيمة الطلب من محفظة فودافون كاش الخاصة بك عبر EasyKash.',
     available: true,
   },
   {
     key: 'INSTAPAY',
     label: 'إنستا باي',
-    badge: 'متاح',
+    badge: 'إلكتروني',
     Icon: Smartphone,
-    desc: 'حوّل على Tamem@instapay وأرفق إثبات التحويل من التطبيق.',
+    desc: 'حوّل من بنكك مباشرةً عبر InstaPay داخل بوابة EasyKash.',
     available: true,
   },
   {
     key: 'CARD',
-    label: 'بطاقة بنكية (Visa / Mastercard)',
-    badge: 'قريباً',
+    label: 'بطاقة (Visa / MasterCard / Meeza)',
+    badge: 'إلكتروني',
     Icon: CreditCard,
-    desc: 'الدفع المباشر بالبطاقة هيكون متاح في الإصدار القادم بإذن الله.',
-    available: false,
+    desc: 'ادفع مباشرةً بأي بطاقة بنكية مصرية أو دولية عبر EasyKash.',
+    available: true,
   },
 ];
 
 export function PaymentMethodsScreen() {
   return (
     <SafeAreaView edges={['top']} style={styles.container}>
-      <ScreenHeader title="طرق الدفع" subtitle="اختر طريقة الدفع عند إنشاء كل طلب" />
+      <ScreenHeader title="طرق الدفع" subtitle="اختر طريقة الدفع عند تأكيد كل طلب" />
 
       <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
         <View style={styles.infoBanner}>
           <Info size={18} color={colors.brand.red} />
           <Text style={styles.infoText}>
-            طرق الدفع تظهر لك في صفحة تأكيد الطلب. يمكنك تغيير الطريقة لكل طلب على حدة.
+            الدفع الإلكتروني (فودافون كاش، InstaPay، بطاقة) يتم عبر بوابة EasyKash الآمنة بعد تأكيد
+            سعر الطلب من الإدارة. الكاش يبقى متاحاً دائماً عند الاستلام.
           </Text>
         </View>
 

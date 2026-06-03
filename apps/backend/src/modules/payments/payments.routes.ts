@@ -1,6 +1,6 @@
 import { Router } from 'express';
 
-import * as gateway from './paymob.admin.controller.js';
+import * as gateway from './easykash.controller.js';
 import * as ctrl from './payments.controller.js';
 
 export const adminPaymentsRouter: Router = Router();
@@ -10,7 +10,7 @@ adminPaymentsRouter.patch('/:id/confirm', ctrl.confirm);
 adminPaymentsRouter.patch('/:id/reject', ctrl.reject);
 adminPaymentsRouter.patch('/:id/refund', ctrl.refund);
 
-// Paymob gateway management
-adminPaymentsRouter.get('/gateway', gateway.status);
-adminPaymentsRouter.put('/gateway', gateway.save);
-adminPaymentsRouter.post('/gateway/test', gateway.testConnection);
+// EasyKash gateway management — replaces the old Paymob admin handlers.
+adminPaymentsRouter.get('/gateway', gateway.adminStatus);
+adminPaymentsRouter.put('/gateway', gateway.adminSave);
+adminPaymentsRouter.post('/gateway/test', gateway.adminTest);

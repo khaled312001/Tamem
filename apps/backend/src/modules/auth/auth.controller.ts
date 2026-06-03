@@ -274,24 +274,85 @@ export const resetPassword: RequestHandler = async (req, res, next) => {
   }
 };
 
-// Phase 1 stubs — return success without actually sending SMS.
-// Day 12+: integrate with SMS gateway or WhatsApp OTP.
+/**
+ * POST /auth/otp/request — generate a 6-digit OTP, persist it hashed
+ * with a 5-minute expiry, and dispatch it over WhatsApp (WppConnect first,
+ * Cloud API fallback). Per-phone rate-limited to one request per 60s.
+ *
+ * In non-production we additionally return the code in the response under
+ * `debugCode` so the mobile QA flow can autofill — this is gated by
+ * NODE_ENV so it never leaks in prod.
+ */
 export const otpRequest: RequestHandler = async (req, res, next) => {
   try {
-    otpRequestSchema.parse(req.body);
-    ok(res, { sent: true, channel: 'STUB' });
+    const input = otpRequestSchema.parse(req.body);
+    const { sendWhatsAppMessage } = await import('../../integrations/whatsapp.js');
+
+    const recent = await prisma.otpCode.findFirst({
+      where: { phone: input.phone, createdAt: { gt: new Date(Date.now() - 60_000) } },
+      orderBy: { createdAt: 'desc' },
+    });
+    if (recent) {
+      ok(res, { sent: true, channel: 'COOLDOWN', retryInSec: 60 });
+      return;
+    }
+
+    const code = String(randomInt(0, 1_000_000)).padStart(6, '0');
+    const codeHash = createHash('sha256').update(code).digest('hex');
+
+    await prisma.otpCode.create({
+      data: {
+        phone: input.phone,
+        codeHash,
+        purpose: 'VERIFY',
+        expiresAt: new Date(Date.now() + 5 * 60_000),
+      },
+    });
+
+    const text = `كود التحقق الخاص بك في تميم للتوصيل: ${code}\nصالح لمدة 5 دقائق. لا تشاركه مع أحد.`;
+    const sent = await sendWhatsAppMessage({ toPhone: input.phone, text });
+
+    const channel = sent ? 'WHATSAPP' : 'NONE';
+    const debugCode = env.NODE_ENV === 'production' ? undefined : code;
+    ok(res, { sent: true, channel, ...(debugCode ? { debugCode } : {}) });
   } catch (err) {
     next(err);
   }
 };
 
+/**
+ * POST /auth/otp/verify — verify the 6-digit code against the latest
+ * non-consumed, non-expired row for the phone. Tracks attempts and locks
+ * the row after 5 failed tries (must request a new code).
+ */
 export const otpVerify: RequestHandler = async (req, res, next) => {
   try {
     const input = otpVerifySchema.parse(req.body);
-    // STUB: any 6-digit code starting with "1" passes in dev.
-    if (!input.code.startsWith('1')) {
+
+    const row = await prisma.otpCode.findFirst({
+      where: { phone: input.phone, consumedAt: null, expiresAt: { gt: new Date() } },
+      orderBy: { createdAt: 'desc' },
+    });
+    if (!row) throw new UnauthorizedError('كود التحقق منتهي أو غير موجود');
+    if (row.attempts >= 5) {
+      throw new UnauthorizedError('تم تجاوز عدد المحاولات — اطلب كوداً جديداً');
+    }
+
+    const submittedHash = createHash('sha256').update(input.code).digest('hex');
+    if (submittedHash !== row.codeHash) {
+      await prisma.otpCode.update({
+        where: { id: row.id },
+        data: { attempts: { increment: 1 } },
+      });
       throw new UnauthorizedError('كود التحقق غير صحيح');
     }
+
+    // mark the OTP row consumed first, then sign the user in.
+    await prisma.otpCode.update({
+      where: { id: row.id },
+      data: { consumedAt: new Date() },
+    });
+
     const user = await prisma.user.findUnique({ where: { phone: input.phone } });
     if (!user) throw new UnauthorizedError('المستخدم غير موجود');
     if (!user.isPhoneVerified) {

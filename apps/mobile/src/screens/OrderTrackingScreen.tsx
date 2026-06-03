@@ -5,6 +5,7 @@ import {
   AlertCircle,
   CheckCircle2,
   Clock,
+  CreditCard,
   MapPin,
   MessageCircle,
   Phone,
@@ -64,6 +65,7 @@ interface OrderDetail {
   notes?: string | null;
   quotedPrice?: string | number | null;
   finalPrice?: string | number | null;
+  paymentStatus?: 'PENDING' | 'PAID' | 'FAILED' | 'REFUNDED' | null;
   deliveryAddress?: string | null;
   pickupAddress?: string | null;
   service?: { nameAr: string };
@@ -297,6 +299,13 @@ export function OrderTrackingScreen() {
             ) : null}
           </View>
         </View>
+
+        {/* ─────── Pay-online CTA — only when the order is priced and unpaid. ───────
+            Lets the customer settle the bill via Paymob (Vodafone Cash / InstaPay)
+            instead of paying the driver in cash on delivery. */}
+        {(order.status === 'PRICED' || order.status === 'AWAITING_CUSTOMER_APPROVAL') &&
+          order.paymentStatus !== 'PAID' &&
+          price != null && <PayOnlineCTA orderId={order.id} amount={Number(price)} />}
 
         {/* ─────── Vertical stage timeline (more RTL-resilient than horizontal) ─────── */}
         {!isTerminalBad && (
@@ -605,6 +614,34 @@ function DriverLastSeen({ at }: { at: string }) {
 // Reorder
 // ════════════════════════════════════════════════════════════════════════════
 
+/**
+ * "Pay online" entry point — rendered when the order is priced but not yet
+ * paid. Navigates into PaymobCheckoutScreen so the user can pick Vodafone
+ * Cash or InstaPay and complete the transaction in the system browser.
+ * Cash-on-delivery customers can simply ignore the card.
+ */
+function PayOnlineCTA({ orderId, amount }: { orderId: string; amount: number }) {
+  const navigation =
+    useNavigation<NativeStackNavigationProp<OrdersStackParamList, 'OrderTracking'>>();
+  return (
+    <Pressable
+      onPress={() => navigation.navigate('EasyKashCheckout', { orderId })}
+      style={({ pressed }) => [styles.payCta, shadows.sm, pressed && { opacity: 0.92 }]}
+    >
+      <View style={styles.payCtaIcon}>
+        <CreditCard size={22} color={colors.white} />
+      </View>
+      <View style={{ flex: 1 }}>
+        <Text style={styles.payCtaTitle}>ادفع أونلاين الآن</Text>
+        <Text style={styles.payCtaSub}>
+          {amount.toLocaleString('ar-EG')} ج.م · فودافون كاش / إنستا باي
+        </Text>
+      </View>
+      <Text style={styles.payCtaArrow}>‹</Text>
+    </Pressable>
+  );
+}
+
 function ReorderButton({ orderId, orderNumber }: { orderId: string; orderNumber: string }) {
   const navigation =
     useNavigation<NativeStackNavigationProp<OrdersStackParamList, 'OrderTracking'>>();
@@ -895,6 +932,36 @@ function StarRow({
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.surface },
   scroll: { padding: spacing.lg, paddingBottom: spacing.xxl },
+  // Pay-online CTA (Paymob entry)
+  payCta: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
+    backgroundColor: colors.brand.red,
+    padding: spacing.md,
+    borderRadius: radii.lg,
+    marginBottom: spacing.lg,
+  },
+  payCtaIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: 'rgba(255,255,255,0.2)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  payCtaTitle: {
+    color: colors.white,
+    fontFamily: fontFamilies.headingBold,
+    fontSize: fontSizes.sm,
+  },
+  payCtaSub: {
+    color: 'rgba(255,255,255,0.85)',
+    fontFamily: fontFamilies.body,
+    fontSize: fontSizes.xs,
+    marginTop: 2,
+  },
+  payCtaArrow: { color: colors.white, fontSize: 28, marginEnd: spacing.xs },
   // WA banner
   waBanner: {
     flexDirection: 'row',

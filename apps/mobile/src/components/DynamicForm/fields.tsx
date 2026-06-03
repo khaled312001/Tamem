@@ -12,6 +12,7 @@ import {
 import { useState } from 'react';
 import { type Control, Controller, type FieldErrors, type FieldValues } from 'react-hook-form';
 import {
+  ActivityIndicator,
   FlatList,
   Image,
   Modal,
@@ -26,6 +27,7 @@ import {
 
 import type { ServiceField } from '@tamem/types';
 
+import { uploadFile } from '../../lib/uploadFile';
 import { colors, fontFamilies, fontSizes, radii, spacing } from '../../theme/tokens';
 
 interface BaseProps {
@@ -260,6 +262,11 @@ export function SelectFieldInput({ field, control, errors }: BaseProps) {
 export function ImageFieldInput({ field, control, errors }: BaseProps) {
   const err = errors[field.key]?.message as string | undefined;
   const maxImages = field.validation?.maxImages ?? 5;
+  // Per-instance "uploading" flag so we can show a spinner on the add tile
+  // while the picked image is being PUT to /uploads. We can't store this
+  // inside the Controller render because the host is re-rendered on every
+  // form value change and we'd lose the in-flight state.
+  const [uploading, setUploading] = useState(false);
 
   return (
     <View style={styles.wrap}>
@@ -271,6 +278,7 @@ export function ImageFieldInput({ field, control, errors }: BaseProps) {
         render={({ field: { value, onChange } }) => {
           const urls = (value as string[] | undefined) ?? [];
           const addImage = async () => {
+            if (uploading) return;
             // Lazy import to keep startup light
             const ImagePicker = await import('expo-image-picker');
             const result = await ImagePicker.launchImageLibraryAsync({
@@ -278,8 +286,16 @@ export function ImageFieldInput({ field, control, errors }: BaseProps) {
               quality: 0.85,
             });
             if (result.canceled || !result.assets?.[0]) return;
-            // TODO: actual upload via api.raw.post('/uploads', ...) — store local URI for now
-            onChange([...urls, result.assets[0].uri]);
+            setUploading(true);
+            try {
+              // Upload now so the order payload contains the hosted URL
+              // immediately — saves us from a second pass at submit time
+              // and matches QuickOrderSheet's behavior.
+              const uploaded = await uploadFile(result.assets[0].uri, { mime: 'image/jpeg' });
+              onChange([...urls, uploaded.url]);
+            } finally {
+              setUploading(false);
+            }
           };
 
           return (
@@ -287,15 +303,21 @@ export function ImageFieldInput({ field, control, errors }: BaseProps) {
               <ScrollView horizontal showsHorizontalScrollIndicator={false}>
                 <Pressable
                   onPress={addImage}
-                  disabled={urls.length >= maxImages}
+                  disabled={urls.length >= maxImages || uploading}
                   style={({ pressed }) => [
                     styles.imageAdd,
                     pressed && { opacity: 0.85 },
-                    urls.length >= maxImages && { opacity: 0.4 },
+                    (urls.length >= maxImages || uploading) && { opacity: 0.55 },
                   ]}
                 >
-                  <Camera size={28} color={colors.brand.red} />
-                  <Text style={styles.imageAddText}>إضافة صورة</Text>
+                  {uploading ? (
+                    <ActivityIndicator color={colors.brand.red} />
+                  ) : (
+                    <Camera size={28} color={colors.brand.red} />
+                  )}
+                  <Text style={styles.imageAddText}>
+                    {uploading ? 'جاري الرفع…' : 'إضافة صورة'}
+                  </Text>
                   <Text style={styles.imageAddCount}>
                     {urls.length}/{maxImages}
                   </Text>

@@ -11,6 +11,7 @@ import {
   updateAddress,
 } from './addresses.controller.js';
 import { changePassword, getMe, setFcmToken, updateMe } from './users.controller.js';
+import { exportMyData } from './users.export.controller.js';
 
 // /me/* — current user routes (any authenticated role)
 export const meRouter: Router = Router();
@@ -21,6 +22,7 @@ meRouter.patch('/', updateMe);
 meRouter.post('/change-password', changePassword);
 meRouter.post('/fcm-token', setFcmToken);
 meRouter.post('/location', updateMyLocation);
+meRouter.get('/export', exportMyData);
 
 meRouter.get('/addresses', listAddresses);
 meRouter.post('/addresses', createAddress);

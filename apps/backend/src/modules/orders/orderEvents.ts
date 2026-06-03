@@ -18,6 +18,7 @@ import type { Application } from 'express';
 import { ORDER_STATUS_AR, type OrderStatus } from '@tamem/types';
 
 import { prisma } from '../../db/prisma.js';
+import { sendPushToUser } from '../../integrations/fcm.js';
 import { sendWhatsAppMessage } from '../../integrations/whatsapp.js';
 import { emitOrderStatusChange } from '../../realtime/channels.js';
 import { logger } from '../../utils/logger.js';
@@ -193,7 +194,24 @@ export async function dispatchOrderStatusChanged(
     }
   }
 
-  // 3. WhatsApp server-side dispatch (optional — gracefully no-ops if not configured)
+  // 3. FCM push to the customer (graceful no-op when FCM isn't configured)
+  if (msgs) {
+    try {
+      await sendPushToUser(order.customerId, {
+        title: msgs.titleAr,
+        body: msgs.bodyAr,
+        data: {
+          orderId: order.id,
+          orderNumber: order.orderNumber,
+          status: newStatus,
+        },
+      });
+    } catch (err) {
+      logger.warn({ err, orderId: order.id }, 'FCM push failed');
+    }
+  }
+
+  // 4. WhatsApp server-side dispatch (optional — gracefully no-ops if not configured)
   if (msgs?.whatsapp) {
     try {
       const customer = await prisma.user.findUnique({
@@ -217,7 +235,7 @@ export async function dispatchOrderStatusChanged(
     }
   }
 
-  // 4. Notify the driver too on assignment so they see a "new ride" message
+  // 5. Notify the driver too on assignment so they see a "new ride" message
   if (newStatus === 'DRIVER_ASSIGNED' && order.assignedDriverId) {
     try {
       await prisma.notification.create({
@@ -231,6 +249,12 @@ export async function dispatchOrderStatusChanged(
           channel: 'IN_APP',
           data: { orderId: order.id, orderNumber: order.orderNumber },
         },
+      });
+      // FCM push for the driver too (silent no-op if no token).
+      await sendPushToUser(order.assignedDriverId, {
+        title: 'تم تعيينك على توصيل',
+        body: `الطلب ${order.orderNumber} مسند إليك`,
+        data: { orderId: order.id, orderNumber: order.orderNumber },
       });
     } catch (err) {
       logger.warn({ err }, 'driver notification failed');

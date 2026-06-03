@@ -1,7 +1,7 @@
 import { useNavigation } from '@react-navigation/native';
 import { useMutation } from '@tanstack/react-query';
 import * as ImagePicker from 'expo-image-picker';
-import { Camera, Mail, Phone, User } from 'lucide-react-native';
+import { Camera, ChevronDown, ChevronUp, Lock, Mail, Phone, User } from 'lucide-react-native';
 import { useState } from 'react';
 import {
   ActivityIndicator,
@@ -66,6 +66,39 @@ export function EditProfileScreen() {
   const [email, setEmail] = useState(user?.email ?? '');
   const [avatarUrl, setAvatarUrl] = useState<string | null>(user?.avatarUrl ?? null);
   const [uploadingAvatar, setUploadingAvatar] = useState(false);
+
+  // Password-change section — collapsed by default so it doesn't clutter
+  // the main edit-profile screen for users who don't intend to change it.
+  const [pwOpen, setPwOpen] = useState(false);
+  const [currentPassword, setCurrentPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+
+  const changePassword = useMutation({
+    mutationFn: async () => {
+      if (newPassword.length < 8) {
+        throw new Error('كلمة السر الجديدة 8 أحرف على الأقل');
+      }
+      if (newPassword !== confirmPassword) {
+        throw new Error('كلمتا السر غير متطابقتين');
+      }
+      const res = await api.raw.post('/me/change-password', {
+        currentPassword,
+        newPassword,
+      });
+      return res.data.data;
+    },
+    onSuccess: () => {
+      setCurrentPassword('');
+      setNewPassword('');
+      setConfirmPassword('');
+      setPwOpen(false);
+      Alert.alert('تم التغيير', 'تم تحديث كلمة السر بنجاح');
+    },
+    onError: (err: unknown) => {
+      Alert.alert('خطأ', err instanceof Error ? err.message : 'فشل تغيير كلمة السر');
+    },
+  });
 
   const pickAvatar = async () => {
     try {
@@ -175,6 +208,57 @@ export function EditProfileScreen() {
             loading={save.isPending}
           />
 
+          {/* Password-change drawer — collapsed by default. Posts to the
+              existing /me/change-password endpoint so the same flow works
+              for both Google + phone-registered users (the backend rejects
+              with NO_PASSWORD when the account has no password yet). */}
+          <Pressable
+            onPress={() => setPwOpen((v) => !v)}
+            style={({ pressed }) => [styles.pwToggle, pressed && { opacity: 0.85 }]}
+          >
+            <Lock size={16} color={colors.brand.red} />
+            <Text style={styles.pwToggleText}>تغيير كلمة السر</Text>
+            {pwOpen ? (
+              <ChevronUp size={18} color={colors.text.muted} />
+            ) : (
+              <ChevronDown size={18} color={colors.text.muted} />
+            )}
+          </Pressable>
+
+          {pwOpen && (
+            <View style={styles.pwBox}>
+              <IconField
+                Icon={Lock}
+                placeholder="كلمة السر الحالية"
+                value={currentPassword}
+                onChangeText={setCurrentPassword}
+                secureTextEntry
+                autoComplete="password"
+              />
+              <IconField
+                Icon={Lock}
+                placeholder="كلمة السر الجديدة (8 أحرف على الأقل)"
+                value={newPassword}
+                onChangeText={setNewPassword}
+                secureTextEntry
+                autoComplete="password-new"
+              />
+              <IconField
+                Icon={Lock}
+                placeholder="تأكيد كلمة السر الجديدة"
+                value={confirmPassword}
+                onChangeText={setConfirmPassword}
+                secureTextEntry
+                autoComplete="password-new"
+              />
+              <GradientButton
+                label={changePassword.isPending ? 'جاري التحديث…' : 'تحديث كلمة السر'}
+                onPress={() => changePassword.mutate()}
+                loading={changePassword.isPending}
+              />
+            </View>
+          )}
+
           <Pressable
             onPress={() => navigation.goBack()}
             style={({ pressed }) => [styles.cancel, pressed && { opacity: 0.7 }]}
@@ -236,6 +320,32 @@ const styles = StyleSheet.create({
     color: colors.text.muted,
     fontFamily: fontFamilies.bodyBold,
     fontSize: fontSizes.sm,
+  },
+  pwToggle: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    marginTop: spacing.lg,
+    paddingVertical: spacing.md,
+    paddingHorizontal: spacing.md,
+    backgroundColor: colors.white,
+    borderRadius: radii.lg,
+    borderWidth: 1,
+    borderColor: colors.line,
+  },
+  pwToggleText: {
+    flex: 1,
+    fontFamily: fontFamilies.bodyExtraBold,
+    fontSize: fontSizes.sm,
+    color: colors.ink,
+  },
+  pwBox: {
+    marginTop: spacing.md,
+    padding: spacing.md,
+    borderRadius: radii.lg,
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.line,
   },
   // legacy class kept to avoid touching all callers (no-op)
   _unused: { display: 'none' as const },
