@@ -60,7 +60,7 @@ const PILLARS: Pillar[] = [
   {
     Icon: Award,
     title: 'مكافآت الولاء',
-    body: 'احصل على 5% من قيمة كل طلب في محفظتك. استخدمها في طلباتك القادمة، أو شارك كود الإحالة مع أصدقائك.',
+    body: 'احصل على 5% من قيمة كل طلب في محفظتك كنقاط ولاء، تُستخدم في طلباتك القادمة.',
   },
   {
     Icon: Sparkles,
@@ -202,6 +202,30 @@ export function AboutScreen() {
             <Text style={styles.infoTitle}>الموقع الإلكتروني</Text>
             <Text style={styles.infoLink}>{TAMEM_SITE.replace('https://', '')}</Text>
           </View>
+        </Pressable>
+
+        {/* Legal documents — required for store policies and merchant payouts. */}
+        <Text style={styles.sectionTitle}>المستندات القانونية</Text>
+        <Pressable
+          onPress={() => void Linking.openURL(TAMEM_SITE + '/terms')}
+          style={({ pressed }) => [styles.legalRow, shadows.sm, pressed && { opacity: 0.85 }]}
+        >
+          <Text style={styles.legalText}>الشروط والأحكام</Text>
+          <Text style={styles.legalLink}>عرض</Text>
+        </Pressable>
+        <Pressable
+          onPress={() => void Linking.openURL(TAMEM_SITE + '/privacy')}
+          style={({ pressed }) => [styles.legalRow, shadows.sm, pressed && { opacity: 0.85 }]}
+        >
+          <Text style={styles.legalText}>سياسة الخصوصية</Text>
+          <Text style={styles.legalLink}>عرض</Text>
+        </Pressable>
+        <Pressable
+          onPress={() => void Linking.openURL(TAMEM_SITE + '/refund')}
+          style={({ pressed }) => [styles.legalRow, shadows.sm, pressed && { opacity: 0.85 }]}
+        >
+          <Text style={styles.legalText}>سياسة الاسترجاع</Text>
+          <Text style={styles.legalLink}>عرض</Text>
         </Pressable>
 
         {/* Developer credit */}
@@ -479,5 +503,26 @@ const styles = StyleSheet.create({
     fontFamily: fontFamilies.body,
     fontSize: 10,
     marginTop: spacing.lg,
+  },
+  legalRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: colors.white,
+    borderRadius: radii.lg,
+    borderWidth: 1,
+    borderColor: colors.line,
+    padding: spacing.md,
+    marginBottom: spacing.sm,
+  },
+  legalText: {
+    fontFamily: fontFamilies.bodyExtraBold,
+    color: colors.ink,
+    fontSize: fontSizes.sm,
+  },
+  legalLink: {
+    fontFamily: fontFamilies.bodyExtraBold,
+    color: colors.brand.red,
+    fontSize: fontSizes.xs,
   },
 });

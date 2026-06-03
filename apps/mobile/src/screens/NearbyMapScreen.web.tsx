@@ -5,16 +5,7 @@
 import { useNavigation, useRoute, type RouteProp } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useQuery } from '@tanstack/react-query';
-import {
-  Crosshair,
-  MapPin,
-  Pill,
-  Search,
-  ShoppingBag,
-  Star,
-  Store,
-  Utensils,
-} from 'lucide-react-native';
+import { MapPin, Pill, Search, ShoppingBag, Star, Store, Utensils } from 'lucide-react-native';
 import { useMemo, useState } from 'react';
 import {
   ActivityIndicator,
@@ -67,6 +58,12 @@ const FILTERS: Filter[] = [
     label: 'صيدليات',
     icon: Pill,
     match: (m) => m.category?.id === 'pharmacies' || /صيدل/.test(m.category?.nameAr ?? ''),
+  },
+  {
+    key: 'sweets',
+    label: 'حلويات',
+    icon: ShoppingBag,
+    match: (m) => m.category?.id === 'sweets' || /حلوى|حلويات/.test(m.category?.nameAr ?? ''),
   },
 ];
 
@@ -153,7 +150,9 @@ export function NearbyMapScreen() {
         </ScrollView>
       </View>
 
-      {/* Embedded OpenStreetMap via iframe (web only) */}
+      {/* Embedded OpenStreetMap via iframe (web only). Interactive map with
+          per-merchant markers is mobile-only — surfaced via a banner so the
+          web user knows where to find the real thing. */}
       <View style={styles.mapWrap}>
         {/* eslint-disable-next-line react/forbid-elements */}
         <iframe
@@ -162,9 +161,11 @@ export function NearbyMapScreen() {
           title="خريطة قفط"
           loading="lazy"
         />
-        <Pressable onPress={() => undefined} style={styles.recenterBtn}>
-          <Crosshair size={20} color={colors.brand.red} />
-        </Pressable>
+        <View style={styles.webMapBanner} pointerEvents="none">
+          <Text style={styles.webMapBannerText}>
+            الخريطة التفاعلية بدبابيس المتاجر وموقعك مباشرة متاحة على تطبيق الموبايل.
+          </Text>
+        </View>
       </View>
 
       <View style={styles.sheet}>
@@ -268,17 +269,22 @@ const styles = StyleSheet.create({
   },
   chipTextActive: { color: colors.white },
   mapWrap: { flex: 1, position: 'relative', backgroundColor: '#E5E7EB' },
-  recenterBtn: {
+  webMapBanner: {
     position: 'absolute',
     bottom: spacing.md,
-    insetInlineStart: spacing.md,
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: colors.white,
-    alignItems: 'center',
-    justifyContent: 'center',
-    boxShadow: '0 6px 18px rgba(0,0,0,0.18)',
+    left: spacing.md,
+    right: spacing.md,
+    backgroundColor: 'rgba(36,19,16,0.85)',
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    borderRadius: radii.md,
+  },
+  webMapBannerText: {
+    color: colors.white,
+    fontFamily: fontFamilies.bodyBold,
+    fontSize: fontSizes.xs,
+    textAlign: 'center',
+    lineHeight: 18,
   },
   sheet: {
     backgroundColor: colors.white,

@@ -3,7 +3,7 @@ import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { useEffect, useState } from 'react';
 
 import { OnboardingTour } from '../components/OnboardingTour';
-import { registerForPushNotifications } from '../lib/push';
+import { navigationRef, registerForPushNotifications, usePushTapNavigation } from '../lib/push';
 import { connectSocket, disconnectSocket } from '../lib/socket';
 import { CollectPhoneScreen } from '../screens/CollectPhoneScreen';
 import { SplashScreen } from '../screens/SplashScreen';
@@ -61,7 +61,8 @@ export function RootNavigator() {
   const mustCollectPhone = !!user && needsPhoneCollection(user.phone);
 
   return (
-    <NavigationContainer>
+    <NavigationContainer ref={navigationRef}>
+      <PushNavBridge />
       <Stack.Navigator screenOptions={{ headerShown: false }}>
         {!user ? (
           <Stack.Screen name="Auth" component={AuthStack} />
@@ -75,4 +76,11 @@ export function RootNavigator() {
       <OnboardingTour />
     </NavigationContainer>
   );
+}
+
+/** Tiny child component so the usePushTapNavigation hook can call useEffect
+ *  inside the NavigationContainer tree. */
+function PushNavBridge(): null {
+  usePushTapNavigation();
+  return null;
 }

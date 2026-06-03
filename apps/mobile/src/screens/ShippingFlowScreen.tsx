@@ -120,7 +120,10 @@ export function ShippingFlowScreen() {
       try {
         const parent = navigation.getParent();
         if (parent) {
-          parent.navigate('Orders', { screen: 'OrdersList' } as never);
+          parent.navigate('Orders', {
+            screen: 'OrderTracking',
+            params: { orderId: order.id, justCreated: true },
+          } as never);
           Alert.alert('تم استلام طلبك ✓', `رقم الطلب: ${order.orderNumber ?? '—'}`);
         } else {
           navigation.popToTop();

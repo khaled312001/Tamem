@@ -90,6 +90,7 @@ const STAGE_ORDER: OrderStatus[] = [
   'PRICED',
   'ACCEPTED',
   'DRIVER_ASSIGNED',
+  'PICKED_UP',
   'IN_ROUTE',
   'DELIVERED',
 ];
@@ -146,6 +147,22 @@ const CANCEL_LOCKED_BUT_ACTIVE: OrderStatus[] = [
   'PICKED_UP',
   'IN_ROUTE',
 ];
+
+/** Mask middle digits of a phone for display, e.g. 01010254819 → 010 *** 4819. */
+function maskPhone(phone: string): string {
+  const digits = phone.replace(/\D/g, '');
+  if (digits.length < 7) return phone;
+  return `${digits.slice(0, 3)} *** ${digits.slice(-4)}`;
+}
+
+const COMPLAINT_REASONS = [
+  'السائق لم يحضر',
+  'تأخّر طويل في التوصيل',
+  'الطلب وصل تالف أو ناقص',
+  'تعامل غير لائق',
+  'مشكلة في السعر / الفاتورة',
+  'سبب آخر',
+] as const;
 
 export function OrderTrackingScreen() {
   const route = useRoute<Route>();
@@ -341,16 +358,47 @@ export function OrderTrackingScreen() {
               </View>
               <View style={{ flex: 1 }}>
                 <Text style={styles.driverName}>{order.assignedDriver.name}</Text>
-                <Text style={styles.driverPhone}>{order.assignedDriver.phone}</Text>
+                <Text style={styles.driverPhone}>
+                  {/* Mask middle digits for privacy until backend exposes proxy. */}
+                  {maskPhone(order.assignedDriver.phone)}
+                </Text>
                 {driverLoc && <DriverLastSeen at={driverLoc.at} />}
               </View>
+            </View>
+            <View style={styles.driverActionsRow}>
               <Pressable
                 onPress={() => Linking.openURL(`tel:${order.assignedDriver!.phone}`)}
-                style={({ pressed }) => [styles.callBtn, pressed && { opacity: 0.85 }]}
+                style={({ pressed }) => [styles.driverActionBtn, pressed && { opacity: 0.85 }]}
                 accessibilityLabel="اتصال بالسائق"
               >
-                <Phone size={16} color={colors.white} />
-                <Text style={styles.callBtnText}>اتصال</Text>
+                <Phone size={14} color={colors.white} />
+                <Text style={styles.driverActionText}>اتصال</Text>
+              </Pressable>
+              <Pressable
+                onPress={() =>
+                  Linking.openURL(`https://wa.me/${order.assignedDriver!.phone.replace(/\D/g, '')}`)
+                }
+                style={({ pressed }) => [
+                  styles.driverActionBtn,
+                  styles.driverActionWa,
+                  pressed && { opacity: 0.85 },
+                ]}
+                accessibilityLabel="واتساب السائق"
+              >
+                <MessageCircle size={14} color={colors.white} />
+                <Text style={styles.driverActionText}>واتساب</Text>
+              </Pressable>
+              <Pressable
+                onPress={() => Linking.openURL(`sms:${order.assignedDriver!.phone}`)}
+                style={({ pressed }) => [
+                  styles.driverActionBtn,
+                  styles.driverActionSms,
+                  pressed && { opacity: 0.85 },
+                ]}
+                accessibilityLabel="رسالة للسائق"
+              >
+                <MessageCircle size={14} color={colors.brand.red} />
+                <Text style={[styles.driverActionText, { color: colors.brand.red }]}>رسالة</Text>
               </Pressable>
             </View>
           </View>
@@ -442,6 +490,37 @@ export function OrderTrackingScreen() {
               <ReorderButton orderId={order.id} orderNumber={order.orderNumber} />
             </View>
           )}
+
+          {/* Receipt — visible after delivery so the customer has a printable
+              trail. Used to import Receipt icon without ever rendering it. */}
+          {isCompleted ? (
+            <View style={{ marginBottom: spacing.md }}>
+              <GhostButton
+                label="إيصال الطلب"
+                Icon={Receipt}
+                onPress={() => {
+                  const lines = [
+                    `إيصال طلب #${order.orderNumber}`,
+                    `الخدمة: ${order.service?.nameAr ?? '—'}`,
+                    `السعر: ${price ? `${Number(price).toLocaleString('ar-EG')} ج.م` : '—'}`,
+                    order.deliveryAddress ? `العنوان: ${order.deliveryAddress}` : null,
+                    order.assignedDriver ? `السائق: ${order.assignedDriver.name}` : null,
+                    `التاريخ: ${new Date(order.createdAt).toLocaleString('ar-EG')}`,
+                  ]
+                    .filter(Boolean)
+                    .join('\n');
+                  Alert.alert('إيصال الطلب', lines, [
+                    {
+                      text: 'مشاركة عبر واتساب',
+                      onPress: () => openWhatsApp(lines),
+                    },
+                    { text: 'إغلاق', style: 'cancel' },
+                  ]);
+                }}
+              />
+            </View>
+          ) : null}
+
           <SecondaryButton
             label="تواصل مع الإدارة"
             Icon={MessageCircle}
@@ -452,17 +531,65 @@ export function OrderTrackingScreen() {
             }
           />
 
+          {/* Complaint — categorized + escalates to admin with context. */}
+          {!isTerminalBad ? (
+            <View style={{ marginTop: spacing.md }}>
+              <GhostButton
+                label="الإبلاغ عن مشكلة"
+                Icon={AlertCircle}
+                tone="danger"
+                onPress={() => {
+                  // Use an action sheet of categorized reasons.
+                  Alert.alert('الإبلاغ عن مشكلة', 'اختر سبب المشكلة وهنتواصل معاك خلال 15 دقيقة:', [
+                    ...COMPLAINT_REASONS.map((r) => ({
+                      text: r,
+                      onPress: () =>
+                        openWhatsApp(
+                          `🚨 إبلاغ عن مشكلة في طلب #${order.orderNumber}\nالسبب: ${r}\nالحالة: ${ORDER_STATUS_AR[order.status]}`,
+                        ),
+                    })),
+                    { text: 'إلغاء', style: 'cancel' as const },
+                  ]);
+                }}
+              />
+            </View>
+          ) : null}
+
           {canCustomerCancel ? (
             <View style={{ marginTop: spacing.md }}>
               <CancelOrderButton orderId={order.id} orderNumber={order.orderNumber} />
             </View>
           ) : cancelLocked ? (
-            <View style={styles.cancelLockedNote}>
-              <ShieldCheck size={14} color={colors.warning} />
-              <Text style={styles.cancelLockedText}>
-                الطلب بقى في مرحلة التسعير ومش هتقدر تلغيه من التطبيق. لو محتاج إلغاء أو تعديل،
-                تواصل مع الإدارة عبر واتساب من الزر أعلاه.
-              </Text>
+            <View style={{ marginTop: spacing.md }}>
+              <View style={styles.cancelLockedNote}>
+                <ShieldCheck size={14} color={colors.warning} />
+                <Text style={styles.cancelLockedText}>
+                  الطلب اتسعّر، الإلغاء بقى محتاج موافقة الإدارة (قد يترتب عليه رسوم).
+                </Text>
+              </View>
+              <View style={{ marginTop: spacing.sm }}>
+                <GhostButton
+                  label="طلب إلغاء (يحتاج موافقة الإدارة)"
+                  tone="danger"
+                  onPress={() => {
+                    Alert.alert(
+                      'طلب إلغاء',
+                      `إلغاء طلب #${order.orderNumber} بعد التسعير قد يرتب عليك رسوم تحضير أو رسوم سائق. الإدارة هتراجع وترد عليك. تأكيد؟`,
+                      [
+                        { text: 'تراجع', style: 'cancel' },
+                        {
+                          text: 'أرسل طلب الإلغاء',
+                          style: 'destructive',
+                          onPress: () =>
+                            openWhatsApp(
+                              `طلب إلغاء — طلب #${order.orderNumber}\nالحالة: ${ORDER_STATUS_AR[order.status]}\nالسبب: __________`,
+                            ),
+                        },
+                      ],
+                    );
+                  }}
+                />
+              </View>
             </View>
           ) : null}
 
@@ -485,7 +612,6 @@ export function OrderTrackingScreen() {
 function StageTimeline({ status }: { status: OrderStatus }) {
   const aliasMap: Partial<Record<OrderStatus, OrderStatus>> = {
     AWAITING_CUSTOMER_APPROVAL: 'PRICED',
-    PICKED_UP: 'DRIVER_ASSIGNED',
     COMPLETED: 'DELIVERED',
   };
   const effective = aliasMap[status] ?? status;
@@ -1142,6 +1268,32 @@ const styles = StyleSheet.create({
     color: colors.text.muted,
     fontSize: fontSizes.xs,
     marginTop: 2,
+  },
+  driverActionsRow: {
+    flexDirection: 'row',
+    gap: spacing.sm,
+    marginTop: spacing.md,
+  },
+  driverActionBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 4,
+    backgroundColor: colors.brand.red,
+    paddingVertical: 10,
+    borderRadius: radii.md,
+  },
+  driverActionWa: { backgroundColor: '#25D366' },
+  driverActionSms: {
+    backgroundColor: colors.brand.redLight,
+    borderWidth: 1,
+    borderColor: colors.brand.red + '40',
+  },
+  driverActionText: {
+    color: colors.white,
+    fontFamily: fontFamilies.bodyExtraBold,
+    fontSize: fontSizes.xs,
   },
   callBtn: {
     flexDirection: 'row',

@@ -126,7 +126,7 @@ export function SplashScreen({ onStart }: SplashScreenProps = {}) {
               <Text style={styles.ctaText}>ابدأ الآن</Text>
               <ChevronLeft size={20} color={colors.brand.dark} />
             </Pressable>
-            <Text style={styles.ctaHint}>اضغط للمتابعة لتسجيل الدخول</Text>
+            <Text style={styles.ctaHint}>اضغط للمتابعة لإنشاء حساب أو تسجيل الدخول</Text>
           </Animated.View>
         ) : (
           <View style={styles.dotsRow}>

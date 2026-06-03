@@ -4,7 +4,6 @@ import { useMutation } from '@tanstack/react-query';
 import { Lock, Phone, ShieldCheck } from 'lucide-react-native';
 import { useState } from 'react';
 import {
-  Alert,
   KeyboardAvoidingView,
   Platform,
   Pressable,
@@ -15,16 +14,18 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { GradientButton } from '../components/GradientButton';
 import { IconField } from '../components/IconField';
+import { PasswordField } from '../components/PasswordField';
 import { ScreenHeader } from '../components/ScreenHeader';
+import { PrimaryButton } from '../components/ui';
 import { api } from '../lib/api';
+import { authErrorMessage } from '../lib/authErrors';
+import { showToast } from '../lib/toast';
 import type { AuthStackParamList } from '../navigation/AuthStack';
 import { useAuth } from '../stores/auth';
 import { colors, fontFamilies, fontSizes, spacing } from '../theme/tokens';
 
 type Nav = NativeStackNavigationProp<AuthStackParamList, 'ForgotPassword'>;
-
 type Step = 'request' | 'verify';
 
 export function ForgotPasswordScreen() {
@@ -34,24 +35,30 @@ export function ForgotPasswordScreen() {
   const [phone, setPhone] = useState('');
   const [code, setCode] = useState('');
   const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
 
   const requestMut = useMutation({
     mutationFn: () => api.raw.post('/auth/forgot-password', { phone: phone.trim() }),
     onSuccess: (res) => {
-      // The backend includes `debugCode` in dev so the user can autofill it.
-      const debugCode = res.data.data?.debugCode as string | undefined;
-      if (debugCode) {
-        setCode(debugCode);
-        Alert.alert(
-          'كود التحقق (وضع التطوير)',
-          `الكود هو: ${debugCode}\nسيظهر تلقائياً في الحقل التالي.`,
-        );
-      } else {
-        Alert.alert('تم إرسال الكود', 'تحقق من رسائل الـ SMS / واتساب');
+      // dev autofill of the OTP code — gated by __DEV__ so it can never
+      // ship in a release build.
+      if (__DEV__) {
+        const debugCode = res.data.data?.debugCode as string | undefined;
+        if (debugCode) setCode(debugCode);
       }
+      showToast({
+        title: 'تم إرسال الكود ✓',
+        message: 'تحقق من رسائل الـ SMS / واتساب على هاتفك',
+        tone: 'success',
+      });
       setStep('verify');
     },
-    onError: (err) => Alert.alert('خطأ', err instanceof Error ? err.message : 'فشل إرسال الكود'),
+    onError: (err) =>
+      showToast({
+        title: 'تعذّر إرسال الكود',
+        message: authErrorMessage(err, 'reset'),
+        tone: 'error',
+      }),
   });
 
   const resetMut = useMutation({
@@ -69,14 +76,22 @@ export function ForgotPasswordScreen() {
     onSuccess: async (data) => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       await setSession(data.user as any, data.tokens);
-      // Auth state change will switch to AppTabs automatically.
     },
     onError: (err) =>
-      Alert.alert('خطأ', err instanceof Error ? err.message : 'كود غير صحيح أو منتهي'),
+      showToast({
+        title: 'تعذّر إعادة الضبط',
+        message: authErrorMessage(err, 'reset'),
+        tone: 'error',
+      }),
   });
 
   const canRequest = phone.trim().length >= 8 && !requestMut.isPending;
-  const canReset = code.trim().length === 6 && newPassword.length >= 8 && !resetMut.isPending;
+  const passwordsMatch = newPassword.length >= 8 && newPassword === confirmPassword;
+  const canReset = code.trim().length === 6 && passwordsMatch && !resetMut.isPending;
+  const passwordMismatchError =
+    confirmPassword.length > 0 && confirmPassword !== newPassword
+      ? 'كلمتا المرور غير متطابقتين'
+      : undefined;
 
   return (
     <SafeAreaView edges={['top']} style={styles.container}>
@@ -107,11 +122,12 @@ export function ForgotPasswordScreen() {
                 keyboardType="phone-pad"
                 value={phone}
                 onChangeText={setPhone}
+                autoComplete="tel"
               />
 
               <View style={{ height: spacing.md }} />
-              <GradientButton
-                label={requestMut.isPending ? 'جاري الإرسال…' : 'إرسال كود التحقق'}
+              <PrimaryButton
+                label="إرسال كود التحقق"
                 onPress={() => canRequest && requestMut.mutate()}
                 loading={requestMut.isPending}
                 disabled={!canRequest}
@@ -140,19 +156,28 @@ export function ForgotPasswordScreen() {
                 maxLength={6}
                 value={code}
                 onChangeText={(t) => setCode(t.replace(/\D/g, ''))}
+                textContentType="oneTimeCode"
+                autoComplete="sms-otp"
               />
 
-              <IconField
-                Icon={Lock}
+              <PasswordField
                 placeholder="كلمة السر الجديدة (8 أحرف على الأقل)"
-                secureTextEntry
                 value={newPassword}
                 onChangeText={setNewPassword}
+                autoComplete="new-password"
+              />
+
+              <PasswordField
+                placeholder="أعد كتابة كلمة السر"
+                value={confirmPassword}
+                onChangeText={setConfirmPassword}
+                error={passwordMismatchError}
+                autoComplete="new-password"
               />
 
               <View style={{ height: spacing.md }} />
-              <GradientButton
-                label={resetMut.isPending ? 'جاري الحفظ…' : 'تغيير كلمة السر'}
+              <PrimaryButton
+                label="تغيير كلمة السر"
                 onPress={() => canReset && resetMut.mutate()}
                 loading={resetMut.isPending}
                 disabled={!canReset}

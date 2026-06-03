@@ -92,6 +92,45 @@ export const updateMe: RequestHandler = async (req, res, next) => {
   }
 };
 
+/**
+ * DELETE /me — customer-initiated account deletion. Required by Google Play
+ * and App Store data-deletion policies (Apple guideline 5.1.1.v, Google Play
+ * "Account Deletion Requirements" effective 2023-12). Soft-delete: the row
+ * stays so completed orders remain attributable, but the account is locked
+ * and the PII is scrubbed.
+ */
+export const deleteMyAccount: RequestHandler = async (req, res, next) => {
+  try {
+    if (!req.user) throw new UnauthorizedError();
+    const stamp = new Date().toISOString().slice(0, 10);
+    await prisma.user.update({
+      where: { id: req.user.id },
+      data: {
+        isActive: false,
+        // Scrub PII so a future export can't surface the account.
+        name: 'حساب محذوف',
+        email: null,
+        avatarUrl: null,
+        passwordHash: null,
+        defaultAddress: null,
+        // Append a stamp to phone so the same number can re-register fresh
+        // without violating the unique constraint.
+        phone: `deleted_${req.user.id.slice(-8)}_${stamp}`,
+      },
+    });
+    // Best-effort: revoke active refresh tokens.
+    await prisma.refreshToken
+      .updateMany({
+        where: { userId: req.user.id, revokedAt: null },
+        data: { revokedAt: new Date() },
+      })
+      .catch(() => undefined);
+    ok(res, { deleted: true });
+  } catch (err) {
+    next(err);
+  }
+};
+
 export const changePassword: RequestHandler = async (req, res, next) => {
   try {
     if (!req.user) throw new UnauthorizedError();

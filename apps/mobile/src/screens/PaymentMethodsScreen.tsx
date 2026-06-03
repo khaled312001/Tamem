@@ -1,4 +1,5 @@
 import { Banknote, CreditCard, Info, Smartphone } from 'lucide-react-native';
+import type { LucideIcon } from 'lucide-react-native';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
@@ -9,7 +10,7 @@ interface Method {
   key: string;
   label: string;
   badge: string;
-  Icon: typeof Banknote;
+  Icon: LucideIcon;
   desc: string;
   available: boolean;
 }
@@ -28,7 +29,7 @@ const METHODS: Method[] = [
     label: 'فودافون كاش',
     badge: 'إلكتروني',
     Icon: Smartphone,
-    desc: 'حوّل قيمة الطلب من محفظة فودافون كاش الخاصة بك عبر EasyKash.',
+    desc: 'حوّل قيمة الطلب من محفظة فودافون كاش الخاصة بك عبر EasyKash مباشرة.',
     available: true,
   },
   {
@@ -36,7 +37,7 @@ const METHODS: Method[] = [
     label: 'إنستا باي',
     badge: 'إلكتروني',
     Icon: Smartphone,
-    desc: 'حوّل من بنكك مباشرةً عبر InstaPay داخل بوابة EasyKash.',
+    desc: 'حوّل من بنكك مباشرةً عبر InstaPay داخل بوابة EasyKash الآمنة.',
     available: true,
   },
   {

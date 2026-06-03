@@ -10,7 +10,13 @@ import {
   listAddresses,
   updateAddress,
 } from './addresses.controller.js';
-import { changePassword, getMe, setFcmToken, updateMe } from './users.controller.js';
+import {
+  changePassword,
+  deleteMyAccount,
+  getMe,
+  setFcmToken,
+  updateMe,
+} from './users.controller.js';
 import { exportMyData } from './users.export.controller.js';
 
 // /me/* — current user routes (any authenticated role)
@@ -19,6 +25,7 @@ meRouter.use(requireAuth);
 
 meRouter.get('/', getMe);
 meRouter.patch('/', updateMe);
+meRouter.delete('/', deleteMyAccount);
 meRouter.post('/change-password', changePassword);
 meRouter.post('/fcm-token', setFcmToken);
 meRouter.post('/location', updateMyLocation);

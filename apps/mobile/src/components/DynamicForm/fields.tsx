@@ -279,7 +279,7 @@ export function ImageFieldInput({ field, control, errors }: BaseProps) {
           const urls = (value as string[] | undefined) ?? [];
           const addImage = async () => {
             if (uploading) return;
-            // Lazy import to keep startup light
+            // Lazy ImagePicker import to keep startup light.
             const ImagePicker = await import('expo-image-picker');
             const result = await ImagePicker.launchImageLibraryAsync({
               mediaTypes: ['images'],
@@ -288,11 +288,19 @@ export function ImageFieldInput({ field, control, errors }: BaseProps) {
             if (result.canceled || !result.assets?.[0]) return;
             setUploading(true);
             try {
-              // Upload now so the order payload contains the hosted URL
-              // immediately — saves us from a second pass at submit time
-              // and matches QuickOrderSheet's behavior.
+              // Host the file via /uploads — the previous TODO let local
+              // file:// URIs reach the dispatcher, where they couldn't be
+              // opened. The order payload now carries the hosted URL.
               const uploaded = await uploadFile(result.assets[0].uri, { mime: 'image/jpeg' });
+              if (!uploaded?.url) throw new Error('فشل رفع الصورة');
               onChange([...urls, uploaded.url]);
+            } catch (e) {
+              const { showToast } = await import('../../lib/toast');
+              showToast({
+                title: 'تعذّر رفع الصورة',
+                message: e instanceof Error ? e.message : undefined,
+                tone: 'error',
+              });
             } finally {
               setUploading(false);
             }

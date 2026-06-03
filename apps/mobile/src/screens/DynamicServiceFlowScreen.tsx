@@ -7,8 +7,10 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import type { Service } from '@tamem/types';
 
+import { AddressPicker, type PickedAddress } from '../components/AddressPicker';
 import { CouponInput } from '../components/CouponInput';
 import { DynamicForm } from '../components/DynamicForm/DynamicForm';
+import { PaymentMethodPicker, type PaymentMethod } from '../components/PaymentMethodPicker';
 import { ScreenHeader } from '../components/ScreenHeader';
 import { CardListSkeleton, EmptyState, PrimaryButton } from '../components/ui';
 import { api } from '../lib/api';
@@ -32,6 +34,8 @@ export function DynamicServiceFlowScreen() {
 
   const [estimatedPrice, setEstimatedPrice] = useState<number | null>(null);
   const [coupon, setCoupon] = useState<AppliedCoupon | null>(null);
+  const [address, setAddress] = useState<PickedAddress | null>(null);
+  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('CASH');
   const formValuesRef = useRef<Record<string, unknown>>({});
   const submitFormRef = useRef<() => void>(() => {});
 
@@ -55,10 +59,16 @@ export function DynamicServiceFlowScreen() {
     mutationFn: (payload: Record<string, unknown>) =>
       api.raw.post('/orders', payload).then((r) => r.data.data),
     onSuccess: (order) => {
+      // Land the customer on the live tracking screen for the order they
+      // just created — was OrdersList before, which felt like the action
+      // disappeared into a haystack.
       try {
         const parent = navigation.getParent();
         if (parent) {
-          parent.navigate('Orders', { screen: 'OrdersList' } as never);
+          parent.navigate('Orders', {
+            screen: 'OrderTracking',
+            params: { orderId: order.id, justCreated: true },
+          } as never);
         } else {
           navigation.popToTop();
         }
@@ -100,12 +110,6 @@ export function DynamicServiceFlowScreen() {
     );
   }
 
-  // Qift center fallback — used when the dynamic form doesn't expose a
-  // LOCATION field so the backend's required deliveryLat/Lng/address checks
-  // still pass.
-  const QIFT_LAT = 26.0297;
-  const QIFT_LNG = 32.8146;
-
   const handleSubmit = async (values: Record<string, unknown>) => {
     formValuesRef.current = values;
 
@@ -114,7 +118,7 @@ export function DynamicServiceFlowScreen() {
         ? values.notes
         : typeof values.details === 'string'
           ? values.details
-          : (Object.values(values).find((v): v is string => typeof v === 'string') ?? '');
+          : '';
 
     const imageUrls = Array.isArray(values.imageUrls)
       ? (values.imageUrls.filter((u) => typeof u === 'string') as string[])
@@ -122,23 +126,38 @@ export function DynamicServiceFlowScreen() {
         ? (values.images.filter((u) => typeof u === 'string') as string[])
         : undefined;
 
-    const address =
-      (typeof values.deliveryAddress === 'string' && values.deliveryAddress.trim()) ||
-      'الرجاء تأكيد العنوان مع الإدارة';
-    const lat = typeof values.deliveryLat === 'number' ? values.deliveryLat : QIFT_LAT;
-    const lng = typeof values.deliveryLng === 'number' ? values.deliveryLng : QIFT_LNG;
+    // Prefer the explicit address picker; fall back to a LOCATION field on
+    // the dynamic form only if it exposes one with real lat/lng. Never use
+    // hard-coded Qift coordinates.
+    const formAddress =
+      typeof values.deliveryAddress === 'string' ? values.deliveryAddress.trim() : '';
+    const formLat = typeof values.deliveryLat === 'number' ? values.deliveryLat : undefined;
+    const formLng = typeof values.deliveryLng === 'number' ? values.deliveryLng : undefined;
+
+    let finalAddress = address?.address ?? formAddress;
+    let finalLat: number | undefined = address && !address.isFreeText ? address.lat : formLat;
+    let finalLng: number | undefined = address && !address.isFreeText ? address.lng : formLng;
+
+    if (service.category === 'DELIVERY' && (!finalLat || !finalLng || !finalAddress)) {
+      showToast({
+        title: 'أدخل عنوان التوصيل أولاً',
+        message: 'اختر عنوان محفوظ أو استخدم موقعك الحالي',
+        tone: 'error',
+      });
+      return;
+    }
 
     let payload: Record<string, unknown>;
     if (service.category === 'DELIVERY') {
       payload = {
         category: 'DELIVERY',
         serviceId: service.id,
-        deliveryAddress: address,
-        deliveryLat: lat,
-        deliveryLng: lng,
+        deliveryAddress: finalAddress,
+        deliveryLat: finalLat,
+        deliveryLng: finalLng,
         notes: notes || undefined,
         imageUrls,
-        paymentMethod: 'CASH',
+        paymentMethod,
         customData: values,
         ...(merchantId ? { merchantId } : {}),
         ...(coupon ? { couponCode: coupon.code } : {}),
@@ -147,7 +166,7 @@ export function DynamicServiceFlowScreen() {
       payload = {
         category: service.category,
         serviceId: service.id,
-        paymentMethod: 'CASH',
+        paymentMethod,
         customData: values,
         ...(coupon ? { couponCode: coupon.code } : {}),
       };
@@ -178,6 +197,18 @@ export function DynamicServiceFlowScreen() {
             }}
           />
         </View>
+
+        {/* ─────── Address (DELIVERY only) ─────── */}
+        {service.category === 'DELIVERY' ? (
+          <>
+            <Text style={styles.sectionTitle}>عنوان التوصيل</Text>
+            <AddressPicker value={address} onChange={setAddress} />
+          </>
+        ) : null}
+
+        {/* ─────── Payment method ─────── */}
+        <Text style={styles.sectionTitle}>طريقة الدفع</Text>
+        <PaymentMethodPicker value={paymentMethod} onChange={setPaymentMethod} />
 
         {/* ─────── Coupon ─────── */}
         <Text style={styles.sectionTitle}>كوبون الخصم</Text>

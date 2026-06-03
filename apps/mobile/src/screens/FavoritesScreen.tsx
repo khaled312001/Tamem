@@ -55,6 +55,16 @@ export function FavoritesScreen() {
             styles.listPad,
             favorites.length === 0 && { flexGrow: 1, justifyContent: 'center' },
           ]}
+          ListHeaderComponent={
+            favorites.length > 0 ? (
+              <View style={styles.localBanner}>
+                <Text style={styles.localBannerText}>
+                  ℹ️ المفضلة محفوظة على هذا الجهاز فقط دلوقتي. لو حذفت التطبيق أو غيّرت الموبايل
+                  هتحتاج تضيفها تاني.
+                </Text>
+              </View>
+            ) : null
+          }
           ListEmptyComponent={
             <EmptyState
               icon={<Heart size={36} color={colors.brand.red} />}
@@ -174,5 +184,19 @@ const styles = StyleSheet.create({
     color: colors.text.muted,
     fontFamily: fontFamilies.bodyExtraBold,
     fontSize: 10,
+  },
+  localBanner: {
+    backgroundColor: colors.surface,
+    borderRadius: radii.md,
+    borderWidth: 1,
+    borderColor: colors.line,
+    padding: spacing.sm,
+    marginBottom: spacing.md,
+  },
+  localBannerText: {
+    color: colors.text.secondary,
+    fontFamily: fontFamilies.body,
+    fontSize: fontSizes.xs,
+    lineHeight: 18,
   },
 });

@@ -18,11 +18,13 @@ export function QuickOrderFAB() {
   const pulse = useRef(new Animated.Value(1)).current;
 
   useEffect(() => {
-    // Gentle pulse to draw attention to the FAB
+    // Gentle pulse to draw attention, then settle — a permanent loop is
+    // exhausting in peripheral vision and was overlapping the trust strip
+    // before the user even scrolled.
     Animated.loop(
       Animated.sequence([
         Animated.timing(pulse, {
-          toValue: 1.08,
+          toValue: 1.06,
           duration: 1200,
           useNativeDriver: Platform.OS !== 'web',
         }),
@@ -32,6 +34,7 @@ export function QuickOrderFAB() {
           useNativeDriver: Platform.OS !== 'web',
         }),
       ]),
+      { iterations: 3 },
     ).start();
   }, [pulse]);
 

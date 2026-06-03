@@ -253,7 +253,9 @@ export function NearbyMapScreen() {
           <Text style={styles.empty}>لا توجد متاجر تطابق الفلتر</Text>
         ) : (
           <ScrollView showsVerticalScrollIndicator={false}>
-            {filtered.slice(0, 6).map((m) => {
+            {/* Let the ScrollView handle overflow — slice(0,6) used to hide
+                most of the list and the bottom-sheet counter was misleading. */}
+            {filtered.map((m) => {
               const p = pinFor(m);
               return (
                 <Pressable

@@ -1,9 +1,12 @@
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
+import { useQuery } from '@tanstack/react-query';
 import { Bell, Home, Package, User } from 'lucide-react-native';
 import { Platform } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { NotificationsScreen } from '../screens/NotificationsScreen';
+import { api } from '../lib/api';
+import { clearAppBadge } from '../lib/push';
 
 import { HomeStack } from './HomeStack';
 import { OrdersStack } from './OrdersStack';
@@ -22,10 +25,29 @@ const Tabs = createBottomTabNavigator<AppTabsParamList>();
 
 const TAB_ICON_SIZE = 22;
 
+/** Polls the unread notifications count so the bell tab can show a badge. */
+function useUnreadCount(): number {
+  const { data } = useQuery({
+    queryKey: ['notifications', 'unread-count'],
+    queryFn: async () => {
+      try {
+        const r = await api.raw.get('/notifications', { params: { pageSize: 100 } });
+        const list = (r.data.data ?? []) as Array<{ isRead?: boolean }>;
+        return list.filter((n) => !n.isRead).length;
+      } catch {
+        return 0;
+      }
+    },
+    refetchInterval: 60_000,
+    staleTime: 30_000,
+  });
+  return data ?? 0;
+}
+
 export function AppTabs() {
-  // Account for the iOS home-bar / Android nav-bar so icons + labels both fit.
   const insets = useSafeAreaInsets();
   const bottomInset = Platform.OS === 'web' ? 8 : Math.max(insets.bottom, 8);
+  const unread = useUnreadCount();
 
   return (
     <Tabs.Navigator
@@ -35,43 +57,37 @@ export function AppTabs() {
         tabBarActiveTintColor: colors.brand.red,
         tabBarInactiveTintColor: colors.text.muted,
         tabBarHideOnKeyboard: true,
-        // Force label under the icon on web too (default is `beside-icon` for wide
-        // screens, which hides Arabic labels with our 4-tab layout).
         tabBarLabelPosition: 'below-icon',
         tabBarShowLabel: true,
         tabBarStyle: {
           borderTopColor: colors.line,
           backgroundColor: colors.white,
-          // Total height = icon (22) + label (~14) + breathing room + bottom inset.
           height: 68 + bottomInset,
           paddingTop: 6,
           paddingBottom: bottomInset,
         },
-        tabBarItemStyle: {
-          paddingVertical: 0,
-        },
+        tabBarItemStyle: { paddingVertical: 0 },
         tabBarIconStyle: { marginTop: 4, marginBottom: 0 },
         tabBarLabelStyle: {
           fontFamily: fontFamilies.bodyBold,
-          fontSize: 11,
+          fontSize: 12,
           lineHeight: 14,
           marginTop: 2,
           marginBottom: 2,
           includeFontPadding: false,
         },
+        tabBarBadgeStyle: {
+          backgroundColor: colors.brand.red,
+          color: colors.white,
+          fontSize: 10,
+          fontFamily: fontFamilies.bodyExtraBold,
+        },
       }}
     >
-      {/* Match Talabat / Careem / Jahez convention for Arabic apps:
-          Home on the LEFT (first visual position), Account on the RIGHT.
-          The bottom-tab navigator renders children in declaration order on
-          web (no RTL flip), so we declare them in that exact order. */}
       <Tabs.Screen
         name="HomeTab"
         component={HomeStack}
         listeners={({ navigation }) => ({
-          // Tapping a tab while you're already inside its nested stack should
-          // jump you back to the stack root, not leave you on the deep page.
-          // (The default `popToTop` behavior is unreliable on web.)
           tabPress: (e) => {
             const state = navigation.getState();
             if (state?.routes[state.index]?.name === 'HomeTab') {
@@ -107,9 +123,17 @@ export function AppTabs() {
       <Tabs.Screen
         name="Notifications"
         component={NotificationsScreen}
+        listeners={() => ({
+          tabPress: () => {
+            // Clear OS-level badge when the user enters the tab — keeps the
+            // device home screen tidy.
+            void clearAppBadge();
+          },
+        })}
         options={{
           title: 'الإشعارات',
           tabBarIcon: ({ color }) => <Bell size={TAB_ICON_SIZE} color={color} />,
+          tabBarBadge: unread > 0 ? (unread > 99 ? '99+' : unread) : undefined,
         }}
       />
       <Tabs.Screen
