@@ -10,6 +10,7 @@ import {
   LogOut,
   MapPin,
   Package,
+  Repeat,
   Shield,
   Star,
   Trash2,
@@ -351,6 +352,13 @@ export function ProfileScreen() {
             sublabel="أكواد خصم حصرية لطلباتك"
             Icon={Gift}
             onPress={() => navigation.navigate('Coupons')}
+          />
+          <Divider inset />
+          <ListItem
+            label="الطلبات المتكررة"
+            sublabel="مياه أسبوعية، أدوية شهرية، ومشاوير دورية"
+            Icon={Repeat}
+            onPress={() => navigation.navigate('RecurringOrders')}
           />
         </View>
 

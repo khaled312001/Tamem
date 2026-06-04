@@ -1,7 +1,7 @@
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { useQuery } from '@tanstack/react-query';
 import { Bell, Home, Package, User } from 'lucide-react-native';
-import { Platform } from 'react-native';
+import { Platform, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { NotificationsScreen } from '../screens/NotificationsScreen';
@@ -24,6 +24,52 @@ export type AppTabsParamList = {
 const Tabs = createBottomTabNavigator<AppTabsParamList>();
 
 const TAB_ICON_SIZE = 22;
+
+/**
+ * Bell icon with a small red dot overlay when there are unread notifications.
+ * We render this manually instead of using React Navigation's built-in
+ * `tabBarBadge`, because the underlying `Badge` component pulls in the
+ * `color` npm package which crashes on web bundles (`colorString.get is
+ * not a function`).
+ */
+function BellWithBadge({ color, count }: { color: string; count: number }) {
+  const label = count > 99 ? '99+' : String(count);
+  return (
+    <View style={badgeStyles.wrap}>
+      <Bell size={TAB_ICON_SIZE} color={color} />
+      {count > 0 && (
+        <View style={badgeStyles.badge}>
+          <Text style={badgeStyles.badgeText} numberOfLines={1}>
+            {label}
+          </Text>
+        </View>
+      )}
+    </View>
+  );
+}
+
+const badgeStyles = StyleSheet.create({
+  wrap: { width: TAB_ICON_SIZE + 14, height: TAB_ICON_SIZE + 4, alignItems: 'center' },
+  badge: {
+    position: 'absolute',
+    top: -4,
+    right: 0,
+    minWidth: 16,
+    height: 16,
+    borderRadius: 8,
+    backgroundColor: '#E0301E',
+    paddingHorizontal: 4,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  badgeText: {
+    color: '#FFFFFF',
+    fontSize: 10,
+    fontWeight: '800',
+    lineHeight: 14,
+    includeFontPadding: false,
+  },
+});
 
 /** Polls the unread notifications count so the bell tab can show a badge. */
 function useUnreadCount(): number {
@@ -76,12 +122,6 @@ export function AppTabs() {
           marginBottom: 2,
           includeFontPadding: false,
         },
-        tabBarBadgeStyle: {
-          backgroundColor: colors.brand.red,
-          color: colors.white,
-          fontSize: 10,
-          fontFamily: fontFamilies.bodyExtraBold,
-        },
       }}
     >
       <Tabs.Screen
@@ -132,8 +172,7 @@ export function AppTabs() {
         })}
         options={{
           title: 'الإشعارات',
-          tabBarIcon: ({ color }) => <Bell size={TAB_ICON_SIZE} color={color} />,
-          tabBarBadge: unread > 0 ? (unread > 99 ? '99+' : unread) : undefined,
+          tabBarIcon: ({ color }) => <BellWithBadge color={color} count={unread} />,
         }}
       />
       <Tabs.Screen

@@ -1,12 +1,19 @@
 import { Heart } from 'lucide-react-native';
 import { Pressable, StyleSheet, type ViewStyle } from 'react-native';
 
-import { useFavorite } from '../lib/favorites';
+import { useFavoriteItem, type FavoriteCollection } from '../lib/favorites';
+import { haptic } from '../lib/haptics';
 import { showToast } from '../lib/toast';
 import { colors, radii, shadows } from '../theme/tokens';
 
 interface HeartButtonProps {
-  merchantId: string;
+  /** Backwards-compat: pass merchantId OR (collection + id). */
+  merchantId?: string;
+  /** Generic: which collection to toggle in. */
+  collection?: FavoriteCollection;
+  /** Generic: id of the item being favorited. */
+  id?: string;
+  /** Display name used in the undo toast. */
   merchantName?: string;
   size?: 'sm' | 'md';
   /** Floating button on top of an image — adds white background + shadow. */
@@ -15,17 +22,23 @@ interface HeartButtonProps {
 }
 
 /**
- * Toggleable heart for adding a merchant to the local favorites list.
- * Fires a toast on toggle so the action is undoable from anywhere.
+ * Toggleable heart for adding a merchant or product to the local favorites
+ * list. Fires a toast on toggle so the action is undoable from anywhere.
  */
 export function HeartButton({
   merchantId,
+  collection,
+  id,
   merchantName,
   size = 'md',
   floating,
   style,
 }: HeartButtonProps) {
-  const { isFavorite, toggle } = useFavorite(merchantId);
+  // Resolve which collection we're targeting. Old call sites pass merchantId
+  // and assume 'merchant'; new ones pass collection+id explicitly.
+  const targetCollection: FavoriteCollection = collection ?? 'merchant';
+  const targetId = id ?? merchantId;
+  const { isFavorite, toggle } = useFavoriteItem(targetCollection, targetId);
   const dimension = size === 'sm' ? 28 : 36;
   const iconSize = size === 'sm' ? 14 : 18;
 
@@ -33,10 +46,18 @@ export function HeartButton({
     <Pressable
       onPress={(e) => {
         e.stopPropagation();
+        haptic.tap();
         void toggle().then((added) => {
           if (added === undefined) return;
+          const isProduct = targetCollection === 'product';
           showToast({
-            title: added ? 'تمت إضافته للمفضلة' : 'تم إزالته من المفضلة',
+            title: added
+              ? isProduct
+                ? 'تمت إضافته لقائمة الرغبات'
+                : 'تمت إضافته للمفضلة'
+              : isProduct
+                ? 'تم إزالته من قائمة الرغبات'
+                : 'تم إزالته من المفضلة',
             message: merchantName,
             tone: added ? 'success' : 'info',
           });

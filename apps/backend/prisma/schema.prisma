@@ -169,6 +169,7 @@ model User {
   confirmedPays   Payment[]        @relation("PaymentConfirmer")
   servicesCreated Service[]        @relation("ServiceCreator")
   savedAddresses  CustomerAddress[]
+  recurringOrders RecurringOrder[] @relation("CustomerRecurring")
 
   @@index([role])
   @@index([phone])
@@ -290,9 +291,10 @@ model Service {
   createdAt                  DateTime        @default(now())
   updatedAt                  DateTime        @updatedAt
 
-  fields ServiceField[]
-  orders Order[]
-  rules  PricingRule[]
+  fields           ServiceField[]
+  orders           Order[]
+  rules            PricingRule[]
+  recurringOrders  RecurringOrder[]
 
   @@index([category, isActive])
 }
@@ -811,4 +813,66 @@ model AdminAuditLog {
   @@index([actorId, createdAt(sort: Desc)])
   @@index([path, createdAt(sort: Desc)])
   @@index([createdAt(sort: Desc)])
+}
+
+// ============================================
+// RecurringOrder — template that auto-creates an Order on a schedule
+// ============================================
+// Customer says "deliver me bottled water every Monday at 10am" — we save
+// the recipe here and the scheduledOrders cron (runs hourly) inserts a
+// fresh Order whenever `nextRunAt` <= now. After insert we bump nextRunAt
+// by `frequency`.
+//
+// We deliberately do NOT carry order status fields on this template — only
+// the inputs needed to construct a new Order. The generated Order starts at
+// NEW just like any other.
+
+enum RecurringFrequency {
+  DAILY
+  WEEKLY
+  BIWEEKLY
+  MONTHLY
+}
+
+model RecurringOrder {
+  id              String              @id @default(cuid())
+  customerId      String
+  customer        User                @relation("CustomerRecurring", fields: [customerId], references: [id], onDelete: Cascade)
+  serviceId       String
+  service         Service             @relation(fields: [serviceId], references: [id])
+  /// Optional label shown to the customer ("مياه أسبوعية", "أدوية الشهر").
+  label           String?             @db.VarChar(120)
+  category        ServiceCategory
+  merchantId      String?
+
+  // Order inputs — mirror Order's create-time fields, minus pricing/status.
+  customData      Json?
+  notes           String?             @db.Text
+  imageUrls       Json?
+  paymentMethod   PaymentMethod?
+  deliveryAddress String?             @db.VarChar(500)
+  deliveryLat     Decimal?            @db.Decimal(10, 7)
+  deliveryLng     Decimal?            @db.Decimal(10, 7)
+
+  // Cadence
+  frequency       RecurringFrequency
+  /// 0=Sun..6=Sat (for WEEKLY/BIWEEKLY). null for DAILY/MONTHLY.
+  dayOfWeek       Int?
+  /// 1..28 for MONTHLY (kept <=28 to dodge month-length edge cases). null otherwise.
+  dayOfMonth      Int?
+  /// Local hour 0..23 we want the order created. Combined with the
+  /// customer's TZ offset client-side; server stores literal hour.
+  hour            Int                 @default(10)
+
+  isActive        Boolean             @default(true)
+  lastGeneratedAt DateTime?
+  nextRunAt       DateTime
+  /// Stop auto-generating after this date (null = forever).
+  endsAt          DateTime?
+
+  createdAt       DateTime            @default(now())
+  updatedAt       DateTime            @updatedAt
+
+  @@index([customerId, isActive])
+  @@index([nextRunAt, isActive])
 }

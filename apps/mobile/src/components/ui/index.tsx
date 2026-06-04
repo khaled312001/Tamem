@@ -499,6 +499,43 @@ export { Skeleton, CardListSkeleton } from '../Skeleton';
 export { AnimatedListItem } from '../AnimatedListItem';
 export { ForwardChevron, BackChevron } from '../../theme/rtl';
 
+// New design-system primitives (added in Phase 1 design pass).
+// Coexist with the legacy PrimaryButton/SecondaryButton/GhostButton — the new
+// `Button` exposes a unified `variant` prop and animated press scale, and is
+// the preferred API for new screens.
+export { Avatar } from './Avatar';
+export type { AvatarProps } from './Avatar';
+
+export { Badge } from './Badge';
+export type { BadgeProps, BadgeTone } from './Badge';
+
+export { BottomSheet } from './BottomSheet';
+export type { BottomSheetProps } from './BottomSheet';
+
+export { Button } from './Button';
+export type { ButtonProps, ButtonSize, ButtonVariant } from './Button';
+
+export { MoneyText } from './MoneyText';
+export type { MoneyTextProps } from './MoneyText';
+
+export { OrderTimeline } from './OrderTimeline';
+export type { OrderTimelineProps, TimelineStage } from './OrderTimeline';
+
+export { Rating } from './Rating';
+export type { RatingProps } from './Rating';
+
+export { SearchBar } from './SearchBar';
+export type { SearchBarProps } from './SearchBar';
+
+export { Stat } from './Stat';
+export type { StatProps } from './Stat';
+
+export { StickyBar } from './StickyBar';
+export type { StickyBarProps } from './StickyBar';
+
+export { Tag } from './Tag';
+export type { TagProps } from './Tag';
+
 export function MerchantSkeleton({ count = 3 }: { count?: number }) {
   return (
     <View>

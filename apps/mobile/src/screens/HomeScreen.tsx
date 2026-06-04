@@ -1,7 +1,6 @@
 import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useQuery } from '@tanstack/react-query';
-import * as Haptics from 'expo-haptics';
 import { LinearGradient } from 'expo-linear-gradient';
 import {
   Bell,
@@ -10,36 +9,30 @@ import {
   Gift,
   MapPin,
   Package,
-  Search,
   ShoppingBag,
   Store,
   Truck,
 } from 'lucide-react-native';
 import { useState } from 'react';
-import {
-  Alert,
-  Platform,
-  Pressable,
-  ScrollView,
-  StyleSheet,
-  Text,
-  TextInput,
-  View,
-} from 'react-native';
+import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { HeartButton } from '../components/HeartButton';
 import { QuickOrderFAB } from '../components/QuickOrderFAB';
 import {
   AnimatedListItem,
+  Badge,
   ForwardChevron,
   MerchantSkeleton,
+  Rating,
+  SearchBar,
   SectionHeader,
   ServiceTile,
   StatusPill,
 } from '../components/ui';
 import { api } from '../lib/api';
 import { copyToClipboard } from '../lib/clipboard';
+import { haptic } from '../lib/haptics';
 import type { HomeStackParamList } from '../navigation/HomeStack';
 import { useAuth } from '../stores/auth';
 import {
@@ -124,9 +117,7 @@ const ACTIVE_STATUSES: OrderStatus[] = [
 // Fallback when the backend hasn't returned a real code on the offer.
 const FALLBACK_PROMO_CODE = 'TAMEM20';
 
-const tickHaptic = () => {
-  if (Platform.OS !== 'web') void Haptics.selectionAsync();
-};
+const tickHaptic = () => haptic.tap();
 
 export function HomeScreen() {
   const navigation = useNavigation<NavProp>();
@@ -216,22 +207,13 @@ export function HomeScreen() {
         <Text style={styles.heroGreeting}>أهلاً {user?.name?.split(' ')[0] ?? 'بك'} 👋</Text>
         <Text style={styles.heroSubtitle}>ايه اللي محتاج توصيله النهارده؟</Text>
 
-        <View style={styles.searchWrap}>
-          <Search size={18} color={colors.text.muted} />
-          <TextInput
+        <View style={styles.searchOuter}>
+          <SearchBar
             value={searchValue}
             onChangeText={setSearchValue}
-            onSubmitEditing={submitSearch}
-            returnKeyType="search"
+            onSubmit={submitSearch}
             placeholder="ابحث عن مطعم، محل، أو منتج…"
-            placeholderTextColor={colors.text.muted}
-            style={styles.searchInput}
           />
-          {searchValue.length > 0 && (
-            <Pressable onPress={submitSearch} hitSlop={8} style={styles.searchGo}>
-              <ForwardChevron size={18} color={colors.brand.red} />
-            </Pressable>
-          )}
         </View>
       </LinearGradient>
 
@@ -345,17 +327,14 @@ export function HomeScreen() {
                     {m.storeNameAr}
                   </Text>
                   <View style={styles.merchantMetaRow}>
-                    <Text style={styles.merchantMetaStar}>★</Text>
-                    <Text style={styles.merchantMetaText}>{Number(m.rating ?? 0).toFixed(1)}</Text>
+                    <Rating value={Number(m.rating ?? 0)} size="xs" />
                     <Text style={styles.merchantMetaDot}>·</Text>
                     <Text style={styles.merchantMetaText}>{m.category?.nameAr ?? '—'}</Text>
                   </View>
                 </View>
-                <View style={m.isOpen ? styles.openTag : styles.closedTag}>
-                  <Text style={m.isOpen ? styles.openTagText : styles.closedTagText}>
-                    {m.isOpen ? 'مفتوح' : 'مغلق'}
-                  </Text>
-                </View>
+                <Badge tone={m.isOpen ? 'success' : 'neutral'} size="sm">
+                  {m.isOpen ? 'مفتوح' : 'مغلق'}
+                </Badge>
                 <HeartButton merchantId={m.id} merchantName={m.storeNameAr} size="sm" />
               </Pressable>
             </AnimatedListItem>
@@ -455,31 +434,7 @@ const styles = StyleSheet.create({
     fontFamily: fontFamilies.body,
     marginTop: 2,
   },
-  searchWrap: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.sm,
-    backgroundColor: colors.white,
-    borderRadius: radii.lg,
-    paddingHorizontal: spacing.md,
-    paddingVertical: 12,
-    marginTop: spacing.lg,
-  },
-  searchInput: {
-    flex: 1,
-    fontSize: fontSizes.sm,
-    fontFamily: fontFamilies.body,
-    color: colors.text.primary,
-    textAlign: 'right',
-  },
-  searchGo: {
-    backgroundColor: colors.brand.redLight,
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
+  searchOuter: { marginTop: spacing.lg },
   // Scroll content
   scroll: {
     paddingHorizontal: spacing.lg,
@@ -590,12 +545,8 @@ const styles = StyleSheet.create({
   merchantMetaRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 4,
-    marginTop: 2,
-  },
-  merchantMetaStar: {
-    fontSize: 12,
-    color: colors.brand.gold,
+    gap: 6,
+    marginTop: 4,
   },
   merchantMetaText: {
     fontSize: fontSizes.xs,
@@ -605,28 +556,6 @@ const styles = StyleSheet.create({
   merchantMetaDot: {
     color: colors.text.muted,
     fontFamily: fontFamilies.body,
-  },
-  openTag: {
-    backgroundColor: colors.successLight,
-    paddingHorizontal: spacing.sm,
-    paddingVertical: 3,
-    borderRadius: radii.pill,
-  },
-  openTagText: {
-    color: colors.success,
-    fontFamily: fontFamilies.bodyExtraBold,
-    fontSize: 10,
-  },
-  closedTag: {
-    backgroundColor: colors.surface,
-    paddingHorizontal: spacing.sm,
-    paddingVertical: 3,
-    borderRadius: radii.pill,
-  },
-  closedTagText: {
-    color: colors.text.muted,
-    fontFamily: fontFamilies.bodyExtraBold,
-    fontSize: 10,
   },
   emptyMerchants: {
     alignItems: 'center',

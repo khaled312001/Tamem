@@ -16,7 +16,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { HeartButton } from '../components/HeartButton';
-import { EmptyState, ForwardChevron, PrimaryButton, StatusPill } from '../components/ui';
+import { EmptyState, ForwardChevron, MoneyText, PrimaryButton, StatusPill } from '../components/ui';
 import { api } from '../lib/api';
 import { formatEta } from '../lib/eta';
 import type { HomeStackParamList } from '../navigation/HomeStack';
@@ -209,10 +209,9 @@ export function MerchantDetailScreen() {
                 </View>
                 <View style={{ flex: 1 }}>
                   <Text style={styles.productName}>{p.nameAr}</Text>
-                  <Text style={styles.productPrice}>
-                    {Number(p.price).toLocaleString('ar-EG')} ج.م
-                  </Text>
+                  <MoneyText amount={Number(p.price)} tone="brand" size="sm" />
                 </View>
+                <HeartButton collection="product" id={p.id} merchantName={p.nameAr} size="sm" />
                 <ForwardChevron size={16} color={colors.text.muted} />
               </Pressable>
             ))}

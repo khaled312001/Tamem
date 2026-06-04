@@ -56,6 +56,7 @@ export async function registerForPushNotifications(): Promise<string | null> {
 
 /** Reset the system badge — call after the user opens the Notifications tab. */
 export async function clearAppBadge(): Promise<void> {
+  if (Platform.OS === 'web') return;
   try {
     await Notifications.setBadgeCountAsync(0);
   } catch {
@@ -74,6 +75,8 @@ export async function clearAppBadge(): Promise<void> {
  */
 export function usePushTapNavigation(): void {
   useEffect(() => {
+    // expo-notifications is native-only; skip on web entirely.
+    if (Platform.OS === 'web') return;
     // Cold start — app was killed and opened from a notification
     void Notifications.getLastNotificationResponseAsync().then((resp) => {
       if (resp) handle(resp);

@@ -4,15 +4,22 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   AlertCircle,
   CheckCircle2,
+  CheckCheck,
+  ClipboardCheck,
   Clock,
   CreditCard,
+  FileSearch,
+  HandCoins,
   MapPin,
   MessageCircle,
+  Package,
   Phone,
   Receipt,
   RotateCcw,
   ShieldCheck,
   Star,
+  Truck,
+  UserCheck,
   X as XIcon,
 } from 'lucide-react-native';
 import { useEffect, useState } from 'react';
@@ -37,6 +44,8 @@ import { ScreenHeader } from '../components/ScreenHeader';
 import {
   EmptyState,
   GhostButton,
+  OrderTimeline,
+  type TimelineStage,
   PrimaryButton,
   SecondaryButton,
   StatusPill,
@@ -72,6 +81,7 @@ interface OrderDetail {
   assignedDriver?: { id: string; name: string; phone: string } | null;
   statusHistory?: StatusHistoryItem[];
   createdAt: string;
+  scheduledFor?: string | null;
   review?: { id: string; rating: number; comment?: string | null } | null;
 }
 
@@ -297,6 +307,29 @@ export function OrderTrackingScreen() {
             {STAGE_LABEL[order.status] ?? ORDER_STATUS_AR[order.status]}
           </Text>
           {stageHint ? <Text style={styles.statusHint}>{stageHint}</Text> : null}
+
+          {/* Scheduled-for indicator — only when the customer requested a
+              future delivery window AND the order is still pre-dispatch. */}
+          {order.scheduledFor &&
+          (order.status === 'NEW' ||
+            order.status === 'UNDER_REVIEW' ||
+            order.status === 'PRICED' ||
+            order.status === 'AWAITING_CUSTOMER_APPROVAL' ||
+            order.status === 'ACCEPTED') ? (
+            <View style={styles.scheduledBanner}>
+              <Clock size={14} color={colors.brand.gold} />
+              <Text style={styles.scheduledBannerText}>
+                مجدول لـ{' '}
+                {new Date(order.scheduledFor).toLocaleString('ar-EG', {
+                  weekday: 'long',
+                  day: 'numeric',
+                  month: 'short',
+                  hour: '2-digit',
+                  minute: '2-digit',
+                })}
+              </Text>
+            </View>
+          ) : null}
           <View style={styles.statusFooter}>
             <View style={{ flex: 1 }}>
               <Text style={styles.statusFooterLabel}>السعر</Text>
@@ -328,7 +361,10 @@ export function OrderTrackingScreen() {
         {!isTerminalBad && (
           <View style={[styles.section, shadows.sm]}>
             <Text style={styles.sectionTitle}>مراحل الطلب</Text>
-            <StageTimeline status={order.status} />
+            <OrderTimeline
+              stages={buildStages(order.statusHistory)}
+              currentStage={resolveEffectiveStage(order.status)}
+            />
           </View>
         )}
 
@@ -606,103 +642,43 @@ export function OrderTrackingScreen() {
 }
 
 // ════════════════════════════════════════════════════════════════════════════
-// Stage timeline (vertical) — visually RTL-safe (no horizontal connectors).
+// Stage timeline — uses the shared <OrderTimeline> primitive. We just adapt
+// the order's statusHistory into the {key, label, Icon, completedAt} shape
+// the primitive expects.
 // ════════════════════════════════════════════════════════════════════════════
 
-function StageTimeline({ status }: { status: OrderStatus }) {
-  const aliasMap: Partial<Record<OrderStatus, OrderStatus>> = {
-    AWAITING_CUSTOMER_APPROVAL: 'PRICED',
-    COMPLETED: 'DELIVERED',
-  };
-  const effective = aliasMap[status] ?? status;
-  const currentIdx = Math.max(0, STAGE_ORDER.indexOf(effective));
+const STAGE_ICONS: Record<string, typeof CheckCircle2> = {
+  NEW: ClipboardCheck,
+  UNDER_REVIEW: FileSearch,
+  PRICED: HandCoins,
+  ACCEPTED: CheckCircle2,
+  DRIVER_ASSIGNED: UserCheck,
+  PICKED_UP: Package,
+  IN_ROUTE: Truck,
+  DELIVERED: CheckCheck,
+};
 
-  return (
-    <View style={{ marginTop: spacing.sm }}>
-      {STAGE_ORDER.map((stage, i) => {
-        const done = i < currentIdx;
-        const current = i === currentIdx;
-        const dotColor = done ? colors.success : current ? colors.brand.red : colors.line2;
-        const labelColor = done || current ? colors.ink : colors.text.muted;
-        return (
-          <View key={stage} style={timelineStyles.row}>
-            <View style={timelineStyles.dotCol}>
-              <View
-                style={[
-                  timelineStyles.dot,
-                  { backgroundColor: dotColor },
-                  current && timelineStyles.dotCurrent,
-                ]}
-              >
-                {done ? <CheckCircle2 size={14} color={colors.white} /> : null}
-              </View>
-              {i < STAGE_ORDER.length - 1 ? (
-                <View
-                  style={[
-                    timelineStyles.connector,
-                    { backgroundColor: done ? colors.success : colors.line2 },
-                  ]}
-                />
-              ) : null}
-            </View>
-            <View style={{ flex: 1, paddingBottom: spacing.md }}>
-              <Text
-                style={[
-                  timelineStyles.label,
-                  {
-                    color: labelColor,
-                    fontFamily: current ? fontFamilies.headingBold : fontFamilies.bodyBold,
-                  },
-                ]}
-              >
-                {STAGE_LABEL[stage]}
-              </Text>
-              {current && STAGE_HINT[stage] ? (
-                <Text style={timelineStyles.hint}>{STAGE_HINT[stage]}</Text>
-              ) : null}
-            </View>
-          </View>
-        );
-      })}
-    </View>
-  );
+function resolveEffectiveStage(status: OrderStatus): OrderStatus {
+  if (status === 'AWAITING_CUSTOMER_APPROVAL') return 'PRICED';
+  if (status === 'COMPLETED') return 'DELIVERED';
+  return status;
 }
 
-const timelineStyles = StyleSheet.create({
-  row: { flexDirection: 'row', gap: spacing.md, alignItems: 'flex-start' },
-  dotCol: { alignItems: 'center' },
-  dot: {
-    width: 24,
-    height: 24,
-    borderRadius: 12,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  dotCurrent: {
-    transform: [{ scale: 1.12 }],
-    shadowColor: colors.brand.red,
-    shadowOpacity: 0.4,
-    shadowRadius: 6,
-    elevation: 6,
-  },
-  connector: {
-    width: 2,
-    flex: 1,
-    minHeight: 24,
-    marginVertical: 2,
-  },
-  label: {
-    fontSize: fontSizes.sm,
-    marginTop: 2,
-  },
-  hint: {
-    fontSize: fontSizes.xs,
-    color: colors.text.secondary,
-    fontFamily: fontFamilies.body,
-    marginTop: 4,
-    lineHeight: 18,
-  },
-});
+function buildStages(history?: StatusHistoryItem[] | null): TimelineStage[] {
+  // Index history by stage so we can attach the completion timestamp.
+  const timestamps = new Map<string, string>();
+  for (const h of history ?? []) {
+    // Latest entry per stage wins (history is chronological asc from server).
+    timestamps.set(h.toStatus, h.createdAt);
+  }
+  return STAGE_ORDER.map((stage) => ({
+    key: stage,
+    label: STAGE_LABEL[stage] ?? stage,
+    description: STAGE_HINT[stage],
+    Icon: STAGE_ICONS[stage],
+    completedAt: timestamps.get(stage) ?? null,
+  }));
+}
 
 // ════════════════════════════════════════════════════════════════════════════
 // Driver last-seen
@@ -1159,6 +1135,22 @@ const styles = StyleSheet.create({
     fontFamily: fontFamilies.body,
     marginTop: 4,
     lineHeight: 22,
+  },
+  scheduledBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: 'rgba(242,169,59,0.12)',
+    borderRadius: radii.md,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 6,
+    marginTop: spacing.sm,
+    alignSelf: 'flex-start',
+  },
+  scheduledBannerText: {
+    fontSize: fontSizes.xs,
+    color: '#92420D',
+    fontFamily: fontFamilies.bodyExtraBold,
   },
   statusFooter: {
     flexDirection: 'row',

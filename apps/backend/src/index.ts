@@ -10,6 +10,7 @@ import {
 } from './integrations/wppconnect.js';
 import { startAlertsCron } from './jobs/alerts.js';
 import { startAuthCleanupCron } from './jobs/authCleanup.js';
+import { startRecurringOrdersCron } from './modules/recurring/recurring.cron.js';
 import { emitWhatsAppStatus } from './realtime/channels.js';
 import { bootstrapWs } from './realtime/ws.js';
 import { logger } from './utils/logger.js';
@@ -26,6 +27,7 @@ async function main() {
 
   startAlertsCron(io);
   startAuthCleanupCron();
+  startRecurringOrdersCron();
 
   // Broadcast WhatsApp bridge status changes (QR ready / connected / disconnected)
   // to the admin dashboard so it can render the QR and connection state live.

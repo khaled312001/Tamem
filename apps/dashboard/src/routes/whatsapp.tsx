@@ -30,7 +30,7 @@ interface WAStatus {
 export function WhatsAppPage() {
   const qc = useQueryClient();
 
-  const { data, isLoading, refetch } = useQuery({
+  const { data, isLoading, isError, error, refetch } = useQuery({
     queryKey: ['admin', 'whatsapp', 'status'],
     queryFn: () => api.adminWhatsAppStatus(),
     refetchInterval: (q) => {
@@ -38,6 +38,7 @@ export function WhatsAppPage() {
       // Poll faster while waiting for QR scan / connecting
       return s === 'qr' || s === 'connecting' ? 2000 : 15_000;
     },
+    retry: 1,
   });
 
   // Live updates via socket
@@ -82,9 +83,18 @@ export function WhatsAppPage() {
         <div className="bg-white rounded-xl border border-border p-10 text-center">
           <Loader2 className="w-6 h-6 animate-spin mx-auto" />
         </div>
+      ) : isError || !data ? (
+        <div className="bg-white rounded-xl border border-destructive/30 p-6 text-center space-y-3">
+          <XCircle className="w-8 h-8 text-destructive mx-auto" />
+          <div className="font-bold">تعذّر الاتصال بالسيرفر</div>
+          <div className="text-sm text-muted-foreground">
+            {(error as Error)?.message || 'تأكد أن خدمة الـ Backend شغّالة على المنفذ 4000'}
+          </div>
+          <Button onClick={() => refetch()}>إعادة المحاولة</Button>
+        </div>
       ) : (
         <ConnectionCard
-          data={data!}
+          data={data}
           onStart={() => start.mutate()}
           onStop={() => stop.mutate()}
           starting={start.isPending}

@@ -7,12 +7,17 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import type { Service } from '@tamem/types';
 
+import { Calendar, Clock } from 'lucide-react-native';
+import { Pressable } from 'react-native';
+
 import { AddressPicker, type PickedAddress } from '../components/AddressPicker';
 import { CouponInput } from '../components/CouponInput';
 import { DynamicForm } from '../components/DynamicForm/DynamicForm';
 import { PaymentMethodPicker, type PaymentMethod } from '../components/PaymentMethodPicker';
 import { ScreenHeader } from '../components/ScreenHeader';
-import { CardListSkeleton, EmptyState, PrimaryButton } from '../components/ui';
+import { SchedulePicker } from '../components/SchedulePicker';
+import { CardListSkeleton, EmptyState, MoneyText, PrimaryButton } from '../components/ui';
+import { palette, typography } from '../theme/tokens';
 import { api } from '../lib/api';
 import { showToast } from '../lib/toast';
 import type { HomeStackParamList } from '../navigation/HomeStack';
@@ -36,6 +41,8 @@ export function DynamicServiceFlowScreen() {
   const [coupon, setCoupon] = useState<AppliedCoupon | null>(null);
   const [address, setAddress] = useState<PickedAddress | null>(null);
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('CASH');
+  const [scheduledFor, setScheduledFor] = useState<string | null>(null);
+  const [scheduleSheetOpen, setScheduleSheetOpen] = useState(false);
   const formValuesRef = useRef<Record<string, unknown>>({});
   const submitFormRef = useRef<() => void>(() => {});
 
@@ -161,6 +168,7 @@ export function DynamicServiceFlowScreen() {
         customData: values,
         ...(merchantId ? { merchantId } : {}),
         ...(coupon ? { couponCode: coupon.code } : {}),
+        ...(scheduledFor ? { scheduledFor } : {}),
       };
     } else {
       payload = {
@@ -169,6 +177,7 @@ export function DynamicServiceFlowScreen() {
         paymentMethod,
         customData: values,
         ...(coupon ? { couponCode: coupon.code } : {}),
+        ...(scheduledFor ? { scheduledFor } : {}),
       };
     }
     await createOrder.mutateAsync(payload);
@@ -206,6 +215,45 @@ export function DynamicServiceFlowScreen() {
           </>
         ) : null}
 
+        {/* ─────── Schedule (optional) ─────── */}
+        <Text style={styles.sectionTitle}>ميعاد التوصيل</Text>
+        <Pressable
+          onPress={() => setScheduleSheetOpen(true)}
+          style={({ pressed }) => [styles.scheduleRow, pressed && { opacity: 0.92 }]}
+        >
+          <View
+            style={[
+              styles.scheduleIcon,
+              { backgroundColor: scheduledFor ? palette.red[50] : colors.soft },
+            ]}
+          >
+            {scheduledFor ? (
+              <Calendar size={20} color={palette.red[600]} />
+            ) : (
+              <Clock size={20} color={colors.text.secondary} />
+            )}
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={[typography.bodyBold, { color: colors.ink }]}>
+              {scheduledFor ? 'مجدول' : 'توصيل فوري'}
+            </Text>
+            <Text style={[typography.caption, { color: colors.text.muted, marginTop: 2 }]}>
+              {scheduledFor
+                ? new Date(scheduledFor).toLocaleString('ar-EG', {
+                    weekday: 'long',
+                    day: 'numeric',
+                    month: 'short',
+                    hour: '2-digit',
+                    minute: '2-digit',
+                  })
+                : 'هنبدأ المراجعة فوراً'}
+            </Text>
+          </View>
+          <Text style={[typography.smallBold, { color: palette.red[600] }]}>
+            {scheduledFor ? 'تعديل' : 'جدولة'}
+          </Text>
+        </Pressable>
+
         {/* ─────── Payment method ─────── */}
         <Text style={styles.sectionTitle}>طريقة الدفع</Text>
         <PaymentMethodPicker value={paymentMethod} onChange={setPaymentMethod} />
@@ -223,20 +271,18 @@ export function DynamicServiceFlowScreen() {
           <View style={[styles.priceCard, shadows.sm]}>
             <View style={styles.priceLine}>
               <Text style={styles.priceLineLabel}>سعر الخدمة</Text>
-              <Text style={styles.priceLineValue}>{basePrice.toLocaleString('ar-EG')} ج.م</Text>
+              <MoneyText amount={basePrice} size="sm" />
             </View>
             {coupon ? (
               <View style={styles.priceLine}>
                 <Text style={styles.priceLineDiscountLabel}>خصم الكوبون ({coupon.code})</Text>
-                <Text style={styles.priceLineDiscount}>
-                  -{coupon.discount.toLocaleString('ar-EG')} ج.م
-                </Text>
+                <MoneyText amount={-coupon.discount} size="sm" tone="success" />
               </View>
             ) : null}
             <View style={styles.priceDivider} />
             <View style={styles.priceLine}>
               <Text style={styles.priceTotalLabel}>الإجمالي</Text>
-              <Text style={styles.priceTotal}>{finalPrice.toLocaleString('ar-EG')} ج.م</Text>
+              <MoneyText amount={finalPrice} size="lg" tone="brand" />
             </View>
           </View>
         ) : null}
@@ -251,6 +297,13 @@ export function DynamicServiceFlowScreen() {
           loading={createOrder.isPending}
         />
       </View>
+
+      <SchedulePicker
+        visible={scheduleSheetOpen}
+        onClose={() => setScheduleSheetOpen(false)}
+        onConfirm={setScheduledFor}
+        initial={scheduledFor}
+      />
     </SafeAreaView>
   );
 }
@@ -276,6 +329,24 @@ const styles = StyleSheet.create({
     marginBottom: spacing.sm,
     textTransform: 'uppercase',
     letterSpacing: 0.5,
+  },
+  scheduleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
+    backgroundColor: colors.white,
+    borderRadius: radii.lg,
+    borderWidth: 1,
+    borderColor: colors.line,
+    padding: spacing.md,
+    marginBottom: spacing.lg,
+  },
+  scheduleIcon: {
+    width: 44,
+    height: 44,
+    borderRadius: radii.md,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   priceCard: {
     backgroundColor: colors.white,

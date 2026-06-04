@@ -89,24 +89,39 @@ export const adminAuditLog: RequestHandler = (req, res, next) => {
 
     // Fire-and-forget the audit row — we don't want a slow DB to block the
     // response, and we never want a logging failure to surface as a 500.
-    prisma.adminAuditLog
-      .create({
-        data: {
-          actorId: req.user!.id,
-          actorRole: req.user!.role,
-          method: req.method,
-          path: req.originalUrl.slice(0, 250),
-          targetType: type,
-          targetId: id,
-          payload: payload as never,
-          ip: req.ip ?? null,
-          userAgent: (req.headers['user-agent'] as string | undefined)?.slice(0, 500) ?? null,
-          status,
-        },
-      })
-      .catch((err) => {
-        logger.warn({ err, path: req.path }, 'audit log write failed');
-      });
+    // Wrap in try/catch because a stale Prisma client (model missing after
+    // schema edit + missing `prisma generate`) would throw SYNCHRONOUSLY
+    // on the `.create(...)` call and crash the response.
+    try {
+      const model = (prisma as unknown as { adminAuditLog?: { create: Function } }).adminAuditLog;
+      if (model && typeof model.create === 'function') {
+        model
+          .create({
+            data: {
+              actorId: req.user!.id,
+              actorRole: req.user!.role,
+              method: req.method,
+              path: req.originalUrl.slice(0, 250),
+              targetType: type,
+              targetId: id,
+              payload: payload as never,
+              ip: req.ip ?? null,
+              userAgent: (req.headers['user-agent'] as string | undefined)?.slice(0, 500) ?? null,
+              status,
+            },
+          })
+          .catch((err: unknown) => {
+            logger.warn({ err, path: req.path }, 'audit log write failed');
+          });
+      } else {
+        logger.warn(
+          { path: req.path },
+          'audit log skipped — prisma.adminAuditLog model missing (run prisma generate)',
+        );
+      }
+    } catch (err) {
+      logger.warn({ err, path: req.path }, 'audit log threw synchronously');
+    }
 
     logger.debug({ path: req.path, status, ms: Date.now() - startedAt }, 'admin write');
     return originalEnd(...(args as Parameters<typeof originalEnd>));
