@@ -68,7 +68,9 @@ export function SavedAddressesScreen() {
   });
 
   const setDefaultMut = useMutation({
-    mutationFn: (id: string) => api.raw.patch(`/me/addresses/${id}`, { isDefault: true }),
+    // Dedicated endpoint — clearer audit trail and idempotent (re-firing on
+    // the current default is a no-op).
+    mutationFn: (id: string) => api.raw.post(`/me/addresses/${id}/set-default`, {}),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['my-addresses'] }),
   });
 

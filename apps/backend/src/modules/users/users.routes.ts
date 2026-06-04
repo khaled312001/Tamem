@@ -8,6 +8,7 @@ import {
   createAddress,
   deleteAddress,
   listAddresses,
+  setDefaultAddress,
   updateAddress,
 } from './addresses.controller.js';
 import {
@@ -35,3 +36,4 @@ meRouter.get('/addresses', listAddresses);
 meRouter.post('/addresses', createAddress);
 meRouter.patch('/addresses/:id', updateAddress);
 meRouter.delete('/addresses/:id', deleteAddress);
+meRouter.post('/addresses/:id/set-default', setDefaultAddress);

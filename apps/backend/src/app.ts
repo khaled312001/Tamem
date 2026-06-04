@@ -41,6 +41,10 @@ import { adminReportsRouter } from './modules/reports/reports.routes.js';
 import { adminServicesRouter, publicServicesRouter } from './modules/services/services.routes.js';
 import { adminSettingsRouter } from './modules/settings/settings.routes.js';
 import { uploadsRouter } from './modules/uploads/uploads.routes.js';
+import {
+  adminHomeConfigRouter,
+  publicHomeConfigRouter,
+} from './modules/homeConfig/homeConfig.routes.js';
 import { recurringOrdersRouter } from './modules/recurring/recurring.routes.js';
 import { meRouter } from './modules/users/users.routes.js';
 import { whatsappRouter } from './modules/whatsapp/whatsapp.routes.js';
@@ -135,6 +139,7 @@ export function createApp(): Express {
   v1.use('/coupons', couponsRouter);
   v1.use('/me/wallet', meWalletRouter);
   v1.use('/me/recurring-orders', recurringOrdersRouter);
+  v1.use('/home-config', publicHomeConfigRouter);
   v1.use('/payments', paymentsPublicRouter);
   v1.use('/payments', paymentsCustomerRouter);
   v1.use('/payments/webhook', easykashWebhookRouter);
@@ -162,6 +167,7 @@ export function createApp(): Express {
   adminRouter.use('/settings', adminSettingsRouter);
   adminRouter.use('/categories', adminCategoriesRouter);
   adminRouter.use('/offers', adminOffersRouter);
+  adminRouter.use('/home-config', adminHomeConfigRouter);
   adminRouter.use('/whatsapp', whatsappRouter);
   v1.use('/admin', adminRouter);
 

@@ -76,6 +76,29 @@ interface ActiveOrder {
   service?: { nameAr: string };
 }
 
+interface SavedAddress {
+  id: string;
+  label: string;
+  address: string;
+  isDefault: boolean;
+}
+
+/** Server-driven home configuration. Every field can be null → use defaults. */
+interface HomeConfig {
+  heroGreeting: string | null;
+  heroSubtitle: string | null;
+  heroGradient: string[] | null;
+  trustStripTitle: string | null;
+  trustStripSubtitle: string | null;
+  promoBannerTitle: string | null;
+  promoBannerCode: string | null;
+  visibleServiceKeys: string[] | null;
+  featuredMerchantIds: string[] | null;
+  featuredOfferIds: string[] | null;
+  showPromoBanner: boolean;
+  showTrustStrip: boolean;
+}
+
 const SERVICES = [
   {
     key: 'delivery',
@@ -156,15 +179,66 @@ export function HomeScreen() {
     queryFn: () => api.raw.get('/orders/mine').then((r) => r.data.data),
   });
 
+  // Saved addresses — used to (1) drive the location row in the hero so it
+  // shows the customer's actual default rather than "قفط — قنا" hardcoded,
+  // and (2) surface a banner if they haven't saved any yet (because the
+  // backend will refuse to create orders without one).
+  const { data: addresses } = useQuery<SavedAddress[]>({
+    queryKey: ['my-addresses'],
+    queryFn: () => api.raw.get('/me/addresses').then((r) => r.data.data),
+  });
+  const defaultAddress = (addresses ?? []).find((a) => a.isDefault) ?? addresses?.[0];
+  const needsAddress = (addresses?.length ?? 0) === 0;
+
+  // Server-driven home content — admin can override text, gradient colors,
+  // visible services, featured merchants/offers from the dashboard.
+  const { data: homeConfig } = useQuery<HomeConfig>({
+    queryKey: ['home-config'],
+    queryFn: () => api.raw.get('/home-config').then((r) => r.data.data),
+    // Stale for 5 min — admins rarely edit hourly, and we don't want every
+    // tab switch to refetch.
+    staleTime: 5 * 60_000,
+  });
+
+  // Resolve the gradient: server-provided > brand default. We tuple it so
+  // LinearGradient is happy.
+  const heroGradient = (
+    homeConfig?.heroGradient && homeConfig.heroGradient.length >= 2
+      ? homeConfig.heroGradient
+      : (gradients.brand as readonly string[])
+  ) as readonly [string, string, ...string[]];
+
+  // Resolve the visible services list: server filter > all hard-coded.
+  const visibleServices =
+    homeConfig?.visibleServiceKeys && homeConfig.visibleServiceKeys.length > 0
+      ? SERVICES.filter((s) => homeConfig.visibleServiceKeys!.includes(s.key))
+      : SERVICES;
+
   const activeOrder = (myOrders ?? []).find((o) => ACTIVE_STATUSES.includes(o.status));
-  const topOffer = offers?.[0];
-  const featuredMerchants = merchants?.slice(0, 4) ?? [];
+
+  // Featured offer: if admin pinned IDs, take the first match; else newest.
+  const topOffer =
+    homeConfig?.featuredOfferIds && homeConfig.featuredOfferIds.length > 0
+      ? ((offers ?? []).find((o) => homeConfig.featuredOfferIds!.includes(o.id)) ?? offers?.[0])
+      : offers?.[0];
+
+  // Featured merchants: admin-pinned in order > top by rating slice.
+  const featuredMerchants = (() => {
+    if (!merchants) return [];
+    if (homeConfig?.featuredMerchantIds && homeConfig.featuredMerchantIds.length > 0) {
+      const idx = new Map(homeConfig.featuredMerchantIds.map((id, i) => [id, i]));
+      return merchants
+        .filter((m) => idx.has(m.id))
+        .sort((a, b) => (idx.get(a.id) ?? 0) - (idx.get(b.id) ?? 0));
+    }
+    return merchants.slice(0, 4);
+  })();
 
   return (
     <SafeAreaView edges={['top']} style={styles.container}>
       {/* ─────── Branded hero with location + bell ─────── */}
       <LinearGradient
-        colors={gradients.brand}
+        colors={heroGradient}
         start={{ x: 0, y: 0 }}
         end={{ x: 1, y: 1 }}
         style={styles.hero}
@@ -173,19 +247,28 @@ export function HomeScreen() {
           <Pressable
             onPress={() => {
               tickHaptic();
-              navigation.navigate('NearbyMap', { search: '' });
+              // Tapping the location row now takes the customer to manage
+              // their saved addresses — that's the source of truth.
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              (navigation.getParent() as any)?.navigate('ProfileTab', {
+                screen: 'SavedAddresses',
+              });
             }}
             style={({ pressed }) => [styles.locationBtn, pressed && { opacity: 0.85 }]}
             accessibilityLabel="تغيير العنوان"
           >
             <View style={styles.locationLabelRow}>
-              <Text style={styles.locationLabel}>التوصيل إلى</Text>
+              <Text style={styles.locationLabel}>
+                {needsAddress ? 'لازم تسجّل عنوان' : 'التوصيل إلى'}
+              </Text>
               <ChevronDown size={14} color="rgba(255,255,255,0.85)" />
             </View>
             <View style={styles.locationValueRow}>
               <MapPin size={14} color={colors.white} />
               <Text style={styles.locationValue} numberOfLines={1}>
-                قفط — قنا
+                {defaultAddress
+                  ? `${defaultAddress.label} · ${defaultAddress.address}`
+                  : 'اضغط هنا لإضافة عنوان'}
               </Text>
             </View>
           </Pressable>
@@ -204,8 +287,12 @@ export function HomeScreen() {
           </Pressable>
         </View>
 
-        <Text style={styles.heroGreeting}>أهلاً {user?.name?.split(' ')[0] ?? 'بك'} 👋</Text>
-        <Text style={styles.heroSubtitle}>ايه اللي محتاج توصيله النهارده؟</Text>
+        <Text style={styles.heroGreeting}>
+          {homeConfig?.heroGreeting ?? `أهلاً ${user?.name?.split(' ')[0] ?? 'بك'} 👋`}
+        </Text>
+        <Text style={styles.heroSubtitle}>
+          {homeConfig?.heroSubtitle ?? 'ايه اللي محتاج توصيله النهارده؟'}
+        </Text>
 
         <View style={styles.searchOuter}>
           <SearchBar
@@ -218,6 +305,33 @@ export function HomeScreen() {
       </LinearGradient>
 
       <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
+        {/* ─────── No-address banner — blocks the customer from any order
+            flow until they save at least one address. Backend will refuse
+            the order anyway, so we surface the fix up front. ─────── */}
+        {needsAddress && (
+          <Pressable
+            onPress={() => {
+              tickHaptic();
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              (navigation.getParent() as any)?.navigate('ProfileTab', {
+                screen: 'SavedAddresses',
+              });
+            }}
+            style={({ pressed }) => [styles.addressWarn, shadows.sm, pressed && { opacity: 0.92 }]}
+          >
+            <View style={styles.addressWarnIcon}>
+              <MapPin size={20} color={colors.white} />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.addressWarnTitle}>سجّل عنوانك أولاً</Text>
+              <Text style={styles.addressWarnSub}>
+                لازم تضيف عنوان واحد على الأقل قبل ما تقدر تطلب
+              </Text>
+            </View>
+            <ForwardChevron size={18} color={colors.white} />
+          </Pressable>
+        )}
+
         {/* ─────── Active order strip ─────── */}
         {activeOrder && (
           <Pressable
@@ -254,7 +368,7 @@ export function HomeScreen() {
         {/* ─────── Services ─────── */}
         <SectionHeader title="خدماتنا" subtitle="اختر نوع الطلب المناسب لك" compact />
         <View style={styles.servicesRow}>
-          {SERVICES.map((s) => (
+          {visibleServices.map((s) => (
             <ServiceTile
               key={s.key}
               label={s.label}
@@ -269,8 +383,8 @@ export function HomeScreen() {
           ))}
         </View>
 
-        {/* ─────── Promo banner ─────── */}
-        {topOffer && (
+        {/* ─────── Promo banner — hidden when admin toggled off ─────── */}
+        {(homeConfig?.showPromoBanner ?? true) && (topOffer || homeConfig?.promoBannerTitle) && (
           <Pressable onPress={onPromo} style={({ pressed }) => [pressed && { opacity: 0.92 }]}>
             <LinearGradient
               colors={gradients.promo}
@@ -282,10 +396,14 @@ export function HomeScreen() {
                 <Gift size={22} color={colors.brand.gold} />
               </View>
               <View style={{ flex: 1 }}>
-                <Text style={styles.bannerTitle}>{topOffer.titleAr}</Text>
+                <Text style={styles.bannerTitle}>
+                  {homeConfig?.promoBannerTitle ?? topOffer?.titleAr ?? ''}
+                </Text>
                 <Text style={styles.bannerSub}>
                   كود الخصم:{' '}
-                  <Text style={styles.bannerCode}>{topOffer?.code || FALLBACK_PROMO_CODE}</Text>
+                  <Text style={styles.bannerCode}>
+                    {homeConfig?.promoBannerCode || topOffer?.code || FALLBACK_PROMO_CODE}
+                  </Text>
                 </Text>
               </View>
               <View style={styles.bannerCopy}>
@@ -341,21 +459,27 @@ export function HomeScreen() {
           ))
         )}
 
-        {/* ─────── Trust strip ─────── */}
-        <LinearGradient
-          colors={gradients.promo}
-          start={{ x: 0, y: 0 }}
-          end={{ x: 1, y: 1 }}
-          style={[styles.trustStrip, shadows.md]}
-        >
-          <View style={styles.trustIconWrap}>
-            <Truck size={20} color={colors.brand.gold} />
-          </View>
-          <View style={{ flex: 1 }}>
-            <Text style={styles.trustTitle}>توصيل سريع خلال 30 دقيقة</Text>
-            <Text style={styles.trustSub}>داخل مدينة قفط — للطلبات القريبة</Text>
-          </View>
-        </LinearGradient>
+        {/* ─────── Trust strip — hidden when admin toggled off ─────── */}
+        {(homeConfig?.showTrustStrip ?? true) && (
+          <LinearGradient
+            colors={gradients.promo}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 1 }}
+            style={[styles.trustStrip, shadows.md]}
+          >
+            <View style={styles.trustIconWrap}>
+              <Truck size={20} color={colors.brand.gold} />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.trustTitle}>
+                {homeConfig?.trustStripTitle ?? 'توصيل سريع خلال 30 دقيقة'}
+              </Text>
+              <Text style={styles.trustSub}>
+                {homeConfig?.trustStripSubtitle ?? 'داخل مدينة قفط — للطلبات القريبة'}
+              </Text>
+            </View>
+          </LinearGradient>
+        )}
       </ScrollView>
 
       <QuickOrderFAB />
@@ -435,6 +559,35 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
   searchOuter: { marginTop: spacing.lg },
+  // Address warning — colored loud (brand-red bg) so it can't be missed
+  addressWarn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
+    backgroundColor: colors.brand.red,
+    borderRadius: radii.lg,
+    padding: spacing.md,
+    marginTop: spacing.lg,
+  },
+  addressWarnIcon: {
+    width: 42,
+    height: 42,
+    borderRadius: radii.md,
+    backgroundColor: 'rgba(255,255,255,0.18)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  addressWarnTitle: {
+    color: colors.white,
+    fontFamily: fontFamilies.headingBold,
+    fontSize: fontSizes.md,
+  },
+  addressWarnSub: {
+    color: 'rgba(255,255,255,0.85)',
+    fontFamily: fontFamilies.body,
+    fontSize: fontSizes.xs,
+    marginTop: 2,
+  },
   // Scroll content
   scroll: {
     paddingHorizontal: spacing.lg,

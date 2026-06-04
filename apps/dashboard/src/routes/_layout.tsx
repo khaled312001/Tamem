@@ -11,6 +11,7 @@ import {
   MessageCircle,
   Package,
   Settings,
+  Smartphone,
   Sparkles,
   Store,
   Tag,
@@ -55,6 +56,7 @@ const NAV_ITEMS: NavItem[] = [
   { to: '/coupons', icon: Tag, label: 'الكوبونات' },
   { to: '/reports', icon: BarChart3, label: 'التقارير' },
   { to: '/whatsapp', icon: MessageCircle, label: 'ربط واتساب' },
+  { to: '/home-settings', icon: Smartphone, label: 'صفحة التطبيق' },
   { to: '/settings', icon: Settings, label: 'الإعدادات' },
 ];
 

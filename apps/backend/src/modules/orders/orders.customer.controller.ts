@@ -6,6 +6,7 @@ import { cancelOrderSchema, createOrderSchema, pricingEstimateSchema } from '@ta
 
 import { prisma } from '../../db/prisma.js';
 import {
+  ConflictError,
   ForbiddenError,
   NotFoundError,
   UnauthorizedError,
@@ -34,6 +35,38 @@ export const createOrder: RequestHandler = async (req, res, next) => {
 
     const service = await prisma.service.findUnique({ where: { id: input.serviceId } });
     if (!service || !service.isActive) throw new NotFoundError('Service', 'الخدمة غير متاحة');
+
+    // ── Address resolution ────────────────────────────────────────────────
+    // Every DELIVERY/SHIPPING order must end up with a deliveryAddress. The
+    // mobile picker normally sends one inline, but if the customer skipped
+    // it (legacy flow, web client, etc.) we fall back to their saved default.
+    // If there isn't one, we refuse the order with a clear code the mobile
+    // can interpret to deep-link them to "add address" rather than showing
+    // a generic 422.
+    if (input.category === 'DELIVERY' || input.category === 'SHIPPING') {
+      const inputAddress = 'deliveryAddress' in input ? input.deliveryAddress : undefined;
+      const inputLat = 'deliveryLat' in input ? input.deliveryLat : undefined;
+      const inputLng = 'deliveryLng' in input ? input.deliveryLng : undefined;
+      if (!inputAddress || inputLat == null || inputLng == null) {
+        const fallback = await prisma.customerAddress.findFirst({
+          where: { userId: req.user.id, isDefault: true },
+        });
+        if (!fallback) {
+          throw new ConflictError('NO_DEFAULT_ADDRESS', 'سجّل عنوان للتوصيل قبل ما تطلب أول مرة');
+        }
+        if (fallback.lat == null || fallback.lng == null) {
+          throw new ConflictError(
+            'DEFAULT_ADDRESS_MISSING_PIN',
+            'العنوان الافتراضي يحتاج تحديد موقع على الخريطة',
+          );
+        }
+        // Splice the resolved address into the input so the create paths
+        // below can stay address-agnostic.
+        (input as { deliveryAddress?: string }).deliveryAddress = fallback.address;
+        (input as { deliveryLat?: number }).deliveryLat = Number(fallback.lat);
+        (input as { deliveryLng?: number }).deliveryLng = Number(fallback.lng);
+      }
+    }
 
     const orderNumber = generateOrderNumber();
 

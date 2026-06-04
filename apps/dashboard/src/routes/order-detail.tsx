@@ -1,30 +1,153 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
+  ArrowRight,
+  Ban,
   Check,
+  CheckCheck,
+  CheckCircle2,
   ChevronRight,
+  ClipboardCheck,
+  Clock,
+  DollarSign,
+  Edit3,
+  FileSearch,
+  HandCoins,
   ImageIcon,
+  Loader2,
   MapPin,
   MessageSquare,
   Mic,
+  Package,
   Phone,
+  Truck,
   User,
+  UserCheck,
 } from 'lucide-react';
 import { useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { toast } from 'sonner';
 
-import { type OrderStatus } from '@tamem/types';
+import { ORDER_STATUS_AR, ORDER_TRANSITIONS, type OrderStatus } from '@tamem/types';
 
 import { Badge, StatusBadge } from '../components/ui/Badge.js';
 import { Button } from '../components/ui/Button.js';
 import { Dialog } from '../components/ui/Dialog.js';
 import { Field, Input, Textarea } from '../components/ui/Input.js';
 import { CardSkeleton } from '../components/ui/Skeleton.js';
-import { StatusQuickMenu } from '../components/StatusQuickMenu.js';
 import { api } from '../lib/api.js';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Order = any;
+
+// ────────────────────────────────────────────────────────────────────────────
+// Workflow definition — the happy-path stages an order moves through. Each
+// stage has an icon + a "next" rule that knows whether progressing to the
+// next stage needs a dialog (price/driver) or is a one-tap status update.
+// ────────────────────────────────────────────────────────────────────────────
+
+interface Stage {
+  status: OrderStatus;
+  label: string;
+  short: string;
+  Icon: typeof Clock;
+}
+
+// Customer-approval step removed from the workflow — admin confirms with the
+// customer outside the app (call/WhatsApp) then moves PRICED → ACCEPTED.
+const HAPPY_PATH: Stage[] = [
+  { status: 'NEW', label: 'استلام الطلب', short: 'استلام', Icon: ClipboardCheck },
+  { status: 'UNDER_REVIEW', label: 'قيد المراجعة', short: 'مراجعة', Icon: FileSearch },
+  { status: 'PRICED', label: 'تم التسعير', short: 'مسعّر', Icon: HandCoins },
+  { status: 'ACCEPTED', label: 'تأكيد الطلب', short: 'مؤكد', Icon: CheckCircle2 },
+  { status: 'DRIVER_ASSIGNED', label: 'تعيين سائق', short: 'سائق', Icon: UserCheck },
+  { status: 'PICKED_UP', label: 'تم الاستلام', short: 'مستلم', Icon: Package },
+  { status: 'IN_ROUTE', label: 'في الطريق', short: 'متجه', Icon: Truck },
+  { status: 'DELIVERED', label: 'تم التوصيل', short: 'موصول', Icon: CheckCheck },
+  { status: 'COMPLETED', label: 'مكتمل', short: 'تم', Icon: CheckCheck },
+];
+
+type NextActionKind = 'price' | 'assign' | 'advance' | 'wait-customer' | 'terminal';
+
+interface NextAction {
+  kind: NextActionKind;
+  /** Status we'll transition to, if applicable. */
+  target?: OrderStatus;
+  /** Button label that explains what the admin is about to do. */
+  label: string;
+  hint?: string;
+}
+
+/**
+ * Decide what the admin's "one-tap next" should do, given the current order.
+ * This is the single source of truth for the big action button in the hero.
+ *
+ *   UNDER_REVIEW + no price  → open price dialog (skips a manual transition)
+ *   PRICED                   → status → AWAITING_CUSTOMER_APPROVAL
+ *   AWAITING_CUSTOMER_APPROVAL → "بانتظار العميل" (no admin action)
+ *   ACCEPTED                 → open assign-driver dialog
+ *   DRIVER_ASSIGNED/PICKED_UP/IN_ROUTE → status → next
+ *   DELIVERED → status → COMPLETED
+ *   terminal (COMPLETED/CANCELLED/REJECTED) → no action
+ */
+function nextActionFor(order: Order): NextAction {
+  const status = order.status as OrderStatus;
+  const hasPrice = order.quotedPrice != null || order.finalPrice != null;
+  const hasDriver = !!order.assignedDriverId;
+
+  if (status === 'NEW') {
+    return { kind: 'advance', target: 'UNDER_REVIEW', label: 'ابدأ المراجعة' };
+  }
+  if (status === 'UNDER_REVIEW') {
+    return hasPrice
+      ? { kind: 'advance', target: 'PRICED', label: 'تأكيد التسعير' }
+      : { kind: 'price', label: 'تسعير الطلب', hint: 'لازم تحدد السعر قبل ما تكمل' };
+  }
+  if (status === 'PRICED') {
+    return {
+      kind: 'advance',
+      target: 'ACCEPTED',
+      label: 'تأكيد موافقة العميل',
+      hint: 'بعد ما تتواصل مع العميل وتأكد السعر',
+    };
+  }
+  // Legacy orders may still be in this state from before we removed it.
+  // We let admin move them forward to ACCEPTED directly.
+  if (status === 'AWAITING_CUSTOMER_APPROVAL') {
+    return {
+      kind: 'advance',
+      target: 'ACCEPTED',
+      label: 'تأكيد موافقة العميل',
+      hint: 'بعد ما تتواصل مع العميل وتأكد السعر',
+    };
+  }
+  if (status === 'ACCEPTED') {
+    return hasDriver
+      ? { kind: 'advance', target: 'DRIVER_ASSIGNED', label: 'تأكيد تعيين السائق' }
+      : { kind: 'assign', label: 'تعيين سائق', hint: 'اختر سائق متاح للطلب' };
+  }
+  if (status === 'DRIVER_ASSIGNED') {
+    return {
+      kind: 'advance',
+      target: 'PICKED_UP',
+      label: 'استلم السائق الطلب',
+      hint: 'السائق لقي الطلب وحمله',
+    };
+  }
+  if (status === 'PICKED_UP') {
+    return { kind: 'advance', target: 'IN_ROUTE', label: 'السائق في الطريق' };
+  }
+  if (status === 'IN_ROUTE') {
+    return { kind: 'advance', target: 'DELIVERED', label: 'تم تسليم الطلب' };
+  }
+  if (status === 'DELIVERED') {
+    return { kind: 'advance', target: 'COMPLETED', label: 'إغلاق الطلب' };
+  }
+  return { kind: 'terminal', label: 'الطلب منتهي' };
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Page
+// ────────────────────────────────────────────────────────────────────────────
 
 export function OrderDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -44,6 +167,18 @@ export function OrderDetailPage() {
     qc.invalidateQueries({ queryKey: ['admin', 'order', id] });
   };
 
+  // Direct status advance (no dialog) — used by the smart-next button when
+  // we already have the prerequisites (price/driver) and just need to record
+  // the transition.
+  const advanceMut = useMutation({
+    mutationFn: (status: OrderStatus) => api.adminUpdateOrderStatus(id!, status),
+    onSuccess: (_d, status) => {
+      toast.success(`تم الانتقال إلى: ${ORDER_STATUS_AR[status]}`);
+      invalidate();
+    },
+    onError: (err: Error) => toast.error(err.message),
+  });
+
   if (isLoading || !order) {
     return (
       <div className="space-y-4">
@@ -53,17 +188,25 @@ export function OrderDetailPage() {
     );
   }
 
+  const status = order.status as OrderStatus;
+  const next = nextActionFor(order);
+  const isTerminal = status === 'COMPLETED' || status === 'CANCELLED' || status === 'REJECTED';
+  const canCancel = (ORDER_TRANSITIONS[status] as readonly OrderStatus[]).includes('CANCELLED');
+  const hasPrice = order.quotedPrice != null || order.finalPrice != null;
+  const hasDriver = !!order.assignedDriverId;
+
+  const fireNext = () => {
+    if (next.kind === 'price') return setDialog('price');
+    if (next.kind === 'assign') return setDialog('assign');
+    if (next.kind === 'advance' && next.target) return advanceMut.mutate(next.target);
+  };
+
   const customData = order.customData as Record<string, unknown> | undefined;
 
-  // Auto-scan customData for media attachments. Mobile dynamic forms with
-  // image/audio fields can land here under any key (e.g. 'attachment',
-  // 'photo', 'voice_note'), so we sniff each value instead of hardcoding.
-  // Some mobile flows send raw base64 (no data URI prefix) — we coerce that
-  // into a displayable data URI on the fly.
+  // ── Media extraction (unchanged from prior version) ──────────────────────
   const BASE64_RE = /^[A-Za-z0-9+/]{500,}={0,2}$/;
   const looksLikeBase64Image = (v: unknown): v is string =>
     typeof v === 'string' && BASE64_RE.test(v);
-
   const normalizeImage = (v: string): string => {
     if (
       v.startsWith('data:') ||
@@ -73,14 +216,9 @@ export function OrderDetailPage() {
     ) {
       return v;
     }
-    if (looksLikeBase64Image(v)) {
-      // Most camera uploads are JPEG; the browser will figure out the format
-      // even if we guess wrong (it sniffs the binary header).
-      return `data:image/jpeg;base64,${v}`;
-    }
+    if (looksLikeBase64Image(v)) return `data:image/jpeg;base64,${v}`;
     return v;
   };
-
   const isImageRef = (v: unknown): v is string =>
     typeof v === 'string' &&
     (v.startsWith('data:image/') ||
@@ -95,25 +233,17 @@ export function OrderDetailPage() {
       (v.startsWith('blob:') &&
         (customData?.audioMime as string | undefined)?.startsWith('audio')) ||
       /\.(mp3|m4a|wav|webm|ogg|aac)(\?|$)/i.test(v));
-
   const collectedImages: string[] = [];
   const collectedAudio: string[] = [];
   const pushFrom = (v: unknown) => {
     if (Array.isArray(v)) v.forEach(pushFrom);
-    // Audio must be checked FIRST — blob: URLs match both image and audio
-    // predicates; without this, voice notes get rendered as broken images.
     else if (isAudioRef(v)) collectedAudio.push(v);
     else if (isImageRef(v)) collectedImages.push(normalizeImage(v));
   };
-  // 1. Top-level order.imageUrls (canonical)
   if (Array.isArray(order.imageUrls)) (order.imageUrls as string[]).forEach(pushFrom);
-  // 2. Anything inside customData
   if (customData) for (const v of Object.values(customData)) pushFrom(v);
-
   const imageUrls = Array.from(new Set(collectedImages));
   const audioUri = collectedAudio[0];
-  // Track which customData keys we've already rendered visually so the
-  // "بيانات إضافية" dump doesn't repeat them as raw base64.
   const renderedKeys = new Set<string>();
   if (customData) {
     for (const [k, v] of Object.entries(customData)) {
@@ -126,7 +256,6 @@ export function OrderDetailPage() {
       }
     }
   }
-  // Also skip the housekeeping keys our QuickOrder sheet writes
   ['audioUri', 'audioMime', 'audioDurationMs', 'quickOrder', 'mode', 'imageUrls'].forEach((k) =>
     renderedKeys.add(k),
   );
@@ -135,43 +264,75 @@ export function OrderDetailPage() {
     <div className="space-y-4">
       <BackBar onBack={() => navigate('/orders')} />
 
-      {/* Hero summary */}
-      <div className="bg-white rounded-xl border border-border p-5 flex flex-wrap items-center gap-4">
-        <div className="flex-1 min-w-[200px]">
-          <div className="text-xs text-muted-foreground">رقم الطلب</div>
-          <div className="font-mono text-lg font-black">{order.orderNumber}</div>
-          <div className="text-xs text-muted-foreground mt-1">
-            {new Date(order.createdAt).toLocaleString('ar-EG')}
+      {/* ───────── Hero: order # + workflow stepper + smart next action ───────── */}
+      <div className="bg-white rounded-xl border border-border p-5 space-y-5">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <div className="text-xs text-muted-foreground">رقم الطلب</div>
+            <div className="font-mono text-xl font-black">{order.orderNumber}</div>
+            <div className="text-xs text-muted-foreground mt-1">
+              {new Date(order.createdAt).toLocaleString('ar-EG')} ·{' '}
+              {order.service?.nameAr ?? order.category}
+            </div>
+          </div>
+          <div className="text-right">
+            <div className="text-xs text-muted-foreground">الإجمالي</div>
+            <div className="font-black text-2xl text-brand-red">
+              {hasPrice
+                ? `${Number(order.finalPrice ?? order.quotedPrice).toLocaleString('ar-EG')} ج.م`
+                : '— غير مسعّر'}
+            </div>
           </div>
         </div>
-        <div>
-          <div className="text-xs text-muted-foreground mb-1">الحالة</div>
-          <StatusQuickMenu orderId={id!} status={order.status as OrderStatus} size="md" />
-        </div>
-        <div>
-          <div className="text-xs text-muted-foreground mb-1">السعر</div>
-          <div className="font-bold text-lg">
-            {(order.finalPrice ?? order.quotedPrice)
-              ? `${Number(order.finalPrice ?? order.quotedPrice).toLocaleString('ar-EG')} ج.م`
-              : '—'}
+
+        <WorkflowStepper currentStatus={status} terminalKind={isTerminal ? status : null} />
+
+        {/* Smart next action + cancel */}
+        {!isTerminal && (
+          <div className="flex flex-wrap items-center gap-3 pt-2 border-t border-border">
+            <div className="flex-1 min-w-[240px]">
+              <SmartNextButton
+                action={next}
+                pending={advanceMut.isPending}
+                onFire={fireNext}
+                hasPrice={hasPrice}
+                hasDriver={hasDriver}
+              />
+              {next.hint && (
+                <p className="text-xs text-muted-foreground mt-2 flex items-center gap-1">
+                  <Clock className="w-3 h-3" /> {next.hint}
+                </p>
+              )}
+            </div>
+            {canCancel && (
+              <Button variant="danger" onClick={() => setDialog('cancel')}>
+                <Ban className="w-4 h-4" /> إلغاء الطلب
+              </Button>
+            )}
           </div>
-        </div>
-        <div className="flex flex-wrap gap-2">
-          {order.status === 'UNDER_REVIEW' && (
-            <Button onClick={() => setDialog('price')}>تسعير الطلب</Button>
-          )}
-          {(order.status === 'ACCEPTED' || order.status === 'PRICED') && (
-            <Button onClick={() => setDialog('assign')}>تعيين سائق</Button>
-          )}
-          <p className="text-xs text-muted-foreground self-center">
-            أو اضغط على شارة الحالة بالأعلى لتغييرها مباشرة ↑
-          </p>
-        </div>
+        )}
+
+        {isTerminal && (
+          <div
+            className={`rounded-lg p-3 flex items-center gap-2 text-sm ${
+              status === 'COMPLETED' ? 'bg-green-50 text-green-800' : 'bg-gray-100 text-gray-700'
+            }`}
+          >
+            {status === 'COMPLETED' ? (
+              <CheckCheck className="w-5 h-5" />
+            ) : (
+              <Ban className="w-5 h-5" />
+            )}
+            <span className="font-bold">{ORDER_STATUS_AR[status]}</span>
+            {order.cancellationReason && (
+              <span className="text-xs">— {order.cancellationReason}</span>
+            )}
+          </div>
+        )}
       </div>
 
-      {/* Main 2-col grid */}
+      {/* ───────── Main 2-col grid ───────── */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-        {/* Left: customer + addresses + content */}
         <div className="lg:col-span-2 space-y-4">
           <Card title="العميل" icon={<User className="w-4 h-4" />}>
             <div className="flex items-center gap-3">
@@ -329,45 +490,103 @@ export function OrderDetailPage() {
             )}
         </div>
 
-        {/* Right: service + driver + history */}
+        {/* ───────── Right sidebar: pricing summary + driver + side actions + history ───────── */}
         <div className="space-y-4">
-          <Card title="الخدمة">
-            <div className="font-bold">{order.service?.nameAr ?? '—'}</div>
-            <div className="text-xs text-muted-foreground mt-1">{order.category}</div>
+          {/* Pricing summary — prominent because it's the conversion bottleneck */}
+          <Card title="التسعير" icon={<DollarSign className="w-4 h-4" />}>
+            {hasPrice ? (
+              <div className="space-y-2">
+                {order.quotedPrice != null && (
+                  <div className="flex justify-between text-sm">
+                    <span className="text-muted-foreground">السعر المعروض</span>
+                    <span className="font-bold">
+                      {Number(order.quotedPrice).toLocaleString('ar-EG')} ج.م
+                    </span>
+                  </div>
+                )}
+                {order.finalPrice != null && (
+                  <div className="flex justify-between text-sm pt-2 border-t border-border">
+                    <span className="text-muted-foreground">السعر النهائي</span>
+                    <span className="font-black text-brand-red">
+                      {Number(order.finalPrice).toLocaleString('ar-EG')} ج.م
+                    </span>
+                  </div>
+                )}
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="w-full mt-2"
+                  onClick={() => setDialog('price')}
+                >
+                  <Edit3 className="w-3 h-3" /> تعديل السعر
+                </Button>
+              </div>
+            ) : (
+              <div className="space-y-2">
+                <p className="text-sm text-amber-700 bg-amber-50 rounded p-2">
+                  ⚠ الطلب لسه مش مسعّر
+                </p>
+                <Button size="sm" className="w-full" onClick={() => setDialog('price')}>
+                  <DollarSign className="w-4 h-4" /> تسعير الطلب
+                </Button>
+              </div>
+            )}
           </Card>
 
-          {order.assignedDriver && (
-            <Card title="السائق" icon={<User className="w-4 h-4" />}>
-              <div className="font-bold">{order.assignedDriver.name}</div>
-              <a
-                href={`tel:${order.assignedDriver.phone}`}
-                className="text-sm text-brand-red"
-                dir="ltr"
-              >
-                {order.assignedDriver.phone}
-              </a>
-              {order.assignedDriver.driverProfile && (
-                <div className="mt-2">
+          {/* Driver */}
+          <Card title="السائق" icon={<User className="w-4 h-4" />}>
+            {order.assignedDriver ? (
+              <div className="space-y-2">
+                <div className="font-bold">{order.assignedDriver.name}</div>
+                <a
+                  href={`tel:${order.assignedDriver.phone}`}
+                  className="text-sm text-brand-red block"
+                  dir="ltr"
+                >
+                  {order.assignedDriver.phone}
+                </a>
+                {order.assignedDriver.driverProfile && (
                   <Badge>
                     {order.assignedDriver.driverProfile.vehicleType}{' '}
                     {order.assignedDriver.driverProfile.vehiclePlate}
                   </Badge>
-                </div>
-              )}
-            </Card>
-          )}
+                )}
+                {!isTerminal && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="w-full mt-2"
+                    onClick={() => setDialog('assign')}
+                  >
+                    <Edit3 className="w-3 h-3" /> تغيير السائق
+                  </Button>
+                )}
+              </div>
+            ) : (
+              <div className="space-y-2">
+                <p className="text-sm text-muted-foreground">لم يتم تعيين سائق بعد</p>
+                {!isTerminal && (
+                  <Button size="sm" className="w-full" onClick={() => setDialog('assign')}>
+                    <Truck className="w-4 h-4" /> تعيين سائق
+                  </Button>
+                )}
+              </div>
+            )}
+          </Card>
 
-          <Card title="ملاحظة داخلية" icon={<MessageSquare className="w-4 h-4" />}>
+          {/* Side actions */}
+          <Card title="إجراءات" icon={<MessageSquare className="w-4 h-4" />}>
             <Button
               variant="outline"
               size="sm"
               onClick={() => setDialog('note')}
               className="w-full"
             >
-              <MessageSquare className="w-3 h-3" /> إضافة ملاحظة للفريق
+              <MessageSquare className="w-3 h-3" /> ملاحظة داخلية
             </Button>
           </Card>
 
+          {/* Audit history */}
           {Array.isArray(order.statusHistory) && order.statusHistory.length > 0 && (
             <Card title="السجل">
               <ol className="space-y-3">
@@ -402,6 +621,7 @@ export function OrderDetailPage() {
       {dialog === 'price' && (
         <PriceDialog
           orderId={id!}
+          initialPrice={order.quotedPrice ?? order.finalPrice}
           onClose={() => {
             setDialog(null);
             invalidate();
@@ -439,6 +659,139 @@ export function OrderDetailPage() {
   );
 }
 
+// ────────────────────────────────────────────────────────────────────────────
+// Workflow stepper — horizontal beaded line, one node per stage
+// ────────────────────────────────────────────────────────────────────────────
+
+function WorkflowStepper({
+  currentStatus,
+  terminalKind,
+}: {
+  currentStatus: OrderStatus;
+  terminalKind: OrderStatus | null;
+}) {
+  // Legacy orders stuck on AWAITING_CUSTOMER_APPROVAL render as "PRICED" on
+  // the strip — that's the most intuitive position now that the wait step
+  // is gone.
+  const effective = currentStatus === 'AWAITING_CUSTOMER_APPROVAL' ? 'PRICED' : currentStatus;
+  const visibleStages = HAPPY_PATH;
+  const currentIdx = Math.max(
+    0,
+    visibleStages.findIndex((s) => s.status === effective),
+  );
+
+  return (
+    <div className="flex items-center justify-between gap-1 overflow-x-auto pb-2">
+      {visibleStages.map((stage, i) => {
+        const isDone = i < currentIdx;
+        const isCurrent = i === currentIdx && !terminalKind;
+        const isFuture = i > currentIdx;
+        const isFailed = terminalKind === 'CANCELLED' || terminalKind === 'REJECTED';
+
+        const dotStyle =
+          isFailed && i >= currentIdx
+            ? 'bg-gray-200 text-gray-400'
+            : isDone
+              ? 'bg-green-500 text-white'
+              : isCurrent
+                ? 'bg-brand-red text-white ring-4 ring-brand-red/20 animate-pulse'
+                : 'bg-muted text-muted-foreground';
+
+        const lineStyle = isDone ? 'bg-green-300' : 'bg-muted';
+
+        return (
+          <div key={stage.status} className="flex items-center flex-shrink-0">
+            <div className="flex flex-col items-center gap-1 min-w-[64px]">
+              <div
+                className={`w-9 h-9 rounded-full grid place-items-center transition ${dotStyle}`}
+                title={stage.label}
+              >
+                {isDone ? <Check className="w-4 h-4" /> : <stage.Icon className="w-4 h-4" />}
+              </div>
+              <div
+                className={`text-[10px] text-center leading-tight ${
+                  isCurrent ? 'font-bold text-brand-red' : 'text-muted-foreground'
+                } ${isFuture ? 'opacity-60' : ''}`}
+              >
+                {stage.short}
+              </div>
+            </div>
+            {i < visibleStages.length - 1 && (
+              <div className={`h-1 w-6 sm:w-10 rounded-full mx-0.5 mt-[-18px] ${lineStyle}`} />
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Smart next button — single big CTA that knows what to do given state.
+// ────────────────────────────────────────────────────────────────────────────
+
+function SmartNextButton({
+  action,
+  pending,
+  onFire,
+  hasPrice,
+  hasDriver,
+}: {
+  action: NextAction;
+  pending: boolean;
+  onFire: () => void;
+  hasPrice: boolean;
+  hasDriver: boolean;
+}) {
+  if (action.kind === 'wait-customer') {
+    return (
+      <div className="flex items-center gap-2 bg-blue-50 text-blue-800 rounded-lg px-4 py-3 text-sm">
+        <Clock className="w-5 h-5 animate-pulse" />
+        <span className="font-bold">{action.label}</span>
+      </div>
+    );
+  }
+  if (action.kind === 'terminal') {
+    return null;
+  }
+
+  // Tone: amber when we still need a precondition (price/driver), green-ish
+  // when we're just confirming progress.
+  const isPrereqOpen = action.kind === 'price' || action.kind === 'assign';
+  const Icon = action.kind === 'price' ? DollarSign : action.kind === 'assign' ? Truck : ArrowRight;
+
+  return (
+    <button
+      type="button"
+      onClick={onFire}
+      disabled={pending}
+      className={`w-full inline-flex items-center justify-center gap-2 px-5 py-3 rounded-xl font-bold transition disabled:opacity-60 disabled:cursor-not-allowed ${
+        isPrereqOpen
+          ? 'bg-amber-500 hover:bg-amber-600 text-white shadow-md shadow-amber-500/30'
+          : 'bg-brand-red hover:bg-brand-red/90 text-white shadow-md shadow-brand-red/30'
+      }`}
+    >
+      {pending ? <Loader2 className="w-5 h-5 animate-spin" /> : <Icon className="w-5 h-5" />}
+      <span>{action.label}</span>
+      {!isPrereqOpen && !pending && <ArrowRight className="w-4 h-4 opacity-80" />}
+      {action.kind === 'price' && !hasPrice && (
+        <span className="bg-white/20 text-[10px] font-bold px-2 py-0.5 rounded-full ms-1">
+          مطلوب
+        </span>
+      )}
+      {action.kind === 'assign' && !hasDriver && (
+        <span className="bg-white/20 text-[10px] font-bold px-2 py-0.5 rounded-full ms-1">
+          مطلوب
+        </span>
+      )}
+    </button>
+  );
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Helpers + dialogs
+// ────────────────────────────────────────────────────────────────────────────
+
 function BackBar({ onBack }: { onBack: () => void }) {
   return (
     <button
@@ -471,12 +824,20 @@ function Card({
   );
 }
 
-function PriceDialog({ orderId, onClose }: { orderId: string; onClose: () => void }) {
-  const [price, setPrice] = useState('');
+function PriceDialog({
+  orderId,
+  initialPrice,
+  onClose,
+}: {
+  orderId: string;
+  initialPrice?: number | string | null;
+  onClose: () => void;
+}) {
+  const [price, setPrice] = useState(initialPrice != null ? String(initialPrice) : '');
   const mut = useMutation({
     mutationFn: () => api.adminSetPrice(orderId, Number(price)),
     onSuccess: () => {
-      toast.success('تم تسعير الطلب');
+      toast.success('تم حفظ السعر');
       onClose();
     },
     onError: (err: Error) => toast.error(err.message),
@@ -498,7 +859,12 @@ function PriceDialog({ orderId, onClose }: { orderId: string; onClose: () => voi
           إلغاء
         </Button>
         <Button onClick={() => mut.mutate()} disabled={!price || mut.isPending}>
-          <Check className="w-4 h-4" /> حفظ السعر
+          {mut.isPending ? (
+            <Loader2 className="w-4 h-4 animate-spin" />
+          ) : (
+            <Check className="w-4 h-4" />
+          )}
+          حفظ السعر
         </Button>
       </div>
     </Dialog>
@@ -506,7 +872,7 @@ function PriceDialog({ orderId, onClose }: { orderId: string; onClose: () => voi
 }
 
 function AssignDialog({ orderId, onClose }: { orderId: string; onClose: () => void }) {
-  const { data: drivers } = useQuery({
+  const { data: drivers, isLoading } = useQuery({
     queryKey: ['admin', 'drivers', 'available'],
     queryFn: () => api.adminListDrivers({ status: 'AVAILABLE', pageSize: 50 }),
   });
@@ -519,27 +885,41 @@ function AssignDialog({ orderId, onClose }: { orderId: string; onClose: () => vo
     },
     onError: (err: Error) => toast.error(err.message),
   });
+  const items = (drivers?.items as Order[] | undefined) ?? [];
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()} title="تعيين سائق">
-      <Field label="السائق المتاح" required>
-        <select
-          value={driverId}
-          onChange={(e) => setDriverId(e.target.value)}
-          className="w-full px-3 py-2 rounded-lg border border-input bg-white text-sm"
-        >
-          <option value="">— اختر —</option>
-          {(drivers?.items as Order[] | undefined)?.map((d) => (
-            <option key={d.id} value={d.id}>
-              {d.name} — {d.driverProfile?.vehicleType} {d.driverProfile?.vehiclePlate}
-            </option>
-          ))}
-        </select>
-      </Field>
+      {isLoading ? (
+        <div className="py-6 text-center text-sm text-muted-foreground">
+          <Loader2 className="w-4 h-4 animate-spin mx-auto mb-2" />
+          جاري تحميل السائقين المتاحين...
+        </div>
+      ) : items.length === 0 ? (
+        <p className="bg-amber-50 text-amber-800 rounded-lg p-3 text-sm">
+          ⚠ مفيش سائقين متاحين دلوقتي. خلي السائق يفعّل حالته من تطبيق الكابتن.
+        </p>
+      ) : (
+        <Field label="السائق المتاح" required>
+          <select
+            value={driverId}
+            onChange={(e) => setDriverId(e.target.value)}
+            className="w-full px-3 py-2 rounded-lg border border-input bg-white text-sm"
+          >
+            <option value="">— اختر —</option>
+            {items.map((d) => (
+              <option key={d.id} value={d.id}>
+                {d.name} — {d.driverProfile?.vehicleType ?? ''}{' '}
+                {d.driverProfile?.vehiclePlate ?? ''}
+              </option>
+            ))}
+          </select>
+        </Field>
+      )}
       <div className="flex justify-end gap-2 mt-4">
         <Button variant="outline" onClick={onClose}>
           إلغاء
         </Button>
         <Button onClick={() => mut.mutate()} disabled={!driverId || mut.isPending}>
+          {mut.isPending && <Loader2 className="w-4 h-4 animate-spin" />}
           تعيين
         </Button>
       </div>
@@ -559,8 +939,14 @@ function CancelDialog({ orderId, onClose }: { orderId: string; onClose: () => vo
   });
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()} title="إلغاء الطلب">
-      <Field label="السبب" required>
-        <Textarea value={reason} onChange={(e) => setReason(e.target.value)} rows={3} autoFocus />
+      <Field label="سبب الإلغاء" required>
+        <Textarea
+          value={reason}
+          onChange={(e) => setReason(e.target.value)}
+          rows={3}
+          autoFocus
+          placeholder="اكتب سبب الإلغاء..."
+        />
       </Field>
       <div className="flex justify-end gap-2 mt-4">
         <Button variant="outline" onClick={onClose}>
@@ -571,6 +957,7 @@ function CancelDialog({ orderId, onClose }: { orderId: string; onClose: () => vo
           onClick={() => mut.mutate()}
           disabled={reason.length < 2 || mut.isPending}
         >
+          {mut.isPending && <Loader2 className="w-4 h-4 animate-spin" />}
           تأكيد الإلغاء
         </Button>
       </div>
@@ -589,7 +976,7 @@ function NoteDialog({ orderId, onClose }: { orderId: string; onClose: () => void
     onError: (err: Error) => toast.error(err.message),
   });
   return (
-    <Dialog open onOpenChange={(o) => !o && onClose()} title="إضافة ملاحظة">
+    <Dialog open onOpenChange={(o) => !o && onClose()} title="ملاحظة داخلية">
       <Field label="الملاحظة" required>
         <Textarea value={note} onChange={(e) => setNote(e.target.value)} rows={3} autoFocus />
       </Field>

@@ -1,6 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
+  ArrowDown,
   ArrowRight,
+  ArrowUp,
+  ArrowUpDown,
   CheckCircle2,
   ChevronLeft,
   ChevronRight,
@@ -38,7 +41,7 @@ const STATUS_TABS = [
   { value: '', label: 'الكل' },
   { value: 'NEW', label: 'جديدة' },
   { value: 'UNDER_REVIEW', label: 'المراجعة' },
-  { value: 'PRICED,AWAITING_CUSTOMER_APPROVAL', label: 'بانتظار العميل' },
+  { value: 'PRICED', label: 'مسعّر' },
   { value: 'ACCEPTED,DRIVER_ASSIGNED,PICKED_UP,IN_ROUTE', label: 'في الطريق' },
   { value: 'COMPLETED', label: 'مكتمل' },
   { value: 'CANCELLED,REJECTED', label: 'ملغي' },
@@ -60,10 +63,10 @@ const QUICK_FILTERS: {
     status: 'UNDER_REVIEW',
   },
   {
-    key: 'pending-customer',
-    label: 'بانتظار العميل',
+    key: 'priced',
+    label: 'مسعّر',
     icon: <CheckCircle2 className="w-3.5 h-3.5" />,
-    status: 'PRICED,AWAITING_CUSTOMER_APPROVAL',
+    status: 'PRICED',
   },
   {
     key: 'on-the-way',
@@ -75,6 +78,43 @@ const QUICK_FILTERS: {
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type OrderRow = any;
+
+/**
+ * Column header that doubles as a sort toggle. Three states:
+ *   not-sorted → click → desc → click → asc → click → cleared
+ * Visually shows ⬇/⬆ when active, faded ⬍ when idle.
+ */
+function SortableTh({
+  label,
+  col,
+  sortBy,
+  sortDir,
+  onToggle,
+}: {
+  label: string;
+  col: 'createdAt' | 'orderNumber' | 'status' | 'finalPrice' | 'quotedPrice';
+  sortBy: string;
+  sortDir: 'asc' | 'desc';
+  onToggle: (c: 'createdAt' | 'orderNumber' | 'status' | 'finalPrice' | 'quotedPrice') => void;
+}) {
+  const active = sortBy === col;
+  const Icon = !active ? ArrowUpDown : sortDir === 'desc' ? ArrowDown : ArrowUp;
+  return (
+    <th className="px-4 py-3 font-bold">
+      <button
+        type="button"
+        onClick={() => onToggle(col)}
+        className={`inline-flex items-center gap-1.5 cursor-pointer hover:text-brand-red transition ${
+          active ? 'text-brand-red' : 'text-brand-dark'
+        }`}
+        title={active ? (sortDir === 'desc' ? 'ترتيب تصاعدي' : 'إلغاء الترتيب') : 'ترتيب تنازلي'}
+      >
+        {label}
+        <Icon className={`w-3.5 h-3.5 ${active ? 'opacity-100' : 'opacity-40'}`} />
+      </button>
+    </th>
+  );
+}
 
 export function OrdersPage() {
   const qc = useQueryClient();
@@ -98,6 +138,31 @@ export function OrdersPage() {
   );
   const [manualOpen, setManualOpen] = useState(false);
 
+  // Sort state. Synced to the URL so reload keeps the chosen order.
+  type SortBy = 'createdAt' | 'orderNumber' | 'status' | 'finalPrice' | 'quotedPrice';
+  type SortDir = 'asc' | 'desc';
+  const [sortBy, setSortBy] = useState<SortBy>(
+    (searchParams.get('sortBy') as SortBy) || 'createdAt',
+  );
+  const [sortDir, setSortDir] = useState<SortDir>(
+    (searchParams.get('sortDir') as SortDir) || 'desc',
+  );
+
+  /** Toggle sort: first click sets desc, second flips to asc, third clears back to default createdAt desc. */
+  const toggleSort = (col: SortBy) => {
+    if (sortBy !== col) {
+      setSortBy(col);
+      setSortDir('desc');
+    } else if (sortDir === 'desc') {
+      setSortDir('asc');
+    } else {
+      // Third click → reset to default
+      setSortBy('createdAt');
+      setSortDir('desc');
+    }
+    setPage(1);
+  };
+
   // Sync ALL filter state to the URL so reload + browser back/forward work.
   useEffect(() => {
     const next: Record<string, string> = {};
@@ -106,13 +171,15 @@ export function OrdersPage() {
     if (fromPreset) next.from = fromPreset;
     if (page > 1) next.page = String(page);
     if (viewMode === 'map') next.view = 'map';
+    if (sortBy !== 'createdAt') next.sortBy = sortBy;
+    if (sortDir !== 'desc') next.sortDir = sortDir;
     const current = Object.fromEntries(searchParams.entries());
     const changed =
       Object.keys(next).length !== Object.keys(current).length ||
       Object.entries(next).some(([k, v]) => current[k] !== v);
     if (changed) setSearchParams(next, { replace: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [debouncedSearch, statusFilter, fromPreset, page, viewMode]);
+  }, [debouncedSearch, statusFilter, fromPreset, page, viewMode, sortBy, sortDir]);
 
   // React to the URL changing externally (e.g. header search bar pushes a new query)
   useEffect(() => {
@@ -168,7 +235,7 @@ export function OrdersPage() {
   }, [search]);
 
   const params = useMemo(() => {
-    const p: Record<string, unknown> = { page, pageSize };
+    const p: Record<string, unknown> = { page, pageSize, sortBy, sortDir };
     if (statusFilter) p.status = statusFilter; // backend accepts CSV for grouped tabs
     if (debouncedSearch) p.search = debouncedSearch;
     if (fromPreset === 'today') {
@@ -177,7 +244,7 @@ export function OrdersPage() {
       p.from = start.toISOString();
     }
     return p;
-  }, [page, pageSize, statusFilter, debouncedSearch, fromPreset]);
+  }, [page, pageSize, statusFilter, debouncedSearch, fromPreset, sortBy, sortDir]);
 
   const { data, isLoading } = useQuery({
     queryKey: ['admin', 'orders', params],
@@ -465,13 +532,37 @@ export function OrdersPage() {
                         className="w-4 h-4 cursor-pointer accent-brand-red"
                       />
                     </th>
-                    <th className="px-4 py-3 font-bold">رقم الطلب</th>
+                    <SortableTh
+                      label="رقم الطلب"
+                      col="orderNumber"
+                      sortBy={sortBy}
+                      sortDir={sortDir}
+                      onToggle={toggleSort}
+                    />
                     <th className="px-4 py-3 font-bold">العميل</th>
                     <th className="px-4 py-3 font-bold">الخدمة</th>
-                    <th className="px-4 py-3 font-bold">الحالة</th>
-                    <th className="px-4 py-3 font-bold">السعر</th>
+                    <SortableTh
+                      label="الحالة"
+                      col="status"
+                      sortBy={sortBy}
+                      sortDir={sortDir}
+                      onToggle={toggleSort}
+                    />
+                    <SortableTh
+                      label="السعر"
+                      col="finalPrice"
+                      sortBy={sortBy}
+                      sortDir={sortDir}
+                      onToggle={toggleSort}
+                    />
                     <th className="px-4 py-3 font-bold">السائق</th>
-                    <th className="px-4 py-3 font-bold">التاريخ</th>
+                    <SortableTh
+                      label="التاريخ"
+                      col="createdAt"
+                      sortBy={sortBy}
+                      sortDir={sortDir}
+                      onToggle={toggleSort}
+                    />
                     <th className="px-4 py-3 font-bold text-center">إجراءات</th>
                   </tr>
                 </thead>

@@ -666,6 +666,17 @@ export class TamemClient {
     await this.http.request({ method: 'DELETE', url: `/admin/offers/${id}` });
   }
 
+  // ===== Home Config (admin-editable mobile home screen) =====
+  async getHomeConfig(): Promise<unknown> {
+    return this.request({ method: 'GET', url: '/home-config' });
+  }
+  async adminGetHomeConfig(): Promise<unknown> {
+    return this.request({ method: 'GET', url: '/admin/home-config' });
+  }
+  async adminUpdateHomeConfig(data: unknown): Promise<unknown> {
+    return this.request({ method: 'PATCH', url: '/admin/home-config', data });
+  }
+
   // Raw escape hatch
   get raw(): AxiosInstance {
     return this.http;

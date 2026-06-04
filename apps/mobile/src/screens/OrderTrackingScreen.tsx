@@ -108,7 +108,8 @@ const STAGE_LABEL: Record<OrderStatus, string> = {
   NEW: 'تم استلام الطلب',
   UNDER_REVIEW: 'قيد المراجعة',
   PRICED: 'تم التسعير',
-  AWAITING_CUSTOMER_APPROVAL: 'بانتظار موافقتك',
+  // Customer-approval step retired — kept here only for legacy orders.
+  AWAITING_CUSTOMER_APPROVAL: 'قيد المعالجة',
   ACCEPTED: 'تم التأكيد',
   DRIVER_ASSIGNED: 'تعيين سائق',
   PICKED_UP: 'تم استلام الطلب من المتجر',
@@ -123,7 +124,7 @@ const STAGE_HINT: Partial<Record<OrderStatus, string>> = {
   NEW: 'وصلك إشعار التأكيد. هنبدأ المراجعة فوراً.',
   UNDER_REVIEW: 'فريقنا بيراجع تفاصيل الطلب. خلال دقائق هنبعت لك السعر.',
   PRICED: 'تم تسعير الطلب. شوف التفاصيل وأكّد للبدء.',
-  AWAITING_CUSTOMER_APPROVAL: 'بانتظار موافقتك على السعر للبدء.',
+  AWAITING_CUSTOMER_APPROVAL: 'بنتأكد من التفاصيل، هنبدأ التنفيذ قريباً.',
   ACCEPTED: 'تم تأكيد الطلب. السائق هيتعيّن خلال دقايق.',
   DRIVER_ASSIGNED: 'السائق في طريقه لاستلام الطلب.',
   PICKED_UP: 'الطلب مع السائق ومتجه إليك.',

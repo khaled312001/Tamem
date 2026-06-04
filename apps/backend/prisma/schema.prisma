@@ -876,3 +876,40 @@ model RecurringOrder {
   @@index([customerId, isActive])
   @@index([nextRunAt, isActive])
 }
+
+// ============================================
+// HomeConfig — admin-editable content for the mobile home screen
+// ============================================
+// Singleton table (id is always 'singleton') so admins can rewrite the
+// hero copy, swap which merchants/offers/services get featured, and
+// tweak the trust strip without redeploying the app.
+//
+// The mobile fetches it on cold start; the dashboard PATCHes it.
+
+model HomeConfig {
+  id                String   @id @default("singleton")
+  heroGreeting      String?  @db.VarChar(120)
+  heroSubtitle      String?  @db.VarChar(160)
+  /// JSON array of strings — hex colors used to render the gradient
+  /// (length must be 2-4). Falls back to brand red→orange when null.
+  heroGradient      Json?
+  trustStripTitle   String?  @db.VarChar(120)
+  trustStripSubtitle String?  @db.VarChar(160)
+  promoBannerTitle  String?  @db.VarChar(140)
+  promoBannerCode   String?  @db.VarChar(40)
+  /// JSON array of service keys ('delivery-supermarket', 'delivery-pharmacy', ...)
+  /// that should appear on the home tiles, in display order. When null we
+  /// render whatever the Services table returns.
+  visibleServiceKeys Json?
+  /// JSON array of merchant IDs to pin in the "featured" rail. Null = pick
+  /// top-rated 4 from the merchants table.
+  featuredMerchantIds Json?
+  /// JSON array of offer IDs to display. Null = newest offer.
+  featuredOfferIds  Json?
+  /// When false, hide promo banner entirely.
+  showPromoBanner   Boolean  @default(true)
+  /// When false, hide the trust strip at the bottom.
+  showTrustStrip    Boolean  @default(true)
+  updatedAt         DateTime @updatedAt
+  updatedById       String?
+}

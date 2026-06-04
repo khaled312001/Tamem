@@ -48,7 +48,20 @@ interface OverviewResponse {
     customersCount: number;
   };
   trend: { day: string; orders: number; revenue: number }[];
-  ordersByService: { serviceId: string; count: number }[];
+  ordersByService: {
+    serviceId: string;
+    serviceName: string;
+    category: string | null;
+    count: number;
+  }[];
+}
+
+const AR_WEEKDAYS = ['أحد', 'إثنين', 'ثلاثاء', 'أربعاء', 'خميس', 'جمعة', 'سبت'];
+
+function formatTrendDay(iso: string): string {
+  // YYYY-MM-DD → "السبت 4/6" (weekday + day/month) — way more readable.
+  const d = new Date(iso + 'T00:00:00');
+  return `${AR_WEEKDAYS[d.getDay()]} ${d.getDate()}/${d.getMonth() + 1}`;
 }
 
 const PIE_COLORS = ['#E0301E', '#EC7A2C', '#F2A93B', '#3B82F6', '#10B981', '#8B5CF6'];
@@ -180,18 +193,21 @@ export function OverviewPage() {
               </div>
               <div className="h-64">
                 <ResponsiveContainer width="100%" height="100%">
-                  <LineChart data={data.trend}>
+                  <LineChart
+                    data={data.trend.map((t) => ({ ...t, dayLabel: formatTrendDay(t.day) }))}
+                  >
                     <CartesianGrid strokeDasharray="3 3" />
-                    <XAxis dataKey="day" />
-                    <YAxis />
+                    <XAxis dataKey="dayLabel" tick={{ fontSize: 11 }} />
+                    <YAxis allowDecimals={false} />
                     <Tooltip />
                     <Legend />
                     <Line
                       type="monotone"
                       dataKey="orders"
-                      name="طلبات"
+                      name="عدد الطلبات"
                       stroke="#E0301E"
                       strokeWidth={2}
+                      dot={{ r: 3 }}
                     />
                   </LineChart>
                 </ResponsiveContainer>
@@ -211,15 +227,23 @@ export function OverviewPage() {
                       <Pie
                         data={data.ordersByService}
                         dataKey="count"
-                        nameKey="serviceId"
+                        nameKey="serviceName"
                         innerRadius={40}
                         outerRadius={80}
+                        label={(entry: { count: number }) => `${entry.count}`}
                       >
                         {data.ordersByService.map((_, i) => (
                           <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />
                         ))}
                       </Pie>
-                      <Tooltip />
+                      <Tooltip
+                        formatter={(value: number, name: string) => [`${value} طلب`, name]}
+                      />
+                      <Legend
+                        layout="horizontal"
+                        verticalAlign="bottom"
+                        wrapperStyle={{ fontSize: 11, paddingTop: 8 }}
+                      />
                     </PieChart>
                   </ResponsiveContainer>
                 )}
@@ -231,12 +255,19 @@ export function OverviewPage() {
             <h2 className="font-bold mb-4">الإيرادات اليومية</h2>
             <div className="h-48">
               <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={data.trend}>
+                <BarChart data={data.trend.map((t) => ({ ...t, dayLabel: formatTrendDay(t.day) }))}>
                   <CartesianGrid strokeDasharray="3 3" />
-                  <XAxis dataKey="day" />
-                  <YAxis />
-                  <Tooltip formatter={(v: number) => `${v.toLocaleString('ar-EG')} ج.م`} />
-                  <Bar dataKey="revenue" name="إيرادات" fill="#F2A93B" />
+                  <XAxis dataKey="dayLabel" tick={{ fontSize: 11 }} />
+                  <YAxis tickFormatter={(v) => `${v}`} />
+                  <Tooltip
+                    formatter={(v: number) => [`${v.toLocaleString('ar-EG')} ج.م`, 'إيرادات']}
+                  />
+                  <Bar
+                    dataKey="revenue"
+                    name="إيرادات اليومية"
+                    fill="#F2A93B"
+                    radius={[6, 6, 0, 0]}
+                  />
                 </BarChart>
               </ResponsiveContainer>
             </div>

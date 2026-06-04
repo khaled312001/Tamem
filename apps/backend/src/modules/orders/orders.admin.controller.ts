@@ -16,6 +16,10 @@ const param = (v: unknown): string => {
   return v;
 };
 
+// Whitelist sortable columns — never echo user input into a Prisma orderBy
+// dictionary or we'd open ourselves to passing garbage that breaks the query.
+const SORTABLE = ['createdAt', 'orderNumber', 'status', 'finalPrice', 'quotedPrice'] as const;
+
 const listQuerySchema = z.object({
   status: z.string().optional(),
   category: z.enum(['DELIVERY', 'SHIPPING', 'MERCHANT']).optional(),
@@ -27,6 +31,8 @@ const listQuerySchema = z.object({
   to: z.coerce.date().optional(),
   page: z.coerce.number().int().positive().default(1),
   pageSize: z.coerce.number().int().positive().max(100).default(20),
+  sortBy: z.enum(SORTABLE).default('createdAt'),
+  sortDir: z.enum(['asc', 'desc']).default('desc'),
 });
 
 const updateStatusSchema = z.object({
@@ -80,7 +86,12 @@ export const adminList: RequestHandler = async (req, res, next) => {
         where,
         skip: (q.page - 1) * q.pageSize,
         take: q.pageSize,
-        orderBy: { createdAt: 'desc' },
+        // Always tie-break by createdAt desc so sorts on nullable columns
+        // (finalPrice on un-priced orders) stay stable across pages.
+        orderBy: [
+          { [q.sortBy]: q.sortDir },
+          ...(q.sortBy === 'createdAt' ? [] : [{ createdAt: 'desc' as const }]),
+        ],
         include: {
           service: { select: { id: true, name: true, nameAr: true, category: true } },
           customer: { select: { id: true, name: true, phone: true } },
@@ -157,6 +168,42 @@ export const adminUpdateStatus: RequestHandler = async (req, res, next) => {
     if (!order) throw new NotFoundError('Order', 'الطلب غير موجود');
 
     assertTransition(order.status, input.status, req.user!.role);
+
+    // Business-rule guards on top of the role/state-machine check. The state
+    // machine alone says "PRICED → DRIVER_ASSIGNED is reachable", but it
+    // doesn't know we must have a driver row to assign — that's tracked
+    // separately on the Order. Catch it here so the admin gets a clear
+    // 422 ("اختر سائق أولاً") instead of a corrupt half-assigned order.
+    const needsPrice: OrderStatus[] = [
+      OrderStatus.PRICED,
+      OrderStatus.AWAITING_CUSTOMER_APPROVAL,
+      OrderStatus.ACCEPTED,
+      OrderStatus.DRIVER_ASSIGNED,
+      OrderStatus.PICKED_UP,
+      OrderStatus.IN_ROUTE,
+      OrderStatus.DELIVERED,
+      OrderStatus.COMPLETED,
+    ];
+    if (
+      needsPrice.includes(input.status) &&
+      order.quotedPrice == null &&
+      order.finalPrice == null
+    ) {
+      throw new ConflictError('NEEDS_PRICE', 'لازم تسعّر الطلب أولاً قبل ما تنقل لهذه المرحلة');
+    }
+
+    const needsDriver: OrderStatus[] = [
+      OrderStatus.DRIVER_ASSIGNED,
+      OrderStatus.PICKED_UP,
+      OrderStatus.IN_ROUTE,
+      OrderStatus.DELIVERED,
+    ];
+    if (needsDriver.includes(input.status) && !order.assignedDriverId) {
+      throw new ConflictError(
+        'NEEDS_DRIVER',
+        'لازم تعيّن سائق للطلب أولاً قبل ما تنقل لهذه المرحلة',
+      );
+    }
 
     const lifecycleStamps: Record<string, Date> = {};
     if (input.status === OrderStatus.PICKED_UP) lifecycleStamps.pickedUpAt = new Date();

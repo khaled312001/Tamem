@@ -34,10 +34,22 @@ export const TERMINAL_STATUSES: ReadonlyArray<OrderStatus> = [
  * Allowed transitions: from -> [to...]
  * Any transition not listed here is invalid and the state machine will reject it.
  */
+/**
+ * NOTE: `AWAITING_CUSTOMER_APPROVAL` is intentionally orphaned in the
+ * transition graph — the customer-approval step was removed from the
+ * happy path. The status itself is kept in the enum so any historic
+ * orders that already reached it keep displaying, but no new order can
+ * enter it and no transition out is offered.
+ *
+ * The flow is now: PRICED → ACCEPTED directly (admin confirms the price
+ * was communicated to the customer through the call/WhatsApp channel
+ * and the admin proceeds).
+ */
 export const ORDER_TRANSITIONS: Readonly<Record<OrderStatus, ReadonlyArray<OrderStatus>>> = {
   NEW: ['UNDER_REVIEW', 'CANCELLED', 'REJECTED'],
   UNDER_REVIEW: ['PRICED', 'REJECTED', 'CANCELLED'],
-  PRICED: ['AWAITING_CUSTOMER_APPROVAL', 'CANCELLED'],
+  PRICED: ['ACCEPTED', 'CANCELLED'],
+  // Legacy orders may already be in this state — keep a way out for them.
   AWAITING_CUSTOMER_APPROVAL: ['ACCEPTED', 'CANCELLED'],
   ACCEPTED: ['DRIVER_ASSIGNED', 'CANCELLED'],
   DRIVER_ASSIGNED: ['PICKED_UP', 'CANCELLED'],
@@ -67,12 +79,16 @@ export const TRANSITION_ROLES: Readonly<
     CANCELLED: ['CUSTOMER', 'ADMIN'],
   },
   PRICED: {
-    AWAITING_CUSTOMER_APPROVAL: ['ADMIN'],
+    // Admin confirms the customer agreed (via call/WhatsApp) and moves
+    // the order straight to ACCEPTED. No more in-app customer approval.
+    ACCEPTED: ['ADMIN'],
     CANCELLED: ['ADMIN'],
   },
+  // Kept for legacy orders that are mid-flow on this state — admin can
+  // still rescue them, but no new order can enter here.
   AWAITING_CUSTOMER_APPROVAL: {
-    ACCEPTED: ['CUSTOMER'],
-    CANCELLED: ['CUSTOMER', 'ADMIN'],
+    ACCEPTED: ['ADMIN'],
+    CANCELLED: ['ADMIN'],
   },
   ACCEPTED: {
     DRIVER_ASSIGNED: ['ADMIN'],

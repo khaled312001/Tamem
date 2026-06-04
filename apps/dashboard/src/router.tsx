@@ -5,6 +5,7 @@ import { DashboardLayout } from './routes/_layout.js';
 import { AlertsPage } from './routes/alerts.js';
 import { CustomersPage } from './routes/customers.js';
 import { DriversPage } from './routes/drivers.js';
+import { HomeSettingsPage } from './routes/home-settings.js';
 import { LoginPage } from './routes/login.js';
 import { MerchantsPage } from './routes/merchants.js';
 import { NotFoundPage } from './routes/not-found.js';
@@ -57,6 +58,7 @@ const routes: RouteObject[] = [
       { path: 'whatsapp', element: <WhatsAppPage /> },
       { path: 'coupons', element: <CouponsPage /> },
       { path: 'settings', element: <SettingsPage /> },
+      { path: 'home-settings', element: <HomeSettingsPage /> },
       { path: '*', element: <NotFoundPage /> },
     ],
   },

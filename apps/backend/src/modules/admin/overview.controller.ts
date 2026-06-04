@@ -115,6 +115,18 @@ export const overview: RequestHandler = async (req, res, next) => {
       0,
     );
 
+    // Join service names so the pie chart shows "دليفري سوبر ماركت" instead
+    // of raw cuid IDs. One round-trip is fine here — the result set is at
+    // most 10-20 rows in production.
+    const serviceIds = ordersByService.map((g) => g.serviceId);
+    const services = serviceIds.length
+      ? await prisma.service.findMany({
+          where: { id: { in: serviceIds } },
+          select: { id: true, nameAr: true, category: true },
+        })
+      : [];
+    const serviceMap = new Map(services.map((s) => [s.id, s]));
+
     ok(res, {
       kpis: {
         totalOrders,
@@ -130,10 +142,15 @@ export const overview: RequestHandler = async (req, res, next) => {
         customersCount,
       },
       trend,
-      ordersByService: ordersByService.map((g) => ({
-        serviceId: g.serviceId,
-        count: g._count,
-      })),
+      ordersByService: ordersByService.map((g) => {
+        const svc = serviceMap.get(g.serviceId);
+        return {
+          serviceId: g.serviceId,
+          serviceName: svc?.nameAr ?? 'غير معروف',
+          category: svc?.category ?? null,
+          count: typeof g._count === 'number' ? g._count : 0,
+        };
+      }),
       range,
       from,
       to,
