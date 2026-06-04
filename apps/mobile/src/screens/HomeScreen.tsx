@@ -90,8 +90,18 @@ interface HomeConfig {
   heroGradient: string[] | null;
   trustStripTitle: string | null;
   trustStripSubtitle: string | null;
+  promoBannerCouponId: string | null;
   promoBannerTitle: string | null;
   promoBannerCode: string | null;
+  /// Inlined by the backend when promoBannerCouponId points to a still-valid
+  /// coupon. Pre-resolved so the mobile doesn't have to do a second lookup.
+  promoCoupon: {
+    id: string;
+    code: string;
+    type: 'PERCENTAGE' | 'FLAT';
+    value: string;
+    description: string | null;
+  } | null;
   visibleServiceKeys: string[] | null;
   featuredMerchantIds: string[] | null;
   featuredOfferIds: string[] | null;
@@ -154,7 +164,13 @@ export function HomeScreen() {
   };
 
   const onPromo = async () => {
-    const code = topOffer?.code || FALLBACK_PROMO_CODE;
+    // Prefer the coupon code resolved by the backend → free-text override
+    // → the legacy offer → the fallback constant.
+    const code =
+      homeConfig?.promoCoupon?.code ||
+      homeConfig?.promoBannerCode ||
+      topOffer?.code ||
+      FALLBACK_PROMO_CODE;
     const copied = await copyToClipboard(code);
     Alert.alert(
       copied ? 'تم نسخ الكود ✓' : `كود الخصم: ${code}`,
@@ -383,35 +399,47 @@ export function HomeScreen() {
           ))}
         </View>
 
-        {/* ─────── Promo banner — hidden when admin toggled off ─────── */}
-        {(homeConfig?.showPromoBanner ?? true) && (topOffer || homeConfig?.promoBannerTitle) && (
-          <Pressable onPress={onPromo} style={({ pressed }) => [pressed && { opacity: 0.92 }]}>
-            <LinearGradient
-              colors={gradients.promo}
-              start={{ x: 0, y: 0 }}
-              end={{ x: 1, y: 1 }}
-              style={[styles.banner, shadows.md]}
-            >
-              <View style={styles.bannerIcon}>
-                <Gift size={22} color={colors.brand.gold} />
-              </View>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.bannerTitle}>
-                  {homeConfig?.promoBannerTitle ?? topOffer?.titleAr ?? ''}
-                </Text>
-                <Text style={styles.bannerSub}>
-                  كود الخصم:{' '}
-                  <Text style={styles.bannerCode}>
-                    {homeConfig?.promoBannerCode || topOffer?.code || FALLBACK_PROMO_CODE}
+        {/* ─────── Promo banner — admin-controlled. Source priority:
+              1. promoCoupon (admin picked from Coupons table — preferred)
+              2. promoBannerTitle/Code (manual override)
+              3. topOffer (legacy Offers table)
+              4. nothing → banner hidden ─────── */}
+        {(() => {
+          if (!(homeConfig?.showPromoBanner ?? true)) return null;
+          const coupon = homeConfig?.promoCoupon;
+          const couponTitle = coupon
+            ? coupon.description ||
+              (coupon.type === 'PERCENTAGE'
+                ? `خصم ${Number(coupon.value)}% على طلبك`
+                : `خصم ${Number(coupon.value)} ج.م على طلبك`)
+            : null;
+          const title = couponTitle ?? homeConfig?.promoBannerTitle ?? topOffer?.titleAr ?? null;
+          const code = coupon?.code ?? homeConfig?.promoBannerCode ?? topOffer?.code ?? null;
+          if (!title && !code) return null;
+          return (
+            <Pressable onPress={onPromo} style={({ pressed }) => [pressed && { opacity: 0.92 }]}>
+              <LinearGradient
+                colors={gradients.promo}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 1 }}
+                style={[styles.banner, shadows.md]}
+              >
+                <View style={styles.bannerIcon}>
+                  <Gift size={22} color={colors.brand.gold} />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.bannerTitle}>{title ?? ''}</Text>
+                  <Text style={styles.bannerSub}>
+                    كود الخصم: <Text style={styles.bannerCode}>{code ?? FALLBACK_PROMO_CODE}</Text>
                   </Text>
-                </Text>
-              </View>
-              <View style={styles.bannerCopy}>
-                <Copy size={14} color={colors.brand.dark} />
-              </View>
-            </LinearGradient>
-          </Pressable>
-        )}
+                </View>
+                <View style={styles.bannerCopy}>
+                  <Copy size={14} color={colors.brand.dark} />
+                </View>
+              </LinearGradient>
+            </Pressable>
+          );
+        })()}
 
         {/* ─────── Featured merchants ─────── */}
         <SectionHeader

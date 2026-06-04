@@ -895,6 +895,10 @@ model HomeConfig {
   heroGradient      Json?
   trustStripTitle   String?  @db.VarChar(120)
   trustStripSubtitle String?  @db.VarChar(160)
+  /// Preferred way to set the promo banner — pick an existing Coupon and
+  /// the mobile renders its title/code/description live. Falls back to the
+  /// free-text fields below when null (legacy or quick one-off banners).
+  promoBannerCouponId String? @db.VarChar(30)
   promoBannerTitle  String?  @db.VarChar(140)
   promoBannerCode   String?  @db.VarChar(40)
   /// JSON array of service keys ('delivery-supermarket', 'delivery-pharmacy', ...)

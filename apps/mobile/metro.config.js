@@ -11,6 +11,29 @@ const config = getDefaultConfig(projectRoot);
 // Watch the monorepo root so shared packages refresh automatically
 config.watchFolders = [monorepoRoot];
 
+// Block paths that crash Metro's FallbackWatcher on Windows long paths.
+// The WhatsApp Web (wppconnect) cache writes deeply-nested chrome profile
+// folders under apps/backend/tokens/ that Metro can't `lstat` — and any
+// lstat error in the watcher crashes the whole bundler.
+const blockedPatterns = [
+  /\/apps\/backend\/tokens\//,
+  /\/apps\/backend\/dist\//,
+  /\/apps\/backend\/uploads\//,
+  /\\apps\\backend\\tokens\\/,
+  /\\apps\\backend\\dist\\/,
+  /\\apps\\backend\\uploads\\/,
+];
+config.resolver.blockList = blockedPatterns;
+config.watcher = {
+  ...(config.watcher ?? {}),
+  additionalExts: config.watcher?.additionalExts ?? [],
+  watchman: { deferStates: ['hg.update'] },
+  unstable_autoSaveCache: { enabled: false },
+  healthCheck: {
+    enabled: false,
+  },
+};
+
 // Resolve node_modules from both the app and the workspace root
 config.resolver.nodeModulesPaths = [
   path.resolve(projectRoot, 'node_modules'),

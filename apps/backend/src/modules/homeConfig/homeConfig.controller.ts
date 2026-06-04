@@ -29,6 +29,7 @@ const patchSchema = z.object({
     .optional(),
   trustStripTitle: z.string().max(120).nullable().optional(),
   trustStripSubtitle: z.string().max(160).nullable().optional(),
+  promoBannerCouponId: z.string().max(30).nullable().optional(),
   promoBannerTitle: z.string().max(140).nullable().optional(),
   promoBannerCode: z.string().max(40).nullable().optional(),
   visibleServiceKeys: z.array(z.string()).nullable().optional(),
@@ -49,11 +50,48 @@ async function loadConfig() {
   });
 }
 
-/** Public — mobile app reads this on home screen mount. */
+/** Public — mobile app reads this on home screen mount.
+ *
+ * If the admin selected a coupon for the promo banner, we inline the coupon
+ * details (code/value/description) so the mobile can render the banner in
+ * one round-trip without a second query. Inactive/expired coupons silently
+ * fall back to the free-text fields. */
 export const getPublicConfig: RequestHandler = async (_req, res, next) => {
   try {
     const cfg = await loadConfig();
-    ok(res, cfg);
+    let promoCoupon: {
+      id: string;
+      code: string;
+      type: string;
+      value: string;
+      description: string | null;
+    } | null = null;
+    if (cfg.promoBannerCouponId) {
+      const coupon = await prisma.coupon.findUnique({
+        where: { id: cfg.promoBannerCouponId },
+        select: {
+          id: true,
+          code: true,
+          type: true,
+          value: true,
+          description: true,
+          isActive: true,
+          validTo: true,
+        },
+      });
+      const stillValid =
+        coupon && coupon.isActive && (!coupon.validTo || coupon.validTo.getTime() >= Date.now());
+      if (stillValid) {
+        promoCoupon = {
+          id: coupon!.id,
+          code: coupon!.code,
+          type: coupon!.type,
+          value: String(coupon!.value),
+          description: coupon!.description,
+        };
+      }
+    }
+    ok(res, { ...cfg, promoCoupon });
   } catch (err) {
     next(err);
   }
