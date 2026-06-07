@@ -207,11 +207,10 @@ export function MerchantDetailScreen() {
               <Pressable
                 key={p.id}
                 onPress={() => {
-                  if (!(data.openness?.isOpenNow ?? data.isOpen)) return;
-                  navigation.navigate('DynamicServiceFlow', {
-                    serviceKey: 'delivery-supermarket',
-                    merchantId: data.id,
-                  });
+                  // Open the product detail page — works even when the
+                  // merchant is closed so the customer can still browse;
+                  // the add-to-cart button is what's actually disabled.
+                  navigation.navigate('ProductDetail', { productId: p.id });
                 }}
                 style={({ pressed }) => [
                   styles.productRow,

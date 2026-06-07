@@ -131,10 +131,47 @@ export const getMerchant: RequestHandler = async (req, res, next) => {
 export const getMerchantProducts: RequestHandler = async (req, res, next) => {
   try {
     const products = await prisma.product.findMany({
-      where: { merchantId: param(req.params.id), isAvailable: true },
+      where: { merchantId: param(req.params.id), isAvailable: true, isHidden: false },
       orderBy: { sortOrder: 'asc' },
     });
     ok(res, products);
+  } catch (err) {
+    next(err);
+  }
+};
+
+/**
+ * GET /products/:id — single product with merchant info inlined so the
+ * detail page can show "from store X" + openness without a follow-up call.
+ */
+export const getProduct: RequestHandler = async (req, res, next) => {
+  try {
+    const id = param(req.params.id);
+    const product = await prisma.product.findUnique({
+      where: { id },
+      include: {
+        merchant: {
+          select: {
+            id: true,
+            storeNameAr: true,
+            logoUrl: true,
+            rating: true,
+            manualStatus: true,
+            timezone: true,
+            businessHours: true,
+          },
+        },
+      },
+    });
+    if (!product) throw new NotFoundError('Product', 'المنتج غير موجود');
+    // Compute openness so the detail page can disable the add-to-cart button
+    // when the store is closed — single source of truth lives on the server.
+    const merchant = product.merchant;
+    const openness = isMerchantOpenNow(
+      { manualStatus: merchant.manualStatus, timezone: merchant.timezone },
+      merchant.businessHours,
+    );
+    ok(res, { ...product, merchant: { ...merchant, businessHours: undefined, openness } });
   } catch (err) {
     next(err);
   }

@@ -6,6 +6,7 @@ import { HomeScreen } from '../screens/HomeScreen';
 import { MerchantDetailScreen } from '../screens/MerchantDetailScreen';
 import { MerchantFlowScreen } from '../screens/MerchantFlowScreen';
 import { NearbyMapScreen } from '../screens/NearbyMapScreen';
+import { ProductDetailScreen } from '../screens/ProductDetailScreen';
 import { ShippingFlowScreen } from '../screens/ShippingFlowScreen';
 import { StoresListScreen } from '../screens/StoresListScreen';
 
@@ -14,6 +15,7 @@ export type HomeStackParamList = {
   StoresList: { categoryId?: string } | undefined;
   NearbyMap: { search?: string } | undefined;
   MerchantDetail: { merchantId: string };
+  ProductDetail: { productId: string };
   DynamicServiceFlow: { serviceKey?: string; serviceId?: string; merchantId?: string };
   DeliveryServices: undefined;
   ShippingFlow: undefined;
@@ -29,6 +31,7 @@ export function HomeStack() {
       <Stack.Screen name="StoresList" component={StoresListScreen} />
       <Stack.Screen name="NearbyMap" component={NearbyMapScreen} />
       <Stack.Screen name="MerchantDetail" component={MerchantDetailScreen} />
+      <Stack.Screen name="ProductDetail" component={ProductDetailScreen} />
       <Stack.Screen name="DynamicServiceFlow" component={DynamicServiceFlowScreen} />
       <Stack.Screen name="DeliveryServices" component={DeliveryServicesScreen} />
       <Stack.Screen name="ShippingFlow" component={ShippingFlowScreen} />
