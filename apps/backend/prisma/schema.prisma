@@ -113,11 +113,37 @@ enum NotificationType {
 }
 
 enum AlertType {
-  PENDING_ORDER
-  DRIVER_NOT_RESPONDING
-  CASH_LIMIT_EXCEEDED
+  // Orders
+  PENDING_ORDER                  // priced but customer never approved
+  MERCHANT_NOT_ACCEPTING         // merchant didn't accept in window
+  ORDER_STALE_IN_STAGE           // stuck in any stage too long
+  DRIVER_NOT_ASSIGNED            // no driver within window
+  DRIVER_PICKUP_LATE             // driver assigned but not picked up in window
+  DRIVER_DELIVERY_LATE           // in route but not delivered in window
+  // People / system
+  DRIVER_NOT_RESPONDING          // BUSY but no location ping
+  CASH_LIMIT_EXCEEDED            // driver carrying too much cash
+  COMPLAINT                      // customer complaint
+  // Payments
+  PAYMENT_PENDING                // online payment never confirmed
+  PAYMENT_FAILED                 // gateway returned error
+  REFUND_REQUESTED               // customer asked for refund
+  ORDER_CANCELLED_AFTER_PAY      // bad — refund flow blocked
+  // System
+  STATUS_UPDATE_ERROR            // backend failed to write a status change
+}
+
+/// Broad category — used for the dashboard filter chips and stats cards.
+/// Each AlertType maps to exactly one category in code.
+enum AlertCategory {
+  ORDER
+  PAYMENT
+  DRIVER
+  MERCHANT
+  CUSTOMER
   COMPLAINT
-  PAYMENT_PENDING
+  DELAY
+  SYSTEM
 }
 
 enum AlertSeverity {
@@ -125,6 +151,14 @@ enum AlertSeverity {
   MEDIUM
   HIGH
   CRITICAL
+}
+
+enum AlertStatus {
+  OPEN
+  ACKNOWLEDGED   // someone is working on it
+  RESOLVED
+  DISMISSED      // false positive / no action needed
+  ESCALATED      // bumped to a supervisor
 }
 
 enum LinkType {
@@ -658,25 +692,48 @@ model Notification {
 }
 
 model Alert {
-  id               String        @id @default(cuid())
+  id               String         @id @default(cuid())
   type             AlertType
-  severity         AlertSeverity @default(MEDIUM)
+  category         AlertCategory  @default(SYSTEM)
+  severity         AlertSeverity  @default(MEDIUM)
+  status           AlertStatus    @default(OPEN)
   title            String
   titleAr          String
-  description      String        @db.Text
-  descriptionAr    String        @db.Text
+  description      String         @db.Text
+  descriptionAr    String         @db.Text
   relatedOrderId   String?
-  relatedOrder     Order?        @relation(fields: [relatedOrderId], references: [id], onDelete: SetNull)
+  relatedOrder     Order?         @relation(fields: [relatedOrderId], references: [id], onDelete: SetNull)
   relatedUserId    String?
-  isResolved       Boolean       @default(false)
+  /// Stable key for deduplication. Pattern: `{type}:{orderId|userId}:{trigger}`.
+  /// The cron checks this before inserting a duplicate alert for the same
+  /// problem on the same target — only a fresh trigger (status change, new
+  /// dispute) creates a new row.
+  triggerKey       String?        @db.VarChar(140)
+  /// Free-text reason that triggered this firing — surfaced in the detail
+  /// panel and useful when the same key fires for different reasons.
+  triggerReason    String?        @db.VarChar(255)
+  // Legacy boolean kept for backwards compat — derived from `status`.
+  isResolved       Boolean        @default(false)
+  // Workflow timestamps + actors
+  ackedById        String?
+  ackedAt          DateTime?
   resolvedById     String?
-  resolvedBy       User?         @relation("AlertResolver", fields: [resolvedById], references: [id])
+  resolvedBy       User?          @relation("AlertResolver", fields: [resolvedById], references: [id])
   resolvedAt       DateTime?
-  resolutionNotes  String?       @db.VarChar(500)
-  createdAt        DateTime      @default(now())
+  resolutionNotes  String?        @db.VarChar(500)
+  dismissedById    String?
+  dismissedAt      DateTime?
+  escalatedById    String?
+  escalatedAt      DateTime?
+  /// Computed at resolve time so we don't recompute in every list query.
+  resolutionDurationSec Int?
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @default(now()) @updatedAt
 
-  @@index([isResolved, severity, createdAt(sort: Desc)])
+  @@index([status, severity, createdAt(sort: Desc)])
+  @@index([category])
   @@index([type])
+  @@index([triggerKey])
 }
 
 // ============================================

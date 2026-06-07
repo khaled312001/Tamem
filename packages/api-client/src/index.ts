@@ -546,10 +546,36 @@ export class TamemClient {
   }
   async adminResolveAlert(id: string, note: string): Promise<unknown> {
     return this.request({
-      method: 'PATCH',
+      method: 'POST',
       url: `/admin/alerts/${id}/resolve`,
       data: { note },
     });
+  }
+  async adminAckAlert(id: string): Promise<unknown> {
+    return this.request({ method: 'POST', url: `/admin/alerts/${id}/ack`, data: {} });
+  }
+  async adminDismissAlert(id: string, note: string): Promise<unknown> {
+    return this.request({
+      method: 'POST',
+      url: `/admin/alerts/${id}/dismiss`,
+      data: { note },
+    });
+  }
+  async adminEscalateAlert(id: string): Promise<unknown> {
+    return this.request({ method: 'POST', url: `/admin/alerts/${id}/escalate`, data: {} });
+  }
+  async adminAlertNote(id: string, note: string): Promise<unknown> {
+    return this.request({
+      method: 'POST',
+      url: `/admin/alerts/${id}/note`,
+      data: { note },
+    });
+  }
+  async adminGetAlert(id: string): Promise<unknown> {
+    return this.request({ method: 'GET', url: `/admin/alerts/${id}` });
+  }
+  async adminAlertStats(): Promise<unknown> {
+    return this.request({ method: 'GET', url: '/admin/alerts/stats' });
   }
 
   // ===== Admin WhatsApp bridge =====
