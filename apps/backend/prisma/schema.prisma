@@ -219,6 +219,15 @@ model DriverProfile {
   @@index([governorate])
 }
 
+/// Manual store status override. Falls back to BusinessHours-based auto-status
+/// when set to OPEN (the default). TEMPORARILY_CLOSED keeps the merchant in
+/// the directory but blocks new orders with a softer message than CLOSED.
+enum MerchantStatus {
+  OPEN
+  CLOSED
+  TEMPORARILY_CLOSED
+}
+
 model MerchantProfile {
   id           String   @id @default(cuid())
   userId       String   @unique
@@ -235,17 +244,53 @@ model MerchantProfile {
   lng          Decimal  @db.Decimal(10, 7)
   governorate  String
   city         String
+  /// Legacy free-text JSON — superseded by the structured BusinessHours rows
+  /// below. Kept for backwards compat with older seeds.
   openHours    Json?
+  /// Legacy quick toggle. Now derived from `manualStatus` + business hours.
   isOpen       Boolean  @default(true)
+  /// Admin/merchant manual override. OPEN = use business hours. CLOSED /
+  /// TEMPORARILY_CLOSED = block orders regardless of schedule.
+  manualStatus MerchantStatus @default(OPEN)
+  /// IANA timezone for hour resolution. Egypt is Africa/Cairo by default.
+  timezone     String   @default("Africa/Cairo") @db.VarChar(60)
+  /// Default commission percentage Tamem takes from orders at this merchant.
+  /// e.g. 15 = 15%. Falls back to the platform-wide setting when null.
+  commissionPct Decimal? @db.Decimal(5, 2)
   rating       Decimal? @db.Decimal(3, 2)
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
-  products     Product[]
+  products      Product[]
+  businessHours MerchantBusinessHours[]
 
   @@index([categoryId])
   @@index([governorate])
   @@index([isOpen])
+  @@index([manualStatus])
+}
+
+/// Per-weekday opening windows for a merchant. One row per (merchant, dayOfWeek)
+/// with a multi-window day modeled as 2+ rows (lunch break, late-night, etc).
+///
+///   dayOfWeek:  0=Sunday .. 6=Saturday (matches JS Date.getDay())
+///   openMin:    minutes since midnight in the merchant's local timezone
+///   closeMin:   same, must be > openMin. For after-midnight (e.g. close at
+///               02:00 next day), use 1440+actual e.g. 1560 for 02:00.
+///   isClosed:   when true, the merchant is closed all day on dayOfWeek
+///               (overrides any window rows for that day).
+model MerchantBusinessHours {
+  id         String          @id @default(cuid())
+  merchantId String
+  merchant   MerchantProfile @relation(fields: [merchantId], references: [id], onDelete: Cascade)
+  dayOfWeek  Int             @db.TinyInt
+  openMin    Int             @db.SmallInt
+  closeMin   Int             @db.SmallInt
+  isClosed   Boolean         @default(false)
+  createdAt  DateTime        @default(now())
+  updatedAt  DateTime        @updatedAt
+
+  @@index([merchantId, dayOfWeek])
 }
 
 model Category {
@@ -364,6 +409,17 @@ model Order {
   couponCode          String?         @db.VarChar(40)
   discountAmount      Decimal?        @db.Decimal(10, 2)
   walletUsed          Decimal?        @db.Decimal(10, 2)
+  /// Breakdown for the accountant report. All optional because legacy orders
+  /// won't have them. The convention:
+  ///   merchantSubtotal  = sum of items the merchant gets credit for
+  ///   deliveryFee       = what the customer pays for the ride
+  ///   platformCommission= what Tamem keeps (typically a % of merchantSubtotal)
+  ///   merchantPayout    = merchantSubtotal - platformCommission
+  /// finalPrice = merchantSubtotal + deliveryFee - discountAmount - walletUsed
+  merchantSubtotal    Decimal?        @db.Decimal(10, 2)
+  deliveryFee         Decimal?        @db.Decimal(10, 2)
+  platformCommission  Decimal?        @db.Decimal(10, 2)
+  merchantPayout      Decimal?        @db.Decimal(10, 2)
 
   // payment
   paymentMethod       PaymentMethod?

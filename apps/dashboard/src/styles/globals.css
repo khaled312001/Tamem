@@ -132,3 +132,38 @@
   transform: translateY(-2px);
   box-shadow: 0 10px 28px -12px rgba(224, 48, 30, 0.18);
 }
+
+/* ───── Print styles for accountant reports ─────
+   Hide dashboard chrome (sidebar, top bar) when the admin presses
+   "طباعة / PDF" so the printed page is just the report content. */
+@media print {
+  @page {
+    size: A4;
+    margin: 14mm 10mm;
+  }
+  body {
+    background: white !important;
+    font-size: 11pt;
+  }
+  aside,
+  header,
+  nav,
+  [data-no-print],
+  .print\:hidden {
+    display: none !important;
+  }
+  main {
+    padding: 0 !important;
+    margin: 0 !important;
+    width: 100% !important;
+    max-width: none !important;
+  }
+  table,
+  th,
+  td {
+    border-color: #cbd5e0 !important;
+  }
+  .print\:break-inside-avoid {
+    break-inside: avoid;
+  }
+}

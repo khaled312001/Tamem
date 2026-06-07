@@ -39,6 +39,14 @@ interface MerchantDetail {
   openHours?: Array<{ day: number; open: string; close: string }> | null;
   category?: { nameAr: string };
   products?: Array<{ id: string; nameAr: string; price: number; imageUrl?: string }>;
+  /// Server-computed openness verdict. Includes the next opening so we can
+  /// render "يفتح غداً 10ص" instead of just "مغلق".
+  openness?: {
+    isOpenNow: boolean;
+    reason: 'MANUAL_CLOSED' | 'MANUAL_TEMP_CLOSED' | 'OUT_OF_HOURS' | null;
+    nextOpenAt: string | null;
+    message: string | null;
+  };
 }
 
 type RouteParam = RouteProp<HomeStackParamList, 'MerchantDetail'>;
@@ -128,11 +136,21 @@ export function MerchantDetailScreen() {
           <View style={styles.titleRow}>
             <Text style={styles.title}>{data.storeNameAr}</Text>
             <StatusPill
-              label={data.isOpen ? 'مفتوح' : 'مغلق'}
-              color={data.isOpen ? colors.success : colors.text.muted}
+              label={(data.openness?.isOpenNow ?? data.isOpen) ? 'مفتوح الآن' : 'مغلق الآن'}
+              color={(data.openness?.isOpenNow ?? data.isOpen) ? colors.success : colors.text.muted}
               dot
             />
           </View>
+          {/* Closed-state banner — surfaces "يفتح غداً 10ص" so the customer
+              doesn't bounce off without knowing when to come back. */}
+          {!(data.openness?.isOpenNow ?? data.isOpen) && (
+            <View style={styles.closedBanner}>
+              <Clock size={14} color={colors.danger} />
+              <Text style={styles.closedBannerText}>
+                {data.openness?.message ?? 'هذا المتجر مغلق حالياً'}
+              </Text>
+            </View>
+          )}
           {data.category && <Text style={styles.subtitle}>{data.category.nameAr}</Text>}
 
           <View style={styles.metaRow}>
@@ -189,6 +207,7 @@ export function MerchantDetailScreen() {
               <Pressable
                 key={p.id}
                 onPress={() => {
+                  if (!(data.openness?.isOpenNow ?? data.isOpen)) return;
                   navigation.navigate('DynamicServiceFlow', {
                     serviceKey: 'delivery-supermarket',
                     merchantId: data.id,
@@ -233,8 +252,12 @@ export function MerchantDetailScreen() {
       <SafeAreaView edges={['bottom']} style={styles.ctaBar}>
         <View style={styles.ctaInner}>
           <PrimaryButton
-            label={data.isOpen ? 'اطلب الآن' : 'المتجر مغلق حالياً'}
-            disabled={!data.isOpen}
+            label={
+              (data.openness?.isOpenNow ?? data.isOpen)
+                ? 'اطلب الآن'
+                : (data.openness?.message ?? 'المتجر مغلق حالياً')
+            }
+            disabled={!(data.openness?.isOpenNow ?? data.isOpen)}
             onPress={() => {
               navigation.navigate('DynamicServiceFlow', {
                 serviceKey: 'delivery-supermarket',
@@ -297,6 +320,22 @@ const styles = StyleSheet.create({
     borderWidth: 1,
   },
   titleRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
+  closedBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: colors.dangerLight,
+    borderRadius: radii.md,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 6,
+    marginTop: spacing.sm,
+  },
+  closedBannerText: {
+    flex: 1,
+    color: colors.danger,
+    fontFamily: fontFamilies.bodyBold,
+    fontSize: fontSizes.xs,
+  },
   title: {
     flex: 1,
     fontSize: fontSizes.xl,

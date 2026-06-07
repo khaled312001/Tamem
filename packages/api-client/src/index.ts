@@ -677,6 +677,44 @@ export class TamemClient {
     return this.request({ method: 'PATCH', url: '/admin/home-config', data });
   }
 
+  // ===== Detailed revenue report =====
+  async adminRevenueReport(params: Record<string, unknown>): Promise<unknown> {
+    return this.request({ method: 'GET', url: '/admin/reports/revenue/detailed', params });
+  }
+  /** Build a URL the browser can navigate to directly to trigger the CSV download. */
+  revenueCsvUrl(
+    baseUrl: string,
+    params: Record<string, string | undefined>,
+    token: string,
+  ): string {
+    const search = new URLSearchParams();
+    for (const [k, v] of Object.entries(params)) if (v) search.set(k, v);
+    search.set('token', token);
+    return `${baseUrl}/api/v1/admin/reports/revenue.csv?${search.toString()}`;
+  }
+
+  // ===== Merchant business hours =====
+  async adminMerchantHours(merchantId: string): Promise<unknown> {
+    return this.request({ method: 'GET', url: `/admin/merchants/${merchantId}/hours` });
+  }
+  async adminSetMerchantHours(merchantId: string, windows: unknown): Promise<unknown> {
+    return this.request({
+      method: 'PUT',
+      url: `/admin/merchants/${merchantId}/hours`,
+      data: { windows },
+    });
+  }
+  async adminSetMerchantStatus(
+    merchantId: string,
+    manualStatus: 'OPEN' | 'CLOSED' | 'TEMPORARILY_CLOSED',
+  ): Promise<unknown> {
+    return this.request({
+      method: 'PATCH',
+      url: `/admin/merchants/${merchantId}/status`,
+      data: { manualStatus },
+    });
+  }
+
   // Raw escape hatch
   get raw(): AxiosInstance {
     return this.http;

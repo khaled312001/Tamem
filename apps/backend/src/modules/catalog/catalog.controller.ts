@@ -2,6 +2,7 @@ import type { RequestHandler } from 'express';
 import { z } from 'zod';
 
 import { prisma } from '../../db/prisma.js';
+import { isMerchantOpenNow } from '../merchants/merchantHours.js';
 import { NotFoundError } from '../../utils/errors.js';
 import { ok } from '../../utils/response.js';
 
@@ -34,6 +35,8 @@ const merchantSelect = {
   city: true,
   rating: true,
   isOpen: true,
+  manualStatus: true,
+  timezone: true,
   category: { select: { id: true, name: true, nameAr: true, iconUrl: true } },
 } as const;
 
@@ -71,11 +74,21 @@ export const listMerchants: RequestHandler = async (req, res, next) => {
       where.OR = [{ storeName: { contains: q.search } }, { storeNameAr: { contains: q.search } }];
     }
 
-    let merchants = await prisma.merchantProfile.findMany({ where, select: merchantSelect });
+    let merchants = await prisma.merchantProfile.findMany({
+      where,
+      select: { ...merchantSelect, businessHours: true },
+    });
+
+    // Attach `openness` to every merchant — the mobile uses this to badge
+    // "مفتوح / مغلق / يفتح غداً" without a per-merchant follow-up call.
+    const withOpenness = merchants.map((m) => ({
+      ...m,
+      openness: isMerchantOpenNow(m, m.businessHours),
+    }));
 
     // Compute distance + filter by radius if lat/lng provided
     if (q.lat !== undefined && q.lng !== undefined) {
-      const withDistance = merchants.map((m) => ({
+      const withDistance = withOpenness.map((m) => ({
         ...m,
         distanceKm: distanceKm(q.lat!, q.lng!, Number(m.lat), Number(m.lng)),
       }));
@@ -87,7 +100,7 @@ export const listMerchants: RequestHandler = async (req, res, next) => {
       return;
     }
 
-    ok(res, merchants);
+    ok(res, withOpenness);
   } catch (err) {
     next(err);
   }
@@ -97,10 +110,19 @@ export const getMerchant: RequestHandler = async (req, res, next) => {
   try {
     const merchant = await prisma.merchantProfile.findUnique({
       where: { id: param(req.params.id) },
-      select: { ...merchantSelect, products: true, openHours: true },
+      select: {
+        ...merchantSelect,
+        products: true,
+        openHours: true,
+        businessHours: {
+          orderBy: [{ dayOfWeek: 'asc' }, { openMin: 'asc' }],
+        },
+      },
     });
     if (!merchant) throw new NotFoundError('Merchant', 'المتجر غير موجود');
-    ok(res, merchant);
+    // Compute openness server-side so the mobile gets a single truth.
+    const openness = isMerchantOpenNow(merchant, merchant.businessHours);
+    ok(res, { ...merchant, openness });
   } catch (err) {
     next(err);
   }

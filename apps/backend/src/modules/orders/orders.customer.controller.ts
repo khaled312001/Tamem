@@ -14,6 +14,8 @@ import {
 } from '../../utils/errors.js';
 import { created, ok, paginated } from '../../utils/response.js';
 
+import { getMerchantOpenness } from '../merchants/merchantHours.js';
+
 import { generateOrderNumber } from './orderNumber.js';
 import { assertTransition } from './transitions.js';
 
@@ -35,6 +37,25 @@ export const createOrder: RequestHandler = async (req, res, next) => {
 
     const service = await prisma.service.findUnique({ where: { id: input.serviceId } });
     if (!service || !service.isActive) throw new NotFoundError('Service', 'الخدمة غير متاحة');
+
+    // ── Merchant business-hours guard ─────────────────────────────────────
+    // When the order targets a specific merchant (DELIVERY with merchantId
+    // or MERCHANT category with pickup points), refuse if that merchant is
+    // closed right now. The mobile already disables the order button, but
+    // we re-check server-side so a stale client can't bypass it.
+    const targetMerchantId =
+      'merchantId' in input && typeof input.merchantId === 'string' ? input.merchantId : undefined;
+    if (targetMerchantId) {
+      const openness = await getMerchantOpenness(targetMerchantId);
+      if (openness && !openness.isOpenNow) {
+        throw new ConflictError(
+          openness.reason === 'MANUAL_CLOSED' || openness.reason === 'MANUAL_TEMP_CLOSED'
+            ? 'MERCHANT_CLOSED'
+            : 'MERCHANT_OUT_OF_HOURS',
+          openness.message ?? 'المتجر مغلق حالياً',
+        );
+      }
+    }
 
     // ── Address resolution ────────────────────────────────────────────────
     // Every DELIVERY/SHIPPING order must end up with a deliveryAddress. The

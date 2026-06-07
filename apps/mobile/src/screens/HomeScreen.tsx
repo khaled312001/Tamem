@@ -64,6 +64,8 @@ interface Merchant {
   rating?: number | null;
   isOpen: boolean;
   category?: { nameAr: string };
+  /// Server-computed openness — preferred over the raw isOpen toggle.
+  openness?: { isOpenNow: boolean; message: string | null };
 }
 
 interface ActiveOrder {
@@ -478,8 +480,8 @@ export function HomeScreen() {
                     <Text style={styles.merchantMetaText}>{m.category?.nameAr ?? '—'}</Text>
                   </View>
                 </View>
-                <Badge tone={m.isOpen ? 'success' : 'neutral'} size="sm">
-                  {m.isOpen ? 'مفتوح' : 'مغلق'}
+                <Badge tone={(m.openness?.isOpenNow ?? m.isOpen) ? 'success' : 'neutral'} size="sm">
+                  {(m.openness?.isOpenNow ?? m.isOpen) ? 'مفتوح' : 'مغلق'}
                 </Badge>
                 <HeartButton merchantId={m.id} merchantName={m.storeNameAr} size="sm" />
               </Pressable>

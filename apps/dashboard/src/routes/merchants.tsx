@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Loader2, Plus, Store } from 'lucide-react';
+import { Clock, Loader2, Plus, Store } from 'lucide-react';
 import { lazy, Suspense, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { toast } from 'sonner';
 
 import { Badge } from '../components/ui/Badge.js';
@@ -83,6 +84,12 @@ export function MerchantsPage() {
                   </div>
                 )}
               </div>
+              <Link
+                to={`/merchants/${m.id}/hours`}
+                className="mt-3 inline-flex items-center gap-1 text-xs text-brand-red hover:underline"
+              >
+                <Clock className="w-3 h-3" /> مواعيد العمل والحالة
+              </Link>
             </div>
           ))}
         </div>

@@ -55,6 +55,7 @@ const NAV_ITEMS: NavItem[] = [
   { to: '/payment-gateway', icon: CreditCard, label: 'بوابة الدفع' },
   { to: '/coupons', icon: Tag, label: 'الكوبونات' },
   { to: '/reports', icon: BarChart3, label: 'التقارير' },
+  { to: '/reports/revenue', icon: BarChart3, label: 'تقرير الإيرادات' },
   { to: '/whatsapp', icon: MessageCircle, label: 'ربط واتساب' },
   { to: '/home-settings', icon: Smartphone, label: 'صفحة التطبيق' },
   { to: '/settings', icon: Settings, label: 'الإعدادات' },

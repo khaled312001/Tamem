@@ -7,6 +7,7 @@ import { CustomersPage } from './routes/customers.js';
 import { DriversPage } from './routes/drivers.js';
 import { HomeSettingsPage } from './routes/home-settings.js';
 import { LoginPage } from './routes/login.js';
+import { MerchantHoursPage } from './routes/merchant-hours.js';
 import { MerchantsPage } from './routes/merchants.js';
 import { NotFoundPage } from './routes/not-found.js';
 import { OrderDetailPage } from './routes/order-detail.js';
@@ -17,6 +18,7 @@ import { PaymentsPage } from './routes/payments.js';
 import { PricingPage } from './routes/pricing.js';
 import { ProductsPage } from './routes/products.js';
 import { ReportsPage } from './routes/reports.js';
+import { RevenueReportPage } from './routes/revenue-report.js';
 import { ServiceEditPage } from './routes/service-edit.js';
 import { ServicesPage } from './routes/services.js';
 import { CouponsPage } from './routes/coupons.js';
@@ -46,6 +48,7 @@ const routes: RouteObject[] = [
       { path: 'customers', element: <CustomersPage /> },
       { path: 'drivers', element: <DriversPage /> },
       { path: 'merchants', element: <MerchantsPage /> },
+      { path: 'merchants/:id/hours', element: <MerchantHoursPage /> },
       { path: 'services', element: <ServicesPage /> },
       { path: 'services/new', element: <ServiceEditPage /> },
       { path: 'services/:id/edit', element: <ServiceEditPage /> },
@@ -54,6 +57,7 @@ const routes: RouteObject[] = [
       { path: 'payments', element: <PaymentsPage /> },
       { path: 'payment-gateway', element: <PaymentGatewayPage /> },
       { path: 'reports', element: <ReportsPage /> },
+      { path: 'reports/revenue', element: <RevenueReportPage /> },
       { path: 'alerts', element: <AlertsPage /> },
       { path: 'whatsapp', element: <WhatsAppPage /> },
       { path: 'coupons', element: <CouponsPage /> },
