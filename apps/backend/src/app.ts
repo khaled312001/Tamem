@@ -102,11 +102,14 @@ export function createApp(): Express {
       legacyHeaders: false,
     }),
   );
+  // Auth endpoints are sensitive — tighter limit in production to slow
+  // credential stuffing / signup spam. In development we relax it so QA
+  // doesn't get locked out after a handful of register attempts.
   app.use(
     '/api/v1/auth',
     rateLimit({
       windowMs: 60_000,
-      limit: 20,
+      limit: env.NODE_ENV === 'production' ? 20 : 200,
       standardHeaders: true,
       legacyHeaders: false,
       message: { error: { code: 'TOO_MANY_REQUESTS', message: 'حاول مرة أخرى لاحقاً' } },

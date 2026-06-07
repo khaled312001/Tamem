@@ -25,7 +25,7 @@ import { IconField } from '../components/IconField';
 import { PasswordField } from '../components/PasswordField';
 import { PrimaryButton } from '../components/ui';
 import { api } from '../lib/api';
-import { authErrorMessage } from '../lib/authErrors';
+import { authErrorMessage, isPhoneAlreadyRegistered } from '../lib/authErrors';
 import type { AuthStackParamList } from '../navigation/AuthStack';
 import {
   colors,
@@ -58,7 +58,23 @@ export function RegisterScreen() {
       await api.raw.post('/auth/register', values);
       navigation.replace('OtpVerify', { phone: values.phone });
     } catch (err: unknown) {
-      Alert.alert('تعذّر إنشاء الحساب', authErrorMessage(err, 'register'));
+      // If the phone is already registered, give the customer a direct
+      // path back to login instead of an information-only error popup.
+      if (isPhoneAlreadyRegistered(err)) {
+        Alert.alert(
+          'هذا الرقم مسجَّل بالفعل',
+          'فيه حساب مسجَّل بنفس الرقم. تقدر تسجّل دخول مباشرة.',
+          [
+            { text: 'تراجع', style: 'cancel' },
+            {
+              text: 'سجّل دخول',
+              onPress: () => navigation.replace('Login'),
+            },
+          ],
+        );
+      } else {
+        Alert.alert('تعذّر إنشاء الحساب', authErrorMessage(err, 'register'));
+      }
     } finally {
       setLoading(false);
     }

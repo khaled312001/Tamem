@@ -47,7 +47,36 @@ export function OtpVerifyScreen() {
   const [loading, setLoading] = useState(false);
   const [resending, setResending] = useState(false);
   const [secondsLeft, setSecondsLeft] = useState(RESEND_SECONDS);
+  // In dev/QA, the backend returns the OTP in the response under `debugCode`.
+  // We surface it in a small dev-only banner so testers don't have to chase
+  // logs or open a WhatsApp account just to verify a number.
+  const [devCode, setDevCode] = useState<string | null>(null);
   const inputs = useRef<Array<TextInput | null>>([]);
+
+  // Auto-fire the FIRST OTP request when the screen mounts. Without this,
+  // the customer lands here with a countdown but no code was ever actually
+  // sent. The Register screen used to assume `/auth/otp/request` had been
+  // dispatched server-side, but it wasn't — fix it client-side here so the
+  // contract stays explicit and works for both register and login-by-otp.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await api.raw.post('/auth/otp/request', { phone });
+        if (!cancelled && res.data?.data?.debugCode) {
+          setDevCode(String(res.data.data.debugCode));
+        }
+      } catch {
+        /* swallow — the user can hit "إعادة إرسال الكود" manually */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // We only fire once per phone — re-firing on every render would burn
+    // through the 60s cooldown.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [phone]);
 
   useEffect(() => {
     if (secondsLeft <= 0) return;
@@ -110,7 +139,8 @@ export function OtpVerifyScreen() {
   const onResend = async () => {
     setResending(true);
     try {
-      await api.raw.post('/auth/otp/request', { phone });
+      const res = await api.raw.post('/auth/otp/request', { phone });
+      if (res.data?.data?.debugCode) setDevCode(String(res.data.data.debugCode));
       setSecondsLeft(RESEND_SECONDS);
       Alert.alert('تم ✓', 'تم إرسال كود جديد إلى رقم هاتفك');
     } catch {
@@ -118,6 +148,13 @@ export function OtpVerifyScreen() {
     } finally {
       setResending(false);
     }
+  };
+
+  /** Tap the dev banner → fill the boxes + submit. */
+  const useDevCode = () => {
+    if (!devCode || devCode.length !== OTP_LENGTH) return;
+    setDigits(devCode.split(''));
+    void onSubmit(devCode);
   };
 
   // In Arabic RTL the first digit must visually appear on the RIGHT.
@@ -160,6 +197,16 @@ export function OtpVerifyScreen() {
         </LinearGradient>
 
         <View style={[styles.card, shadows.md]}>
+          {/* Dev-only debug-code banner — disappears in production
+              because the backend strips `debugCode` from the response. */}
+          {devCode && (
+            <Pressable onPress={useDevCode} style={styles.devBanner}>
+              <Text style={styles.devBannerLabel}>🛠 وضع المطور — اضغط لإدخال الكود تلقائياً</Text>
+              <Text style={styles.devBannerCode} selectable>
+                {devCode}
+              </Text>
+            </Pressable>
+          )}
           <Text style={styles.fieldLabel}>الكود</Text>
           <View style={styles.otpRow}>
             {orderedIndices.map((idx) => {
@@ -296,11 +343,13 @@ const styles = StyleSheet.create({
   },
   otpRow: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
-    gap: spacing.sm,
+    justifyContent: 'center',
+    gap: 8,
   },
   otpInput: {
-    flex: 1,
+    // Fixed width — `flex: 1` was fighting RN Web's RTL/`space-between` and
+    // collapsing 5 of the 6 boxes off-screen on Safari.
+    width: 44,
     height: 56,
     borderWidth: 2,
     borderColor: colors.line2,
@@ -351,4 +400,26 @@ const styles = StyleSheet.create({
     fontFamily: fontFamilies.body,
   },
   backCta: { color: colors.brand.red, fontFamily: fontFamilies.bodyExtraBold },
+  // Dev banner — bright enough to never be mistaken for prod UI
+  devBanner: {
+    backgroundColor: '#FEF3C7',
+    borderWidth: 1,
+    borderColor: '#FDE68A',
+    borderRadius: radii.md,
+    padding: spacing.md,
+    marginBottom: spacing.lg,
+    alignItems: 'center',
+    gap: 4,
+  },
+  devBannerLabel: {
+    color: '#92400E',
+    fontFamily: fontFamilies.bodyBold,
+    fontSize: fontSizes.xs,
+  },
+  devBannerCode: {
+    color: '#92400E',
+    fontFamily: fontFamilies.headingBlack,
+    fontSize: fontSizes.xxl,
+    letterSpacing: 6,
+  },
 });
