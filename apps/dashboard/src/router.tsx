@@ -8,6 +8,7 @@ import { DriversPage } from './routes/drivers.js';
 import { HomeSettingsPage } from './routes/home-settings.js';
 import { LoginPage } from './routes/login.js';
 import { MerchantHoursPage } from './routes/merchant-hours.js';
+import { MerchantProductsApiPage } from './routes/merchant-products-api.js';
 import { MerchantsPage } from './routes/merchants.js';
 import { NotFoundPage } from './routes/not-found.js';
 import { OrderDetailPage } from './routes/order-detail.js';
@@ -49,6 +50,7 @@ const routes: RouteObject[] = [
       { path: 'drivers', element: <DriversPage /> },
       { path: 'merchants', element: <MerchantsPage /> },
       { path: 'merchants/:id/hours', element: <MerchantHoursPage /> },
+      { path: 'merchants/:id/products-api', element: <MerchantProductsApiPage /> },
       { path: 'services', element: <ServicesPage /> },
       { path: 'services/new', element: <ServiceEditPage /> },
       { path: 'services/:id/edit', element: <ServiceEditPage /> },

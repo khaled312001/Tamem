@@ -741,6 +741,47 @@ export class TamemClient {
     });
   }
 
+  // ===== Merchant Product API integration =====
+  async adminMerchantApiConfig(merchantId: string): Promise<unknown> {
+    return this.request({
+      method: 'GET',
+      url: `/admin/merchants/${merchantId}/api-config`,
+    });
+  }
+  async adminSaveMerchantApiConfig(merchantId: string, data: unknown): Promise<unknown> {
+    return this.request({
+      method: 'PUT',
+      url: `/admin/merchants/${merchantId}/api-config`,
+      data,
+    });
+  }
+  async adminDeleteMerchantApiConfig(merchantId: string): Promise<unknown> {
+    return this.request({
+      method: 'DELETE',
+      url: `/admin/merchants/${merchantId}/api-config`,
+    });
+  }
+  async adminTestMerchantApi(merchantId: string): Promise<unknown> {
+    return this.request({
+      method: 'POST',
+      url: `/admin/merchants/${merchantId}/api-config/test`,
+      data: {},
+    });
+  }
+  async adminSyncMerchantProducts(merchantId: string): Promise<unknown> {
+    return this.request({
+      method: 'POST',
+      url: `/admin/merchants/${merchantId}/api-config/sync`,
+      data: {},
+    });
+  }
+  async adminMerchantSyncLogs(merchantId: string): Promise<unknown[]> {
+    return this.request({
+      method: 'GET',
+      url: `/admin/merchants/${merchantId}/api-config/logs`,
+    });
+  }
+
   // Raw escape hatch
   get raw(): AxiosInstance {
     return this.http;

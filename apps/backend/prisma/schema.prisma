@@ -297,6 +297,7 @@ model MerchantProfile {
 
   products      Product[]
   businessHours MerchantBusinessHours[]
+  apiConfig     MerchantApiConfig?
 
   @@index([categoryId])
   @@index([governorate])
@@ -596,17 +597,38 @@ model Product {
   nameAr      String
   description String?         @db.Text
   imageUrl    String?
+  /// Extra image URLs captured from an external API. Single Json array.
+  imageUrls   Json?
   price       Decimal         @db.Decimal(10, 2)
+  /// Optional discounted price — when set, mobile shows the strike-through.
+  salePrice   Decimal?        @db.Decimal(10, 2)
   unit        String?
+  /// Stock-keeping unit. Used as the de-dup key when syncing from an
+  /// external API: (merchantId, sku) is unique.
+  sku         String?         @db.VarChar(80)
+  /// Raw ID from the external API (when a merchant doesn't expose a real
+  /// SKU). Used as a secondary upsert key when SKU is missing.
+  externalId  String?         @db.VarChar(120)
+  barcode     String?         @db.VarChar(80)
+  weight      Decimal?        @db.Decimal(10, 3)
+  categoryName String?        @db.VarChar(120)
   isAvailable Boolean         @default(true)
   stock       Int?
   sortOrder   Int             @default(0)
+  /// Last time this product was written by the external-API sync. Null for
+  /// hand-entered products so we never clobber them.
+  lastSyncedAt DateTime?
+  /// Soft-hidden when the merchant's API stopped returning this product
+  /// (per their config — admin can choose to hide instead of delete).
+  isHidden    Boolean         @default(false)
   createdAt   DateTime        @default(now())
   updatedAt   DateTime        @updatedAt
 
   orderItems  OrderItem[]
 
+  @@unique([merchantId, sku])
   @@index([merchantId, isAvailable])
+  @@index([merchantId, externalId])
 }
 
 // ============================================
@@ -1029,4 +1051,121 @@ model HomeConfig {
   showTrustStrip    Boolean  @default(true)
   updatedAt         DateTime @updatedAt
   updatedById       String?
+}
+
+// ============================================
+// MerchantApiConfig — external product-feed integration
+// ============================================
+// Each merchant can plug their own product API URL. We store the request
+// recipe (method/auth/headers/body) + field mapping + sync settings. The
+// `tokenSecret` is encrypted at rest with AES-256-GCM keyed by the
+// PRODUCTS_API_ENC_KEY env var (see lib/encrypt.ts) so a DB dump doesn't
+// leak third-party credentials.
+
+enum ProductApiAuthType {
+  NONE
+  API_KEY        // sent as header `X-API-Key` by default (configurable)
+  BEARER         // Authorization: Bearer <token>
+  BASIC          // Authorization: Basic base64(user:pass)
+}
+
+enum ProductApiMethod {
+  GET
+  POST
+}
+
+enum ProductApiSyncInterval {
+  DISABLED
+  EVERY_15_MIN
+  EVERY_30_MIN
+  HOURLY
+  DAILY
+}
+
+/// What to do with products that previously came from this API but vanished
+/// in the latest sync (admin-tunable per merchant).
+enum MissingProductPolicy {
+  IGNORE          // leave them as-is
+  MARK_UNAVAILABLE
+  HIDE            // soft-hide (isHidden = true)
+  DELETE          // hard delete — only used after explicit admin confirm
+}
+
+model MerchantApiConfig {
+  id              String                 @id @default(cuid())
+  merchantId      String                 @unique
+  merchant        MerchantProfile        @relation(fields: [merchantId], references: [id], onDelete: Cascade)
+  apiUrl          String                 @db.VarChar(500)
+  method          ProductApiMethod       @default(GET)
+  authType        ProductApiAuthType     @default(NONE)
+  /// Header name when authType=API_KEY. Defaults to `X-API-Key`.
+  authHeaderName  String?                @db.VarChar(60)
+  /// Encrypted ciphertext (AES-256-GCM) of the API key / bearer token /
+  /// `user:pass` for basic auth. Null = no auth or not saved yet.
+  tokenSecret     String?                @db.Text
+  /// JSON object of extra request headers (e.g. {"Accept": "application/json"}).
+  extraHeaders    Json?
+  /// JSON body for POST requests. Null for GET.
+  requestBody     Json?
+  /// Where the products array lives inside the response. Empty/null = root.
+  /// Examples: "products", "data", "items", "result.products"
+  productsPath    String?                @db.VarChar(120)
+  /// Field mapping — admin maps source field paths (left) to internal
+  /// product fields (right). JSON object like:
+  ///   { "nameAr": "title", "price": "regular_price", "image": "image_url" }
+  fieldMapping    Json?
+  syncInterval    ProductApiSyncInterval @default(DISABLED)
+  /// What to do when a previously-synced product disappears from the feed.
+  missingPolicy   MissingProductPolicy   @default(MARK_UNAVAILABLE)
+  /// Set after a successful test or sync to surface a green status badge.
+  isConnected     Boolean                @default(false)
+  /// Cached last error string, for display in the connection status block.
+  lastError       String?                @db.VarChar(500)
+  lastSyncedAt    DateTime?
+  /// Marker used by the cron to decide which configs are due. Mirrors
+  /// `lastSyncedAt` + the interval; reset on config change.
+  nextSyncAt      DateTime?
+  isActive        Boolean                @default(true)
+  createdAt       DateTime               @default(now())
+  updatedAt       DateTime               @updatedAt
+
+  logs            ProductSyncLog[]
+
+  @@index([isActive, nextSyncAt])
+}
+
+enum SyncRunStatus {
+  RUNNING
+  SUCCESS
+  PARTIAL    // succeeded with some failed items
+  FAILED
+}
+
+enum SyncTrigger {
+  MANUAL
+  AUTO
+  WEBHOOK
+}
+
+model ProductSyncLog {
+  id              String            @id @default(cuid())
+  configId        String
+  config          MerchantApiConfig @relation(fields: [configId], references: [id], onDelete: Cascade)
+  merchantId      String
+  trigger         SyncTrigger       @default(MANUAL)
+  startedAt       DateTime          @default(now())
+  finishedAt      DateTime?
+  status          SyncRunStatus     @default(RUNNING)
+  fetchedCount    Int               @default(0)
+  createdCount    Int               @default(0)
+  updatedCount    Int               @default(0)
+  failedCount     Int               @default(0)
+  hiddenCount     Int               @default(0)
+  /// Brief error summary when status=FAILED. Long stack traces go to the logger.
+  errorMessage    String?           @db.VarChar(500)
+  /// User who triggered MANUAL sync. Null for AUTO.
+  triggeredById   String?
+
+  @@index([merchantId, startedAt(sort: Desc)])
+  @@index([configId, startedAt(sort: Desc)])
 }

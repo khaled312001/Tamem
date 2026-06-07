@@ -84,12 +84,20 @@ export function MerchantsPage() {
                   </div>
                 )}
               </div>
-              <Link
-                to={`/merchants/${m.id}/hours`}
-                className="mt-3 inline-flex items-center gap-1 text-xs text-brand-red hover:underline"
-              >
-                <Clock className="w-3 h-3" /> مواعيد العمل والحالة
-              </Link>
+              <div className="mt-3 flex flex-wrap gap-3">
+                <Link
+                  to={`/merchants/${m.id}/hours`}
+                  className="inline-flex items-center gap-1 text-xs text-brand-red hover:underline"
+                >
+                  <Clock className="w-3 h-3" /> مواعيد العمل
+                </Link>
+                <Link
+                  to={`/merchants/${m.id}/products-api`}
+                  className="inline-flex items-center gap-1 text-xs text-brand-red hover:underline"
+                >
+                  🔗 ربط المنتجات (API)
+                </Link>
+              </div>
             </div>
           ))}
         </div>
