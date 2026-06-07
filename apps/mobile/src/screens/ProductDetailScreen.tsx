@@ -4,11 +4,9 @@
  * when applicable), description, the merchant the product belongs to, and
  * an add-to-cart button with quantity controls.
  *
- * Guard rails:
- *   - The "+ Add to cart" button is disabled when the product is hidden,
- *     unavailable, or the merchant is closed.
- *   - Adding a product from a different merchant prompts the customer
- *     before clearing the existing cart (cart.ts enforces single-merchant).
+ * Multi-merchant carts are allowed — the checkout splits the order per
+ * merchant. The "+ Add to cart" button is disabled when the product is
+ * hidden, unavailable, or the merchant is closed.
  */
 import { useNavigation, useRoute, type RouteProp } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
@@ -18,7 +16,6 @@ import { Clock, Minus, Package, Plus, ShoppingCart, Star, Store } from 'lucide-r
 import { useState } from 'react';
 import {
   ActivityIndicator,
-  Alert,
   Image,
   Pressable,
   ScrollView,
@@ -32,7 +29,7 @@ import { EmptyState, MoneyText, PrimaryButton } from '../components/ui';
 import { api } from '../lib/api';
 import { showToast } from '../lib/toast';
 import type { HomeStackParamList } from '../navigation/HomeStack';
-import { addToCart, replaceMerchant } from '../stores/cart';
+import { addToCart } from '../stores/cart';
 import { BackChevron } from '../theme/rtl';
 import { colors, fontFamilies, fontSizes, radii, shadows, spacing } from '../theme/tokens';
 
@@ -130,10 +127,9 @@ export function ProductDetailScreen() {
     data.isAvailable && !data.isHidden && (data.stock == null || data.stock > 0);
   const canAdd = productInStock && merchantOpen;
 
-  // ── Add to cart with merchant guard ───────────────────────────────────
   const onAddToCart = () => {
     if (!canAdd) return;
-    const payload = {
+    addToCart({
       product: {
         id: data.id,
         nameAr: data.nameAr,
@@ -143,26 +139,7 @@ export function ProductDetailScreen() {
       merchantId: data.merchant.id,
       merchantNameAr: data.merchant.storeNameAr,
       quantity,
-    };
-    const result = addToCart(payload);
-    if (result === 'wrong_merchant') {
-      Alert.alert(
-        'سلتك من متجر آخر',
-        'لا يمكن طلب منتجات من متجرين في نفس الطلب. هل تريد إفراغ السلة وبدء طلب جديد من هذا المتجر؟',
-        [
-          { text: 'إلغاء', style: 'cancel' },
-          {
-            text: 'نعم، إفراغ وإضافة',
-            style: 'destructive',
-            onPress: () => {
-              replaceMerchant(payload);
-              showToast({ title: 'تمت إضافة المنتج إلى السلة', tone: 'success' });
-            },
-          },
-        ],
-      );
-      return;
-    }
+    });
     showToast({ title: 'تمت إضافة المنتج إلى السلة', tone: 'success' });
   };
 

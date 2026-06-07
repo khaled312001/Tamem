@@ -19,7 +19,6 @@ import {
 } from 'lucide-react-native';
 import { useCallback, useEffect, useState } from 'react';
 import {
-  Alert,
   Image,
   Pressable,
   RefreshControl,
@@ -34,6 +33,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { GradientHeader } from '../components/GradientHeader';
 import { Divider, ListItem, SecondaryButton } from '../components/ui';
 import { api } from '../lib/api';
+import { confirm, notify } from '../lib/confirm';
 import { isNotificationSoundMuted, setNotificationSoundMuted } from '../lib/notificationSound';
 import { connectSocket } from '../lib/socket';
 import type { ProfileStackParamList } from '../navigation/ProfileStack';
@@ -188,7 +188,10 @@ export function ProfileScreen() {
   const walletBalance = Number(walletQuery.data?.wallet?.balance ?? 0);
 
   const onLogout = () => {
-    Alert.alert('تأكيد تسجيل الخروج', 'هل تريد بالفعل تسجيل الخروج من حسابك؟', [
+    // `confirm` routes to Alert.alert on native and window.confirm on web,
+    // so this works in both the mobile build and the dashboard-bundled
+    // preview the team uses in the browser.
+    confirm('تأكيد تسجيل الخروج', 'هل تريد بالفعل تسجيل الخروج من حسابك؟', [
       { text: 'إلغاء', style: 'cancel' },
       { text: 'تسجيل الخروج', style: 'destructive', onPress: () => void clear() },
     ]);
@@ -196,7 +199,7 @@ export function ProfileScreen() {
 
   const onDeleteAccount = () => {
     // Two-step confirmation per platform store requirements.
-    Alert.alert(
+    confirm(
       'حذف الحساب نهائياً',
       'هتم حذف بياناتك (الاسم، الإيميل، الصورة، العناوين) ومش هتقدر تسجّل دخول بنفس الرقم. الطلبات السابقة هتفضل محفوظة عند الإدارة للأغراض المحاسبية.',
       [
@@ -205,7 +208,7 @@ export function ProfileScreen() {
           text: 'تأكيد الحذف',
           style: 'destructive',
           onPress: () => {
-            Alert.alert('تأكيد نهائي', 'إجراء لا يمكن التراجع عنه. متأكد؟', [
+            confirm('تأكيد نهائي', 'إجراء لا يمكن التراجع عنه. متأكد؟', [
               { text: 'لا', style: 'cancel' },
               {
                 text: 'احذف الحساب',
@@ -215,7 +218,7 @@ export function ProfileScreen() {
                     await api.raw.delete('/me');
                     await clear();
                   } catch (err) {
-                    Alert.alert(
+                    notify(
                       'تعذّر الحذف',
                       err instanceof Error ? err.message : 'حاول مرة أخرى لاحقاً',
                     );

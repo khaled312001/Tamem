@@ -487,11 +487,20 @@ model Order {
   review              OrderReview?
   couponRedemption    CouponRedemption?
 
+  /// Multi-merchant carts produce one "parent" order (no merchantId,
+  /// holds the totals + payment) and N child orders (one per merchant,
+  /// each tracked + assigned a driver independently). Single-merchant
+  /// carts skip the parent and create a single regular Order.
+  parentOrderId       String?
+  parentOrder         Order?         @relation("OrderSubOrders", fields: [parentOrderId], references: [id])
+  subOrders           Order[]        @relation("OrderSubOrders")
+
   @@index([status, createdAt(sort: Desc)])
   @@index([customerId, createdAt(sort: Desc)])
   @@index([assignedDriverId, status])
   @@index([category])
   @@index([serviceId])
+  @@index([parentOrderId])
 }
 
 /// One review per completed order. Customer rates the experience overall and

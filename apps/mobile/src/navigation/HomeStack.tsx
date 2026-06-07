@@ -1,5 +1,7 @@
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 
+import { CartCheckoutScreen } from '../screens/CartCheckoutScreen';
+import { CartScreen } from '../screens/CartScreen';
 import { DeliveryServicesScreen } from '../screens/DeliveryServicesScreen';
 import { DynamicServiceFlowScreen } from '../screens/DynamicServiceFlowScreen';
 import { HomeScreen } from '../screens/HomeScreen';
@@ -16,6 +18,8 @@ export type HomeStackParamList = {
   NearbyMap: { search?: string } | undefined;
   MerchantDetail: { merchantId: string };
   ProductDetail: { productId: string };
+  Cart: undefined;
+  CartCheckout: undefined;
   DynamicServiceFlow: { serviceKey?: string; serviceId?: string; merchantId?: string };
   DeliveryServices: undefined;
   ShippingFlow: undefined;
@@ -32,6 +36,8 @@ export function HomeStack() {
       <Stack.Screen name="NearbyMap" component={NearbyMapScreen} />
       <Stack.Screen name="MerchantDetail" component={MerchantDetailScreen} />
       <Stack.Screen name="ProductDetail" component={ProductDetailScreen} />
+      <Stack.Screen name="Cart" component={CartScreen} />
+      <Stack.Screen name="CartCheckout" component={CartCheckoutScreen} />
       <Stack.Screen name="DynamicServiceFlow" component={DynamicServiceFlowScreen} />
       <Stack.Screen name="DeliveryServices" component={DeliveryServicesScreen} />
       <Stack.Screen name="ShippingFlow" component={ShippingFlowScreen} />

@@ -30,11 +30,17 @@ export const errorHandler: ErrorRequestHandler = (err, _req, res, _next) => {
   }
 
   logger.error({ err }, 'Unhandled error');
+  const isDev = process.env.NODE_ENV !== 'production';
   res.status(500).json({
     error: {
       code: 'INTERNAL_ERROR',
       message: 'Internal server error',
       messageAr: 'حدث خطأ في الخادم',
+      // In dev only, echo the real cause so the operator can debug from
+      // the browser network panel without tailing the backend terminal.
+      ...(isDev && err instanceof Error
+        ? { devMessage: err.message, devStack: err.stack?.split('\n').slice(0, 8) }
+        : {}),
     },
   });
 };
