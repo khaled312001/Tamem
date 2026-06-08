@@ -83,6 +83,16 @@ interface OrderDetail {
   createdAt: string;
   scheduledFor?: string | null;
   review?: { id: string; rating: number; comment?: string | null } | null;
+  /** Multi-merchant child orders. Populated only when this is a parent. */
+  subOrders?: Array<{
+    id: string;
+    orderNumber: string;
+    status: OrderStatus;
+    merchantId: string | null;
+    merchantSubtotal: string | number | null;
+    quotedPrice?: string | number | null;
+    items: Array<{ productNameSnapshot: string; quantity: number }>;
+  }>;
 }
 
 const SUPPORT_WHATSAPP =
@@ -177,6 +187,8 @@ const COMPLAINT_REASONS = [
 
 export function OrderTrackingScreen() {
   const route = useRoute<Route>();
+  const navigation =
+    useNavigation<NativeStackNavigationProp<OrdersStackParamList, 'OrderTracking'>>();
   const qc = useQueryClient();
   const { orderId, justCreated } = route.params;
   const [showWaBanner, setShowWaBanner] = useState(!!justCreated);
@@ -357,6 +369,42 @@ export function OrderTrackingScreen() {
         {(order.status === 'PRICED' || order.status === 'AWAITING_CUSTOMER_APPROVAL') &&
           order.paymentStatus !== 'PAID' &&
           price != null && <PayOnlineCTA orderId={order.id} amount={Number(price)} />}
+
+        {/* ─────── Multi-merchant sub-orders breakdown ─────── */}
+        {order.subOrders && order.subOrders.length > 0 ? (
+          <View style={[styles.section, shadows.sm]}>
+            <Text style={styles.sectionTitle}>تفاصيل المتاجر ({order.subOrders.length})</Text>
+            <Text style={styles.subOrderHint}>
+              طلبك انقسم لكذا متجر — كل متجر له سائق ومسار منفصل، الإجمالي والدفع موحّدين.
+            </Text>
+            {order.subOrders.map((sub) => (
+              <Pressable
+                key={sub.id}
+                onPress={() => navigation.push('OrderTracking', { orderId: sub.id })}
+                style={({ pressed }) => [styles.subOrderRow, pressed && { opacity: 0.85 }]}
+              >
+                <View style={{ flex: 1, gap: 4 }}>
+                  <Text style={styles.subOrderNum}>#{sub.orderNumber}</Text>
+                  <Text style={styles.subOrderItems} numberOfLines={2}>
+                    {sub.items.map((i) => `${i.productNameSnapshot} × ${i.quantity}`).join(' · ')}
+                  </Text>
+                </View>
+                <View style={{ alignItems: 'flex-end', gap: 4 }}>
+                  <Text style={styles.subOrderPrice}>
+                    {(sub.merchantSubtotal ?? sub.quotedPrice)
+                      ? `${Number(sub.merchantSubtotal ?? sub.quotedPrice).toLocaleString('ar-EG')} ج.م`
+                      : '—'}
+                  </Text>
+                  <View style={styles.subOrderStatusPill}>
+                    <Text style={styles.subOrderStatusText}>
+                      {STAGE_LABEL[sub.status] ?? sub.status}
+                    </Text>
+                  </View>
+                </View>
+              </Pressable>
+            ))}
+          </View>
+        ) : null}
 
         {/* ─────── Vertical stage timeline (more RTL-resilient than horizontal) ─────── */}
         {!isTerminalBad && (
@@ -1206,6 +1254,48 @@ const styles = StyleSheet.create({
     fontFamily: fontFamilies.bodyExtraBold,
     textTransform: 'uppercase',
     letterSpacing: 0.5,
+  },
+  // Sub-order rows (multi-merchant parent only)
+  subOrderHint: {
+    fontSize: fontSizes.xs,
+    color: colors.text.muted,
+    fontFamily: fontFamilies.body,
+    marginTop: spacing.xs,
+    marginBottom: spacing.sm,
+  },
+  subOrderRow: {
+    flexDirection: 'row',
+    gap: spacing.md,
+    backgroundColor: colors.surface,
+    borderRadius: radii.md,
+    padding: spacing.md,
+    marginTop: spacing.xs,
+  },
+  subOrderNum: {
+    fontSize: fontSizes.sm,
+    color: colors.ink,
+    fontFamily: fontFamilies.bodyExtraBold,
+  },
+  subOrderItems: {
+    fontSize: fontSizes.xs,
+    color: colors.text.secondary,
+    fontFamily: fontFamilies.body,
+  },
+  subOrderPrice: {
+    fontSize: fontSizes.sm,
+    color: colors.brand.red,
+    fontFamily: fontFamilies.bodyExtraBold,
+  },
+  subOrderStatusPill: {
+    backgroundColor: colors.brand.redLight,
+    paddingHorizontal: spacing.xs,
+    paddingVertical: 2,
+    borderRadius: radii.sm,
+  },
+  subOrderStatusText: {
+    fontSize: 10,
+    color: colors.brand.red,
+    fontFamily: fontFamilies.bodyBold,
   },
   // Terminal
   terminalCard: {

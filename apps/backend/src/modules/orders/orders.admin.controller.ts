@@ -6,10 +6,19 @@ import { assignDriverSchema, cancelOrderSchema, setPriceSchema } from '@tamem/va
 
 import { prisma } from '../../db/prisma.js';
 import { ConflictError, NotFoundError } from '../../utils/errors.js';
+import { logger } from '../../utils/logger.js';
 import { ok, paginated } from '../../utils/response.js';
+
+import { buildDriverAssignmentText, sendWhatsAppMessage } from '../../integrations/whatsapp.js';
 
 import { dispatchOrderStatusChanged } from './orderEvents.js';
 import { assertTransition } from './transitions.js';
+
+const PAYMENT_METHOD_AR: Record<string, string> = {
+  CASH: 'كاش عند الاستلام',
+  VODAFONE_CASH: 'فودافون كاش',
+  INSTAPAY: 'إنستا باي',
+};
 
 const param = (v: unknown): string => {
   if (typeof v !== 'string' || !v) throw new NotFoundError('Resource');
@@ -33,6 +42,13 @@ const listQuerySchema = z.object({
   pageSize: z.coerce.number().int().positive().max(100).default(20),
   sortBy: z.enum(SORTABLE).default('createdAt'),
   sortDir: z.enum(['asc', 'desc']).default('desc'),
+  /**
+   * Multi-merchant grouping. Default is 'parents' — sub-orders are hidden
+   * so the admin sees one row per checkout; the parent row carries a
+   * `subOrders` summary the UI can expand. Pass 'all' to fall back to the
+   * flat list when filtering by driverId, etc.
+   */
+  group: z.enum(['parents', 'all']).default('parents'),
 });
 
 const updateStatusSchema = z.object({
@@ -80,6 +96,14 @@ export const adminList: RequestHandler = async (req, res, next) => {
         { customer: { phone: { contains: q.search } } },
       ];
     }
+    // Default view: collapse multi-merchant carts to a single row by
+    // hiding child orders. We still surface them inside the parent's
+    // `subOrders` summary so the UI can expand inline.
+    // Disable the collapse when a filter that would only apply to children
+    // is active (driverId — children carry the driver, parents don't).
+    if (q.group === 'parents' && !q.driverId) {
+      where.parentOrderId = null;
+    }
 
     const [items, total] = await Promise.all([
       prisma.order.findMany({
@@ -109,6 +133,27 @@ export const adminList: RequestHandler = async (req, res, next) => {
                   vehiclePlate: true,
                 },
               },
+            },
+          },
+          // Surface the multi-merchant cart linkage so the dashboard can
+          // badge children ("جزء من #PARENT") and parents ("3 متاجر")
+          // — otherwise the admin sees 3 disconnected rows and can't tell
+          // they came from the same checkout.
+          parentOrder: { select: { id: true, orderNumber: true } },
+          _count: { select: { subOrders: true } },
+          // Inline sub-order summary so the expandable parent row can
+          // render every merchant in-place without a second request.
+          subOrders: {
+            orderBy: { createdAt: 'asc' },
+            select: {
+              id: true,
+              orderNumber: true,
+              status: true,
+              merchantSubtotal: true,
+              quotedPrice: true,
+              finalPrice: true,
+              assignedDriver: { select: { id: true, name: true } },
+              items: { select: { productNameSnapshot: true, quantity: true } },
             },
           },
         },
@@ -152,10 +197,63 @@ export const adminGet: RequestHandler = async (req, res, next) => {
         },
         payments: true,
         alerts: { where: { isResolved: false } },
+        // Multi-merchant cart linkage — admin needs both directions:
+        // parent → list of children with merchant + status; child → link
+        // back to parent + its siblings so they can be reviewed together.
+        parentOrder: { select: { id: true, orderNumber: true, status: true } },
+        subOrders: {
+          orderBy: { createdAt: 'asc' },
+          select: {
+            id: true,
+            orderNumber: true,
+            status: true,
+            merchantId: true,
+            merchantSubtotal: true,
+            quotedPrice: true,
+            finalPrice: true,
+            paymentStatus: true,
+            assignedDriver: { select: { id: true, name: true, phone: true } },
+            items: { select: { productNameSnapshot: true, quantity: true } },
+          },
+        },
       },
     });
     if (!order) throw new NotFoundError('Order', 'الطلب غير موجود');
-    ok(res, order);
+
+    // For child orders, include siblings (other children of the same parent)
+    // so the admin can jump between them from one place. Cheap — child
+    // counts are small (typically 2-3 per cart).
+    let siblings: Array<{ id: string; orderNumber: string; status: string }> = [];
+    if (order.parentOrderId) {
+      siblings = await prisma.order.findMany({
+        where: { parentOrderId: order.parentOrderId, NOT: { id: order.id } },
+        select: { id: true, orderNumber: true, status: true },
+        orderBy: { createdAt: 'asc' },
+      });
+    }
+
+    // Attach merchant name to each sub-order so the UI shows "صيدلية X"
+    // instead of an opaque merchantId. Order.merchantId is not a relation,
+    // so we join by hand with a single batched lookup.
+    let subOrdersEnriched = order.subOrders;
+    if (order.subOrders && order.subOrders.length > 0) {
+      const ids = Array.from(
+        new Set(order.subOrders.map((s) => s.merchantId).filter((x): x is string => !!x)),
+      );
+      const merchants = ids.length
+        ? await prisma.merchantProfile.findMany({
+            where: { id: { in: ids } },
+            select: { id: true, storeNameAr: true, logoUrl: true },
+          })
+        : [];
+      const byId = new Map(merchants.map((m) => [m.id, m]));
+      subOrdersEnriched = order.subOrders.map((s) => ({
+        ...s,
+        merchant: s.merchantId ? (byId.get(s.merchantId) ?? null) : null,
+      }));
+    }
+
+    ok(res, { ...order, subOrders: subOrdersEnriched, siblings });
   } catch (err) {
     next(err);
   }
@@ -356,6 +454,68 @@ export const adminAssignDriver: RequestHandler = async (req, res, next) => {
       });
       await dispatchOrderStatusChanged(req.app, updated, OrderStatus.DRIVER_ASSIGNED);
     }
+
+    // ── Notify the driver on WhatsApp with the full job brief ──────────
+    // Fire-and-forget so a delivery failure doesn't roll back the assignment.
+    // We fetch the joined data here (cheap — single round trip) instead of
+    // re-doing it inside the helper.
+    void (async () => {
+      try {
+        const full = await prisma.order.findUnique({
+          where: { id: order.id },
+          include: {
+            service: { select: { nameAr: true } },
+            customer: { select: { name: true, phone: true } },
+            items: { select: { productNameSnapshot: true, quantity: true } },
+          },
+        });
+        if (!full || !driver.phone) return;
+        const text = buildDriverAssignmentText({
+          orderNumber: full.orderNumber,
+          customerName: full.customer?.name ?? '—',
+          customerPhone: full.customer?.phone ?? '',
+          serviceNameAr: full.service?.nameAr ?? full.category,
+          notes: full.notes,
+          paymentMethodAr: full.paymentMethod
+            ? (PAYMENT_METHOD_AR[full.paymentMethod] ?? full.paymentMethod)
+            : null,
+          total: full.finalPrice
+            ? Number(full.finalPrice)
+            : full.quotedPrice
+              ? Number(full.quotedPrice)
+              : null,
+          pickupAddress: full.pickupAddress,
+          pickupLat: full.pickupLat ? Number(full.pickupLat) : null,
+          pickupLng: full.pickupLng ? Number(full.pickupLng) : null,
+          deliveryAddress: full.deliveryAddress,
+          deliveryLat: full.deliveryLat ? Number(full.deliveryLat) : null,
+          deliveryLng: full.deliveryLng ? Number(full.deliveryLng) : null,
+          items: full.items.map((it) => ({
+            name: it.productNameSnapshot,
+            quantity: it.quantity,
+          })),
+          // Quick orders ship the customer's description in customData,
+          // not as catalog items. Forward both so the driver sees it.
+          customData:
+            full.customData && typeof full.customData === 'object'
+              ? (full.customData as Record<string, unknown>)
+              : null,
+          imageUrls: Array.isArray(full.imageUrls)
+            ? (full.imageUrls.filter((u) => typeof u === 'string') as string[])
+            : null,
+        });
+        const sent = await sendWhatsAppMessage({ toPhone: driver.phone, text });
+        if (!sent) {
+          logger.warn(
+            { orderId: order.id, driverPhone: driver.phone },
+            'driver assignment WhatsApp not delivered',
+          );
+        }
+      } catch (err) {
+        logger.error({ err, orderId: order.id }, 'driver assignment WhatsApp send failed');
+      }
+    })();
+
     ok(res, updated);
   } catch (err) {
     next(err);

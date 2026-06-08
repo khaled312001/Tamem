@@ -186,6 +186,10 @@ model User {
   city            String?
   governorate     String?
   defaultAddress  String?  @db.VarChar(500)
+  /// Secondary contact phones — primary `phone` stays the login identity.
+  /// Stored as JSON array of strings so the admin can add/remove without
+  /// needing migrations or a separate table.
+  secondaryPhones Json?
   fcmToken        String?
   passwordResetHash     String?
   passwordResetExpiresAt DateTime?

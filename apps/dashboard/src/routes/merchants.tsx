@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Clock, Loader2, Plus, Store } from 'lucide-react';
+import { Clock, Loader2, Pencil, Phone, Plus, Save, Store, X } from 'lucide-react';
 import { lazy, Suspense, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { toast } from 'sonner';
@@ -23,6 +23,7 @@ type Row = any;
 
 export function MerchantsPage() {
   const [createOpen, setCreateOpen] = useState(false);
+  const [editing, setEditing] = useState<Row | null>(null);
 
   const { data, isLoading } = useQuery({
     queryKey: ['admin', 'merchants'],
@@ -85,6 +86,12 @@ export function MerchantsPage() {
                 )}
               </div>
               <div className="mt-3 flex flex-wrap gap-3">
+                <button
+                  onClick={() => setEditing(m)}
+                  className="inline-flex items-center gap-1 text-xs text-brand-red hover:underline"
+                >
+                  <Pencil className="w-3 h-3" /> تعديل البيانات
+                </button>
                 <Link
                   to={`/merchants/${m.id}/hours`}
                   className="inline-flex items-center gap-1 text-xs text-brand-red hover:underline"
@@ -104,7 +111,108 @@ export function MerchantsPage() {
       )}
 
       {createOpen && <CreateMerchantDialog onClose={() => setCreateOpen(false)} />}
+      {editing && <EditMerchantDialog merchant={editing} onClose={() => setEditing(null)} />}
     </div>
+  );
+}
+
+function EditMerchantDialog({ merchant, onClose }: { merchant: Row; onClose: () => void }) {
+  const qc = useQueryClient();
+  const [storeNameAr, setStoreNameAr] = useState<string>(merchant.storeNameAr ?? '');
+  const [storeName, setStoreName] = useState<string>(merchant.storeName ?? '');
+  const [addressLine, setAddressLine] = useState<string>(merchant.addressLine ?? '');
+  const [ownerName, setOwnerName] = useState<string>(merchant.user?.name ?? '');
+  const [ownerPhone, setOwnerPhone] = useState<string>(merchant.user?.phone ?? '');
+  const [secondaryPhones, setSecondaryPhones] = useState<string[]>(
+    Array.isArray(merchant.user?.secondaryPhones) ? merchant.user.secondaryPhones : [],
+  );
+
+  const mut = useMutation({
+    mutationFn: (data: Record<string, unknown>) => api.adminUpdateMerchant(merchant.id, data),
+    onSuccess: () => {
+      toast.success('تم حفظ بيانات التاجر');
+      qc.invalidateQueries({ queryKey: ['admin', 'merchants'] });
+      onClose();
+    },
+    onError: (err: Error) => toast.error(err.message),
+  });
+
+  return (
+    <Dialog open onOpenChange={(o) => !o && onClose()} title="تعديل بيانات التاجر" size="md">
+      <div className="space-y-3">
+        <Field label="اسم المتجر (عربي)">
+          <Input value={storeNameAr} onChange={(e) => setStoreNameAr(e.target.value)} />
+        </Field>
+        <Field label="اسم المتجر (إنجليزي)">
+          <Input value={storeName} onChange={(e) => setStoreName(e.target.value)} />
+        </Field>
+        <Field label="العنوان">
+          <Input value={addressLine} onChange={(e) => setAddressLine(e.target.value)} />
+        </Field>
+        <div className="pt-2 border-t border-border" />
+        <Field label="اسم المالك">
+          <Input value={ownerName} onChange={(e) => setOwnerName(e.target.value)} />
+        </Field>
+        <Field label="رقم المالك الرئيسي (للدخول)">
+          <Input value={ownerPhone} dir="ltr" onChange={(e) => setOwnerPhone(e.target.value)} />
+        </Field>
+        <div>
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-xs font-bold text-muted-foreground">أرقام احتياطية</span>
+            {secondaryPhones.length < 3 && (
+              <button
+                onClick={() => setSecondaryPhones([...secondaryPhones, ''])}
+                className="text-xs font-bold text-brand-red inline-flex items-center gap-1 hover:underline"
+              >
+                <Plus className="w-3 h-3" /> إضافة رقم
+              </button>
+            )}
+          </div>
+          {secondaryPhones.map((p, i) => (
+            <div key={i} className="flex items-center gap-2 mb-2">
+              <Phone className="w-4 h-4 text-muted-foreground" />
+              <Input
+                dir="ltr"
+                value={p}
+                onChange={(e) =>
+                  setSecondaryPhones(
+                    secondaryPhones.map((v, idx) => (idx === i ? e.target.value : v)),
+                  )
+                }
+                placeholder="01XXXXXXXXX"
+                className="flex-1"
+              />
+              <button
+                onClick={() => setSecondaryPhones(secondaryPhones.filter((_, idx) => idx !== i))}
+                className="p-1.5 rounded hover:bg-red-50 text-red-600"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+          ))}
+        </div>
+
+        <div className="flex justify-end pt-2 border-t border-border">
+          <button
+            onClick={() =>
+              mut.mutate({
+                storeNameAr: storeNameAr.trim() || undefined,
+                storeName: storeName.trim() || undefined,
+                addressLine: addressLine.trim() || undefined,
+                ownerName: ownerName.trim() || undefined,
+                ownerPhone: ownerPhone.trim() || undefined,
+                ownerSecondaryPhones: secondaryPhones.map((p) => p.trim()).filter(Boolean),
+              })
+            }
+            disabled={mut.isPending}
+            className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-brand-red text-white font-bold disabled:opacity-60"
+          >
+            <Save className="w-4 h-4" />
+            {mut.isPending ? 'جاري الحفظ…' : 'حفظ التغييرات'}
+          </button>
+        </div>
+      </div>
+    </Dialog>
   );
 }
 

@@ -44,6 +44,21 @@ const updateMerchantSchema = createMerchantSchema
   .extend({
     isOpen: z.boolean().optional(),
     isActive: z.boolean().optional(),
+    // Admin can change the owner's login phone + secondary contacts.
+    ownerPhone: z
+      .string()
+      .trim()
+      .regex(/^\+?\d{8,15}$/)
+      .optional(),
+    ownerSecondaryPhones: z
+      .array(
+        z
+          .string()
+          .trim()
+          .regex(/^\+?\d{8,15}$/),
+      )
+      .max(3)
+      .optional(),
   });
 
 const listQuerySchema = z.object({
@@ -184,14 +199,23 @@ export const update: RequestHandler = async (req, res, next) => {
       },
     });
 
-    if (input.ownerName || typeof input.isActive === 'boolean') {
-      await prisma.user.update({
-        where: { id: merchant.userId },
-        data: {
-          ...(input.ownerName ? { name: input.ownerName } : {}),
-          ...(typeof input.isActive === 'boolean' ? { isActive: input.isActive } : {}),
-        },
+    const userPatch: Record<string, unknown> = {};
+    if (input.ownerName) userPatch.name = input.ownerName;
+    if (typeof input.isActive === 'boolean') userPatch.isActive = input.isActive;
+    if (input.ownerPhone) {
+      // Prevent silent collision with another account.
+      const clash = await prisma.user.findUnique({
+        where: { phone: input.ownerPhone },
+        select: { id: true },
       });
+      if (clash && clash.id !== merchant.userId) {
+        throw new ConflictError('PHONE_TAKEN', 'هذا الرقم مسجّل لمستخدم آخر');
+      }
+      userPatch.phone = input.ownerPhone;
+    }
+    if (input.ownerSecondaryPhones) userPatch.secondaryPhones = input.ownerSecondaryPhones;
+    if (Object.keys(userPatch).length > 0) {
+      await prisma.user.update({ where: { id: merchant.userId }, data: userPatch });
     }
     ok(res, updated);
   } catch (err) {

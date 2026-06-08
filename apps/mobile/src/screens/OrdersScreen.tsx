@@ -34,6 +34,8 @@ interface OrderListItem {
   finalPrice?: number | null;
   createdAt: string;
   service?: { nameAr: string };
+  /** Populated for multi-merchant parent orders only. */
+  _count?: { subOrders: number };
 }
 
 type Nav = NativeStackNavigationProp<OrdersStackParamList, 'OrdersList'>;
@@ -107,8 +109,15 @@ const OrderCard = memo(function OrderCard({
           <StatusPill label={ORDER_STATUS_AR[item.status]} color={colors.status[item.status]} dot />
         </View>
 
-        {/* Order number sub-line */}
-        <Text style={styles.cardOrderNumber}>#{item.orderNumber}</Text>
+        {/* Order number + multi-merchant badge */}
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.xs }}>
+          <Text style={styles.cardOrderNumber}>#{item.orderNumber}</Text>
+          {item._count && item._count.subOrders > 1 ? (
+            <View style={styles.multiBadge}>
+              <Text style={styles.multiBadgeText}>{item._count.subOrders} متاجر</Text>
+            </View>
+          ) : null}
+        </View>
 
         {/* Bottom row: date + price */}
         <View style={styles.cardBottom}>
@@ -379,6 +388,18 @@ const styles = StyleSheet.create({
     color: colors.text.muted,
     fontFamily: fontFamilies.body,
     marginTop: 2,
+  },
+  multiBadge: {
+    marginTop: 2,
+    paddingHorizontal: spacing.xs,
+    paddingVertical: 1,
+    borderRadius: radii.sm,
+    backgroundColor: colors.brand.redLight,
+  },
+  multiBadgeText: {
+    fontSize: 10,
+    color: colors.brand.red,
+    fontFamily: fontFamilies.bodyBold,
   },
   cardBottom: {
     flexDirection: 'row',

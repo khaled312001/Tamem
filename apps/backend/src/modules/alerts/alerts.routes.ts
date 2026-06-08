@@ -6,6 +6,8 @@ export const adminAlertsRouter: Router = Router();
 
 adminAlertsRouter.get('/', ctrl.list);
 adminAlertsRouter.get('/stats', ctrl.stats);
+// Manual rerun of the sweep; useful right after tuning thresholds.
+adminAlertsRouter.post('/run-sweep', ctrl.runSweep);
 adminAlertsRouter.get('/:id', ctrl.getOne);
 adminAlertsRouter.post('/:id/ack', ctrl.ack);
 adminAlertsRouter.post('/:id/resolve', ctrl.resolve);

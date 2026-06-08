@@ -10,12 +10,12 @@
  *
  * Rule list:
  *
+ *   • Order NEW > N min (admin hasn't even looked yet)       → MEDIUM/HIGH
  *   • Order priced > N min ago, customer didn't approve     → MEDIUM
  *   • Order PRICED/UNDER_REVIEW > N min, merchant idle       → HIGH
  *   • Order ACCEPTED > N min without driver                  → CRITICAL
  *   • Order DRIVER_ASSIGNED > N min, never picked up         → HIGH
  *   • Order IN_ROUTE > N min, never delivered                → HIGH
- *   • Order stuck in same status > N min (catch-all)         → MEDIUM
  *   • Driver BUSY but no GPS ping > N min                    → HIGH
  *   • Driver cash on hand > limit                            → CRITICAL
  *   • Payment PENDING > N min (online flow)                  → HIGH
@@ -114,6 +114,37 @@ export async function runAlertSweep(io?: SocketServer): Promise<{ created: numbe
     const full = await prisma.alert.findUnique({ where: { id: alert.id } });
     if (full) emitNewAlert(io, full);
   };
+
+  // ── 0. Brand-new orders the admin hasn't touched ──────────────────
+  // Without this rule a fresh NEW order sitting overnight produces zero
+  // alerts because every other rule targets a status the admin would
+  // only reach by acting first (UNDER_REVIEW, PRICED, etc.). Severity
+  // escalates to HIGH once it crosses 60 minutes.
+  const newMin = await settingNumber('order_new_alert_minutes', 15);
+  const newCutoff = new Date(Date.now() - newMin * 60_000);
+  const staleNew = await prisma.order.findMany({
+    where: { status: 'NEW', createdAt: { lte: newCutoff } },
+    select: { id: true, orderNumber: true, createdAt: true },
+  });
+  for (const o of staleNew) {
+    const ageMin = Math.floor((Date.now() - o.createdAt.getTime()) / 60_000);
+    const severity: AlertSeverity = ageMin >= 60 ? 'HIGH' : 'MEDIUM';
+    // Bucketed by age so an order that crossed the 60-min line opens a
+    // fresh higher-severity alert (the previous MEDIUM dedup row stays
+    // until resolved, so the team sees the escalation explicitly).
+    const bucket = ageMin >= 60 ? 'OVER_60M' : `OVER_${newMin}M`;
+    await fire(
+      await upsertAlert({
+        type: 'PENDING_ORDER',
+        severity,
+        titleAr: 'طلب جديد بدون مراجعة',
+        descriptionAr: `الطلب ${o.orderNumber} موجود منذ ${ageMin} دقيقة بدون أي تحرك. ابدأ المراجعة.`,
+        triggerKey: `PENDING_ORDER:${o.id}:NEW_${bucket}`,
+        triggerReason: `NEW + > ${ageMin}m`,
+        relatedOrderId: o.id,
+      }),
+    );
+  }
 
   // ── 1. Order PRICED with no customer approval ─────────────────────
   const pendingMin = await settingNumber('order_pending_alert_minutes', 60);
@@ -325,5 +356,13 @@ export function startAlertsCron(io: SocketServer): void {
       logger.error({ err }, 'alert sweep failed');
     }
   });
+  // Catch-up: run one sweep right after boot so a server restart doesn't
+  // leave the dashboard quiet for up to 5 minutes while orders that went
+  // stale during the downtime sit invisible.
+  setTimeout(() => {
+    runAlertSweep(io)
+      .then(({ created }) => logger.info({ created }, '🔔 startup alert sweep complete'))
+      .catch((err) => logger.error({ err }, 'startup alert sweep failed'));
+  }, 5_000);
   logger.info('🔔 alerts cron scheduled (every 5 min, expanded rules)');
 }

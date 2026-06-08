@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Loader2, Plus, Truck } from 'lucide-react';
+import { Loader2, Pencil, Phone, Plus, Save, Truck, X } from 'lucide-react';
 import { useState } from 'react';
 import { toast } from 'sonner';
 
@@ -18,6 +18,7 @@ const VEHICLE_TYPES = ['دراجة بخارية', 'سيارة', 'دراجة', '�
 export function DriversPage() {
   const qc = useQueryClient();
   const [createOpen, setCreateOpen] = useState(false);
+  const [editing, setEditing] = useState<Row | null>(null);
 
   const { data, isLoading } = useQuery({
     queryKey: ['admin', 'drivers'],
@@ -107,13 +108,145 @@ export function DriversPage() {
                   </button>
                 ))}
               </div>
+              <button
+                onClick={() => setEditing(d)}
+                className="mt-3 inline-flex items-center gap-1 text-xs text-brand-red hover:underline"
+              >
+                <Pencil className="w-3 h-3" /> تعديل البيانات
+              </button>
             </div>
           ))}
         </div>
       )}
 
       {createOpen && <CreateDriverDialog onClose={() => setCreateOpen(false)} />}
+      {editing && <EditDriverDialog driver={editing} onClose={() => setEditing(null)} />}
     </div>
+  );
+}
+
+function EditDriverDialog({ driver, onClose }: { driver: Row; onClose: () => void }) {
+  const qc = useQueryClient();
+  const [name, setName] = useState<string>(driver.name ?? '');
+  const [phone, setPhone] = useState<string>(driver.phone ?? '');
+  const [governorate, setGovernorate] = useState<string>(driver.driverProfile?.governorate ?? '');
+  const [vehicleType, setVehicleType] = useState<string>(driver.driverProfile?.vehicleType ?? '');
+  const [vehiclePlate, setVehiclePlate] = useState<string>(
+    driver.driverProfile?.vehiclePlate ?? '',
+  );
+  const [nationalId, setNationalId] = useState<string>(driver.driverProfile?.nationalId ?? '');
+  const [notes, setNotes] = useState<string>(driver.driverProfile?.notes ?? '');
+  const [secondaryPhones, setSecondaryPhones] = useState<string[]>(
+    Array.isArray(driver.secondaryPhones) ? driver.secondaryPhones : [],
+  );
+
+  const mut = useMutation({
+    mutationFn: (data: Record<string, unknown>) => api.adminUpdateDriver(driver.id, data),
+    onSuccess: () => {
+      toast.success('تم حفظ بيانات السائق');
+      qc.invalidateQueries({ queryKey: ['admin', 'drivers'] });
+      onClose();
+    },
+    onError: (err: Error) => toast.error(err.message),
+  });
+
+  return (
+    <Dialog open onOpenChange={(o) => !o && onClose()} title="تعديل بيانات السائق" size="md">
+      <div className="space-y-3">
+        <Field label="الاسم">
+          <Input value={name} onChange={(e) => setName(e.target.value)} />
+        </Field>
+        <Field label="رقم الهاتف الرئيسي (للدخول)">
+          <Input dir="ltr" value={phone} onChange={(e) => setPhone(e.target.value)} />
+        </Field>
+        <Field label="الرقم القومي">
+          <Input value={nationalId} onChange={(e) => setNationalId(e.target.value)} />
+        </Field>
+        <Field label="المحافظة">
+          <Input value={governorate} onChange={(e) => setGovernorate(e.target.value)} />
+        </Field>
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="نوع المركبة">
+            <select
+              value={vehicleType}
+              onChange={(e) => setVehicleType(e.target.value)}
+              className="w-full px-3 py-2 border border-border rounded-lg text-sm"
+            >
+              <option value="">—</option>
+              {VEHICLE_TYPES.map((v) => (
+                <option key={v} value={v}>
+                  {v}
+                </option>
+              ))}
+            </select>
+          </Field>
+          <Field label="رقم اللوحة">
+            <Input value={vehiclePlate} onChange={(e) => setVehiclePlate(e.target.value)} />
+          </Field>
+        </div>
+        <Field label="ملاحظات">
+          <Input value={notes} onChange={(e) => setNotes(e.target.value)} />
+        </Field>
+
+        <div>
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-xs font-bold text-muted-foreground">أرقام احتياطية</span>
+            {secondaryPhones.length < 3 && (
+              <button
+                onClick={() => setSecondaryPhones([...secondaryPhones, ''])}
+                className="text-xs font-bold text-brand-red inline-flex items-center gap-1 hover:underline"
+              >
+                <Plus className="w-3 h-3" /> إضافة رقم
+              </button>
+            )}
+          </div>
+          {secondaryPhones.map((p, i) => (
+            <div key={i} className="flex items-center gap-2 mb-2">
+              <Phone className="w-4 h-4 text-muted-foreground" />
+              <Input
+                dir="ltr"
+                value={p}
+                onChange={(e) =>
+                  setSecondaryPhones(
+                    secondaryPhones.map((v, idx) => (idx === i ? e.target.value : v)),
+                  )
+                }
+                placeholder="01XXXXXXXXX"
+                className="flex-1"
+              />
+              <button
+                onClick={() => setSecondaryPhones(secondaryPhones.filter((_, idx) => idx !== i))}
+                className="p-1.5 rounded hover:bg-red-50 text-red-600"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+          ))}
+        </div>
+
+        <div className="flex justify-end pt-2 border-t border-border">
+          <button
+            onClick={() =>
+              mut.mutate({
+                name: name.trim() || undefined,
+                phone: phone.trim() || undefined,
+                nationalId: nationalId.trim() || undefined,
+                governorate: governorate.trim() || undefined,
+                vehicleType: vehicleType.trim() || undefined,
+                vehiclePlate: vehiclePlate.trim() || undefined,
+                notes: notes.trim() || undefined,
+                secondaryPhones: secondaryPhones.map((p) => p.trim()).filter(Boolean),
+              })
+            }
+            disabled={mut.isPending}
+            className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-brand-red text-white font-bold disabled:opacity-60"
+          >
+            <Save className="w-4 h-4" />
+            {mut.isPending ? 'جاري الحفظ…' : 'حفظ التغييرات'}
+          </button>
+        </div>
+      </div>
+    </Dialog>
   );
 }
 

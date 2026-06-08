@@ -30,6 +30,21 @@ const createDriverSchema = z.object({
 
 const updateDriverSchema = z.object({
   name: z.string().trim().min(2).max(100).optional(),
+  // Admin can change the driver's login phone + add secondary contacts.
+  phone: z
+    .string()
+    .trim()
+    .regex(/^\+?\d{8,15}$/)
+    .optional(),
+  secondaryPhones: z
+    .array(
+      z
+        .string()
+        .trim()
+        .regex(/^\+?\d{8,15}$/),
+    )
+    .max(3)
+    .optional(),
   vehicleType: z.string().trim().min(1).max(50).optional(),
   vehiclePlate: z.string().trim().min(1).max(20).optional(),
   nationalId: z.string().trim().min(4).max(30).optional(),
@@ -69,7 +84,36 @@ export const list: RequestHandler = async (req, res, next) => {
       }),
       prisma.user.count({ where }),
     ]);
-    paginated(res, items, { page: q.page, pageSize: q.pageSize, total });
+
+    // Compute live delivery counts from the orders table — the stored
+    // DriverProfile.totalDeliveries counter is unreliable (it was never
+    // incremented in code). One grouped query stays O(N drivers) instead
+    // of N separate counts.
+    const ids = items.map((u) => u.id);
+    const counts = ids.length
+      ? await prisma.order.groupBy({
+          by: ['assignedDriverId'],
+          where: {
+            assignedDriverId: { in: ids },
+            status: { in: ['COMPLETED', 'DELIVERED'] },
+          },
+          _count: { _all: true },
+        })
+      : [];
+    const byDriver = new Map(
+      counts.map((c) => [c.assignedDriverId, c._count._all] as [string | null, number]),
+    );
+    const enriched = items.map((u) => ({
+      ...u,
+      driverProfile: u.driverProfile
+        ? {
+            ...u.driverProfile,
+            totalDeliveries: byDriver.get(u.id) ?? 0,
+          }
+        : null,
+    }));
+
+    paginated(res, enriched, { page: q.page, pageSize: q.pageSize, total });
   } catch (err) {
     next(err);
   }
@@ -83,8 +127,10 @@ export const get: RequestHandler = async (req, res, next) => {
     });
     if (!driver) throw new NotFoundError('Driver', 'السائق غير موجود');
 
-    // Quick stats
-    const [totalOrders, activeOrders] = await Promise.all([
+    // Quick stats — totalDeliveries is computed live from the orders
+    // table so it always matches reality, independent of the (unused)
+    // DriverProfile.totalDeliveries counter.
+    const [totalOrders, activeOrders, totalDeliveries] = await Promise.all([
       prisma.order.count({ where: { assignedDriverId: driver.id } }),
       prisma.order.count({
         where: {
@@ -92,9 +138,20 @@ export const get: RequestHandler = async (req, res, next) => {
           status: { notIn: ['COMPLETED', 'CANCELLED', 'REJECTED'] },
         },
       }),
+      prisma.order.count({
+        where: {
+          assignedDriverId: driver.id,
+          status: { in: ['COMPLETED', 'DELIVERED'] },
+        },
+      }),
     ]);
 
-    ok(res, { ...driver, stats: { totalOrders, activeOrders } });
+    const enriched = {
+      ...driver,
+      driverProfile: driver.driverProfile ? { ...driver.driverProfile, totalDeliveries } : null,
+      stats: { totalOrders, activeOrders, totalDeliveries },
+    };
+    ok(res, enriched);
   } catch (err) {
     next(err);
   }
@@ -150,6 +207,17 @@ export const update: RequestHandler = async (req, res, next) => {
     if (input.name) userData.name = input.name;
     if (input.governorate) userData.governorate = input.governorate;
     if (typeof input.isActive === 'boolean') userData.isActive = input.isActive;
+    if (input.phone && input.phone !== driver.phone) {
+      const clash = await prisma.user.findUnique({
+        where: { phone: input.phone },
+        select: { id: true },
+      });
+      if (clash && clash.id !== driverId) {
+        throw new ConflictError('PHONE_TAKEN', 'هذا الرقم مسجّل لمستخدم آخر');
+      }
+      userData.phone = input.phone;
+    }
+    if (input.secondaryPhones) userData.secondaryPhones = input.secondaryPhones;
 
     const profileData: Record<string, unknown> = {};
     if (input.vehicleType) profileData.vehicleType = input.vehicleType;

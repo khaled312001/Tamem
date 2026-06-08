@@ -26,6 +26,7 @@ import {
   Loader2,
   MessageSquare,
   Phone,
+  RefreshCw,
   Search,
   Siren,
   Sparkles,
@@ -268,6 +269,18 @@ export function AlertsPage() {
     },
     onError: (err: Error) => toast.error(err.message),
   });
+  // Manual sweep — admin clicks the refresh button to force a rule pass
+  // instead of waiting for the next 5-minute cron tick.
+  const sweepMut = useMutation({
+    mutationFn: () => api.adminRunAlertSweep(),
+    onSuccess: (res) => {
+      toast.success(
+        res.created > 0 ? `تم إنشاء ${res.created} تنبيه جديد` : 'تم الفحص — لا توجد تنبيهات جديدة',
+      );
+      qc.invalidateQueries({ queryKey: ['admin', 'alerts'] });
+    },
+    onError: (err: Error) => toast.error(err.message),
+  });
 
   const alerts = data?.alerts ?? [];
   const stats = data?.stats;
@@ -285,16 +298,27 @@ export function AlertsPage() {
             متابعة فورية لمشاكل الطلبات والتدخل بسرعة
           </p>
         </div>
-        <button
-          onClick={() => setSoundOn((s) => !s)}
-          className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-bold ${
-            soundOn ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-600'
-          }`}
-          title={soundOn ? 'صوت التنبيهات الحرجة مفعّل' : 'صوت التنبيهات مكتوم'}
-        >
-          {soundOn ? <Bell className="w-4 h-4" /> : <BellOff className="w-4 h-4" />}
-          {soundOn ? 'الصوت مفعّل' : 'مكتوم'}
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => sweepMut.mutate()}
+            disabled={sweepMut.isPending}
+            className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-bold bg-brand-red text-white hover:bg-brand-red/90 disabled:opacity-60"
+            title="فحص فوري للقواعد بدون انتظار الـ5 دقايق"
+          >
+            <RefreshCw className={`w-4 h-4 ${sweepMut.isPending ? 'animate-spin' : ''}`} />
+            {sweepMut.isPending ? 'جاري الفحص…' : 'فحص الآن'}
+          </button>
+          <button
+            onClick={() => setSoundOn((s) => !s)}
+            className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-bold ${
+              soundOn ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-600'
+            }`}
+            title={soundOn ? 'صوت التنبيهات الحرجة مفعّل' : 'صوت التنبيهات مكتوم'}
+          >
+            {soundOn ? <Bell className="w-4 h-4" /> : <BellOff className="w-4 h-4" />}
+            {soundOn ? 'الصوت مفعّل' : 'مكتوم'}
+          </button>
+        </div>
       </div>
 
       {/* Stats cards — click to filter */}

@@ -473,6 +473,25 @@ export class TamemClient {
   async adminGetCustomer(id: string): Promise<unknown> {
     return this.request({ method: 'GET', url: `/admin/customers/${id}` });
   }
+  async adminUpdateCustomer(id: string, data: unknown): Promise<unknown> {
+    return this.request({ method: 'PATCH', url: `/admin/customers/${id}`, data });
+  }
+  async adminAddCustomerAddress(id: string, data: unknown): Promise<unknown> {
+    return this.request({ method: 'POST', url: `/admin/customers/${id}/addresses`, data });
+  }
+  async adminUpdateCustomerAddress(id: string, addressId: string, data: unknown): Promise<unknown> {
+    return this.request({
+      method: 'PATCH',
+      url: `/admin/customers/${id}/addresses/${addressId}`,
+      data,
+    });
+  }
+  async adminDeleteCustomerAddress(id: string, addressId: string): Promise<void> {
+    await this.http.request({
+      method: 'DELETE',
+      url: `/admin/customers/${id}/addresses/${addressId}`,
+    });
+  }
 
   // ===== Admin Products =====
   async adminListProducts(params?: Record<string, unknown>): Promise<Paginated<unknown>> {
@@ -553,6 +572,15 @@ export class TamemClient {
   }
   async adminAckAlert(id: string): Promise<unknown> {
     return this.request({ method: 'POST', url: `/admin/alerts/${id}/ack`, data: {} });
+  }
+  /** Manually run the alert sweep — bypasses the 5-minute cron tick. */
+  async adminRunAlertSweep(): Promise<{ created: number; ranAt: string }> {
+    const res = await this.http.request<{ data: { created: number; ranAt: string } }>({
+      method: 'POST',
+      url: '/admin/alerts/run-sweep',
+      data: {},
+    });
+    return res.data.data;
   }
   async adminDismissAlert(id: string, note: string): Promise<unknown> {
     return this.request({

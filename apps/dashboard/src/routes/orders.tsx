@@ -5,6 +5,7 @@ import {
   ArrowUp,
   ArrowUpDown,
   CheckCircle2,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
   DollarSign,
@@ -14,12 +15,13 @@ import {
   Map as MapIcon,
   Plus,
   Search,
+  Store,
   Truck,
   X,
   XCircle,
   Zap,
 } from 'lucide-react';
-import { useEffect, useMemo, useState } from 'react';
+import { Fragment, useEffect, useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { toast } from 'sonner';
 
@@ -133,6 +135,16 @@ export function OrdersPage() {
   const [quickAssignFor, setQuickAssignFor] = useState<OrderRow | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [bulkActionFor, setBulkActionFor] = useState<OrderStatus | null>(null);
+  /** Parent orders the admin has clicked to expand inline. */
+  const [expandedParents, setExpandedParents] = useState<Set<string>>(new Set());
+  const toggleExpand = (id: string): void => {
+    setExpandedParents((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
   const [viewMode, setViewMode] = useState<'table' | 'map'>(() =>
     searchParams.get('view') === 'map' ? 'map' : 'table',
   );
@@ -570,91 +582,181 @@ export function OrdersPage() {
                   {(data.items as OrderRow[]).map((o) => {
                     const next = nextStatusFor(o);
                     const isSelected = selectedIds.has(o.id);
+                    const subCount = o._count?.subOrders ?? 0;
+                    const isParent = subCount > 0;
+                    const isExpanded = expandedParents.has(o.id);
                     return (
-                      <tr
-                        key={o.id}
-                        onClick={() => navigate(`/orders/${o.id}`)}
-                        className={`border-b border-border/50 hover:bg-muted/30 cursor-pointer ${
-                          isSelected ? 'bg-brand-red/5' : ''
-                        }`}
-                      >
-                        <td
-                          className="px-3 py-3"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            toggleSelectOne(o.id);
-                          }}
+                      <Fragment key={o.id}>
+                        <tr
+                          onClick={() => navigate(`/orders/${o.id}`)}
+                          className={`border-b border-border/50 hover:bg-muted/30 cursor-pointer ${
+                            isSelected ? 'bg-brand-red/5' : ''
+                          } ${isParent ? 'bg-brand-red/[0.02]' : ''}`}
                         >
-                          <input
-                            type="checkbox"
-                            checked={isSelected}
-                            onChange={() => toggleSelectOne(o.id)}
-                            onClick={(e) => e.stopPropagation()}
-                            aria-label="تحديد الطلب"
-                            className="w-4 h-4 cursor-pointer accent-brand-red"
-                          />
-                        </td>
-                        <td className="px-4 py-3 font-mono text-xs">{o.orderNumber}</td>
-                        <td className="px-4 py-3">
-                          <div className="font-medium">{o.customer?.name ?? '—'}</div>
-                          <div className="text-xs text-muted-foreground" dir="ltr">
-                            {o.customer?.phone ?? ''}
-                          </div>
-                        </td>
-                        <td className="px-4 py-3">{o.service?.nameAr ?? '—'}</td>
-                        <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
-                          <StatusQuickMenu orderId={o.id} status={o.status as OrderStatus} />
-                        </td>
-                        <td className="px-4 py-3">
-                          {(o.finalPrice ?? o.quotedPrice)
-                            ? `${Number(o.finalPrice ?? o.quotedPrice).toLocaleString('ar-EG')} ج.م`
-                            : '—'}
-                        </td>
-                        <td className="px-4 py-3">{o.assignedDriver?.name ?? '—'}</td>
-                        <td className="px-4 py-3 text-xs text-muted-foreground">
-                          {new Date(o.createdAt).toLocaleDateString('ar-EG')}
-                        </td>
-                        <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
-                          <div className="flex items-center justify-center gap-1">
-                            {/* Status-aware quick action */}
-                            {o.status === 'UNDER_REVIEW' && (
-                              <button
-                                onClick={() => setQuickPriceFor(o)}
-                                title="تسعير سريع"
-                                className="p-1.5 rounded-md hover:bg-brand-red/10 text-brand-red"
-                              >
-                                <DollarSign className="w-4 h-4" />
-                              </button>
+                          <td
+                            className="px-3 py-3"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              toggleSelectOne(o.id);
+                            }}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={isSelected}
+                              onChange={() => toggleSelectOne(o.id)}
+                              onClick={(e) => e.stopPropagation()}
+                              aria-label="تحديد الطلب"
+                              className="w-4 h-4 cursor-pointer accent-brand-red"
+                            />
+                          </td>
+                          <td className="px-4 py-3 font-mono text-xs">
+                            <div className="flex items-center gap-2">
+                              {isParent && (
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    toggleExpand(o.id);
+                                  }}
+                                  className="p-0.5 rounded hover:bg-brand-red/20 text-brand-red"
+                                  title={
+                                    isExpanded ? 'إخفاء الطلبات الفرعية' : 'إظهار الطلبات الفرعية'
+                                  }
+                                >
+                                  <ChevronDown
+                                    className={`w-4 h-4 transition-transform ${isExpanded ? '' : '-rotate-90'}`}
+                                  />
+                                </button>
+                              )}
+                              <span>{o.orderNumber}</span>
+                            </div>
+                            {/* Multi-merchant linkage badges — make it obvious
+                              when 3 rows came from the same checkout. */}
+                            {isParent && (
+                              <span className="inline-flex items-center gap-1 mt-1 px-1.5 py-0.5 rounded text-[10px] font-bold bg-brand-red/10 text-brand-red">
+                                <Store className="w-3 h-3" />
+                                سلة من {subCount} متاجر
+                              </span>
                             )}
-                            {(o.status === 'ACCEPTED' || o.status === 'PRICED') && (
+                          </td>
+                          <td className="px-4 py-3">
+                            <div className="font-medium">{o.customer?.name ?? '—'}</div>
+                            <div className="text-xs text-muted-foreground" dir="ltr">
+                              {o.customer?.phone ?? ''}
+                            </div>
+                          </td>
+                          <td className="px-4 py-3">{o.service?.nameAr ?? '—'}</td>
+                          <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
+                            <StatusQuickMenu orderId={o.id} status={o.status as OrderStatus} />
+                          </td>
+                          <td className="px-4 py-3">
+                            {(o.finalPrice ?? o.quotedPrice)
+                              ? `${Number(o.finalPrice ?? o.quotedPrice).toLocaleString('ar-EG')} ج.م`
+                              : '—'}
+                          </td>
+                          <td className="px-4 py-3">{o.assignedDriver?.name ?? '—'}</td>
+                          <td className="px-4 py-3 text-xs text-muted-foreground">
+                            {new Date(o.createdAt).toLocaleDateString('ar-EG')}
+                          </td>
+                          <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
+                            <div className="flex items-center justify-center gap-1">
+                              {/* Status-aware quick action */}
+                              {o.status === 'UNDER_REVIEW' && (
+                                <button
+                                  onClick={() => setQuickPriceFor(o)}
+                                  title="تسعير سريع"
+                                  className="p-1.5 rounded-md hover:bg-brand-red/10 text-brand-red"
+                                >
+                                  <DollarSign className="w-4 h-4" />
+                                </button>
+                              )}
+                              {(o.status === 'ACCEPTED' || o.status === 'PRICED') && (
+                                <button
+                                  onClick={() => setQuickAssignFor(o)}
+                                  title="تعيين سائق"
+                                  className="p-1.5 rounded-md hover:bg-blue-50 text-blue-600"
+                                >
+                                  <Truck className="w-4 h-4" />
+                                </button>
+                              )}
+                              {next &&
+                                !['UNDER_REVIEW', 'ACCEPTED', 'PRICED'].includes(o.status) && (
+                                  <button
+                                    onClick={() => quickAdvance.mutate({ id: o.id, status: next })}
+                                    disabled={quickAdvance.isPending}
+                                    title={`→ ${ORDER_STATUS_AR[next]}`}
+                                    className="p-1.5 rounded-md hover:bg-green-50 text-green-600"
+                                  >
+                                    <ArrowRight className="w-4 h-4" />
+                                  </button>
+                                )}
                               <button
-                                onClick={() => setQuickAssignFor(o)}
-                                title="تعيين سائق"
-                                className="p-1.5 rounded-md hover:bg-blue-50 text-blue-600"
+                                onClick={() => navigate(`/orders/${o.id}`)}
+                                title="فتح التفاصيل"
+                                className="p-1.5 rounded-md hover:bg-muted"
                               >
-                                <Truck className="w-4 h-4" />
+                                <Eye className="w-4 h-4" />
                               </button>
-                            )}
-                            {next && !['UNDER_REVIEW', 'ACCEPTED', 'PRICED'].includes(o.status) && (
-                              <button
-                                onClick={() => quickAdvance.mutate({ id: o.id, status: next })}
-                                disabled={quickAdvance.isPending}
-                                title={`→ ${ORDER_STATUS_AR[next]}`}
-                                className="p-1.5 rounded-md hover:bg-green-50 text-green-600"
+                            </div>
+                          </td>
+                        </tr>
+                        {/* Expanded inline rows for each sub-order — only
+                          rendered when the admin clicks the chevron. */}
+                        {isExpanded &&
+                          Array.isArray(o.subOrders) &&
+                          o.subOrders.map(
+                            (sub: {
+                              id: string;
+                              orderNumber: string;
+                              status: string;
+                              merchantSubtotal: number | null;
+                              quotedPrice: number | null;
+                              finalPrice: number | null;
+                              assignedDriver: { name: string } | null;
+                              items: { productNameSnapshot: string; quantity: number }[];
+                            }) => (
+                              <tr
+                                key={sub.id}
+                                onClick={() => navigate(`/orders/${sub.id}`)}
+                                className="border-b border-border/30 bg-muted/20 hover:bg-muted/40 cursor-pointer text-xs"
                               >
-                                <ArrowRight className="w-4 h-4" />
-                              </button>
-                            )}
-                            <button
-                              onClick={() => navigate(`/orders/${o.id}`)}
-                              title="فتح التفاصيل"
-                              className="p-1.5 rounded-md hover:bg-muted"
-                            >
-                              <Eye className="w-4 h-4" />
-                            </button>
-                          </div>
-                        </td>
-                      </tr>
+                                <td className="px-3 py-2" />
+                                <td className="px-4 py-2 font-mono ps-10">
+                                  <span className="text-muted-foreground">↳ </span>
+                                  {sub.orderNumber}
+                                </td>
+                                <td className="px-4 py-2 text-muted-foreground" colSpan={2}>
+                                  {sub.items
+                                    .map((i) => `${i.productNameSnapshot} ×${i.quantity}`)
+                                    .join(' · ')}
+                                </td>
+                                <td className="px-4 py-2">
+                                  <span className="inline-block px-1.5 py-0.5 rounded text-[10px] font-bold bg-brand-red/10 text-brand-red">
+                                    {ORDER_STATUS_AR[sub.status as OrderStatus] ?? sub.status}
+                                  </span>
+                                </td>
+                                <td className="px-4 py-2">
+                                  {(sub.finalPrice ?? sub.merchantSubtotal ?? sub.quotedPrice)
+                                    ? `${Number(sub.finalPrice ?? sub.merchantSubtotal ?? sub.quotedPrice).toLocaleString('ar-EG')} ج.م`
+                                    : '—'}
+                                </td>
+                                <td className="px-4 py-2">{sub.assignedDriver?.name ?? '—'}</td>
+                                <td className="px-4 py-2" />
+                                <td className="px-4 py-2 text-center">
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      navigate(`/orders/${sub.id}`);
+                                    }}
+                                    title="فتح التفاصيل"
+                                    className="p-1.5 rounded-md hover:bg-muted"
+                                  >
+                                    <Eye className="w-3 h-3" />
+                                  </button>
+                                </td>
+                              </tr>
+                            ),
+                          )}
+                      </Fragment>
                     );
                   })}
                 </tbody>

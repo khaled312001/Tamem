@@ -22,6 +22,8 @@ import { prisma } from '../../db/prisma.js';
 import { ConflictError, NotFoundError } from '../../utils/errors.js';
 import { ok } from '../../utils/response.js';
 
+import { runAlertSweep } from '../../jobs/alerts.js';
+
 const param = (v: unknown): string => {
   if (typeof v !== 'string' || !v) throw new NotFoundError('Resource');
   return v;
@@ -371,6 +373,21 @@ export const escalate: RequestHandler = async (req, res, next) => {
     });
     emitAlertUpdated(req, alert);
     ok(res, alert);
+  } catch (err) {
+    next(err);
+  }
+};
+
+/**
+ * Manual trigger so admins don't have to wait for the next 5-min tick when
+ * they just changed a threshold setting or want to verify the sweep itself
+ * is healthy. Returns the number of alerts created.
+ */
+export const runSweep: RequestHandler = async (req, res, next) => {
+  try {
+    const io = req.app.locals.io as SocketServer | undefined;
+    const result = await runAlertSweep(io);
+    ok(res, { created: result.created, ranAt: new Date().toISOString() });
   } catch (err) {
     next(err);
   }

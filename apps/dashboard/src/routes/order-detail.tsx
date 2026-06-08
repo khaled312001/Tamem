@@ -264,6 +264,130 @@ export function OrderDetailPage() {
     <div className="space-y-4">
       <BackBar onBack={() => navigate('/orders')} />
 
+      {/* ───────── Multi-merchant linkage banners ───────── */}
+      {order.parentOrder && (
+        <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 flex items-start gap-3">
+          <div className="text-2xl">↗</div>
+          <div className="flex-1">
+            <div className="font-bold text-amber-900">هذا الطلب جزء من سلة متعددة المتاجر</div>
+            <div className="text-sm text-amber-800 mt-1">
+              العميل عمل checkout واحد وانقسم لكذا طلب (تاجر لكل واحد). افتح الطلب الأصلي لتشوف باقي
+              طلبات نفس السلة.
+            </div>
+            <button
+              onClick={() => navigate(`/orders/${order.parentOrder.id}`)}
+              className="mt-2 inline-flex items-center gap-2 px-3 py-1.5 rounded bg-amber-600 text-white font-bold text-sm hover:bg-amber-700"
+            >
+              فتح الطلب الأصلي #{order.parentOrder.orderNumber}
+            </button>
+          </div>
+        </div>
+      )}
+      {Array.isArray(order.siblings) && order.siblings.length > 0 && (
+        <div className="bg-amber-50 border border-amber-200 rounded-xl p-4">
+          <div className="font-bold text-amber-900 mb-2">طلبات أخرى من نفس السلة:</div>
+          <div className="flex flex-wrap gap-2">
+            {order.siblings.map((s: { id: string; orderNumber: string; status: string }) => (
+              <button
+                key={s.id}
+                onClick={() => navigate(`/orders/${s.id}`)}
+                className="px-2 py-1 rounded bg-white border border-amber-300 text-sm font-mono hover:bg-amber-100"
+              >
+                #{s.orderNumber} · {ORDER_STATUS_AR[s.status as OrderStatus] ?? s.status}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+      {Array.isArray(order.subOrders) && order.subOrders.length > 0 && (
+        <div className="bg-white border border-border rounded-xl overflow-hidden">
+          <div className="px-5 py-4 bg-brand-red/5 border-b border-brand-red/20">
+            <div className="font-bold text-brand-dark flex items-center gap-2">
+              🛒 سلة متعددة المتاجر
+              <span className="text-xs font-bold px-2 py-0.5 rounded bg-brand-red/10 text-brand-red">
+                {order.subOrders.length} تجار
+              </span>
+            </div>
+            <div className="text-xs text-muted-foreground mt-1">
+              هذا هو الطلب الأصلي. كل تاجر له طلب فرعي مع سائقه وحالته. الدفع والإجمالي موحّدين هنا.
+            </div>
+          </div>
+          <div className="divide-y divide-border">
+            {order.subOrders.map(
+              (sub: {
+                id: string;
+                orderNumber: string;
+                status: string;
+                merchantSubtotal: number | null;
+                quotedPrice: number | null;
+                finalPrice: number | null;
+                paymentStatus: string | null;
+                assignedDriver: { name: string; phone?: string } | null;
+                items: { productNameSnapshot: string; quantity: number }[];
+                merchant: { id: string; storeNameAr: string; logoUrl: string | null } | null;
+              }) => {
+                const total = sub.finalPrice ?? sub.merchantSubtotal ?? sub.quotedPrice;
+                return (
+                  <div
+                    key={sub.id}
+                    onClick={() => navigate(`/orders/${sub.id}`)}
+                    className="p-4 hover:bg-muted/30 cursor-pointer flex items-start gap-3"
+                  >
+                    {sub.merchant?.logoUrl ? (
+                      <img
+                        src={sub.merchant.logoUrl}
+                        alt={sub.merchant.storeNameAr}
+                        className="w-10 h-10 rounded-lg object-cover border border-border shrink-0"
+                      />
+                    ) : (
+                      <div className="w-10 h-10 rounded-lg bg-brand-orange/10 text-brand-orange flex items-center justify-center font-bold shrink-0">
+                        {sub.merchant?.storeNameAr?.[0] ?? '?'}
+                      </div>
+                    )}
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className="font-bold text-sm">
+                          {sub.merchant?.storeNameAr ?? 'تاجر غير معروف'}
+                        </span>
+                        <span className="font-mono text-xs text-muted-foreground">
+                          #{sub.orderNumber}
+                        </span>
+                      </div>
+                      <div className="text-xs text-muted-foreground mt-1 truncate">
+                        {sub.items
+                          .map((i) => `${i.productNameSnapshot} ×${i.quantity}`)
+                          .join(' · ')}
+                      </div>
+                      <div className="text-xs text-muted-foreground mt-1 flex items-center gap-3">
+                        <span>
+                          السائق:{' '}
+                          <span className="font-bold text-foreground">
+                            {sub.assignedDriver?.name ?? '— لم يُعيّن بعد'}
+                          </span>
+                        </span>
+                        {sub.assignedDriver?.phone && (
+                          <span dir="ltr" className="text-foreground">
+                            {sub.assignedDriver.phone}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                    <div className="text-right shrink-0">
+                      <div className="font-bold text-brand-red">
+                        {total != null ? `${Number(total).toLocaleString('ar-EG')} ج.م` : '—'}
+                      </div>
+                      <div className="text-[10px] font-bold mt-1 inline-block px-1.5 py-0.5 rounded bg-brand-red/10 text-brand-red">
+                        {ORDER_STATUS_AR[sub.status as OrderStatus] ?? sub.status}
+                      </div>
+                    </div>
+                  </div>
+                );
+              },
+            )}
+          </div>
+        </div>
+      )}
+
       {/* ───────── Hero: order # + workflow stepper + smart next action ───────── */}
       <div className="bg-white rounded-xl border border-border p-5 space-y-5">
         <div className="flex flex-wrap items-start justify-between gap-3">
@@ -470,22 +594,11 @@ export function OrderDetailPage() {
           {customData &&
             Object.entries(customData).filter(([k]) => !renderedKeys.has(k)).length > 0 && (
               <Card title="بيانات إضافية" icon={<Phone className="w-4 h-4" />}>
-                <dl className="grid grid-cols-3 gap-x-4 gap-y-2 text-sm">
-                  {Object.entries(customData)
-                    .filter(([k]) => !renderedKeys.has(k))
-                    .map(([k, v]) => {
-                      const str = typeof v === 'string' ? v : JSON.stringify(v);
-                      const display = str.length > 80 ? `${str.slice(0, 80)}…` : str;
-                      return (
-                        <div key={k} className="contents">
-                          <dt className="text-muted-foreground">{k}</dt>
-                          <dd className="col-span-2 font-mono text-xs truncate" title={str}>
-                            {display}
-                          </dd>
-                        </div>
-                      );
-                    })}
-                </dl>
+                <CustomDataRender
+                  data={Object.fromEntries(
+                    Object.entries(customData).filter(([k]) => !renderedKeys.has(k)),
+                  )}
+                />
               </Card>
             )}
         </div>
@@ -820,6 +933,137 @@ function Card({
         {title}
       </div>
       <div>{children}</div>
+    </div>
+  );
+}
+
+// Arabic labels for the keys we know about. Anything else falls back to
+// the raw key (better than hiding it — admins occasionally add new fields).
+const CUSTOM_DATA_LABELS: Record<string, string> = {
+  order_text: 'وصف الطلب',
+  details: 'وصف الطلب',
+  description: 'الوصف',
+  notes: 'ملاحظات',
+  weight: 'الوزن',
+  size: 'الحجم',
+  fragile: 'هش / قابل للكسر',
+  attachment: 'مرفقات',
+  attachments: 'مرفقات',
+  images: 'صور',
+};
+
+function isLikelyImageUrl(s: string): boolean {
+  return /^https?:\/\//.test(s) && /\.(png|jpe?g|gif|webp|svg)(\?.*)?$/i.test(s);
+}
+
+function CustomDataRender({ data }: { data: Record<string, unknown> }) {
+  const entries = Object.entries(data);
+  if (entries.length === 0) {
+    return <div className="text-xs text-muted-foreground">لا توجد بيانات إضافية</div>;
+  }
+  return (
+    <div className="space-y-3">
+      {entries.map(([key, value]) => {
+        const label = CUSTOM_DATA_LABELS[key] ?? key;
+
+        // Array of image URLs → image grid
+        if (Array.isArray(value) && value.every((v) => typeof v === 'string')) {
+          const arr = value as string[];
+          if (arr.length === 0) return null;
+          const allImages = arr.every(isLikelyImageUrl);
+          if (allImages) {
+            return (
+              <div key={key}>
+                <div className="text-xs font-bold text-muted-foreground mb-1">{label}</div>
+                <div className="flex flex-wrap gap-2">
+                  {arr.map((url) => (
+                    <a
+                      key={url}
+                      href={url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="block border border-border rounded-lg overflow-hidden hover:border-brand-red"
+                    >
+                      <img src={url} alt="" className="w-20 h-20 object-cover" />
+                    </a>
+                  ))}
+                </div>
+              </div>
+            );
+          }
+          // Generic string array → chips
+          return (
+            <div key={key}>
+              <div className="text-xs font-bold text-muted-foreground mb-1">{label}</div>
+              <div className="flex flex-wrap gap-1">
+                {arr.map((v, i) => (
+                  <span key={i} className="px-2 py-0.5 rounded bg-muted text-xs">
+                    {v}
+                  </span>
+                ))}
+              </div>
+            </div>
+          );
+        }
+
+        // Empty array — show "—" instead of "[]"
+        if (Array.isArray(value) && value.length === 0) {
+          return (
+            <div key={key} className="flex items-baseline gap-2">
+              <span className="text-xs font-bold text-muted-foreground shrink-0">{label}:</span>
+              <span className="text-xs text-muted-foreground">—</span>
+            </div>
+          );
+        }
+
+        // Single image URL
+        if (typeof value === 'string' && isLikelyImageUrl(value)) {
+          return (
+            <div key={key}>
+              <div className="text-xs font-bold text-muted-foreground mb-1">{label}</div>
+              <a href={value} target="_blank" rel="noopener noreferrer">
+                <img
+                  src={value}
+                  alt={label}
+                  className="w-32 h-32 object-cover rounded-lg border border-border hover:border-brand-red"
+                />
+              </a>
+            </div>
+          );
+        }
+
+        // Long free-text — render as a quoted block so it stays readable
+        if (typeof value === 'string' && value.length > 60) {
+          return (
+            <div key={key}>
+              <div className="text-xs font-bold text-muted-foreground mb-1">{label}</div>
+              <div className="text-sm whitespace-pre-wrap bg-muted/40 rounded p-2">{value}</div>
+            </div>
+          );
+        }
+
+        // Booleans
+        if (typeof value === 'boolean') {
+          return (
+            <div key={key} className="flex items-baseline gap-2">
+              <span className="text-xs font-bold text-muted-foreground shrink-0">{label}:</span>
+              <span className="text-sm">{value ? 'نعم' : 'لا'}</span>
+            </div>
+          );
+        }
+
+        // Numbers / short strings — inline label : value
+        const display =
+          typeof value === 'string' || typeof value === 'number'
+            ? String(value)
+            : JSON.stringify(value);
+        return (
+          <div key={key} className="flex items-baseline gap-2">
+            <span className="text-xs font-bold text-muted-foreground shrink-0">{label}:</span>
+            <span className="text-sm">{display}</span>
+          </div>
+        );
+      })}
     </div>
   );
 }

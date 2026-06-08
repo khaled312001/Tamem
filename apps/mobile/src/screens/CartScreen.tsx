@@ -8,6 +8,7 @@
  */
 import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
+import { useQuery } from '@tanstack/react-query';
 import { Minus, Package, Plus, ShoppingBag, Store, Trash2 } from 'lucide-react-native';
 import { useMemo } from 'react';
 import { Image, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
@@ -15,6 +16,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { ScreenHeader } from '../components/ScreenHeader';
 import { EmptyState, MoneyText, PrimaryButton } from '../components/ui';
+import { api } from '../lib/api';
 import { confirm } from '../lib/confirm';
 import { haptic } from '../lib/haptics';
 import type { HomeStackParamList } from '../navigation/HomeStack';
@@ -30,10 +32,30 @@ import { colors, fontFamilies, fontSizes, radii, shadows, spacing } from '../the
 
 type NavProp = NativeStackNavigationProp<HomeStackParamList, 'Cart'>;
 
+interface OpennessInfo {
+  isOpenNow: boolean;
+  message?: string | null;
+}
+
 export function CartScreen() {
   const navigation = useNavigation<NavProp>();
   const cart = useCart();
   const groups = useMemo(() => getMerchantGroups(cart), [cart]);
+
+  // Live openness for every merchant in the cart — refreshes every minute
+  // so a section that opens / closes is reflected without manual refresh.
+  const merchantIds = cart.merchantIds;
+  const { data: openness } = useQuery<Record<string, OpennessInfo>>({
+    queryKey: ['cart-openness', merchantIds.join(',')],
+    enabled: merchantIds.length > 0,
+    queryFn: async () => {
+      const r = await api.raw.post('/merchants/openness', { ids: merchantIds });
+      return r.data.data ?? {};
+    },
+    refetchInterval: 60_000,
+    staleTime: 30_000,
+  });
+  const anyClosed = !!openness && Object.values(openness).some((o) => !o.isOpenNow);
 
   // ── Empty cart ──────────────────────────────────────────────────────
   if (cart.items.length === 0) {
@@ -117,11 +139,24 @@ export function CartScreen() {
               <View style={styles.merchantIcon}>
                 <Store size={16} color={colors.brand.red} />
               </View>
-              <View style={{ flex: 1 }}>
+              <View style={{ flex: 1, gap: 4 }}>
                 <Text style={styles.merchantLabel}>المتجر</Text>
                 <Text style={styles.merchantName} numberOfLines={1}>
                   {group.merchantNameAr}
                 </Text>
+                {openness?.[group.merchantId] ? (
+                  openness[group.merchantId]!.isOpenNow ? (
+                    <View style={[styles.openBadge, styles.openBadgeOpen]}>
+                      <Text style={styles.openBadgeOpenText}>مفتوح الآن</Text>
+                    </View>
+                  ) : (
+                    <View style={[styles.openBadge, styles.openBadgeClosed]}>
+                      <Text style={styles.openBadgeClosedText} numberOfLines={1}>
+                        {openness[group.merchantId]!.message ?? 'مغلق حالياً'}
+                      </Text>
+                    </View>
+                  )
+                ) : null}
               </View>
               <Pressable
                 onPress={() => onClearMerchant(group.merchantId, group.merchantNameAr)}
@@ -205,11 +240,22 @@ export function CartScreen() {
       {/* Sticky bottom: grand total + checkout */}
       <SafeAreaView edges={['bottom']} style={styles.bottomBar}>
         <View style={styles.bottomInner}>
+          {anyClosed && (
+            <View style={styles.closedBanner}>
+              <Text style={styles.closedBannerText} numberOfLines={2}>
+                بعض المتاجر في سلتك مغلقة الآن. احذف منتجاتها لتقدر تكمل الطلب.
+              </Text>
+            </View>
+          )}
           <View style={styles.subtotalRow}>
             <Text style={styles.subtotalLabel}>الإجمالي الكلي</Text>
             <MoneyText amount={cart.subtotal} tone="brand" size="xl" />
           </View>
-          <PrimaryButton label="إتمام الطلب" onPress={onCheckout} />
+          <PrimaryButton
+            label={anyClosed ? 'لا يمكن إتمام الطلب — متجر مغلق' : 'إتمام الطلب'}
+            onPress={onCheckout}
+            disabled={anyClosed}
+          />
         </View>
       </SafeAreaView>
     </SafeAreaView>
@@ -240,6 +286,37 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: colors.line,
     marginBottom: spacing.sm,
+  },
+  // Open/closed badge under the merchant name
+  openBadge: {
+    alignSelf: 'flex-start',
+    paddingHorizontal: spacing.xs,
+    paddingVertical: 2,
+    borderRadius: radii.sm,
+  },
+  openBadgeOpen: { backgroundColor: '#DCFCE7' },
+  openBadgeOpenText: {
+    color: '#166534',
+    fontSize: 10,
+    fontFamily: fontFamilies.bodyBold,
+  },
+  openBadgeClosed: { backgroundColor: colors.dangerLight },
+  openBadgeClosedText: {
+    color: colors.danger,
+    fontSize: 10,
+    fontFamily: fontFamilies.bodyBold,
+  },
+  // Warning banner above the checkout button
+  closedBanner: {
+    backgroundColor: colors.dangerLight,
+    borderRadius: radii.md,
+    padding: spacing.sm,
+  },
+  closedBannerText: {
+    color: colors.danger,
+    fontFamily: fontFamilies.bodyBold,
+    fontSize: 12,
+    textAlign: 'center',
   },
   merchantIcon: {
     width: 36,

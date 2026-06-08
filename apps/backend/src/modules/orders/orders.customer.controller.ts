@@ -285,7 +285,14 @@ export const listMine: RequestHandler = async (req, res, next) => {
   try {
     if (!req.user) throw new UnauthorizedError();
     const q = listMineQuery.parse(req.query);
-    const where: Record<string, unknown> = { customerId: req.user.id };
+    // Hide sub-orders from the customer's "My Orders" list. Multi-merchant
+    // carts produce one parent + N children server-side; the customer
+    // should see one row per checkout, with the merchant breakdown shown
+    // when they open the parent. Admin dashboards still see everything.
+    const where: Record<string, unknown> = {
+      customerId: req.user.id,
+      parentOrderId: null,
+    };
     if (q.status) where.status = q.status as OrderStatus;
 
     const [items, total] = await Promise.all([
@@ -296,6 +303,9 @@ export const listMine: RequestHandler = async (req, res, next) => {
         orderBy: { createdAt: 'desc' },
         include: {
           service: { select: { id: true, nameAr: true, category: true } },
+          // Cheap aggregate so the list row can badge "3 متاجر" without a
+          // follow-up request when the parent fans out.
+          _count: { select: { subOrders: true } },
         },
       }),
       prisma.order.count({ where }),
@@ -319,6 +329,17 @@ export const getMine: RequestHandler = async (req, res, next) => {
         statusHistory: { orderBy: { createdAt: 'asc' } },
         assignedDriver: { select: { id: true, name: true, phone: true } },
         review: true,
+        // When this is a multi-merchant parent, fan out the per-merchant
+        // child orders so OrderTracking can render each merchant's items
+        // and status side-by-side.
+        subOrders: {
+          orderBy: { createdAt: 'asc' },
+          include: {
+            items: true,
+            assignedDriver: { select: { id: true, name: true, phone: true } },
+            statusHistory: { orderBy: { createdAt: 'asc' } },
+          },
+        },
       },
     });
     if (!order) throw new NotFoundError('Order', 'الطلب غير موجود');

@@ -128,6 +128,32 @@ export const getMerchant: RequestHandler = async (req, res, next) => {
   }
 };
 
+/**
+ * Bulk openness lookup — the cart screen calls this with every merchantId
+ * it has items from so it can badge each section "مفتوح / مغلق" without
+ * issuing N separate /merchants/:id requests.
+ */
+const opennessBatchSchema = z.object({
+  ids: z.array(z.string().min(1)).min(1).max(50),
+});
+
+export const merchantOpennessBatch: RequestHandler = async (req, res, next) => {
+  try {
+    const { ids } = opennessBatchSchema.parse(req.body);
+    const rows = await prisma.merchantProfile.findMany({
+      where: { id: { in: ids } },
+      include: {
+        businessHours: { orderBy: [{ dayOfWeek: 'asc' }, { openMin: 'asc' }] },
+      },
+    });
+    const byId: Record<string, ReturnType<typeof isMerchantOpenNow>> = {};
+    for (const m of rows) byId[m.id] = isMerchantOpenNow(m, m.businessHours);
+    ok(res, byId);
+  } catch (err) {
+    next(err);
+  }
+};
+
 export const getMerchantProducts: RequestHandler = async (req, res, next) => {
   try {
     const products = await prisma.product.findMany({

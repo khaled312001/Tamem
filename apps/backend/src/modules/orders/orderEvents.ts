@@ -62,7 +62,7 @@ function messagesFor(order: Order, status: OrderStatus): StatusMessages | null {
         bodyAr:
           `طلب ${num} جاهز.\n` +
           `💵 السعر: ${price}\n\n` +
-          `افتح التطبيق ووافق على السعر للبدء فوراً.` +
+          // `افتح التطبيق ووافق على السعر للبدء فوراً.` +
           sig,
         channel: 'IN_APP',
         whatsapp: true,

@@ -81,8 +81,23 @@ export function CartCheckoutScreen() {
       showToast({ title: 'تم إنشاء طلبك بنجاح', tone: 'success' });
     },
     onError: (err: unknown) => {
-      const message = err instanceof Error ? err.message : 'تعذّر إنشاء الطلب، حاول لاحقاً';
-      showToast({ title: 'فشل إنشاء الطلب', message, tone: 'error' });
+      // The backend wraps errors as TamemApiError { code, message, messageAr }.
+      // Prefer messageAr — `message` falls back to the English code (e.g.
+      // "MERCHANT_CLOSED") which is meaningless to the customer.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const e = err as any;
+      const arMessage: string | undefined = e?.messageAr;
+      const fallback = err instanceof Error ? err.message : 'تعذّر إنشاء الطلب';
+      const message = arMessage ?? fallback;
+      const title =
+        e?.code === 'MERCHANT_CLOSED'
+          ? 'متجر مغلق حالياً'
+          : e?.code === 'PRODUCT_UNAVAILABLE'
+            ? 'منتج غير متاح'
+            : e?.code === 'INSUFFICIENT_STOCK'
+              ? 'الكمية غير متوفرة'
+              : 'فشل إنشاء الطلب';
+      showToast({ title, message, tone: 'error' });
     },
   });
 

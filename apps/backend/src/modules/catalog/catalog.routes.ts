@@ -7,6 +7,8 @@ categoriesRouter.get('/', ctrl.listCategories);
 
 export const merchantsRouter: Router = Router();
 merchantsRouter.get('/', ctrl.listMerchants);
+// Batch openness — used by the cart to badge multiple merchants at once.
+merchantsRouter.post('/openness', ctrl.merchantOpennessBatch);
 merchantsRouter.get('/:id', ctrl.getMerchant);
 merchantsRouter.get('/:id/products', ctrl.getMerchantProducts);
 

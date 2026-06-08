@@ -89,13 +89,22 @@ export const createCartOrder: RequestHandler = async (req, res, next) => {
       imageUrls?: string[];
     }> = [];
 
+    // Resolve merchant display names once so error messages can name them.
+    const merchantRows = await prisma.merchantProfile.findMany({
+      where: { id: { in: input.merchants.map((m) => m.merchantId) } },
+      select: { id: true, storeNameAr: true },
+    });
+    const merchantNameById = new Map(merchantRows.map((m) => [m.id, m.storeNameAr]));
+
     for (const block of input.merchants) {
+      const merchantName = merchantNameById.get(block.merchantId) ?? 'المتجر';
       // Merchant must be open right now.
       const openness = await getMerchantOpenness(block.merchantId);
       if (openness && !openness.isOpenNow) {
+        const detail = openness.message ?? 'مغلق حالياً';
         throw new ConflictError(
           'MERCHANT_CLOSED',
-          openness.message ?? `المتجر ${block.merchantId} مغلق حالياً`,
+          `${merchantName} ${detail}. احذف منتجاته من السلة أو جدوّل الطلب لاحقاً.`,
         );
       }
 
