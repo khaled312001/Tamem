@@ -1,5 +1,4 @@
-import * as Linking from 'expo-linking';
-import { Clock, HelpCircle, Mail, MessageCircle, Phone } from 'lucide-react-native';
+import { Clock, HelpCircle, Mail, MapPin, MessageCircle, Phone } from 'lucide-react-native';
 import {
   Alert,
   Image,
@@ -13,11 +12,10 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { ScreenHeader } from '../components/ScreenHeader';
+import { DEFAULT_CONTACTS, TAMEM_ADDRESS_AR } from '../config/contact';
 import { colors, fontFamilies, fontSizes, radii, spacing } from '../theme/tokens';
 
-const SUPPORT_PHONE = '+201010254819';
 const SUPPORT_EMAIL = 'support@tamem-delivery.com';
-const SUPPORT_WHATSAPP = process.env.EXPO_PUBLIC_TAMEM_WHATSAPP ?? SUPPORT_PHONE;
 
 async function openURL(url: string) {
   try {
@@ -52,12 +50,6 @@ const FAQS = [
 ];
 
 export function SupportScreen() {
-  const onWhatsApp = () => {
-    const msg = encodeURIComponent('السلام عليكم، عندي استفسار/مشكلة:');
-    openURL(`whatsapp://send?phone=${SUPPORT_WHATSAPP.replace('+', '')}&text=${msg}`);
-  };
-  const onCall = () =>
-    openURL(Linking.createURL('') ? `tel:${SUPPORT_PHONE}` : `tel:${SUPPORT_PHONE}`);
   const onEmail = () =>
     openURL(`mailto:${SUPPORT_EMAIL}?subject=${encodeURIComponent('استفسار من تطبيق تميم')}`);
 
@@ -67,50 +59,61 @@ export function SupportScreen() {
 
       <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
         <Text style={styles.heroTitle}>إزاي نقدر نساعدك؟</Text>
-        <Text style={styles.heroSub}>فريق الدعم متاح 7 أيام في الأسبوع</Text>
+        <Text style={styles.heroSub}>فريق تميم متاح يومياً من 10 ص حتى 1 بعد منتصف الليل</Text>
 
-        {/* Contact channels */}
-        <View style={styles.channelRow}>
-          <Pressable
-            onPress={onWhatsApp}
-            style={({ pressed }) => [
-              styles.channelCard,
-              styles.whatsapp,
-              pressed && { opacity: 0.85 },
-            ]}
-          >
-            <MessageCircle size={26} color={colors.white} />
-            <Text style={styles.channelLabel}>واتساب</Text>
-            <Text style={styles.channelSub}>الأسرع</Text>
-          </Pressable>
-          <Pressable
-            onPress={onCall}
-            style={({ pressed }) => [styles.channelCard, styles.call, pressed && { opacity: 0.85 }]}
-          >
-            <Phone size={26} color={colors.white} />
-            <Text style={styles.channelLabel}>اتصال</Text>
-            <Text style={styles.channelSub}>24/7</Text>
-          </Pressable>
-          <Pressable
-            onPress={onEmail}
-            style={({ pressed }) => [
-              styles.channelCard,
-              styles.email,
-              pressed && { opacity: 0.85 },
-            ]}
-          >
-            <Mail size={26} color={colors.white} />
-            <Text style={styles.channelLabel}>إيميل</Text>
-            <Text style={styles.channelSub}>24 ساعة</Text>
-          </Pressable>
+        {/* Per-service direct lines — each card opens WhatsApp on tap with a
+            pre-filled message; the inline phone number is a tel: link for
+            customers who prefer to call instead. */}
+        {DEFAULT_CONTACTS.map((c) => (
+          <View key={c.key} style={styles.lineCard}>
+            <View style={styles.lineHead}>
+              <View
+                style={[styles.lineIcon, c.key === 'support' && { backgroundColor: '#F2A93B' }]}
+              >
+                <Phone size={18} color={colors.white} />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.lineLabel}>{c.labelAr}</Text>
+                <Text style={styles.lineDesc}>{c.descAr}</Text>
+              </View>
+            </View>
+            <View style={styles.lineActions}>
+              <Pressable
+                onPress={() => openURL(c.whatsapp)}
+                style={({ pressed }) => [styles.waBtn, pressed && { opacity: 0.85 }]}
+              >
+                <MessageCircle size={16} color={colors.white} />
+                <Text style={styles.waBtnText}>واتساب</Text>
+              </Pressable>
+              <Pressable
+                onPress={() => openURL(`tel:${c.phone}`)}
+                style={({ pressed }) => [styles.callBtn, pressed && { opacity: 0.85 }]}
+              >
+                <Text style={styles.callBtnText}>{c.phone}</Text>
+              </Pressable>
+            </View>
+          </View>
+        ))}
+
+        {/* HQ address */}
+        <View style={styles.addressCard}>
+          <MapPin size={18} color={colors.brand.red} />
+          <View style={{ flex: 1 }}>
+            <Text style={styles.hoursTitle}>{TAMEM_ADDRESS_AR}</Text>
+            <Pressable onPress={onEmail}>
+              <Text style={styles.addressEmail}>
+                <Mail size={12} color={colors.text.muted} /> {SUPPORT_EMAIL}
+              </Text>
+            </Pressable>
+          </View>
         </View>
 
         {/* Working hours */}
-        <View style={styles.hours}>
+        <View style={styles.addressCard}>
           <Clock size={18} color={colors.brand.red} />
           <View style={{ flex: 1 }}>
             <Text style={styles.hoursTitle}>ساعات العمل</Text>
-            <Text style={styles.hoursBody}>كل يوم من 8 صباحاً إلى 12 منتصف الليل</Text>
+            <Text style={styles.hoursBody}>كل يوم من 10 صباحاً إلى 1 بعد منتصف الليل</Text>
           </View>
         </View>
 
@@ -126,9 +129,7 @@ export function SupportScreen() {
           </View>
         ))}
 
-        <Text style={styles.footnote}>
-          {SUPPORT_PHONE} · {SUPPORT_EMAIL}
-        </Text>
+        <Text style={styles.footnote}>{SUPPORT_EMAIL}</Text>
 
         {/* Developer credit — شركة برمجلي */}
         <Pressable
@@ -170,32 +171,69 @@ const styles = StyleSheet.create({
     marginTop: 4,
     marginBottom: spacing.lg,
   },
-  channelRow: { flexDirection: 'row', gap: spacing.sm, marginBottom: spacing.lg },
-  channelCard: {
-    flex: 1,
-    alignItems: 'center',
-    padding: spacing.md,
+  lineCard: {
+    backgroundColor: colors.white,
     borderRadius: radii.lg,
-    gap: 4,
+    padding: spacing.md,
+    marginBottom: spacing.sm,
+    borderWidth: 1,
+    borderColor: colors.line,
   },
-  whatsapp: { backgroundColor: '#25D366' },
-  call: { backgroundColor: colors.brand.red },
-  email: { backgroundColor: colors.brand.dark },
-  channelLabel: {
+  lineHead: { flexDirection: 'row', alignItems: 'flex-start', gap: spacing.sm },
+  lineIcon: {
+    width: 38,
+    height: 38,
+    borderRadius: radii.md,
+    backgroundColor: colors.brand.red,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  lineLabel: { fontFamily: fontFamilies.bodyExtraBold, color: colors.ink, fontSize: fontSizes.sm },
+  lineDesc: {
+    fontFamily: fontFamilies.body,
+    color: colors.text.muted,
+    fontSize: fontSizes.xs,
+    marginTop: 2,
+  },
+  lineActions: { flexDirection: 'row', gap: spacing.sm, marginTop: spacing.sm },
+  waBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    backgroundColor: '#1A9F6E',
+    paddingVertical: spacing.sm,
+    borderRadius: radii.md,
+  },
+  waBtnText: {
     color: colors.white,
     fontFamily: fontFamilies.bodyExtraBold,
-    fontSize: fontSizes.sm,
-    marginTop: spacing.xs,
+    fontSize: fontSizes.xs,
   },
-  channelSub: { color: 'rgba(255,255,255,0.85)', fontFamily: fontFamilies.body, fontSize: 10 },
-  hours: {
+  callBtn: {
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.md,
+    borderRadius: radii.md,
+    borderWidth: 1,
+    borderColor: colors.brand.red,
+  },
+  callBtnText: { color: colors.brand.red, fontFamily: fontFamilies.body, fontSize: fontSizes.xs },
+  addressCard: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing.sm,
     backgroundColor: colors.brand.redLight,
     padding: spacing.md,
     borderRadius: radii.lg,
+    marginTop: spacing.md,
     marginBottom: spacing.lg,
+  },
+  addressEmail: {
+    color: colors.text.muted,
+    fontFamily: fontFamilies.body,
+    fontSize: fontSizes.xs,
+    marginTop: 2,
   },
   hoursTitle: { fontFamily: fontFamilies.bodyExtraBold, color: colors.ink, fontSize: fontSizes.sm },
   hoursBody: {

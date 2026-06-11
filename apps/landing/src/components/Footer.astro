@@ -1,7 +1,8 @@
 ---
 import Icon from './Icon.astro';
+import { TAMEM_CONTACTS, TAMEM_PRIMARY_PHONE } from '../config/contact';
 
-const WHATSAPP = import.meta.env.PUBLIC_TAMEM_WHATSAPP || '+201010254819';
+const WHATSAPP = import.meta.env.PUBLIC_TAMEM_WHATSAPP || TAMEM_PRIMARY_PHONE;
 const year = new Date().getFullYear();
 ---
 
@@ -65,19 +66,21 @@ const year = new Date().getFullYear();
         <ul class="space-y-2.5 text-sm text-white/80">
           <li class="flex items-center gap-2">
             <Icon name="map-pin" size={14} class="text-brand-gold shrink-0" />
-            قفط - قنا، جمهورية مصر العربية
+            المقر الرئيسي — مدينة قفط، محافظة قنا
           </li>
-          <li class="flex items-center gap-2">
-            <Icon name="phone" size={14} class="text-brand-gold shrink-0" />
-            <a href={`tel:${WHATSAPP}`} dir="ltr" class="hover:text-white">{WHATSAPP}</a>
-          </li>
-          <li class="flex items-center gap-2">
+          {TAMEM_CONTACTS.map((c) => (
+            <li class="flex flex-col gap-0.5 pt-1">
+              <span class="text-xs text-white/55">{c.labelAr}</span>
+              <a href={`tel:${c.phone}`} dir="ltr" class="hover:text-white font-mono">{c.phone}</a>
+            </li>
+          ))}
+          <li class="flex items-center gap-2 pt-1 border-t border-white/10 mt-2">
             <Icon name="mail" size={14} class="text-brand-gold shrink-0" />
             <a href="mailto:info@tamem-delivery.com" class="hover:text-white">info@tamem-delivery.com</a>
           </li>
           <li class="flex items-center gap-2">
             <Icon name="clock" size={14} class="text-brand-gold shrink-0" />
-            يومياً 8 صباحاً - 12 منتصف الليل
+            يومياً 10 صباحاً - 1 بعد منتصف الليل
           </li>
         </ul>
       </div>
@@ -116,7 +119,7 @@ const year = new Date().getFullYear();
               <Icon name="facebook" size={14} />
             </span>
             <span
-              onclick="event.preventDefault(); window.open('https://wa.me/201010254819','_blank')"
+              onclick="event.preventDefault(); window.open('https://wa.me/201070750167','_blank')"
               role="button" tabindex="0" aria-label="Barmagly WhatsApp"
               class="w-7 h-7 rounded-md grid place-items-center transition cursor-pointer"
               style="background: rgba(255,255,255,0.10);"

@@ -1,7 +1,7 @@
 ---
 import Icon from './Icon.astro';
+import { TAMEM_CONTACTS, TAMEM_ADDRESS_AR } from '../config/contact';
 
-const WHATSAPP = import.meta.env.PUBLIC_TAMEM_WHATSAPP || '+201010254819';
 const EMAIL = 'info@tamem-delivery.com';
 ---
 
@@ -10,56 +10,85 @@ const EMAIL = 'info@tamem-delivery.com';
     <div class="text-center mb-12 reveal">
       <h2 class="text-3xl md:text-5xl font-black mb-4 text-white">عاوز تتواصل معانا؟</h2>
       <p class="text-white/60 max-w-xl mx-auto">
-        فريقنا متاح يومياً من 8 صباحاً لـ 12 منتصف الليل.
+        فريقنا متاح يومياً من 10 صباحاً لـ 1 بعد منتصف الليل.
       </p>
     </div>
 
-    <div class="grid sm:grid-cols-3 gap-4">
-      <a
-        href={`https://wa.me/${WHATSAPP.replace(/[^\d]/g, '')}`}
-        target="_blank" rel="noreferrer"
-        class="reveal reveal-delay-1 group flex flex-col items-center text-center rounded-2xl p-6 border hover:-translate-y-1 transition-all"
-        style="background: linear-gradient(180deg, rgba(255,255,255,0.04), rgba(255,255,255,0.01)); border-color: rgba(255,255,255,0.08);"
-      >
-        <div class="w-14 h-14 rounded-2xl bg-green-500 text-white grid place-items-center mb-3 group-hover:scale-110 transition shadow-lg shadow-green-500/30">
-          <Icon name="whatsapp" size={24} />
-        </div>
-        <div class="font-black mb-1 text-white">واتساب</div>
-        <div class="text-sm text-white/60" dir="ltr">{WHATSAPP}</div>
-      </a>
+    <!-- The four real Tamem service lines — each card opens WhatsApp on tap.
+         A tel: link is exposed underneath for desktop visitors who prefer to call. -->
+    <div class="grid sm:grid-cols-2 gap-4">
+      {TAMEM_CONTACTS.map((c) => (
+        <div
+          class="reveal group rounded-2xl p-5 border flex flex-col gap-3"
+          style="background: linear-gradient(180deg, rgba(255,255,255,0.04), rgba(255,255,255,0.01)); border-color: rgba(255,255,255,0.08);"
+        >
+          <div class="flex items-start gap-3">
+            <div class="w-12 h-12 rounded-2xl text-white grid place-items-center shrink-0" style={c.key === 'support' ? 'background:#F2A93B; box-shadow: 0 8px 20px -8px rgba(242,169,59,0.5);' : 'background:#E0301E; box-shadow: 0 8px 20px -8px rgba(224,48,30,0.5);'}>
+              <Icon name={c.key === 'support' ? 'shield' : c.key === 'shipping' ? 'truck' : 'phone'} size={20} />
+            </div>
+            <div class="flex-1 min-w-0">
+              <div class="font-black text-white text-sm">{c.labelAr}</div>
+              <div class="text-xs text-white/55 mt-0.5">{c.descAr}</div>
+            </div>
+          </div>
 
-      <a
-        href={`tel:${WHATSAPP}`}
-        class="reveal reveal-delay-2 group flex flex-col items-center text-center rounded-2xl p-6 border hover:-translate-y-1 transition-all"
-        style="background: linear-gradient(180deg, rgba(255,255,255,0.04), rgba(255,255,255,0.01)); border-color: rgba(255,255,255,0.08);"
-      >
-        <div class="w-14 h-14 rounded-2xl text-white grid place-items-center mb-3 group-hover:scale-110 transition shadow-lg" style="background:#E0301E; box-shadow: 0 8px 20px -8px rgba(224,48,30,0.6);">
-          <Icon name="phone" size={24} />
+          <div class="flex items-center gap-2">
+            <a
+              href={c.whatsapp}
+              target="_blank" rel="noreferrer"
+              class="flex-1 flex items-center justify-center gap-2 rounded-xl py-2.5 text-white font-bold text-sm transition hover:opacity-90"
+              style="background:#1A9F6E;"
+            >
+              <Icon name="whatsapp" size={16} />
+              <span>واتساب</span>
+            </a>
+            <a
+              href={`tel:${c.phone}`}
+              class="flex items-center justify-center gap-2 rounded-xl py-2.5 px-4 text-white font-bold text-sm transition hover:opacity-90 border border-white/10"
+              dir="ltr"
+            >
+              <Icon name="phone" size={14} />
+              <span>{c.phone}</span>
+            </a>
+          </div>
         </div>
-        <div class="font-black mb-1 text-white">اتصال مباشر</div>
-        <div class="text-sm text-white/60" dir="ltr">{WHATSAPP}</div>
-      </a>
+      ))}
+    </div>
+
+    <!-- HQ + email + hours -->
+    <div class="reveal mt-8 grid sm:grid-cols-2 gap-4 max-w-3xl mx-auto">
+      <div class="rounded-2xl p-5 flex items-center gap-4 border" style="background: rgba(242,169,59,0.08); border-color: rgba(242,169,59,0.20);">
+        <div class="w-12 h-12 rounded-xl grid place-items-center" style="background: rgba(242,169,59,0.15); color:#F2A93B;">
+          <Icon name="clock" size={22} />
+        </div>
+        <div>
+          <div class="font-black text-white">ساعات العمل</div>
+          <div class="text-sm text-white/65">يومياً 10:00 ص — 1:00 بعد منتصف الليل</div>
+        </div>
+      </div>
 
       <a
         href={`mailto:${EMAIL}`}
-        class="reveal reveal-delay-3 group flex flex-col items-center text-center rounded-2xl p-6 border hover:-translate-y-1 transition-all"
-        style="background: linear-gradient(180deg, rgba(255,255,255,0.04), rgba(255,255,255,0.01)); border-color: rgba(255,255,255,0.08);"
+        class="rounded-2xl p-5 flex items-center gap-4 border hover:-translate-y-1 transition-all"
+        style="background: rgba(255,255,255,0.04); border-color: rgba(255,255,255,0.08);"
       >
-        <div class="w-14 h-14 rounded-2xl text-white grid place-items-center mb-3 group-hover:scale-110 transition shadow-lg" style="background:#EC7A2C; box-shadow: 0 8px 20px -8px rgba(236,122,44,0.6);">
-          <Icon name="mail" size={24} />
+        <div class="w-12 h-12 rounded-xl text-white grid place-items-center" style="background:#EC7A2C;">
+          <Icon name="mail" size={22} />
         </div>
-        <div class="font-black mb-1 text-white">إيميل</div>
-        <div class="text-sm text-white/60 break-all" dir="ltr">{EMAIL}</div>
+        <div class="min-w-0">
+          <div class="font-black text-white">البريد الإلكتروني</div>
+          <div class="text-sm text-white/65 break-all" dir="ltr">{EMAIL}</div>
+        </div>
       </a>
     </div>
 
-    <div class="reveal mt-8 max-w-2xl mx-auto rounded-2xl p-5 flex items-center gap-4 border" style="background: rgba(242,169,59,0.08); border-color: rgba(242,169,59,0.20);">
-      <div class="w-12 h-12 rounded-xl grid place-items-center" style="background: rgba(242,169,59,0.15); color:#F2A93B;">
-        <Icon name="clock" size={22} />
+    <div class="reveal mt-4 rounded-2xl p-5 flex items-center gap-4 border max-w-3xl mx-auto" style="background: rgba(255,255,255,0.03); border-color: rgba(255,255,255,0.08);">
+      <div class="w-12 h-12 rounded-xl grid place-items-center" style="background: rgba(224,48,30,0.15); color:#E0301E;">
+        <Icon name="map-pin" size={22} />
       </div>
       <div>
-        <div class="font-black text-white">ساعات العمل</div>
-        <div class="text-sm text-white/65">كل يوم — من 8:00 صباحاً حتى 12:00 منتصف الليل</div>
+        <div class="font-black text-white">المقر الرئيسي</div>
+        <div class="text-sm text-white/65">{TAMEM_ADDRESS_AR}</div>
       </div>
     </div>
   </div>

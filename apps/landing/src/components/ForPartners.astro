@@ -1,7 +1,8 @@
 ---
 import Icon, { type IconName } from './Icon.astro';
+import { TAMEM_PRIMARY_PHONE } from '../config/contact';
 
-const WHATSAPP = import.meta.env.PUBLIC_TAMEM_WHATSAPP || '+201010254819';
+const WHATSAPP = import.meta.env.PUBLIC_TAMEM_WHATSAPP || TAMEM_PRIMARY_PHONE;
 const wa = (text: string) =>
   `https://wa.me/${WHATSAPP.replace(/[^\d]/g, '')}?text=${encodeURIComponent(text)}`;
 
