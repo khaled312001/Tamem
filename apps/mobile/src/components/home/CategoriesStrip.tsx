@@ -1,26 +1,47 @@
 /**
- * CategoriesStrip — horizontal scrollable strip of category circles shown
- * on the Home screen. Tapping a category drills into a category-filtered
- * StoresList; tapping the trailing "see all" tile opens the NearbyMap.
+ * CategoriesStrip — premium horizontal strip of category tiles.
+ *
+ * Visual design (post-redesign):
+ *   - 76×76 rounded squares with a soft gradient background (red → gold for
+ *     odd indices, gold → orange for evens) and a drop shadow.
+ *   - Server-supplied iconUrl renders as an inset rounded image; without
+ *     one we fall back to a category-specific lucide icon picked by the
+ *     Arabic name keyword (مطاعم → UtensilsCrossed, صيدلية → Pill, etc.)
+ *     instead of a generic grid icon — feels much closer to Talabat/Yamm.
+ *   - Press feedback: subtle scale-down + opacity change.
  *
  * Data: GET /categories — { id, name, nameAr, iconUrl, sortOrder }.
- * The endpoint already filters by isActive and orders by sortOrder, so we
- * render the response in whatever order the server gives us.
- *
- * Icons: when the server returns no iconUrl we fall back to a generic
- * lucide grid icon — keeps the strip visually consistent even if the
- * admin hasn't uploaded artwork yet.
  */
 import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useQuery } from '@tanstack/react-query';
-import { LayoutGrid, MapPin } from 'lucide-react-native';
+import { LinearGradient } from 'expo-linear-gradient';
+import {
+  Apple,
+  Bike,
+  Carrot,
+  Coffee,
+  CookingPot,
+  Croissant,
+  Drumstick,
+  Flower2,
+  Gift,
+  IceCream,
+  LayoutGrid,
+  MapPin,
+  Newspaper,
+  Pill,
+  Sandwich,
+  ShoppingCart,
+  type LucideIcon,
+  UtensilsCrossed,
+} from 'lucide-react-native';
 import { Image, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { api } from '../../lib/api';
 import { haptic } from '../../lib/haptics';
 import type { HomeStackParamList } from '../../navigation/HomeStack';
-import { colors, fontFamilies, fontSizes, spacing } from '../../theme/tokens';
+import { colors, fontFamilies, fontSizes, radii, shadows, spacing } from '../../theme/tokens';
 
 import { SectionHeader } from '../ui';
 
@@ -34,7 +55,45 @@ interface Category {
   sortOrder: number;
 }
 
-const CIRCLE_SIZE = 64;
+const TILE_SIZE = 72;
+
+/**
+ * Picks a lucide icon based on Arabic keywords in the category name so we
+ * never render a generic grid when the admin hasn't uploaded artwork yet.
+ * Order matters — first match wins.
+ */
+function iconFor(nameAr: string): LucideIcon {
+  const n = nameAr;
+  if (/مطعم|طعام|وجب|أكل/.test(n)) return UtensilsCrossed;
+  if (/برجر|سندوتش|ساندو/.test(n)) return Sandwich;
+  if (/فراخ|دجاج|بانيه/.test(n)) return Drumstick;
+  if (/قهوة|بن|كافيه|قهاوي/.test(n)) return Coffee;
+  if (/فطار|كرواسون|مخبوزات|فطائر|حلوي|حلاوة|كنافة/.test(n)) return Croissant;
+  if (/أيس|آيس|مثلجات/.test(n)) return IceCream;
+  if (/فاكهة|خضار|خضراوات|فواكه|فول|تموين/.test(n)) return Carrot;
+  if (/تفاح|فاكهة/.test(n)) return Apple;
+  if (/زهور|ورد|بوكيه|هدايا/.test(n)) return Gift;
+  if (/زرع|نبات/.test(n)) return Flower2;
+  if (/سوبر|ماركت|بقالة|تموين/.test(n)) return ShoppingCart;
+  if (/مكتبة|جرايد|مكتبات/.test(n)) return Newspaper;
+  if (/صيدلية|دواء|أدوية/.test(n)) return Pill;
+  if (/شحن|دليفري|توصيل/.test(n)) return Bike;
+  if (/طبخ|طباخ/.test(n)) return CookingPot;
+  return LayoutGrid;
+}
+
+/**
+ * Brand-aligned gradient palette — rotates per tile so the strip has rhythm
+ * without becoming chaotic. All gradients keep the red→amber temperature
+ * the brand already uses elsewhere (hero, splash, brand strip).
+ */
+const GRADIENTS: Array<[string, string]> = [
+  ['#FF6B5C', '#E0301E'], // brand red glow
+  ['#FFB347', '#EC7A2C'], // amber → orange
+  ['#FFD86F', '#F2A93B'], // gold pour
+  ['#FFA76D', '#E0301E'], // peach → red
+  ['#FF8C9A', '#E0301E'], // rose → red
+];
 
 export function CategoriesStrip() {
   const navigation = useNavigation<NavProp>();
@@ -45,16 +104,13 @@ export function CategoriesStrip() {
     staleTime: 5 * 60_000,
   });
 
-  // Hide the whole section while loading the first time — a flash of an
-  // empty strip is uglier than a brief gap. We can revisit with a skeleton
-  // if categories grow slow to fetch.
   if (isLoading || !categories || categories.length === 0) return null;
 
   return (
-    <View>
+    <View style={{ marginTop: spacing.lg }}>
       <SectionHeader
         title="التصنيفات"
-        actionLabel="عرض الكل"
+        actionLabel="على الخريطة"
         onAction={() => {
           haptic.tap();
           navigation.navigate('NearbyMap');
@@ -65,44 +121,51 @@ export function CategoriesStrip() {
         showsHorizontalScrollIndicator={false}
         contentContainerStyle={styles.scrollContent}
       >
-        {categories.map((c) => (
-          <Pressable
-            key={c.id}
-            onPress={() => {
-              haptic.tap();
-              navigation.navigate('StoresList', { categoryId: c.id });
-            }}
-            style={({ pressed }) => [styles.item, pressed && { opacity: 0.85 }]}
-            accessibilityLabel={c.nameAr}
-          >
-            <View style={styles.circle}>
-              {c.iconUrl ? (
-                <Image source={{ uri: c.iconUrl }} style={styles.iconImg} resizeMode="cover" />
-              ) : (
-                <LayoutGrid size={26} color={colors.brand.red} />
-              )}
-            </View>
-            <Text style={styles.label} numberOfLines={2}>
-              {c.nameAr}
-            </Text>
-          </Pressable>
-        ))}
+        {categories.map((c, idx) => {
+          const Icon = iconFor(c.nameAr);
+          const grad = GRADIENTS[idx % GRADIENTS.length]!;
+          return (
+            <Pressable
+              key={c.id}
+              onPress={() => {
+                haptic.tap();
+                navigation.navigate('StoresList', { categoryId: c.id });
+              }}
+              style={({ pressed }) => [styles.item, pressed && { transform: [{ scale: 0.94 }] }]}
+              accessibilityLabel={c.nameAr}
+            >
+              <LinearGradient
+                colors={grad}
+                start={{ x: 0.1, y: 0.1 }}
+                end={{ x: 0.9, y: 0.9 }}
+                style={[styles.tile, shadows.sm]}
+              >
+                {c.iconUrl ? (
+                  <Image source={{ uri: c.iconUrl }} style={styles.iconImg} resizeMode="cover" />
+                ) : (
+                  <Icon size={32} color={colors.white} strokeWidth={2.2} />
+                )}
+              </LinearGradient>
+              <Text style={styles.label} numberOfLines={2}>
+                {c.nameAr}
+              </Text>
+            </Pressable>
+          );
+        })}
 
-        {/* Trailing tile → NearbyMap, mirrors the "see all" CTA in the
-            section header but reachable without scrolling back up. */}
         <Pressable
           onPress={() => {
             haptic.tap();
             navigation.navigate('NearbyMap');
           }}
-          style={({ pressed }) => [styles.item, pressed && { opacity: 0.85 }]}
+          style={({ pressed }) => [styles.item, pressed && { transform: [{ scale: 0.94 }] }]}
           accessibilityLabel="عرض على الخريطة"
         >
-          <View style={[styles.circle, styles.circleMap]}>
-            <MapPin size={24} color={colors.brand.gold} />
+          <View style={[styles.tile, styles.tileMap, shadows.sm]}>
+            <MapPin size={28} color={colors.brand.red} strokeWidth={2.2} />
           </View>
           <Text style={styles.label} numberOfLines={2}>
-            على الخريطة
+            الخريطة
           </Text>
         </Pressable>
       </ScrollView>
@@ -113,39 +176,37 @@ export function CategoriesStrip() {
 const styles = StyleSheet.create({
   scrollContent: {
     gap: spacing.md,
-    paddingVertical: spacing.xs,
+    paddingVertical: spacing.sm,
     paddingHorizontal: 2,
   },
   item: {
-    width: CIRCLE_SIZE + 12,
+    width: TILE_SIZE + 8,
     alignItems: 'center',
-    gap: 6,
+    gap: 8,
   },
-  circle: {
-    width: CIRCLE_SIZE,
-    height: CIRCLE_SIZE,
-    borderRadius: CIRCLE_SIZE / 2,
-    backgroundColor: colors.brand.redLight,
+  tile: {
+    width: TILE_SIZE,
+    height: TILE_SIZE,
+    borderRadius: radii.lg,
     alignItems: 'center',
     justifyContent: 'center',
     overflow: 'hidden',
-    borderWidth: 1,
-    borderColor: colors.line,
   },
-  circleMap: {
-    backgroundColor: colors.brand.goldLight,
-    borderColor: colors.brand.goldLight,
+  tileMap: {
+    backgroundColor: colors.white,
+    borderWidth: 1.5,
+    borderColor: colors.brand.red,
   },
   iconImg: {
-    width: CIRCLE_SIZE,
-    height: CIRCLE_SIZE,
-    borderRadius: CIRCLE_SIZE / 2,
+    width: TILE_SIZE - 16,
+    height: TILE_SIZE - 16,
+    borderRadius: radii.md,
   },
   label: {
     fontSize: fontSizes.xs,
     fontFamily: fontFamilies.bodyExtraBold,
     color: colors.ink,
     textAlign: 'center',
-    maxWidth: CIRCLE_SIZE + 12,
+    maxWidth: TILE_SIZE + 8,
   },
 });

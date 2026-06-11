@@ -1,0 +1,79 @@
+name: Sync DB to Hostinger
+
+# ============================================================
+# Pushes the local Prisma schema + seed data to the Hostinger
+# production database whenever main is updated. Ahmed and Khaled
+# can both pull from the same online DB instead of maintaining
+# divergent local copies.
+#
+# Required GitHub repository secrets:
+#   HOSTINGER_DB_HOST   — srv2123.hstgr.io (or the IP 31.97.198.54)
+#   HOSTINGER_DB_USER   — u405809647_tamem
+#   HOSTINGER_DB_PASS   — the MySQL password
+#   HOSTINGER_DB_NAME   — u405809647_tamem
+#
+# Add the IP of GitHub Actions' runner to Hostinger's Remote
+# MySQL whitelist OR set the whitelist to `%` (any IP).
+# ============================================================
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'apps/backend/prisma/schema.prisma'
+      - 'apps/backend/prisma/seed.ts'
+      - '.github/workflows/sync-db.yml'
+  workflow_dispatch:
+    inputs:
+      run_seed:
+        description: 'Run the seed script after schema push?'
+        required: false
+        default: 'true'
+
+concurrency:
+  group: hostinger-db-sync
+  cancel-in-progress: false
+
+jobs:
+  push-schema:
+    name: Push schema (+ optional seed) to Hostinger
+    runs-on: ubuntu-latest
+    env:
+      DATABASE_URL: ${{ format('mysql://{0}:{1}@{2}:3306/{3}', secrets.HOSTINGER_DB_USER, secrets.HOSTINGER_DB_PASS, secrets.HOSTINGER_DB_HOST, secrets.HOSTINGER_DB_NAME) }}
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Generate Prisma client
+        run: pnpm --filter @tamem/backend prisma:generate
+
+      - name: Push schema (apply latest models without losing existing data)
+        run: pnpm --filter @tamem/backend exec prisma db push --accept-data-loss --skip-generate
+
+      - name: Seed (admin + services + sample data)
+        if: ${{ inputs.run_seed != 'false' }}
+        run: pnpm --filter @tamem/backend db:seed
+        env:
+          # The seed script is idempotent — re-running won't duplicate.
+          NODE_ENV: production
+
+      - name: Summary
+        run: |
+          echo "Hostinger DB now mirrors schema.prisma at commit ${{ github.sha }}."
+          echo "Connection string for local devs:"
+          echo "  mysql://${{ secrets.HOSTINGER_DB_USER }}:<password>@${{ secrets.HOSTINGER_DB_HOST }}:3306/${{ secrets.HOSTINGER_DB_NAME }}"
