@@ -17,7 +17,20 @@ export interface UploadResult {
   uploaded: boolean;
 }
 
-const API_URL = process.env.EXPO_PUBLIC_API_URL ?? 'http://localhost:4000/api/v1';
+/**
+ * Same hostname-aware resolution as api.ts and socket.ts — on web we follow
+ * the page hostname so the LAN-IP value in .env (needed for physical phone
+ * testing) doesn't strand the browser build with ERR_CONNECTION_TIMED_OUT.
+ */
+function resolveApiUrl(): string {
+  if (Platform.OS === 'web' && typeof window !== 'undefined') {
+    const host = window.location.hostname || 'localhost';
+    return `http://${host}:4000/api/v1`;
+  }
+  return process.env.EXPO_PUBLIC_API_URL ?? 'http://localhost:4000/api/v1';
+}
+
+const API_URL = resolveApiUrl();
 
 /**
  * Uploads a file via the browser's native fetch / RN's fetch. We deliberately
