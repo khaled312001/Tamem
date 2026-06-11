@@ -17,6 +17,7 @@ import type { Application } from 'express';
 
 import { ORDER_STATUS_AR, type OrderStatus } from '@tamem/types';
 
+import { env } from '../../config/env.js';
 import { prisma } from '../../db/prisma.js';
 import { sendPushToUser } from '../../integrations/fcm.js';
 import { sendWhatsAppMessage } from '../../integrations/whatsapp.js';
@@ -29,7 +30,10 @@ interface StatusMessages {
   titleAr: string;
   bodyAr: string;
   channel: NotifChannel;
-  whatsapp?: boolean;
+  /** WhatsApp message for the customer. Only set on the 4 major-stage
+   *  transitions + final CANCELLED/REJECTED so we don't spam them with
+   *  every granular FSM step. */
+  customerWhatsappBody?: string;
 }
 
 /**
@@ -47,6 +51,21 @@ interface OrderContext {
   deliveryAddress?: string;
 }
 
+/**
+ * Customer-facing messages. We keep granular in-app titles for the 12-state
+ * FSM (so the audit timeline reads naturally), but WhatsApp is only sent
+ * on the 4 MAJOR-STAGE transitions matching the admin's stepper:
+ *
+ *   استلام  → NEW          "أهلاً، استلمنا طلبك"
+ *   مؤكد    → ACCEPTED     "تم قبول طلبك، بنحضّر المندوب"
+ *   متجه    → PICKED_UP    "المندوب في الطريق ليك + بياناته"
+ *   تم      → DELIVERED    "تم التسليم، قيّم تجربتك"
+ *
+ * Intermediate states (UNDER_REVIEW / PRICED / AWAITING / DRIVER_ASSIGNED /
+ * IN_ROUTE / COMPLETED) intentionally do NOT send WhatsApp — the customer
+ * already got the major-stage update and the in-app notification covers
+ * the granularity. Only CANCELLED / REJECTED override and force WhatsApp.
+ */
 function messagesFor(
   order: Order,
   status: OrderStatus,
@@ -65,16 +84,17 @@ function messagesFor(
       ]
         .filter(Boolean)
         .join('\n');
+      const body =
+        `أهلاً بك في تميم.\n` +
+        `استلمنا طلبك رقم ${num} بنجاح.\n` +
+        (summary ? summary + '\n\n' : '') +
+        `هنبعتلك تأكيد جديد بمجرد ما الإدارة تقبل الطلب.` +
+        sig;
       return {
         titleAr: 'تم استلام طلبك',
-        bodyAr:
-          `أهلاً بك في تميم.\n` +
-          `استلمنا طلبك رقم ${num} بنجاح.\n` +
-          (summary ? summary + '\n\n' : '') +
-          `هتوصلك رسالة تأكيد تانية بمجرد ما الإدارة تراجع الطلب وتسعّره (خلال دقائق).` +
-          sig,
+        bodyAr: body,
         channel: 'IN_APP',
-        whatsapp: true,
+        customerWhatsappBody: body, // stage 1
       };
     }
     case 'UNDER_REVIEW':
@@ -82,14 +102,12 @@ function messagesFor(
         titleAr: 'طلبك قيد المراجعة',
         bodyAr: `طلب ${num} قيد المراجعة.\nالفريق بيتحقق من التفاصيل ويسعّره الآن.` + sig,
         channel: 'IN_APP',
-        whatsapp: true,
       };
     case 'PRICED':
       return {
         titleAr: 'تم تسعير طلبك',
         bodyAr: `طلب ${num} جاهز.\nالسعر: ${price}\n` + sig,
         channel: 'IN_APP',
-        whatsapp: true,
       };
     case 'AWAITING_CUSTOMER_APPROVAL':
       return {
@@ -100,16 +118,20 @@ function messagesFor(
           `افتح التطبيق ووافق علشان نبدأ التجهيز.` +
           sig,
         channel: 'IN_APP',
-        whatsapp: true,
       };
-    case 'ACCEPTED':
+    case 'ACCEPTED': {
+      const body =
+        `شكراً ليك.\n` +
+        `طلب ${num} اتقبل وبنحضّر المندوب المناسب ليه.` +
+        (price ? `\nالإجمالي: ${price}` : '') +
+        sig;
       return {
-        titleAr: 'تم قبول الطلب',
-        bodyAr:
-          `شكراً ليك.\n` + `طلب ${num} تم قبوله، هنبدأ تجهيزه فوراً وندوّر على مندوب مناسب.` + sig,
+        titleAr: 'تم قبول طلبك',
+        bodyAr: body,
         channel: 'IN_APP',
-        whatsapp: true,
+        customerWhatsappBody: body, // stage 2
       };
+    }
     case 'DRIVER_ASSIGNED': {
       const driverLine = ctx.driverName
         ? `المندوب: ${ctx.driverName}` +
@@ -120,62 +142,133 @@ function messagesFor(
         bodyAr:
           `طلب ${num} في طريقه إليك.\n` + driverLine + (price ? `\nالإجمالي: ${price}` : '') + sig,
         channel: 'IN_APP',
-        whatsapp: true,
       };
     }
-    case 'PICKED_UP':
-      return {
-        titleAr: 'تم استلام الطلب من المتجر',
-        bodyAr: `المندوب استلم طلب ${num} وبدأ التحرك ليك.\nاستعد للاستلام خلال دقايق.` + sig,
-        channel: 'IN_APP',
-        whatsapp: true,
-      };
-    case 'IN_ROUTE':
+    case 'PICKED_UP': {
+      const driverLine = ctx.driverName
+        ? `المندوب: ${ctx.driverName}` + (ctx.driverPhone ? `\nللتواصل: ${ctx.driverPhone}` : '')
+        : '';
+      const body =
+        `المندوب استلم طلب ${num} وبدأ التحرك ليك.\n` +
+        (driverLine ? driverLine + '\n' : '') +
+        `استعد للاستلام خلال دقايق.` +
+        sig;
       return {
         titleAr: 'الطلب في الطريق',
-        bodyAr: `طلب ${num} وصل لمنطقتك.\nجهّز التواجد عند العنوان من فضلك.` + sig,
+        bodyAr: body,
         channel: 'IN_APP',
-        whatsapp: true,
+        customerWhatsappBody: body, // stage 3
       };
-    case 'DELIVERED':
+    }
+    case 'IN_ROUTE':
+      return {
+        titleAr: 'الطلب وصل لمنطقتك',
+        bodyAr: `طلب ${num} قرّب يوصل.\nجهّز التواجد عند العنوان من فضلك.` + sig,
+        channel: 'IN_APP',
+      };
+    case 'DELIVERED': {
+      const body =
+        `تم تسليم طلب ${num} بنجاح.\n` + `شكراً لاختيارك تميم — قيّم تجربتك من التطبيق.` + sig;
       return {
         titleAr: 'تم تسليم الطلب',
-        bodyAr: `تم تسليم طلب ${num} بنجاح.\nشكراً لاختيارك تميم — قيّم تجربتك من التطبيق.` + sig,
+        bodyAr: body,
         channel: 'IN_APP',
-        whatsapp: true,
+        customerWhatsappBody: body, // stage 4
       };
+    }
     case 'COMPLETED':
       return {
         titleAr: 'تم إكمال الطلب',
         bodyAr: `طلب ${num} مكتمل بالكامل.\nنتمنى أن نخدمك مرة أخرى قريباً.` + sig,
         channel: 'IN_APP',
-        whatsapp: true,
       };
-    case 'CANCELLED':
+    case 'CANCELLED': {
+      const body =
+        `تم إلغاء طلب ${num}.` +
+        (order.cancellationReason ? `\nالسبب: ${order.cancellationReason}` : '') +
+        `\n\nلو فيه أي استفسار، تواصل معنا.` +
+        sig;
       return {
         titleAr: 'تم إلغاء الطلب',
-        bodyAr:
-          `تم إلغاء طلب ${num}.` +
-          (order.cancellationReason ? `\nالسبب: ${order.cancellationReason}` : '') +
-          `\n\nلو فيه أي استفسار، تواصل معنا.` +
-          sig,
+        bodyAr: body,
         channel: 'IN_APP',
-        whatsapp: true,
+        customerWhatsappBody: body, // exception
       };
-    case 'REJECTED':
+    }
+    case 'REJECTED': {
+      const body =
+        `للأسف ما قدرناش ننفذ طلب ${num}.` +
+        (order.cancellationReason ? `\nالسبب: ${order.cancellationReason}` : '') +
+        `\n\nنعتذر، تواصل معنا للتفاصيل.` +
+        sig;
       return {
         titleAr: 'تعذّر تنفيذ الطلب',
-        bodyAr:
-          `للأسف ما قدرناش ننفذ طلب ${num}.` +
-          (order.cancellationReason ? `\nالسبب: ${order.cancellationReason}` : '') +
-          `\n\nنعتذر، تواصل معنا للتفاصيل.` +
-          sig,
+        bodyAr: body,
         channel: 'IN_APP',
-        whatsapp: true,
+        customerWhatsappBody: body, // exception
       };
+    }
     default:
       return null;
   }
+}
+
+/**
+ * Merchant WhatsApp messages — 2 events that matter for the store owner:
+ * NEW (طلب جديد جالك) and DELIVERED (تم التسليم). Returns null otherwise.
+ */
+function merchantWhatsappFor(order: Order, status: OrderStatus): string | null {
+  const num = order.orderNumber;
+  const sig = '\n\n— تميم للتوصيل';
+  switch (status) {
+    case 'NEW':
+      return (
+        `طلب جديد جالك على متجرك.\n` +
+        `رقم الطلب: ${num}\n` +
+        `افتح تطبيق التاجر لمراجعة التفاصيل والقبول.` +
+        sig
+      );
+    case 'DELIVERED':
+      return `تم تسليم طلب ${num} بنجاح للعميل.\n` + `شكراً للتعاون مع تميم.` + sig;
+    default:
+      return null;
+  }
+}
+
+/**
+ * Driver WhatsApp messages — one event: DRIVER_ASSIGNED (رحلة جديدة).
+ */
+function driverWhatsappFor(order: Order, status: OrderStatus): string | null {
+  const num = order.orderNumber;
+  const sig = '\n\n— تميم للتوصيل';
+  if (status !== 'DRIVER_ASSIGNED') return null;
+  return (
+    `اتعينت على رحلة جديدة.\n` +
+    `رقم الطلب: ${num}\n` +
+    (order.pickupAddress ? `الاستلام: ${order.pickupAddress}\n` : '') +
+    (order.deliveryAddress ? `التسليم: ${order.deliveryAddress}\n` : '') +
+    `افتح تطبيق الكابتن للتفاصيل وبدء الرحلة.` +
+    sig
+  );
+}
+
+/**
+ * Admin WhatsApp broadcast — fires on NEW so the duty admin sees every
+ * incoming order on the business number even when they're not online.
+ */
+function adminWhatsappFor(order: Order, status: OrderStatus, ctx: OrderContext): string | null {
+  const num = order.orderNumber;
+  const sig = '\n\n— تميم';
+  if (status !== 'NEW') return null;
+  return (
+    `طلب جديد على المنصة.\n` +
+    `رقم: ${num}\n` +
+    (ctx.customerName ? `العميل: ${ctx.customerName}\n` : '') +
+    (ctx.deliveryAddress ? `العنوان: ${ctx.deliveryAddress}\n` : '') +
+    (order.quotedPrice ? `الإجمالي التقديري: ${order.quotedPrice} ج.م\n` : '') +
+    `افتح لوحة الإدارة للمراجعة.` +
+    sig
+  );
 }
 
 export async function dispatchOrderStatusChanged(
@@ -267,17 +360,23 @@ export async function dispatchOrderStatusChanged(
     }
   }
 
-  // 4. WhatsApp server-side dispatch (optional — gracefully no-ops if not configured)
-  if (msgs?.whatsapp) {
+  // 4. WhatsApp fan-out — 4 distinct recipients, each on a focused 4-stage
+  //    cadence so nobody gets spammed. Each block is independent so one
+  //    failing recipient never blocks the others.
+
+  // 4a. Customer — only fires on the 4 major-stage transitions (handled by
+  //     messagesFor returning customerWhatsappBody on NEW/ACCEPTED/PICKED_UP/
+  //     DELIVERED) plus the CANCELLED/REJECTED exceptions.
+  if (msgs?.customerWhatsappBody) {
     try {
       const customer = await prisma.user.findUnique({
         where: { id: order.customerId },
-        select: { phone: true, name: true },
+        select: { phone: true },
       });
       if (customer?.phone) {
         const sent = await sendWhatsAppMessage({
           toPhone: customer.phone,
-          text: msgs.bodyAr,
+          text: msgs.customerWhatsappBody,
         });
         if (sent) {
           await prisma.order.update({
@@ -287,7 +386,56 @@ export async function dispatchOrderStatusChanged(
         }
       }
     } catch (err) {
-      logger.warn({ err, orderId: order.id }, 'whatsapp dispatch failed');
+      logger.warn({ err, orderId: order.id }, 'customer whatsapp failed');
+    }
+  }
+
+  // 4b. Merchant — only on NEW + DELIVERED (and only when the order has a
+  //     merchant attached, which means it's a marketplace order).
+  const merchantText = merchantWhatsappFor(order, newStatus);
+  if (merchantText && order.merchantId) {
+    try {
+      const merchantProfile = await prisma.merchantProfile.findUnique({
+        where: { id: order.merchantId },
+        select: { user: { select: { phone: true } } },
+      });
+      const phone = merchantProfile?.user?.phone;
+      if (phone) {
+        await sendWhatsAppMessage({ toPhone: phone, text: merchantText });
+      }
+    } catch (err) {
+      logger.warn({ err, orderId: order.id }, 'merchant whatsapp failed');
+    }
+  }
+
+  // 4c. Driver — only on DRIVER_ASSIGNED.
+  const driverText = driverWhatsappFor(order, newStatus);
+  if (driverText && order.assignedDriverId) {
+    try {
+      const driver = await prisma.user.findUnique({
+        where: { id: order.assignedDriverId },
+        select: { phone: true },
+      });
+      if (driver?.phone) {
+        await sendWhatsAppMessage({ toPhone: driver.phone, text: driverText });
+      }
+    } catch (err) {
+      logger.warn({ err, orderId: order.id }, 'driver whatsapp failed');
+    }
+  }
+
+  // 4d. Admin — only on NEW. Sends to the configured business number so
+  //     whoever's on duty sees every fresh order. Gracefully no-ops if the
+  //     env var isn't set.
+  const adminText = adminWhatsappFor(order, newStatus, ctx);
+  if (adminText && env.WHATSAPP_BUSINESS_NUMBER) {
+    try {
+      await sendWhatsAppMessage({
+        toPhone: env.WHATSAPP_BUSINESS_NUMBER,
+        text: adminText,
+      });
+    } catch (err) {
+      logger.warn({ err, orderId: order.id }, 'admin whatsapp failed');
     }
   }
 

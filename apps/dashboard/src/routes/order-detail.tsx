@@ -10,7 +10,6 @@ import {
   DollarSign,
   Edit3,
   FileSearch,
-  HandCoins,
   ImageIcon,
   Loader2,
   MapPin,
@@ -20,7 +19,6 @@ import {
   Phone,
   Truck,
   User,
-  UserCheck,
 } from 'lucide-react';
 import { useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
@@ -39,31 +37,51 @@ import { api } from '../lib/api.js';
 type Order = any;
 
 // ────────────────────────────────────────────────────────────────────────────
-// Workflow definition — the happy-path stages an order moves through. Each
-// stage has an icon + a "next" rule that knows whether progressing to the
-// next stage needs a dialog (price/driver) or is a one-tap status update.
+// Workflow definition — the 4 major stages an order moves through, shown in
+// the status strip. Granular state transitions (12 enum values) still live
+// in the backend FSM and surface in the audit log; this strip is the human-
+// readable view the admin scans at a glance.
 // ────────────────────────────────────────────────────────────────────────────
 
-interface Stage {
-  status: OrderStatus;
+interface MajorStage {
   label: string;
   short: string;
   Icon: typeof Clock;
 }
 
-// Customer-approval step removed from the workflow — admin confirms with the
-// customer outside the app (call/WhatsApp) then moves PRICED → ACCEPTED.
-const HAPPY_PATH: Stage[] = [
-  { status: 'NEW', label: 'استلام الطلب', short: 'استلام', Icon: ClipboardCheck },
-  { status: 'UNDER_REVIEW', label: 'قيد المراجعة', short: 'مراجعة', Icon: FileSearch },
-  { status: 'PRICED', label: 'تم التسعير', short: 'مسعّر', Icon: HandCoins },
-  { status: 'ACCEPTED', label: 'تأكيد الطلب', short: 'مؤكد', Icon: CheckCircle2 },
-  { status: 'DRIVER_ASSIGNED', label: 'تعيين سائق', short: 'سائق', Icon: UserCheck },
-  { status: 'PICKED_UP', label: 'تم الاستلام', short: 'مستلم', Icon: Package },
-  { status: 'IN_ROUTE', label: 'في الطريق', short: 'متجه', Icon: Truck },
-  { status: 'DELIVERED', label: 'تم التوصيل', short: 'موصول', Icon: CheckCheck },
-  { status: 'COMPLETED', label: 'مكتمل', short: 'تم', Icon: CheckCheck },
+const MAJOR_STAGES: MajorStage[] = [
+  { label: 'استلام الطلب', short: 'استلام', Icon: ClipboardCheck },
+  { label: 'تم التأكيد', short: 'مؤكد', Icon: CheckCircle2 },
+  { label: 'في الطريق', short: 'متجه', Icon: Truck },
+  { label: 'تم التسليم', short: 'تم', Icon: CheckCheck },
 ];
+
+/**
+ * Map a granular FSM status to the major-stage index (0..3) the order is
+ * currently in. CANCELLED / REJECTED return -1 so the stepper renders all
+ * stages as inactive grey when the strip caller passes terminalKind.
+ */
+function majorStageIndexFor(status: OrderStatus): number {
+  switch (status) {
+    case 'NEW':
+    case 'UNDER_REVIEW':
+    case 'PRICED':
+    case 'AWAITING_CUSTOMER_APPROVAL':
+      return 0;
+    case 'ACCEPTED':
+    case 'DRIVER_ASSIGNED':
+      return 1;
+    case 'PICKED_UP':
+    case 'IN_ROUTE':
+      return 2;
+    case 'DELIVERED':
+    case 'COMPLETED':
+      return 3;
+    case 'CANCELLED':
+    case 'REJECTED':
+      return -1;
+  }
+}
 
 // ────────────────────────────────────────────────────────────────────────────
 // Phase model — the admin only ever needs to do 4 things to take an order
@@ -171,7 +189,14 @@ export function OrderDetailPage() {
     enabled: !!id,
   });
 
-  const [dialog, setDialog] = useState<null | 'price' | 'assign' | 'cancel' | 'note'>(null);
+  type DialogState = null | {
+    kind: 'price' | 'assign' | 'cancel' | 'note';
+    /** Status to advance to after the dialog completes successfully — used
+     *  by the NextActionCard to chain "price + accept" and "assign + start
+     *  delivery" into single major-stage actions. */
+    after?: OrderStatus;
+  };
+  const [dialog, setDialog] = useState<DialogState>(null);
 
   const invalidate = () => {
     qc.invalidateQueries({ queryKey: ['admin', 'orders'] });
@@ -212,6 +237,24 @@ export function OrderDetailPage() {
     onError: (err: Error) => toast.error(err.message),
   });
 
+  /** Walk from PICKED_UP/IN_ROUTE → DELIVERED (stops short of COMPLETED so
+   *  the admin can confirm finalization as a separate, explicit step). */
+  const markDeliveredMut = useMutation({
+    mutationFn: async (from: OrderStatus) => {
+      const walk: OrderStatus[] = ['PICKED_UP', 'IN_ROUTE', 'DELIVERED'];
+      const startIdx = walk.indexOf(from);
+      const remaining = startIdx >= 0 ? walk.slice(startIdx + 1) : (['DELIVERED'] as OrderStatus[]);
+      for (const next of remaining) {
+        await api.adminUpdateOrderStatus(id!, next);
+      }
+    },
+    onSuccess: () => {
+      toast.success('تم تأكيد التسليم');
+      invalidate();
+    },
+    onError: (err: Error) => toast.error(err.message),
+  });
+
   if (isLoading || !order) {
     return (
       <div className="space-y-4">
@@ -228,17 +271,19 @@ export function OrderDetailPage() {
   const phase = currentPhaseFor(status);
   void phase;
 
-  const phasePending = advanceMut.isPending || completeMut.isPending;
+  const phasePending = advanceMut.isPending || completeMut.isPending || markDeliveredMut.isPending;
 
   // Kept around because the action dialogs (price, assign, complete) reuse
   // the same dispatching logic. The 4-card overview UI it used to render
   // alongside is gone; the detailed timeline is now the sole progress view.
   // void at the end suppresses tsc's noUnusedLocals without removing the
   // helper outright (we'll likely revive a compact phase summary later).
+  // Legacy 4-card phase dispatcher — kept around for potential revival.
+  // The NextActionCard below now owns admin progression.
   const onPhaseClick = (id: PhaseId) => {
     if (phasePending) return;
     if (id === 1) {
-      setDialog('price');
+      setDialog({ kind: 'price' });
       return;
     }
     if (id === 2) {
@@ -251,7 +296,7 @@ export function OrderDetailPage() {
       return;
     }
     if (id === 3) {
-      setDialog('assign');
+      setDialog({ kind: 'assign' });
       return;
     }
     if (id === 4) {
@@ -477,7 +522,7 @@ export function OrderDetailPage() {
 
         {canCancel && !isTerminal && (
           <div className="flex justify-end">
-            <Button variant="danger" size="sm" onClick={() => setDialog('cancel')}>
+            <Button variant="danger" size="sm" onClick={() => setDialog({ kind: 'cancel' })}>
               <Ban className="w-4 h-4" /> إلغاء الطلب
             </Button>
           </div>
@@ -502,11 +547,53 @@ export function OrderDetailPage() {
         )}
       </div>
 
-      {/* ───────── Detailed status timeline (kept for audit) ───────── */}
+      {/* ───────── Next-action card (the "تحديث الطلب" button) ───────── */}
+      {!isTerminal && (
+        <NextActionCard
+          status={status}
+          hasPrice={hasPrice}
+          pending={phasePending}
+          onStage1={() => {
+            if (hasPrice && (status === 'PRICED' || status === 'AWAITING_CUSTOMER_APPROVAL')) {
+              advanceMut.mutate('ACCEPTED', {
+                onSuccess: () => {
+                  toast.success('تم قبول الطلب');
+                  invalidate();
+                },
+              });
+            } else {
+              setDialog({ kind: 'price', after: 'ACCEPTED' });
+            }
+          }}
+          onStage2={() => {
+            if (status === 'DRIVER_ASSIGNED') {
+              advanceMut.mutate('PICKED_UP', {
+                onSuccess: () => {
+                  toast.success('بدأ التوصيل');
+                  invalidate();
+                },
+              });
+            } else {
+              setDialog({ kind: 'assign', after: 'PICKED_UP' });
+            }
+          }}
+          onStage3={() => markDeliveredMut.mutate(status)}
+          onStage4={() =>
+            advanceMut.mutate('COMPLETED', {
+              onSuccess: () => {
+                toast.success('تم إنهاء الطلب');
+                invalidate();
+              },
+            })
+          }
+        />
+      )}
+
+      {/* ───────── Status stepper (4 major stages) ───────── */}
       <div className="bg-white rounded-xl border border-border p-5">
         <div className="text-xs uppercase tracking-wider text-muted-foreground font-bold mb-3 flex items-center gap-1.5">
           <FileSearch className="w-4 h-4" />
-          مسار الحالة (للسجل)
+          مراحل الطلب
         </div>
         <WorkflowStepper currentStatus={status} terminalKind={isTerminal ? status : null} />
       </div>
@@ -685,7 +772,7 @@ export function OrderDetailPage() {
                   variant="outline"
                   size="sm"
                   className="w-full mt-2"
-                  onClick={() => setDialog('price')}
+                  onClick={() => setDialog({ kind: 'price' })}
                 >
                   <Edit3 className="w-3 h-3" /> تعديل السعر
                 </Button>
@@ -695,7 +782,7 @@ export function OrderDetailPage() {
                 <p className="text-sm text-amber-700 bg-amber-50 rounded p-2 inline-flex items-center gap-1.5">
                   <Clock className="w-3.5 h-3.5" /> الطلب لسه مش مسعّر
                 </p>
-                <Button size="sm" className="w-full" onClick={() => setDialog('price')}>
+                <Button size="sm" className="w-full" onClick={() => setDialog({ kind: 'price' })}>
                   <DollarSign className="w-4 h-4" /> تسعير الطلب
                 </Button>
               </div>
@@ -725,7 +812,7 @@ export function OrderDetailPage() {
                     variant="outline"
                     size="sm"
                     className="w-full mt-2"
-                    onClick={() => setDialog('assign')}
+                    onClick={() => setDialog({ kind: 'assign' })}
                   >
                     <Edit3 className="w-3 h-3" /> تغيير السائق
                   </Button>
@@ -735,7 +822,11 @@ export function OrderDetailPage() {
               <div className="space-y-2">
                 <p className="text-sm text-muted-foreground">لم يتم تعيين سائق بعد</p>
                 {!isTerminal && (
-                  <Button size="sm" className="w-full" onClick={() => setDialog('assign')}>
+                  <Button
+                    size="sm"
+                    className="w-full"
+                    onClick={() => setDialog({ kind: 'assign' })}
+                  >
                     <Truck className="w-4 h-4" /> تعيين سائق
                   </Button>
                 )}
@@ -748,7 +839,7 @@ export function OrderDetailPage() {
             <Button
               variant="outline"
               size="sm"
-              onClick={() => setDialog('note')}
+              onClick={() => setDialog({ kind: 'note' })}
               className="w-full"
             >
               <MessageSquare className="w-3 h-3" /> ملاحظة داخلية
@@ -786,28 +877,51 @@ export function OrderDetailPage() {
         </div>
       </div>
 
-      {/* Action dialogs */}
-      {dialog === 'price' && (
+      {/* Action dialogs. The `after` field on dialog state lets the NextActionCard
+          chain a status-advance onto the dialog's success — e.g. tasering the
+          price dialog with after='ACCEPTED' auto-promotes the order to
+          ACCEPTED once the admin saves the price. */}
+      {dialog?.kind === 'price' && (
         <PriceDialog
           orderId={id!}
           initialPrice={order.quotedPrice ?? order.finalPrice}
           currentStatus={status}
+          onSaved={() => {
+            const next = dialog.after;
+            if (next) {
+              advanceMut.mutate(next, {
+                onSuccess: () => {
+                  toast.success('تم قبول الطلب');
+                },
+              });
+            }
+          }}
           onClose={() => {
             setDialog(null);
             invalidate();
           }}
         />
       )}
-      {dialog === 'assign' && (
+      {dialog?.kind === 'assign' && (
         <AssignDialog
           orderId={id!}
+          onAssigned={() => {
+            const next = dialog.after;
+            if (next) {
+              advanceMut.mutate(next, {
+                onSuccess: () => {
+                  toast.success('بدأ التوصيل');
+                },
+              });
+            }
+          }}
           onClose={() => {
             setDialog(null);
             invalidate();
           }}
         />
       )}
-      {dialog === 'cancel' && (
+      {dialog?.kind === 'cancel' && (
         <CancelDialog
           orderId={id!}
           onClose={() => {
@@ -816,7 +930,7 @@ export function OrderDetailPage() {
           }}
         />
       )}
-      {dialog === 'note' && (
+      {dialog?.kind === 'note' && (
         <NoteDialog
           orderId={id!}
           onClose={() => {
@@ -825,6 +939,113 @@ export function OrderDetailPage() {
           }}
         />
       )}
+    </div>
+  );
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Next-action card — one prominent button per major stage. The 12-state FSM
+// collapses into 4 admin actions matching the 4 stepper stages:
+//   1. استلام     → تسعير وقبول الطلب  (opens price dialog → auto-advance to ACCEPTED)
+//   2. مؤكد       → تعيين سائق وبدء التوصيل (opens assign dialog → auto-advance to PICKED_UP)
+//   3. متجه       → تأكيد التسليم للعميل (walks PICKED_UP → IN_ROUTE → DELIVERED)
+//   4. تم         → إنهاء الطلب (advances DELIVERED → COMPLETED)
+// ────────────────────────────────────────────────────────────────────────────
+
+interface StageActionUI {
+  stage: 1 | 2 | 3 | 4;
+  label: string;
+  hint: string;
+  onClick: () => void;
+}
+
+function NextActionCard({
+  status,
+  hasPrice,
+  pending,
+  onStage1,
+  onStage2,
+  onStage3,
+  onStage4,
+}: {
+  status: OrderStatus;
+  hasPrice: boolean;
+  pending: boolean;
+  onStage1: () => void;
+  onStage2: () => void;
+  onStage3: () => void;
+  onStage4: () => void;
+}) {
+  const action: StageActionUI | null = (() => {
+    const idx = majorStageIndexFor(status);
+    switch (idx) {
+      case 0:
+        return {
+          stage: 1,
+          label: hasPrice ? 'قبول الطلب' : 'تسعير وقبول الطلب',
+          hint: hasPrice
+            ? 'تأكيد قبول الطلب والانتقال لمرحلة التعيين'
+            : 'حدّد السعر، احفظه، والطلب يتقبل تلقائياً',
+          onClick: onStage1,
+        };
+      case 1:
+        return {
+          stage: 2,
+          label: status === 'DRIVER_ASSIGNED' ? 'بدء التوصيل' : 'تعيين سائق وبدء التوصيل',
+          hint:
+            status === 'DRIVER_ASSIGNED'
+              ? 'السائق استلم الطلب من المتجر'
+              : 'اختر سائقاً متاحاً، والطلب يتحول لـ "في الطريق" تلقائياً',
+          onClick: onStage2,
+        };
+      case 2:
+        return {
+          stage: 3,
+          label: 'تأكيد التسليم للعميل',
+          hint: 'العميل استلم الطلب من السائق',
+          onClick: onStage3,
+        };
+      case 3:
+        return {
+          stage: 4,
+          label: 'إنهاء الطلب',
+          hint: 'إغلاق الطلب وتسجيله كمكتمل في السجل',
+          onClick: onStage4,
+        };
+      default:
+        return null;
+    }
+  })();
+
+  if (!action) return null;
+
+  return (
+    <div
+      className="rounded-xl border-2 p-5 flex items-center gap-4 shadow-sm"
+      style={{
+        background: 'linear-gradient(135deg, rgba(224,48,30,0.06), rgba(242,169,59,0.08))',
+        borderColor: 'rgba(224,48,30,0.25)',
+      }}
+    >
+      <div className="w-14 h-14 rounded-xl bg-brand-red text-white grid place-items-center shrink-0 shadow-md">
+        {pending ? (
+          <Loader2 className="w-6 h-6 animate-spin" />
+        ) : (
+          <ChevronRight className="w-7 h-7" />
+        )}
+      </div>
+
+      <div className="flex-1 min-w-0">
+        <div className="text-xs text-brand-red font-bold uppercase tracking-wider mb-0.5">
+          الإجراء التالي · المرحلة {action.stage} من 4
+        </div>
+        <div className="font-black text-lg leading-tight">{action.label}</div>
+        <div className="text-sm text-muted-foreground mt-0.5">{action.hint}</div>
+      </div>
+
+      <Button onClick={action.onClick} disabled={pending} size="lg" className="shrink-0">
+        {action.label}
+      </Button>
     </div>
   );
 }
@@ -840,54 +1061,48 @@ function WorkflowStepper({
   currentStatus: OrderStatus;
   terminalKind: OrderStatus | null;
 }) {
-  // Legacy orders stuck on AWAITING_CUSTOMER_APPROVAL render as "PRICED" on
-  // the strip — that's the most intuitive position now that the wait step
-  // is gone.
-  const effective = currentStatus === 'AWAITING_CUSTOMER_APPROVAL' ? 'PRICED' : currentStatus;
-  const visibleStages = HAPPY_PATH;
-  const currentIdx = Math.max(
-    0,
-    visibleStages.findIndex((s) => s.status === effective),
-  );
+  // COMPLETED is past the last stage — render everything as done.
+  // CANCELLED / REJECTED collapse to -1 → all stages render greyed.
+  const rawIdx = majorStageIndexFor(currentStatus);
+  const currentIdx = currentStatus === 'COMPLETED' ? MAJOR_STAGES.length : rawIdx;
 
   return (
-    <div className="flex items-center justify-between gap-1 overflow-x-auto pb-2">
-      {visibleStages.map((stage, i) => {
+    <div className="flex items-center justify-between gap-1 overflow-x-auto pb-2 px-2">
+      {MAJOR_STAGES.map((stage, i) => {
         const isDone = i < currentIdx;
         const isCurrent = i === currentIdx && !terminalKind;
         const isFuture = i > currentIdx;
         const isFailed = terminalKind === 'CANCELLED' || terminalKind === 'REJECTED';
 
-        const dotStyle =
-          isFailed && i >= currentIdx
-            ? 'bg-gray-200 text-gray-400'
-            : isDone
-              ? 'bg-green-500 text-white'
-              : isCurrent
-                ? 'bg-brand-red text-white ring-4 ring-brand-red/20 animate-pulse'
-                : 'bg-muted text-muted-foreground';
+        const dotStyle = isFailed
+          ? 'bg-gray-200 text-gray-400'
+          : isDone
+            ? 'bg-green-500 text-white'
+            : isCurrent
+              ? 'bg-brand-red text-white ring-4 ring-brand-red/20 animate-pulse'
+              : 'bg-muted text-muted-foreground';
 
-        const lineStyle = isDone ? 'bg-green-300' : 'bg-muted';
+        const lineStyle = isDone ? 'bg-green-400' : 'bg-muted';
 
         return (
-          <div key={stage.status} className="flex items-center flex-shrink-0">
-            <div className="flex flex-col items-center gap-1 min-w-[64px]">
+          <div key={i} className="flex items-center flex-1 last:flex-none min-w-0">
+            <div className="flex flex-col items-center gap-1.5 min-w-[80px]">
               <div
-                className={`w-9 h-9 rounded-full grid place-items-center transition ${dotStyle}`}
+                className={`w-12 h-12 rounded-full grid place-items-center transition ${dotStyle}`}
                 title={stage.label}
               >
-                {isDone ? <Check className="w-4 h-4" /> : <stage.Icon className="w-4 h-4" />}
+                {isDone ? <Check className="w-5 h-5" /> : <stage.Icon className="w-5 h-5" />}
               </div>
               <div
-                className={`text-[10px] text-center leading-tight ${
-                  isCurrent ? 'font-bold text-brand-red' : 'text-muted-foreground'
+                className={`text-xs text-center leading-tight font-bold ${
+                  isCurrent ? 'text-brand-red' : isDone ? 'text-green-700' : 'text-muted-foreground'
                 } ${isFuture ? 'opacity-60' : ''}`}
               >
                 {stage.short}
               </div>
             </div>
-            {i < visibleStages.length - 1 && (
-              <div className={`h-1 w-6 sm:w-10 rounded-full mx-0.5 mt-[-18px] ${lineStyle}`} />
+            {i < MAJOR_STAGES.length - 1 && (
+              <div className={`h-1.5 flex-1 rounded-full mx-2 mt-[-22px] ${lineStyle}`} />
             )}
           </div>
         );
@@ -1126,6 +1341,7 @@ function PriceDialog({
   orderId,
   initialPrice,
   currentStatus,
+  onSaved,
   onClose,
 }: {
   orderId: string;
@@ -1134,6 +1350,9 @@ function PriceDialog({
    *  so the backend's set-price endpoint can then auto-transition to PRICED.
    *  This is what makes the "بدء المراجعة + تسعير" button a single click. */
   currentStatus?: OrderStatus;
+  /** Called after the price is saved successfully but before the dialog
+   *  closes — used to chain a status advance (e.g. PRICED → ACCEPTED). */
+  onSaved?: () => void;
   onClose: () => void;
 }) {
   const [price, setPrice] = useState(initialPrice != null ? String(initialPrice) : '');
@@ -1149,6 +1368,7 @@ function PriceDialog({
     },
     onSuccess: () => {
       toast.success('تم حفظ السعر');
+      onSaved?.();
       onClose();
     },
     onError: (err: Error) => toast.error(err.message),
@@ -1190,7 +1410,17 @@ function PriceDialog({
   );
 }
 
-function AssignDialog({ orderId, onClose }: { orderId: string; onClose: () => void }) {
+function AssignDialog({
+  orderId,
+  onAssigned,
+  onClose,
+}: {
+  orderId: string;
+  /** Called after the driver is assigned successfully but before the dialog
+   *  closes — used to chain a status advance (e.g. DRIVER_ASSIGNED → PICKED_UP). */
+  onAssigned?: () => void;
+  onClose: () => void;
+}) {
   const { data: drivers, isLoading } = useQuery({
     queryKey: ['admin', 'drivers', 'available'],
     queryFn: () => api.adminListDrivers({ status: 'AVAILABLE', pageSize: 50 }),
@@ -1200,6 +1430,7 @@ function AssignDialog({ orderId, onClose }: { orderId: string; onClose: () => vo
     mutationFn: () => api.adminAssignDriver(orderId, driverId),
     onSuccess: () => {
       toast.success('تم تعيين السائق');
+      onAssigned?.();
       onClose();
     },
     onError: (err: Error) => toast.error(err.message),

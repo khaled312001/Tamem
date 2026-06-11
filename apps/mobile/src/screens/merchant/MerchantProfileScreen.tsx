@@ -15,11 +15,12 @@
  */
 import { useNavigation } from '@react-navigation/native';
 import { useQuery } from '@tanstack/react-query';
-import { Clock, LogOut, MapPin, Pencil, Star, Store } from 'lucide-react-native';
+import { Clock, LogOut, MapPin, Pencil, Star, Store, X } from 'lucide-react-native';
 import type { LucideIcon } from 'lucide-react-native';
+import { useState } from 'react';
 import {
   ActivityIndicator,
-  Alert,
+  Modal,
   Pressable,
   RefreshControl,
   ScrollView,
@@ -42,13 +43,17 @@ interface MerchantProfile {
   rating?: number | null;
 }
 
+type DialogKind = { kind: 'info'; title: string; body: string } | { kind: 'confirm-logout' };
+
 export function MerchantProfileScreen() {
-  // Navigation reserved for the edit-store / hours screens once they
-  // exist — keeping the hook here avoids a later refactor when they're
-  // wired up.
   const navigation = useNavigation();
   void navigation;
   const clear = useAuth((s) => s.clear);
+
+  // State-driven Modal instead of Alert.alert — the native Alert renders an
+  // ugly browser dialog on react-native-web that the user reported as "not
+  // working". A custom Modal works identically on both platforms.
+  const [dialog, setDialog] = useState<DialogKind | null>(null);
 
   const query = useQuery<MerchantProfile>({
     queryKey: ['merchant', 'me'],
@@ -63,50 +68,36 @@ export function MerchantProfileScreen() {
   const displayName = data?.storeNameAr || data?.storeName || 'متجرك';
   const subName = data?.storeNameAr && data?.storeName ? data.storeName : null;
 
-  // Stubbed actions — the dedicated screens haven't been built yet so we
-  // surface a friendly "coming soon" toast instead of triggering a
-  // navigation error. Toast (rather than Alert.alert) keeps the UX
-  // consistent across native + web; native Alert pops a ugly browser
-  // dialog on react-native-web. When the screens land we'll swap these
-  // for navigation.navigate(...) calls.
-  const onEditStore = () => {
-    showToast({
+  const onEditStore = () =>
+    setDialog({
+      kind: 'info',
       title: 'قريباً',
-      message: 'تعديل بيانات المتجر سيكون متاحاً قريباً من هنا.',
-      tone: 'info',
+      body: 'تعديل بيانات المتجر (الاسم، العنوان، الغلاف) هيكون متاح قريباً من هنا.',
     });
-  };
 
-  const onEditHours = () => {
-    showToast({
+  const onEditHours = () =>
+    setDialog({
+      kind: 'info',
       title: 'قريباً',
-      message: 'تغيير ساعات العمل سيكون متاحاً قريباً من هنا.',
-      tone: 'info',
+      body: 'تغيير مواعيد العمل اليومية هيكون متاح قريباً من هنا.',
     });
-  };
 
-  const onLogout = () => {
-    Alert.alert('تأكيد تسجيل الخروج', 'هل تريد تسجيل الخروج من حساب المتجر؟', [
-      { text: 'إلغاء', style: 'cancel' },
-      {
-        text: 'تسجيل خروج',
-        style: 'destructive',
-        onPress: () => {
-          clear()
-            .then(() => {
-              try {
-                showToast({ title: 'تم تسجيل الخروج', tone: 'success' });
-              } catch {
-                /* toast is best-effort */
-              }
-            })
-            .catch((err) => {
-              const message = err instanceof Error ? err.message : 'حدث خطأ';
-              Alert.alert('تعذّر تسجيل الخروج', message);
-            });
-        },
-      },
-    ]);
+  const onLogout = () => setDialog({ kind: 'confirm-logout' });
+
+  const performLogout = () => {
+    setDialog(null);
+    clear()
+      .then(() => {
+        try {
+          showToast({ title: 'تم تسجيل الخروج', tone: 'success' });
+        } catch {
+          /* toast is best-effort */
+        }
+      })
+      .catch((err) => {
+        const message = err instanceof Error ? err.message : 'حدث خطأ';
+        setDialog({ kind: 'info', title: 'تعذّر تسجيل الخروج', body: message });
+      });
   };
 
   return (
@@ -195,6 +186,59 @@ export function MerchantProfileScreen() {
           <MenuItem Icon={LogOut} label="تسجيل خروج" destructive onPress={onLogout} />
         </View>
       </ScrollView>
+
+      {/* Cross-platform action modal — replaces Alert.alert which renders
+          poorly on react-native-web. */}
+      <Modal
+        visible={dialog != null}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setDialog(null)}
+      >
+        <Pressable style={styles.modalBackdrop} onPress={() => setDialog(null)}>
+          <Pressable style={styles.modalCard} onPress={(e) => e.stopPropagation()}>
+            <Pressable onPress={() => setDialog(null)} hitSlop={8} style={styles.modalCloseBtn}>
+              <X size={18} color={colors.text.muted} />
+            </Pressable>
+
+            {dialog?.kind === 'info' && (
+              <>
+                <Text style={styles.modalTitle}>{dialog.title}</Text>
+                <Text style={styles.modalBody}>{dialog.body}</Text>
+                <View style={styles.modalActions}>
+                  <Pressable
+                    onPress={() => setDialog(null)}
+                    style={({ pressed }) => [styles.modalBtnPrimary, pressed && { opacity: 0.85 }]}
+                  >
+                    <Text style={styles.modalBtnPrimaryText}>حسناً</Text>
+                  </Pressable>
+                </View>
+              </>
+            )}
+
+            {dialog?.kind === 'confirm-logout' && (
+              <>
+                <Text style={styles.modalTitle}>تأكيد تسجيل الخروج</Text>
+                <Text style={styles.modalBody}>هل تريد فعلاً تسجيل الخروج من حساب المتجر؟</Text>
+                <View style={styles.modalActions}>
+                  <Pressable
+                    onPress={() => setDialog(null)}
+                    style={({ pressed }) => [styles.modalBtnGhost, pressed && { opacity: 0.85 }]}
+                  >
+                    <Text style={styles.modalBtnGhostText}>إلغاء</Text>
+                  </Pressable>
+                  <Pressable
+                    onPress={performLogout}
+                    style={({ pressed }) => [styles.modalBtnDanger, pressed && { opacity: 0.85 }]}
+                  >
+                    <Text style={styles.modalBtnDangerText}>تسجيل خروج</Text>
+                  </Pressable>
+                </View>
+              </>
+            )}
+          </Pressable>
+        </Pressable>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -337,4 +381,85 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
   menuDivider: { height: 1, backgroundColor: colors.line },
+  // Modal
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.45)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: spacing.lg,
+  },
+  modalCard: {
+    width: '100%',
+    maxWidth: 420,
+    backgroundColor: colors.white,
+    borderRadius: radii.xl,
+    padding: spacing.lg,
+    gap: spacing.sm,
+    ...shadows.sm,
+  },
+  modalCloseBtn: {
+    position: 'absolute',
+    top: 12,
+    left: 12,
+    width: 32,
+    height: 32,
+    borderRadius: radii.md,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.surface,
+  },
+  modalTitle: {
+    fontFamily: fontFamilies.headingBlack,
+    fontSize: fontSizes.lg,
+    color: colors.ink,
+    marginTop: spacing.xs,
+  },
+  modalBody: {
+    fontFamily: fontFamilies.body,
+    fontSize: fontSizes.sm,
+    color: colors.text.secondary,
+    lineHeight: 22,
+  },
+  modalActions: {
+    flexDirection: 'row',
+    gap: spacing.sm,
+    marginTop: spacing.md,
+    justifyContent: 'flex-end',
+  },
+  modalBtnPrimary: {
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.sm,
+    borderRadius: radii.md,
+    backgroundColor: colors.brand.red,
+  },
+  modalBtnPrimaryText: {
+    fontFamily: fontFamilies.bodyBold,
+    color: colors.white,
+    fontSize: fontSizes.sm,
+  },
+  modalBtnGhost: {
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.sm,
+    borderRadius: radii.md,
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.line,
+  },
+  modalBtnGhostText: {
+    fontFamily: fontFamilies.bodyBold,
+    color: colors.text.secondary,
+    fontSize: fontSizes.sm,
+  },
+  modalBtnDanger: {
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.sm,
+    borderRadius: radii.md,
+    backgroundColor: colors.danger,
+  },
+  modalBtnDangerText: {
+    fontFamily: fontFamilies.bodyBold,
+    color: colors.white,
+    fontSize: fontSizes.sm,
+  },
 });

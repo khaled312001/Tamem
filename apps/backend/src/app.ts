@@ -10,6 +10,7 @@ import { adminAuditLog } from './middleware/audit.js';
 import { requireAuth, requireRole } from './middleware/auth.js';
 import { errorHandler } from './middleware/errorHandler.js';
 import { adminOverviewRouter } from './modules/admin/admin.routes.js';
+import { adminBroadcastRouter } from './modules/admin/broadcast.routes.js';
 import { adminAlertsRouter } from './modules/alerts/alerts.routes.js';
 import { authRouter } from './modules/auth/auth.routes.js';
 import {
@@ -177,6 +178,7 @@ export function createApp(): Express {
   adminRouter.use('/home-config', adminHomeConfigRouter);
   adminRouter.use('/site-config', adminSiteRouter);
   adminRouter.use('/whatsapp', whatsappRouter);
+  adminRouter.use('/broadcast', adminBroadcastRouter);
   v1.use('/admin', adminRouter);
 
   app.use('/api/v1', v1);

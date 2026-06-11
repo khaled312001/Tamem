@@ -230,6 +230,17 @@ export function RegisterScreen() {
                 />
               )}
             />
+            <View style={styles.whatsappNotice}>
+              <View style={styles.whatsappNoticeIcon}>
+                <Text style={styles.whatsappNoticeEmoji}>💬</Text>
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.whatsappNoticeTitle}>لازم الرقم عليه واتساب</Text>
+                <Text style={styles.whatsappNoticeBody}>
+                  بنبعت كل تأكيدات الطلبات والتحديثات على واتساب — استخدم رقم مفعّل عليه واتساب.
+                </Text>
+              </View>
+            </View>
 
             <View style={styles.fieldsRow}>
               <View style={{ flex: 1 }}>
@@ -398,6 +409,40 @@ const styles = StyleSheet.create({
     marginTop: spacing.sm,
   },
   fieldsRow: { flexDirection: 'row', gap: spacing.sm },
+  // WhatsApp-required notice — sits right under the phone field.
+  whatsappNotice: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    marginTop: spacing.sm,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    borderRadius: radii.md,
+    backgroundColor: 'rgba(37, 211, 102, 0.10)',
+    borderWidth: 1,
+    borderColor: 'rgba(37, 211, 102, 0.30)',
+  },
+  whatsappNoticeIcon: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: '#25D366',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  whatsappNoticeEmoji: { fontSize: 16, lineHeight: 18 },
+  whatsappNoticeTitle: {
+    fontFamily: fontFamilies.bodyExtraBold,
+    fontSize: fontSizes.sm,
+    color: '#0F6B3C',
+  },
+  whatsappNoticeBody: {
+    fontFamily: fontFamilies.body,
+    fontSize: fontSizes.xs,
+    color: '#0F6B3C',
+    marginTop: 2,
+    lineHeight: 18,
+  },
   // Role selector
   roleRow: {
     flexDirection: 'row',

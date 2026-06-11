@@ -3,6 +3,7 @@ import { createBrowserRouter, Navigate, type RouteObject } from 'react-router-do
 import { useAuth } from './lib/auth.js';
 import { DashboardLayout } from './routes/_layout.js';
 import { AlertsPage } from './routes/alerts.js';
+import { BroadcastPage } from './routes/broadcast.js';
 import { CustomersPage } from './routes/customers.js';
 import { DriversPage } from './routes/drivers.js';
 import { HomeSettingsPage } from './routes/home-settings.js';
@@ -63,6 +64,7 @@ const routes: RouteObject[] = [
       { path: 'reports/revenue', element: <RevenueReportPage /> },
       { path: 'alerts', element: <AlertsPage /> },
       { path: 'whatsapp', element: <WhatsAppPage /> },
+      { path: 'broadcast', element: <BroadcastPage /> },
       { path: 'coupons', element: <CouponsPage /> },
       { path: 'settings', element: <SettingsPage /> },
       { path: 'home-settings', element: <HomeSettingsPage /> },

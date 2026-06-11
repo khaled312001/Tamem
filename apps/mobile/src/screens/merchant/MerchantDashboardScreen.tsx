@@ -25,11 +25,14 @@ import {
   Star,
   Store,
   User,
+  X,
 } from 'lucide-react-native';
 import type { LucideIcon } from 'lucide-react-native';
 import { useQuery } from '@tanstack/react-query';
+import { useState } from 'react';
 import {
   ActivityIndicator,
+  Modal,
   Pressable,
   RefreshControl,
   ScrollView,
@@ -130,6 +133,10 @@ export function MerchantDashboardScreen() {
   // sibling tabs (Orders / Products / Profile) when a quick-action tile
   // is tapped.
   const navigation = useNavigation<BottomTabNavigationProp<MerchantTabsParamList>>();
+
+  // "إحصائيات" tile has no dedicated screen yet — open a coming-soon modal
+  // instead of silently no-op'ing on press.
+  const [statsModalOpen, setStatsModalOpen] = useState(false);
 
   const query = useQuery<MerchantSummary>({
     queryKey: ['merchant', 'me'],
@@ -234,7 +241,13 @@ export function MerchantDashboardScreen() {
           {QUICK_TILES.map((t) => (
             <Pressable
               key={t.key}
-              onPress={() => navigation.navigate(TILE_ROUTES[t.key])}
+              onPress={() => {
+                if (t.key === 'stats') {
+                  setStatsModalOpen(true);
+                  return;
+                }
+                navigation.navigate(TILE_ROUTES[t.key]);
+              }}
               style={({ pressed }) => [
                 styles.tile,
                 shadows.sm,
@@ -249,6 +262,41 @@ export function MerchantDashboardScreen() {
           ))}
         </View>
       </ScrollView>
+
+      <Modal
+        visible={statsModalOpen}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setStatsModalOpen(false)}
+      >
+        <Pressable style={styles.modalBackdrop} onPress={() => setStatsModalOpen(false)}>
+          <Pressable style={styles.modalCard} onPress={(e) => e.stopPropagation()}>
+            <Pressable
+              onPress={() => setStatsModalOpen(false)}
+              hitSlop={8}
+              style={styles.modalCloseBtn}
+            >
+              <X size={18} color={colors.text.muted} />
+            </Pressable>
+            <View style={styles.modalIcon}>
+              <BarChart3 size={28} color={colors.success} />
+            </View>
+            <Text style={styles.modalTitle}>إحصائيات تفصيلية قريباً</Text>
+            <Text style={styles.modalBody}>
+              نشتغل على شاشة إحصائيات أعمق مع رسوم بيانية شهرية وتقارير المبيعات لكل منتج. حالياً
+              الأرقام الأساسية معروضة في الأعلى.
+            </Text>
+            <View style={styles.modalActions}>
+              <Pressable
+                onPress={() => setStatsModalOpen(false)}
+                style={({ pressed }) => [styles.modalBtn, pressed && { opacity: 0.85 }]}
+              >
+                <Text style={styles.modalBtnText}>حسناً</Text>
+              </Pressable>
+            </View>
+          </Pressable>
+        </Pressable>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -439,5 +487,72 @@ const styles = StyleSheet.create({
     fontFamily: fontFamilies.bodyExtraBold,
     fontSize: fontSizes.sm,
     color: colors.ink,
+  },
+  // Coming-soon modal for the "إحصائيات" tile
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.45)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: spacing.lg,
+  },
+  modalCard: {
+    width: '100%',
+    maxWidth: 420,
+    backgroundColor: colors.white,
+    borderRadius: radii.xl,
+    padding: spacing.lg,
+    gap: spacing.sm,
+    alignItems: 'center',
+    ...shadows.sm,
+  },
+  modalCloseBtn: {
+    position: 'absolute',
+    top: 12,
+    left: 12,
+    width: 32,
+    height: 32,
+    borderRadius: radii.md,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.surface,
+  },
+  modalIcon: {
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+    backgroundColor: colors.successLight,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: spacing.sm,
+  },
+  modalTitle: {
+    fontFamily: fontFamilies.headingBlack,
+    fontSize: fontSizes.lg,
+    color: colors.ink,
+    textAlign: 'center',
+  },
+  modalBody: {
+    fontFamily: fontFamilies.body,
+    fontSize: fontSizes.sm,
+    color: colors.text.secondary,
+    lineHeight: 22,
+    textAlign: 'center',
+  },
+  modalActions: {
+    marginTop: spacing.md,
+    width: '100%',
+  },
+  modalBtn: {
+    backgroundColor: colors.brand.red,
+    paddingVertical: spacing.sm + 2,
+    paddingHorizontal: spacing.lg,
+    borderRadius: radii.md,
+    alignItems: 'center',
+  },
+  modalBtnText: {
+    fontFamily: fontFamilies.bodyBold,
+    color: colors.white,
+    fontSize: fontSizes.sm,
   },
 });
