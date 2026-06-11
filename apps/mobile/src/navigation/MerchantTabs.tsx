@@ -52,12 +52,6 @@ export function MerchantTabs() {
             height: 68 + bottomInset,
             paddingTop: 6,
             paddingBottom: bottomInset,
-            // Force RTL visual order on web — react-native-web doesn't
-            // auto-flip the tab bar even when I18nManager.forceRTL is on,
-            // so "الرئيسية" ends up on the wrong side. Setting the row
-            // direction explicitly puts الرئيسية on the right where users
-            // expect it.
-            flexDirection: 'row-reverse',
           },
           tabBarItemStyle: { paddingVertical: 0 },
           tabBarIconStyle: { marginTop: 4, marginBottom: 0 },
