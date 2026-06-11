@@ -10,14 +10,29 @@ const param = (v: unknown): string => {
   return v;
 };
 
+// Match the schema's @db.VarChar(5) cap and require strict HH:MM 24h form so the
+// mobile can do a cheap lexical compare instead of parsing each time.
+const HHMM_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
+const hhmmSchema = z.string().regex(HHMM_RE, 'Expected HH:MM (24h)');
+
 const createSchema = z.object({
   merchantId: z.string(),
   name: z.string().trim().min(1).max(255),
   nameAr: z.string().trim().min(1).max(255),
   description: z.string().max(2000).optional(),
   imageUrl: z.string().url().optional(),
+  /// Up to 5 extra image URLs. Persisted as a JSON array on the Product row.
+  imageUrls: z.array(z.string().url()).max(5).optional(),
   price: z.number().nonnegative(),
+  /// Percentage off the base price. Capped at 90 to keep the UI sane and
+  /// stop accidental near-free pricing.
+  discount: z.number().min(0).max(90).optional(),
+  /// Daily availability window in local time. Both must be set together
+  /// (or both omitted). Empty string = "not set" so the form can clear it.
+  availableFrom: hhmmSchema.optional().or(z.literal('')),
+  availableTo: hhmmSchema.optional().or(z.literal('')),
   unit: z.string().max(50).optional(),
+  sku: z.string().trim().max(80).optional(),
   isAvailable: z.boolean().default(true),
   stock: z.number().int().nonnegative().optional(),
   sortOrder: z.number().int().default(0),
@@ -63,10 +78,25 @@ export const list: RequestHandler = async (req, res, next) => {
   }
 };
 
+/**
+ * Normalize the parsed payload into a Prisma-friendly shape:
+ *   - empty SKU / window strings become null (so the unique index works and
+ *     the merchant can clear a previously-set value),
+ *   - empty `imageUrls` array stays as [] so Prisma writes a real JSON array
+ *     instead of leaving the column untouched.
+ */
+function toPrismaProductData<T extends Record<string, unknown>>(input: T): T {
+  const out: Record<string, unknown> = { ...input };
+  for (const k of ['sku', 'availableFrom', 'availableTo'] as const) {
+    if (out[k] === '') out[k] = null;
+  }
+  return out as T;
+}
+
 export const create: RequestHandler = async (req, res, next) => {
   try {
     const input = createSchema.parse(req.body);
-    const product = await prisma.product.create({ data: input });
+    const product = await prisma.product.create({ data: toPrismaProductData(input) });
     created(res, product);
   } catch (err) {
     next(err);
@@ -78,7 +108,7 @@ export const update: RequestHandler = async (req, res, next) => {
     const input = updateSchema.parse(req.body);
     const product = await prisma.product.update({
       where: { id: param(req.params.id) },
-      data: input,
+      data: toPrismaProductData(input),
     });
     ok(res, product);
   } catch (err) {

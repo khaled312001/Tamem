@@ -209,7 +209,7 @@ export function OrdersScreen() {
         .then((r) => r.data.data as { id: string; orderNumber: string }),
     onSuccess: (newOrder) => {
       showToast({
-        title: 'تم إنشاء طلب جديد ✓',
+        title: 'تم إنشاء طلب جديد',
         message: `رقم الطلب: #${newOrder.orderNumber}`,
         tone: 'success',
       });

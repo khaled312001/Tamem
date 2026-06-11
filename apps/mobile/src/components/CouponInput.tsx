@@ -134,7 +134,7 @@ export function CouponInput({ orderAmount, onApplied, onCleared }: CouponInputPr
           )}
         </Pressable>
       </View>
-      {error ? <Text style={styles.errorText}>⚠ {error}</Text> : null}
+      {error ? <Text style={styles.errorText}>{error}</Text> : null}
     </View>
   );
 }

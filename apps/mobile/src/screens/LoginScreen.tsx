@@ -1,8 +1,16 @@
 import { zodResolver } from '@hookform/resolvers/zod';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, useRoute, type RouteProp } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { LinearGradient } from 'expo-linear-gradient';
-import { Lock, LogIn, Phone, Truck } from 'lucide-react-native';
+import {
+  AlertCircle,
+  Lock,
+  LogIn,
+  Phone,
+  Store,
+  Truck,
+  User as UserIcon,
+} from 'lucide-react-native';
 import { useState } from 'react';
 import { Controller, useForm } from 'react-hook-form';
 import {
@@ -38,13 +46,20 @@ import {
 } from '../theme/tokens';
 
 type NavProp = NativeStackNavigationProp<AuthStackParamList, 'Login'>;
+type LoginRouteProp = RouteProp<AuthStackParamList, 'Login'>;
 
 // Errors now go through the shared lib/authErrors helper.
 
 export function LoginScreen() {
   const navigation = useNavigation<NavProp>();
+  const route = useRoute<LoginRouteProp>();
+  const initialRole = route.params?.initialRole;
   const setSession = useAuth((s) => s.setSession);
   const [loading, setLoading] = useState(false);
+  // Surface the auth error inline (red banner above the submit button) AND
+  // via Alert.alert — web's RN Alert sometimes flashes too quickly to read,
+  // so the inline banner is the reliable channel.
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   const {
     control,
@@ -57,15 +72,28 @@ export function LoginScreen() {
 
   const onSubmit = async (values: LoginInput) => {
     setLoading(true);
+    setErrorMsg(null);
     try {
-      const res = await api.login(values.phone, values.password);
+      const res = await api.login(values.phone, values.password, initialRole);
+      if (initialRole === 'MERCHANT' && res.user.role !== 'MERCHANT') {
+        Alert.alert('حساب غير تاجر', 'هذا الحساب ليس تاجر — هل تريد التسجيل كتاجر؟', [
+          { text: 'إلغاء', style: 'cancel' },
+          { text: 'التسجيل كتاجر', onPress: () => navigation.navigate('MerchantSignup') },
+        ]);
+        return;
+      }
       await setSession(res.user, res.tokens);
     } catch (err: unknown) {
-      Alert.alert('تعذّر تسجيل الدخول', authErrorMessage(err, 'login'));
+      const msg = authErrorMessage(err, 'login');
+      setErrorMsg(msg);
+      Alert.alert('تعذّر تسجيل الدخول', msg);
     } finally {
       setLoading(false);
     }
   };
+
+  const roleBadgeLabel = initialRole === 'MERCHANT' ? 'تاجر' : 'عميل';
+  const RoleBadgeIcon = initialRole === 'MERCHANT' ? Store : UserIcon;
 
   return (
     <SafeAreaView edges={['top']} style={styles.container}>
@@ -87,6 +115,12 @@ export function LoginScreen() {
           <Text style={styles.heroSubtitle}>
             سجّل دخولك لمتابعة طلباتك وإنشاء طلبات جديدة بسهولة
           </Text>
+          {initialRole && (
+            <View style={styles.roleBadge}>
+              <RoleBadgeIcon size={14} color={colors.white} />
+              <Text style={styles.roleBadgeText}>تسجيل دخول كـ {roleBadgeLabel}</Text>
+            </View>
+          )}
         </LinearGradient>
 
         <ScrollView
@@ -134,6 +168,13 @@ export function LoginScreen() {
                 />
               )}
             />
+
+            {errorMsg ? (
+              <View style={styles.errorBanner}>
+                <AlertCircle size={16} color={colors.danger} />
+                <Text style={styles.errorBannerText}>{errorMsg}</Text>
+              </View>
+            ) : null}
 
             <View style={{ marginTop: spacing.lg }}>
               <PrimaryButton
@@ -225,6 +266,26 @@ const styles = StyleSheet.create({
     marginBottom: 6,
     marginTop: spacing.sm,
   },
+  errorBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    marginTop: spacing.md,
+    backgroundColor: '#FBEAEA',
+    borderWidth: 1,
+    borderColor: '#F2C2C2',
+    borderRadius: radii.md,
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.md,
+  },
+  errorBannerText: {
+    flex: 1,
+    color: colors.danger,
+    fontFamily: fontFamilies.bodyBold,
+    fontSize: fontSizes.sm,
+    lineHeight: 20,
+    textAlign: 'right',
+  },
   fieldHeader: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -252,4 +313,21 @@ const styles = StyleSheet.create({
     fontFamily: fontFamilies.body,
   },
   registerCta: { color: colors.brand.red, fontFamily: fontFamilies.bodyExtraBold },
+  roleBadge: {
+    marginTop: spacing.md,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: spacing.md,
+    paddingVertical: 6,
+    borderRadius: radii.pill,
+    backgroundColor: 'rgba(255,255,255,0.18)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.28)',
+  },
+  roleBadgeText: {
+    color: colors.white,
+    fontSize: fontSizes.xs,
+    fontFamily: fontFamilies.bodyExtraBold,
+  },
 });

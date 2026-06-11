@@ -83,7 +83,7 @@ export function DynamicServiceFlowScreen() {
         navigation.popToTop();
       }
       showToast({
-        title: 'تم استلام طلبك ✓',
+        title: 'تم استلام طلبك',
         message: `رقم الطلب: #${order.orderNumber ?? '—'}`,
         tone: 'success',
       });

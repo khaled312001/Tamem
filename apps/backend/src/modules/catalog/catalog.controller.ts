@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { prisma } from '../../db/prisma.js';
 import { isMerchantOpenNow } from '../merchants/merchantHours.js';
 import { NotFoundError } from '../../utils/errors.js';
-import { ok } from '../../utils/response.js';
+import { ok, paginated } from '../../utils/response.js';
 
 const param = (v: unknown): string => {
   if (typeof v !== 'string' || !v) throw new NotFoundError('Resource');
@@ -16,9 +16,19 @@ const merchantsQuerySchema = z.object({
   governorate: z.string().optional(),
   city: z.string().optional(),
   search: z.string().optional(),
+  q: z.string().optional(),
   lat: z.coerce.number().optional(),
   lng: z.coerce.number().optional(),
   radiusKm: z.coerce.number().positive().max(100).optional(),
+  page: z.coerce.number().int().positive().default(1),
+  pageSize: z.coerce.number().int().positive().max(100).default(20),
+});
+
+const productsQuerySchema = z.object({
+  merchantId: z.string().optional(),
+  q: z.string().optional(),
+  page: z.coerce.number().int().positive().default(1),
+  pageSize: z.coerce.number().int().positive().max(100).default(20),
 });
 
 const merchantSelect = {
@@ -70,14 +80,47 @@ export const listMerchants: RequestHandler = async (req, res, next) => {
     if (q.categoryId) where.categoryId = q.categoryId;
     if (q.governorate) where.governorate = q.governorate;
     if (q.city) where.city = q.city;
-    if (q.search) {
-      where.OR = [{ storeName: { contains: q.search } }, { storeNameAr: { contains: q.search } }];
+    // `q` is the new public search param; keep `search` working for older callers.
+    const searchTerm = q.q ?? q.search;
+    if (searchTerm) {
+      where.OR = [
+        { storeName: { contains: searchTerm } },
+        { storeNameAr: { contains: searchTerm } },
+      ];
     }
 
-    let merchants = await prisma.merchantProfile.findMany({
-      where,
-      select: { ...merchantSelect, businessHours: true },
-    });
+    // Geo branch — distance/radius filtering happens in memory after the query,
+    // so we must paginate after filtering to keep `total` accurate.
+    if (q.lat !== undefined && q.lng !== undefined) {
+      const merchants = await prisma.merchantProfile.findMany({
+        where,
+        select: { ...merchantSelect, businessHours: true },
+      });
+      const withDistance = merchants.map((m) => ({
+        ...m,
+        openness: isMerchantOpenNow(m, m.businessHours),
+        distanceKm: distanceKm(q.lat!, q.lng!, Number(m.lat), Number(m.lng)),
+      }));
+      const filtered = q.radiusKm
+        ? withDistance.filter((m) => m.distanceKm <= q.radiusKm!)
+        : withDistance;
+      filtered.sort((a, b) => a.distanceKm - b.distanceKm);
+      const total = filtered.length;
+      const start = (q.page - 1) * q.pageSize;
+      const page = filtered.slice(start, start + q.pageSize);
+      paginated(res, page, { page: q.page, pageSize: q.pageSize, total });
+      return;
+    }
+
+    const [merchants, total] = await Promise.all([
+      prisma.merchantProfile.findMany({
+        where,
+        select: { ...merchantSelect, businessHours: true },
+        skip: (q.page - 1) * q.pageSize,
+        take: q.pageSize,
+      }),
+      prisma.merchantProfile.count({ where }),
+    ]);
 
     // Attach `openness` to every merchant — the mobile uses this to badge
     // "مفتوح / مغلق / يفتح غداً" without a per-merchant follow-up call.
@@ -86,21 +129,7 @@ export const listMerchants: RequestHandler = async (req, res, next) => {
       openness: isMerchantOpenNow(m, m.businessHours),
     }));
 
-    // Compute distance + filter by radius if lat/lng provided
-    if (q.lat !== undefined && q.lng !== undefined) {
-      const withDistance = withOpenness.map((m) => ({
-        ...m,
-        distanceKm: distanceKm(q.lat!, q.lng!, Number(m.lat), Number(m.lng)),
-      }));
-      const filtered = q.radiusKm
-        ? withDistance.filter((m) => m.distanceKm <= q.radiusKm!)
-        : withDistance;
-      filtered.sort((a, b) => a.distanceKm - b.distanceKm);
-      ok(res, filtered);
-      return;
-    }
-
-    ok(res, withOpenness);
+    paginated(res, withOpenness, { page: q.page, pageSize: q.pageSize, total });
   } catch (err) {
     next(err);
   }
@@ -208,19 +237,29 @@ export const getProduct: RequestHandler = async (req, res, next) => {
  * Used by the QuickOrder products picker so the customer can browse without
  * picking a merchant first.
  */
-export const listAllProducts: RequestHandler = async (_req, res, next) => {
+export const listAllProducts: RequestHandler = async (req, res, next) => {
   try {
-    const products = await prisma.product.findMany({
-      where: { isAvailable: true },
-      orderBy: [{ sortOrder: 'asc' }, { nameAr: 'asc' }],
-      include: {
-        merchant: {
-          select: { id: true, storeNameAr: true, isOpen: true },
+    const q = productsQuerySchema.parse(req.query);
+    const where: Record<string, unknown> = { isAvailable: true };
+    if (q.merchantId) where.merchantId = q.merchantId;
+    if (q.q) {
+      where.OR = [{ name: { contains: q.q } }, { nameAr: { contains: q.q } }];
+    }
+    const [products, total] = await Promise.all([
+      prisma.product.findMany({
+        where,
+        orderBy: [{ sortOrder: 'asc' }, { nameAr: 'asc' }],
+        include: {
+          merchant: {
+            select: { id: true, storeNameAr: true, isOpen: true },
+          },
         },
-      },
-      take: 200,
-    });
-    ok(res, products);
+        skip: (q.page - 1) * q.pageSize,
+        take: q.pageSize,
+      }),
+      prisma.product.count({ where }),
+    ]);
+    paginated(res, products, { page: q.page, pageSize: q.pageSize, total });
   } catch (err) {
     next(err);
   }

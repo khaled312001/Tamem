@@ -1,7 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useQuery } from '@tanstack/react-query';
 import * as Location from 'expo-location';
-import { Crosshair, Home, MapPin } from 'lucide-react-native';
+import { AlertTriangle, Crosshair, Home, MapPin } from 'lucide-react-native';
 import { useEffect, useState } from 'react';
 import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 
@@ -204,8 +204,9 @@ export function AddressPicker({ value, onChange }: AddressPickerProps) {
 
       {value?.isFreeText ? (
         <View style={styles.warnBanner}>
+          <AlertTriangle size={14} color={colors.warning} />
           <Text style={styles.warnText}>
-            ⚠️ كتبت العنوان يدوي بدون GPS. الإدارة هتتواصل معاك تأكيد الموقع قبل السائق.
+            كتبت العنوان يدوي بدون GPS. الإدارة هتتواصل معاك تأكيد الموقع قبل السائق.
           </Text>
         </View>
       ) : null}
@@ -284,6 +285,9 @@ const styles = StyleSheet.create({
     textAlignVertical: 'top',
   },
   warnBanner: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: spacing.xs,
     backgroundColor: colors.warningLight,
     borderColor: colors.warning,
     borderWidth: 1,
@@ -292,6 +296,7 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.sm,
   },
   warnText: {
+    flex: 1,
     color: '#9A6B16',
     fontFamily: fontFamilies.bodyBold,
     fontSize: fontSizes.xs,

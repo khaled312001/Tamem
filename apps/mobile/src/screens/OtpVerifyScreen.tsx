@@ -142,7 +142,7 @@ export function OtpVerifyScreen() {
       const res = await api.raw.post('/auth/otp/request', { phone });
       if (res.data?.data?.debugCode) setDevCode(String(res.data.data.debugCode));
       setSecondsLeft(RESEND_SECONDS);
-      Alert.alert('تم ✓', 'تم إرسال كود جديد إلى رقم هاتفك');
+      Alert.alert('تم', 'تم إرسال كود جديد إلى رقم هاتفك');
     } catch {
       Alert.alert('خطأ', 'فشل إرسال الكود، حاول مرة أخرى');
     } finally {
@@ -201,7 +201,7 @@ export function OtpVerifyScreen() {
               because the backend strips `debugCode` from the response. */}
           {devCode && (
             <Pressable onPress={useDevCode} style={styles.devBanner}>
-              <Text style={styles.devBannerLabel}>🛠 وضع المطور — اضغط لإدخال الكود تلقائياً</Text>
+              <Text style={styles.devBannerLabel}>وضع المطور — اضغط لإدخال الكود تلقائياً</Text>
               <Text style={styles.devBannerCode} selectable>
                 {devCode}
               </Text>

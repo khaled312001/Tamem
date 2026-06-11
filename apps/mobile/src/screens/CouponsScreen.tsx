@@ -30,7 +30,7 @@ export function CouponsScreen() {
   const onCopy = async (code: string) => {
     const ok = await copyToClipboard(code);
     showToast({
-      title: ok ? 'تم نسخ الكود ✓' : `الكود: ${code}`,
+      title: ok ? 'تم نسخ الكود' : `الكود: ${code}`,
       message: ok ? 'استخدمه عند تأكيد طلبك للحصول على الخصم' : 'انسخ الكود واستخدمه يدوياً',
       tone: 'success',
     });

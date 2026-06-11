@@ -1,6 +1,6 @@
 import { useNavigation } from '@react-navigation/native';
 import { useQuery } from '@tanstack/react-query';
-import { Heart, ShoppingBag, Store } from 'lucide-react-native';
+import { Heart, ShoppingBag, Star, Store } from 'lucide-react-native';
 import { useMemo, useState } from 'react';
 import { FlatList, Image, Pressable, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -130,7 +130,7 @@ export function FavoritesScreen() {
             <EmptyState
               icon={<Heart size={36} color={colors.brand.red} />}
               title="مفيش متاجر في المفضلة بعد"
-              subtitle="اضغط على ❤️ بجانب أي متجر في الصفحة الرئيسية عشان تحفظه هنا."
+              subtitle="اضغط على أيقونة القلب بجانب أي متجر في الصفحة الرئيسية عشان تحفظه هنا."
               actionLabel="تصفح المتاجر"
               onAction={() => {
                 navigation.getParent()?.navigate('HomeTab', {
@@ -158,7 +158,7 @@ export function FavoritesScreen() {
                     {item.storeNameAr}
                   </Text>
                   <View style={styles.metaRow}>
-                    <Text style={styles.star}>★</Text>
+                    <Star size={12} color={colors.brand.gold} fill={colors.brand.gold} />
                     <Text style={styles.meta}>{Number(item.rating ?? 0).toFixed(1)}</Text>
                     <Text style={styles.metaDot}>·</Text>
                     <Text style={styles.meta} numberOfLines={1}>
@@ -188,7 +188,7 @@ export function FavoritesScreen() {
             <EmptyState
               icon={<ShoppingBag size={36} color={colors.brand.red} />}
               title="قائمة الرغبات فاضية"
-              subtitle="افتح أي متجر واضغط على ❤️ بجانب المنتج اللي عاوز تحفظه."
+              subtitle="افتح أي متجر واضغط على أيقونة القلب بجانب المنتج اللي عاوز تحفظه."
               actionLabel="تصفح المتاجر"
               onAction={() => {
                 navigation.getParent()?.navigate('HomeTab', {
@@ -309,7 +309,6 @@ const styles = StyleSheet.create({
     gap: 4,
     marginTop: 2,
   },
-  star: { fontSize: 12, color: colors.brand.gold },
   meta: {
     fontSize: fontSizes.xs,
     color: colors.text.muted,

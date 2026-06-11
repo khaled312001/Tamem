@@ -112,7 +112,7 @@ export function MerchantFlowScreen() {
             screen: 'OrderTracking',
             params: { orderId: order.id, justCreated: true },
           } as never);
-          Alert.alert('تم استلام طلبك ✓', `رقم الطلب: ${order.orderNumber ?? '—'}`);
+          Alert.alert('تم استلام طلبك', `رقم الطلب: ${order.orderNumber ?? '—'}`);
         } else {
           navigation.popToTop();
         }

@@ -134,7 +134,7 @@ export function NotificationsScreen() {
       }
       return { prev };
     },
-    onSuccess: () => showToast({ title: 'تم تعليم الكل كمقروء ✓', tone: 'success' }),
+    onSuccess: () => showToast({ title: 'تم تعليم الكل كمقروء', tone: 'success' }),
     onError: (e, _v, ctx) => {
       if (ctx?.prev) qc.setQueryData(['notifications'], ctx.prev);
       showToast({

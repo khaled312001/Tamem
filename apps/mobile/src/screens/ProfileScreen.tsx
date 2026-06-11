@@ -345,7 +345,7 @@ export function ProfileScreen() {
         <View style={[styles.group, shadows.sm]}>
           <ListItem
             label="المتاجر المفضلة"
-            sublabel="المتاجر اللي اخترتها من ❤️"
+            sublabel="المتاجر اللي اخترتها من قائمة المفضلة"
             Icon={Heart}
             onPress={() => navigation.navigate('Favorites')}
           />

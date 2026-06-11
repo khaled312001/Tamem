@@ -19,6 +19,8 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { HeartButton } from '../components/HeartButton';
 import { QuickOrderFAB } from '../components/QuickOrderFAB';
+import { BannerCarousel } from '../components/home/BannerCarousel';
+import { CategoriesStrip } from '../components/home/CategoriesStrip';
 import {
   AnimatedListItem,
   Badge,
@@ -442,6 +444,16 @@ export function HomeScreen() {
             </Pressable>
           );
         })()}
+
+        {/* ─────── Categories strip — fetched from /categories, drills
+            into a category-filtered StoresList. ─────── */}
+        <CategoriesStrip />
+
+        {/* ─────── Promotional banners carousel — sits between the
+            categories strip and the merchants list per design.
+            Renders nothing while loading / empty so the layout
+            collapses cleanly. ─────── */}
+        <BannerCarousel />
 
         {/* ─────── Featured merchants ─────── */}
         <SectionHeader

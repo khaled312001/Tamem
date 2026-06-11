@@ -7,7 +7,7 @@
  * under I18nManager.forceRTL on native.
  */
 import { LinearGradient } from 'expo-linear-gradient';
-import type { LucideIcon } from 'lucide-react-native';
+import { Bike, Clock, Star, type LucideIcon } from 'lucide-react-native';
 import type { ReactNode } from 'react';
 import {
   ActivityIndicator,
@@ -422,19 +422,19 @@ export function MerchantCard(props: MerchantCardProps) {
         <View style={styles.merchantMetaRow}>
           {props.rating != null && (
             <View style={styles.merchantMeta}>
-              <Text style={styles.metaStar}>★</Text>
+              <Star size={12} color={colors.brand.gold} fill={colors.brand.gold} />
               <Text style={styles.merchantMetaText}>{Number(props.rating).toFixed(1)}</Text>
             </View>
           )}
           {props.deliveryMinutes && (
             <View style={styles.merchantMeta}>
-              <Text style={styles.merchantMetaIcon}>⏱</Text>
+              <Clock size={12} color={colors.text.muted} />
               <Text style={styles.merchantMetaText}>{props.deliveryMinutes}</Text>
             </View>
           )}
           {props.deliveryFee && (
             <View style={styles.merchantMeta}>
-              <Text style={styles.merchantMetaIcon}>🛵</Text>
+              <Bike size={12} color={colors.text.muted} />
               <Text style={styles.merchantMetaText}>{props.deliveryFee}</Text>
             </View>
           )}
@@ -803,8 +803,6 @@ const styles = StyleSheet.create({
     fontFamily: fontFamilies.bodyExtraBold,
     color: colors.ink,
   },
-  metaStar: { color: colors.brand.gold, fontSize: 12 },
-  merchantMetaIcon: { fontSize: 12 },
   promoTag: {
     position: 'absolute',
     top: spacing.sm,

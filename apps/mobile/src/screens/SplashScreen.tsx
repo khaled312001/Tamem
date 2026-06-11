@@ -1,5 +1,5 @@
 import { LinearGradient } from 'expo-linear-gradient';
-import { ChevronLeft } from 'lucide-react-native';
+import { ChevronLeft, Bike } from 'lucide-react-native';
 import { useEffect, useRef } from 'react';
 import { Animated, Image, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 
@@ -83,19 +83,22 @@ export function SplashScreen({ onStart }: SplashScreenProps = {}) {
           <Animated.View style={[styles.glow, { transform: [{ scale: pulse }] }]} />
           <View style={styles.goldRing} />
 
+          {/* Main brand logo — center of the halo. The rider portrait
+              shows as a small rotated badge in the corner so the brand
+              is the immediate visual anchor of the splash. */}
           <View style={styles.riderFrame}>
             <Image
-              source={require('../assets/delivery-rider.png')}
-              style={styles.riderImage}
-              resizeMode="cover"
+              source={require('../assets/logo.jpg')}
+              style={styles.logoMainImg}
+              resizeMode="contain"
             />
           </View>
 
           <View style={styles.logoBadge}>
             <Image
-              source={require('../assets/logo.jpg')}
-              style={styles.logoBadgeImg}
-              resizeMode="contain"
+              source={require('../assets/delivery-rider.png')}
+              style={styles.riderBadgeImg}
+              resizeMode="cover"
             />
           </View>
         </View>
@@ -110,7 +113,7 @@ export function SplashScreen({ onStart }: SplashScreenProps = {}) {
         </View>
 
         <View style={styles.tagline}>
-          <Text style={styles.taglineIcon}>🛵</Text>
+          <Bike size={14} color={colors.brand.gold} />
           <Text style={styles.taglineText}>تميم… التوصيل لعبتنا</Text>
         </View>
       </View>
@@ -206,10 +209,15 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
     borderWidth: 3,
     borderColor: 'rgba(255,255,255,0.18)',
+    backgroundColor: colors.white,
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: spacing.lg,
     boxShadow: '0 14px 24px rgba(0,0,0,0.4)',
     elevation: 14,
   },
   riderImage: { width: '100%', height: '100%' },
+  logoMainImg: { width: '100%', height: '100%' },
   logoBadge: {
     position: 'absolute',
     bottom: 0,
@@ -218,13 +226,15 @@ const styles = StyleSheet.create({
     height: BADGE_SIZE,
     borderRadius: radii.lg,
     backgroundColor: colors.white,
-    padding: 6,
+    padding: 4,
     transform: [{ rotate: '-6deg' }],
     boxShadow: '0 8px 12px rgba(0,0,0,0.35)',
     elevation: 12,
     zIndex: 3,
+    overflow: 'hidden',
   },
   logoBadgeImg: { width: '100%', height: '100%' },
+  riderBadgeImg: { width: '100%', height: '100%', borderRadius: radii.md },
 
   brandWrap: { alignItems: 'center', marginTop: spacing.md },
   brand: {
@@ -253,7 +263,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: spacing.sm,
   },
-  taglineIcon: { fontSize: 14 },
   taglineText: {
     color: colors.white,
     fontSize: fontSizes.sm,

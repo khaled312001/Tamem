@@ -47,7 +47,7 @@ export function ForgotPasswordScreen() {
         if (debugCode) setCode(debugCode);
       }
       showToast({
-        title: 'تم إرسال الكود ✓',
+        title: 'تم إرسال الكود',
         message: 'تحقق من رسائل الـ SMS / واتساب على هاتفك',
         tone: 'success',
       });

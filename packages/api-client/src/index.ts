@@ -1,6 +1,14 @@
 import axios, { type AxiosInstance, type AxiosRequestConfig } from 'axios';
 
-import type { ApiError, ApiSuccess, AuthTokens, Order, Service, User } from '@tamem/types';
+import type {
+  ApiError,
+  ApiSuccess,
+  AuthTokens,
+  Order,
+  Service,
+  User,
+  UserRole,
+} from '@tamem/types';
 
 export interface TamemClientConfig {
   baseURL: string;
@@ -99,8 +107,16 @@ export class TamemClient {
   }
 
   // ===== Auth =====
-  async login(phone: string, password: string): Promise<{ user: User; tokens: AuthTokens }> {
-    return this.request({ method: 'POST', url: '/auth/login', data: { phone, password } });
+  async login(
+    phone: string,
+    password: string,
+    role?: UserRole,
+  ): Promise<{ user: User; tokens: AuthTokens }> {
+    return this.request({
+      method: 'POST',
+      url: '/auth/login',
+      data: { phone, password, ...(role ? { role } : {}) },
+    });
   }
 
   async refresh(refreshToken: string): Promise<AuthTokens> {

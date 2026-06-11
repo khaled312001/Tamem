@@ -36,7 +36,7 @@ interface Step {
 const STEPS: Step[] = [
   {
     Icon: Sparkles,
-    title: 'مرحبا بك في تميم 👋',
+    title: 'مرحبا بك في تميم',
     body: 'منصة توصيل وشحن متكاملة تخدمك في قفط وقنا وعموم الصعيد. اطلب أي حاجة، احنا نوصّلها.',
     accent: gradients.brand,
   },

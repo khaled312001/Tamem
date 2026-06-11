@@ -209,7 +209,7 @@ export function QuickOrderSheet({ visible, onClose }: QuickOrderSheetProps) {
         /* ignore */
       }
       showToast({
-        title: 'تم استلام طلبك ✓',
+        title: 'تم استلام طلبك',
         message: `رقم الطلب: #${order.orderNumber ?? '—'}`,
         tone: 'success',
       });

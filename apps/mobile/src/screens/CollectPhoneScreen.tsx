@@ -72,7 +72,7 @@ export function CollectPhoneScreen() {
             </View>
           </View>
 
-          <Text style={styles.title}>أهلاً {user?.name?.split(' ')[0] ?? 'بك'} 👋</Text>
+          <Text style={styles.title}>أهلاً {user?.name?.split(' ')[0] ?? 'بك'}</Text>
           <Text style={styles.subtitle}>
             محتاجين رقم تليفونك علشان نقدر نوصلك طلباتك ونبعتلك تأكيد على واتساب.
           </Text>

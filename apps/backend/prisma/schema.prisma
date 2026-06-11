@@ -615,6 +615,15 @@ model Product {
   price       Decimal         @db.Decimal(10, 2)
   /// Optional discounted price — when set, mobile shows the strike-through.
   salePrice   Decimal?        @db.Decimal(10, 2)
+  /// Optional percentage discount 0..90. When set, the mobile renders the
+  /// effective price as `price * (1 - discount/100)`. Independent of
+  /// `salePrice` (admin can use either knob).
+  discount    Decimal?        @db.Decimal(5, 2)
+  /// Daily availability window in the merchant's local time, HH:MM 24h.
+  /// Both null = always available. Both set = product is only orderable
+  /// when current local time is within [availableFrom, availableTo].
+  availableFrom String?       @db.VarChar(5)
+  availableTo   String?       @db.VarChar(5)
   unit        String?
   /// Stock-keeping unit. Used as the de-dup key when syncing from an
   /// external API: (merchantId, sku) is unique.

@@ -125,20 +125,24 @@ const waLink = `https://wa.me/${WHATSAPP.replace(/[^\d]/g, '')}?text=${encodeURI
           style="border-color: rgba(242,169,59,0.4); transform: scale(1.06);"
         ></div>
 
-        <!-- Rider portrait -->
+        <!-- Main brand logo — center of the hero halo -->
         <div
-          class="relative w-[280px] md:w-[340px] aspect-square rounded-full overflow-hidden border-[3px] shadow-[0_20px_40px_-10px_rgba(0,0,0,0.5)] float-anim"
+          class="relative w-[280px] md:w-[340px] aspect-square rounded-full overflow-hidden border-[3px] shadow-[0_20px_40px_-10px_rgba(0,0,0,0.5)] float-anim bg-white grid place-items-center p-8"
           style="border-color: rgba(255,255,255,0.18);"
         >
-          <img src="/delivery-rider.png" alt="ساعي تميم" class="w-full h-full object-cover" />
+          <img src="/logo.png" alt="تميم" class="w-full h-full object-contain" />
         </div>
 
-        <!-- Logo badge (rotated tile in corner — splash style) -->
+        <!-- Rider portrait badge (rotated tile in corner — splash style) -->
         <div
-          class="absolute bottom-0 left-0 w-20 h-20 bg-white rounded-2xl p-1.5 shadow-[0_10px_20px_rgba(0,0,0,0.35)] z-10"
+          class="absolute bottom-0 left-0 w-24 h-24 md:w-28 md:h-28 bg-white rounded-2xl p-1 shadow-[0_10px_20px_rgba(0,0,0,0.35)] z-10 overflow-hidden"
           style="transform: rotate(-6deg);"
         >
-          <img src="/logo.png" alt="تميم logo" class="w-full h-full object-contain" />
+          <img
+            src="/delivery-rider.png"
+            alt="ساعي تميم"
+            class="w-full h-full object-cover rounded-xl"
+          />
         </div>
 
         <!-- Floating notification card -->

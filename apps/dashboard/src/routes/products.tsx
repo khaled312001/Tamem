@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Box, Plus } from 'lucide-react';
-import { useState } from 'react';
+import { Box, GripVertical, ImagePlus, Loader2, Pencil, Plus, Trash2 } from 'lucide-react';
+import { useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
 
 import { Badge } from '../components/ui/Badge.js';
@@ -9,14 +9,30 @@ import { Dialog } from '../components/ui/Dialog.js';
 import { Field, Input, Textarea } from '../components/ui/Input.js';
 import { EmptyState, TableSkeleton } from '../components/ui/Skeleton.js';
 import { api } from '../lib/api.js';
+import { uploadFile } from '../lib/uploadFile.js';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Row = any;
+
+const MAX_IMAGES = 5;
+
+/**
+ * Coerce whatever `imageUrls` shape the API returned (legacy JSON, null,
+ * already-array) into a clean string[] capped at MAX_IMAGES. The list view
+ * + the form both read through here so a corrupt row can't blow up the UI.
+ */
+function toImageList(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter((v): v is string => typeof v === 'string' && v.length > 0)
+    .slice(0, MAX_IMAGES);
+}
 
 export function ProductsPage() {
   const qc = useQueryClient();
   const [merchantFilter, setMerchantFilter] = useState('');
   const [createOpen, setCreateOpen] = useState(false);
+  const [editing, setEditing] = useState<Row | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
 
   const { data: merchants } = useQuery({
@@ -124,6 +140,7 @@ export function ProductsPage() {
                   <th className="px-3 py-3 font-bold">السعر</th>
                   <th className="px-3 py-3 font-bold">متاح</th>
                   <th className="px-3 py-3 font-bold">المخزون</th>
+                  <th className="px-3 py-3 w-12" />
                 </tr>
               </thead>
               <tbody>
@@ -170,6 +187,16 @@ export function ProductsPage() {
                     <td className="px-3 py-2">
                       {p.stock !== null ? <Badge>{p.stock}</Badge> : '—'}
                     </td>
+                    <td className="px-3 py-2">
+                      <button
+                        type="button"
+                        onClick={() => setEditing(p)}
+                        className="p-1.5 rounded-md hover:bg-muted text-muted-foreground hover:text-foreground"
+                        aria-label="تعديل"
+                      >
+                        <Pencil className="w-4 h-4" />
+                      </button>
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -179,43 +206,161 @@ export function ProductsPage() {
       </div>
 
       {createOpen && (
-        <CreateProductDialog
+        <ProductFormDialog
+          mode="create"
           merchants={(merchants?.items as Row[]) ?? []}
           onClose={() => setCreateOpen(false)}
+        />
+      )}
+      {editing && (
+        <ProductFormDialog
+          mode="edit"
+          product={editing}
+          merchants={(merchants?.items as Row[]) ?? []}
+          onClose={() => setEditing(null)}
         />
       )}
     </div>
   );
 }
 
-function CreateProductDialog({ merchants, onClose }: { merchants: Row[]; onClose: () => void }) {
+interface ProductFormState {
+  merchantId: string;
+  name: string;
+  nameAr: string;
+  description: string;
+  price: number;
+  unit: string;
+  sku: string;
+  discount: string; // kept as string so the field can be empty
+  availableFrom: string;
+  availableTo: string;
+  imageUrls: string[];
+  isAvailable: boolean;
+}
+
+function initialFromProduct(product: Row | undefined, merchants: Row[]): ProductFormState {
+  if (!product) {
+    return {
+      merchantId: merchants[0]?.id ?? '',
+      name: '',
+      nameAr: '',
+      description: '',
+      price: 0,
+      unit: '',
+      sku: '',
+      discount: '',
+      availableFrom: '',
+      availableTo: '',
+      imageUrls: [],
+      isAvailable: true,
+    };
+  }
+  // Legacy rows may only have `imageUrl` (singular). Hoist it into the gallery
+  // so the admin can drag/reorder it like any other image.
+  const gallery = toImageList(product.imageUrls);
+  if (gallery.length === 0 && typeof product.imageUrl === 'string' && product.imageUrl) {
+    gallery.push(product.imageUrl);
+  }
+  return {
+    merchantId: product.merchantId ?? merchants[0]?.id ?? '',
+    name: product.name ?? '',
+    nameAr: product.nameAr ?? '',
+    description: product.description ?? '',
+    price: Number(product.price ?? 0),
+    unit: product.unit ?? '',
+    sku: product.sku ?? '',
+    discount: product.discount == null ? '' : String(product.discount),
+    availableFrom: product.availableFrom ?? '',
+    availableTo: product.availableTo ?? '',
+    imageUrls: gallery,
+    isAvailable: product.isAvailable ?? true,
+  };
+}
+
+interface ProductFormDialogProps {
+  mode: 'create' | 'edit';
+  product?: Row;
+  merchants: Row[];
+  onClose: () => void;
+}
+
+function ProductFormDialog({ mode, product, merchants, onClose }: ProductFormDialogProps) {
   const qc = useQueryClient();
-  const [form, setForm] = useState({
-    merchantId: merchants[0]?.id ?? '',
-    name: '',
-    nameAr: '',
-    description: '',
-    price: 0,
-    unit: '',
-    isAvailable: true,
-  });
+  const [form, setForm] = useState<ProductFormState>(() => initialFromProduct(product, merchants));
+
+  // Submit-time payload: strip empty optionals so the backend treats them as
+  // "not set" instead of validating them as malformed strings.
+  const payload = useMemo(() => {
+    const out: Record<string, unknown> = {
+      merchantId: form.merchantId,
+      name: form.name.trim(),
+      nameAr: form.nameAr.trim(),
+      price: Number(form.price) || 0,
+      isAvailable: form.isAvailable,
+      imageUrls: form.imageUrls,
+      // First image becomes the legacy `imageUrl` so older surfaces (cart
+      // thumbnails, mobile detail screen) keep rendering without a migration.
+      imageUrl: form.imageUrls[0],
+    };
+    if (form.description.trim()) out.description = form.description.trim();
+    if (form.unit.trim()) out.unit = form.unit.trim();
+    if (form.sku.trim()) out.sku = form.sku.trim();
+    if (form.discount !== '') {
+      const n = Number(form.discount);
+      if (Number.isFinite(n)) out.discount = n;
+    }
+    if (form.availableFrom) out.availableFrom = form.availableFrom;
+    if (form.availableTo) out.availableTo = form.availableTo;
+    return out;
+  }, [form]);
+
   const mut = useMutation({
-    mutationFn: () => api.adminCreateProduct(form),
+    mutationFn: async () => {
+      if (mode === 'create') return api.adminCreateProduct(payload);
+      // Don't send merchantId on edit — backend update schema strips it anyway,
+      // but being explicit avoids confusing 400s if the schema ever changes.
+      const { merchantId: _omit, ...patch } = payload;
+      void _omit;
+      return api.adminUpdateProduct(product!.id, patch);
+    },
     onSuccess: () => {
-      toast.success('تم إنشاء المنتج');
+      toast.success(mode === 'create' ? 'تم إنشاء المنتج' : 'تم حفظ التغييرات');
       qc.invalidateQueries({ queryKey: ['admin', 'products'] });
       onClose();
     },
     onError: (err: Error) => toast.error(err.message),
   });
+
+  // Soft client-side guard: prevent saving a window where end < start so the
+  // admin gets immediate feedback instead of a confused 400 from Prisma.
+  const windowError = useMemo(() => {
+    if (form.availableFrom && form.availableTo && form.availableTo <= form.availableFrom) {
+      return 'وقت النهاية يجب أن يكون بعد وقت البداية';
+    }
+    return null;
+  }, [form.availableFrom, form.availableTo]);
+
+  const discountNum = form.discount === '' ? 0 : Number(form.discount);
+  const afterDiscount =
+    Number.isFinite(discountNum) && discountNum > 0
+      ? Number(form.price) * (1 - discountNum / 100)
+      : null;
+
   return (
-    <Dialog open onOpenChange={(o) => !o && onClose()} title="منتج جديد">
+    <Dialog
+      open
+      onOpenChange={(o) => !o && onClose()}
+      title={mode === 'create' ? 'منتج جديد' : 'تعديل المنتج'}
+      size="lg"
+    >
       <div className="space-y-3">
         <Field label="التاجر" required>
           <select
             value={form.merchantId}
             onChange={(e) => setForm({ ...form, merchantId: e.target.value })}
-            className="w-full px-3 py-2 rounded-lg border border-input bg-white text-sm"
+            disabled={mode === 'edit'}
+            className="w-full px-3 py-2 rounded-lg border border-input bg-white text-sm disabled:bg-muted"
           >
             {merchants.map((m) => (
               <option key={m.id} value={m.id}>
@@ -224,6 +369,12 @@ function CreateProductDialog({ merchants, onClose }: { merchants: Row[]; onClose
             ))}
           </select>
         </Field>
+
+        <ImageGalleryField
+          value={form.imageUrls}
+          onChange={(imageUrls) => setForm({ ...form, imageUrls })}
+        />
+
         <Field label="الاسم (ع)" required>
           <Input
             value={form.nameAr}
@@ -241,13 +392,17 @@ function CreateProductDialog({ merchants, onClose }: { merchants: Row[]; onClose
           <Textarea
             value={form.description}
             onChange={(e) => setForm({ ...form, description: e.target.value })}
-            rows={2}
+            rows={3}
+            placeholder="مكونات، حجم العبوة، تفاصيل إضافية..."
           />
         </Field>
+
         <div className="grid grid-cols-2 gap-3">
           <Field label="السعر" required>
             <Input
               type="number"
+              min={0}
+              step="0.01"
               value={form.price}
               onChange={(e) => setForm({ ...form, price: Number(e.target.value) })}
             />
@@ -260,15 +415,211 @@ function CreateProductDialog({ merchants, onClose }: { merchants: Row[]; onClose
             />
           </Field>
         </div>
+
+        <div className="grid grid-cols-2 gap-3">
+          <Field
+            label="نسبة الخصم %"
+            hint={
+              afterDiscount !== null
+                ? `بعد الخصم: ${afterDiscount.toFixed(2)}`
+                : 'اختياري — من 0 إلى 90'
+            }
+          >
+            <Input
+              type="number"
+              min={0}
+              max={90}
+              step="1"
+              value={form.discount}
+              onChange={(e) => setForm({ ...form, discount: e.target.value })}
+              placeholder="0"
+            />
+          </Field>
+          <Field label="SKU" hint="اختياري — يستخدم للمزامنة مع API التاجر">
+            <Input
+              value={form.sku}
+              onChange={(e) => setForm({ ...form, sku: e.target.value })}
+              dir="ltr"
+              placeholder="مثال: MILK-1L"
+            />
+          </Field>
+        </div>
+
+        <Field
+          label="ساعات الإتاحة (يومياً)"
+          hint="اتركها فارغة لتكون متاح دائماً"
+          error={windowError ?? undefined}
+        >
+          <div className="grid grid-cols-2 gap-3">
+            <Input
+              type="time"
+              value={form.availableFrom}
+              onChange={(e) => setForm({ ...form, availableFrom: e.target.value })}
+              aria-label="من"
+            />
+            <Input
+              type="time"
+              value={form.availableTo}
+              onChange={(e) => setForm({ ...form, availableTo: e.target.value })}
+              aria-label="إلى"
+            />
+          </div>
+        </Field>
+
+        <label className="flex items-center gap-2 text-sm font-bold pt-1">
+          <input
+            type="checkbox"
+            checked={form.isAvailable}
+            onChange={(e) => setForm({ ...form, isAvailable: e.target.checked })}
+          />
+          متاح للطلب
+        </label>
       </div>
+
       <div className="flex justify-end gap-2 mt-4">
         <Button variant="outline" size="md" onClick={onClose}>
           إلغاء
         </Button>
-        <Button onClick={() => mut.mutate()} disabled={mut.isPending}>
-          إضافة
+        <Button
+          onClick={() => mut.mutate()}
+          disabled={
+            mut.isPending || !!windowError || !form.merchantId || !form.nameAr || !form.name
+          }
+        >
+          {mode === 'create' ? 'إضافة' : 'حفظ'}
         </Button>
       </div>
     </Dialog>
+  );
+}
+
+/**
+ * Up to MAX_IMAGES image URLs with upload + reorder + remove. Reorder uses the
+ * native HTML5 drag-and-drop API with a small grip handle so the row itself
+ * stays clickable for image preview.
+ */
+function ImageGalleryField({
+  value,
+  onChange,
+}: {
+  value: string[];
+  onChange: (next: string[]) => void;
+}) {
+  const fileRef = useRef<HTMLInputElement | null>(null);
+  const dragIndex = useRef<number | null>(null);
+  const [uploading, setUploading] = useState(false);
+
+  const handlePick = async (files: FileList | null) => {
+    if (!files || files.length === 0) return;
+    const remaining = MAX_IMAGES - value.length;
+    if (remaining <= 0) {
+      toast.error(`الحد الأقصى ${MAX_IMAGES} صور`);
+      return;
+    }
+    const picked = Array.from(files).slice(0, remaining);
+    setUploading(true);
+    try {
+      const results = await Promise.all(picked.map((f) => uploadFile(f)));
+      onChange([...value, ...results.map((r) => r.url)]);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'فشل رفع الصورة');
+    } finally {
+      setUploading(false);
+      if (fileRef.current) fileRef.current.value = '';
+    }
+  };
+
+  const move = (from: number, to: number) => {
+    if (from === to || to < 0 || to >= value.length) return;
+    const next = value.slice();
+    const [item] = next.splice(from, 1);
+    if (item === undefined) return;
+    next.splice(to, 0, item);
+    onChange(next);
+  };
+
+  return (
+    <Field
+      label={`الصور (حتى ${MAX_IMAGES})`}
+      hint="أول صورة هي الصورة الرئيسية. اسحب المقبض لإعادة الترتيب."
+    >
+      <div className="space-y-2">
+        {value.length > 0 && (
+          <ul className="space-y-2">
+            {value.map((url, idx) => (
+              <li
+                key={`${url}-${idx}`}
+                draggable
+                onDragStart={() => {
+                  dragIndex.current = idx;
+                }}
+                onDragOver={(e) => e.preventDefault()}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  const from = dragIndex.current;
+                  dragIndex.current = null;
+                  if (from !== null) move(from, idx);
+                }}
+                className="flex items-center gap-2 p-2 rounded-lg border border-border bg-white"
+              >
+                <button
+                  type="button"
+                  className="p-1 text-muted-foreground cursor-grab active:cursor-grabbing"
+                  aria-label="إعادة ترتيب"
+                  // Mouse-down on the handle is enough; HTML5 drag is started
+                  // by the parent <li draggable> being grabbed from this child.
+                >
+                  <GripVertical className="w-4 h-4" />
+                </button>
+                <img
+                  src={url}
+                  alt=""
+                  className="w-12 h-12 object-cover rounded-md border border-border"
+                />
+                <div className="flex-1 min-w-0 text-xs text-muted-foreground truncate" dir="ltr">
+                  {url}
+                </div>
+                {idx === 0 && <Badge variant="success">رئيسية</Badge>}
+                <button
+                  type="button"
+                  onClick={() => onChange(value.filter((_, i) => i !== idx))}
+                  className="p-1.5 rounded-md text-destructive hover:bg-destructive/10"
+                  aria-label="حذف الصورة"
+                >
+                  <Trash2 className="w-4 h-4" />
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+        <div className="flex items-center gap-2">
+          <input
+            ref={fileRef}
+            type="file"
+            accept="image/*"
+            multiple
+            className="hidden"
+            onChange={(e) => void handlePick(e.target.files)}
+          />
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={uploading || value.length >= MAX_IMAGES}
+            onClick={() => fileRef.current?.click()}
+          >
+            {uploading ? (
+              <Loader2 className="w-4 h-4 animate-spin" />
+            ) : (
+              <ImagePlus className="w-4 h-4" />
+            )}
+            {uploading ? 'جارٍ الرفع...' : 'رفع صورة'}
+          </Button>
+          <span className="text-xs text-muted-foreground">
+            {value.length}/{MAX_IMAGES}
+          </span>
+        </div>
+      </div>
+    </Field>
   );
 }

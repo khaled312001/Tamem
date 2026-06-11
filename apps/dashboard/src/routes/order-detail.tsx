@@ -1,6 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
-  ArrowRight,
   Ban,
   Check,
   CheckCheck,
@@ -66,83 +65,95 @@ const HAPPY_PATH: Stage[] = [
   { status: 'COMPLETED', label: 'مكتمل', short: 'تم', Icon: CheckCheck },
 ];
 
-type NextActionKind = 'price' | 'assign' | 'advance' | 'wait-customer' | 'terminal';
+// ────────────────────────────────────────────────────────────────────────────
+// Phase model — the admin only ever needs to do 4 things to take an order
+// from intake to delivered. We collapse the 9-state happy path into these
+// 4 big quick-action cards. The underlying transitions still happen on the
+// server (often via multiple PATCH calls), keeping the audit history intact.
+// ────────────────────────────────────────────────────────────────────────────
+type PhaseId = 1 | 2 | 3 | 4;
 
-interface NextAction {
-  kind: NextActionKind;
-  /** Status we'll transition to, if applicable. */
-  target?: OrderStatus;
-  /** Button label that explains what the admin is about to do. */
+interface Phase {
+  id: PhaseId;
   label: string;
-  hint?: string;
+  Icon: typeof Clock;
+  /** Tailwind tone — colored card per phase to make scanning fast. */
+  tone: {
+    base: string;
+    current: string;
+    done: string;
+  };
 }
 
-/**
- * Decide what the admin's "one-tap next" should do, given the current order.
- * This is the single source of truth for the big action button in the hero.
- *
- *   UNDER_REVIEW + no price  → open price dialog (skips a manual transition)
- *   PRICED                   → status → AWAITING_CUSTOMER_APPROVAL
- *   AWAITING_CUSTOMER_APPROVAL → "بانتظار العميل" (no admin action)
- *   ACCEPTED                 → open assign-driver dialog
- *   DRIVER_ASSIGNED/PICKED_UP/IN_ROUTE → status → next
- *   DELIVERED → status → COMPLETED
- *   terminal (COMPLETED/CANCELLED/REJECTED) → no action
- */
-function nextActionFor(order: Order): NextAction {
-  const status = order.status as OrderStatus;
-  const hasPrice = order.quotedPrice != null || order.finalPrice != null;
-  const hasDriver = !!order.assignedDriverId;
+const PHASES: Phase[] = [
+  {
+    id: 1,
+    label: 'بدء المراجعة + تسعير',
+    Icon: ClipboardCheck,
+    tone: {
+      base: 'border-amber-200 bg-amber-50 text-amber-900',
+      current: 'border-amber-500 bg-amber-100 ring-2 ring-amber-400/40 text-amber-900',
+      done: 'border-amber-200 bg-white text-amber-700/70',
+    },
+  },
+  {
+    id: 2,
+    label: 'قبول الطلب',
+    Icon: CheckCircle2,
+    tone: {
+      base: 'border-blue-200 bg-blue-50 text-blue-900',
+      current: 'border-blue-500 bg-blue-100 ring-2 ring-blue-400/40 text-blue-900',
+      done: 'border-blue-200 bg-white text-blue-700/70',
+    },
+  },
+  {
+    id: 3,
+    label: 'تعيين سائق + بدء التوصيل',
+    Icon: Truck,
+    tone: {
+      base: 'border-purple-200 bg-purple-50 text-purple-900',
+      current: 'border-purple-500 bg-purple-100 ring-2 ring-purple-400/40 text-purple-900',
+      done: 'border-purple-200 bg-white text-purple-700/70',
+    },
+  },
+  {
+    id: 4,
+    label: 'إكمال الطلب',
+    Icon: CheckCheck,
+    tone: {
+      base: 'border-green-200 bg-green-50 text-green-900',
+      current: 'border-green-500 bg-green-100 ring-2 ring-green-400/40 text-green-900',
+      done: 'border-green-200 bg-white text-green-700/70',
+    },
+  },
+];
 
-  if (status === 'NEW') {
-    return { kind: 'advance', target: 'UNDER_REVIEW', label: 'ابدأ المراجعة' };
+/**
+ * Map an order status to the phase it currently belongs to. Anything before
+ * phase N's terminal status means N is "current" or earlier; the rest are
+ * done. Terminal/cancelled states sit "after" all phases.
+ */
+function currentPhaseFor(status: OrderStatus): PhaseId | 'done' | 'cancelled' {
+  switch (status) {
+    case 'NEW':
+    case 'UNDER_REVIEW':
+      return 1;
+    case 'PRICED':
+    case 'AWAITING_CUSTOMER_APPROVAL':
+      return 2;
+    case 'ACCEPTED':
+      return 3;
+    case 'DRIVER_ASSIGNED':
+    case 'PICKED_UP':
+    case 'IN_ROUTE':
+    case 'DELIVERED':
+      return 4;
+    case 'COMPLETED':
+      return 'done';
+    case 'CANCELLED':
+    case 'REJECTED':
+      return 'cancelled';
   }
-  if (status === 'UNDER_REVIEW') {
-    return hasPrice
-      ? { kind: 'advance', target: 'PRICED', label: 'تأكيد التسعير' }
-      : { kind: 'price', label: 'تسعير الطلب', hint: 'لازم تحدد السعر قبل ما تكمل' };
-  }
-  if (status === 'PRICED') {
-    return {
-      kind: 'advance',
-      target: 'ACCEPTED',
-      label: 'تأكيد موافقة العميل',
-      hint: 'بعد ما تتواصل مع العميل وتأكد السعر',
-    };
-  }
-  // Legacy orders may still be in this state from before we removed it.
-  // We let admin move them forward to ACCEPTED directly.
-  if (status === 'AWAITING_CUSTOMER_APPROVAL') {
-    return {
-      kind: 'advance',
-      target: 'ACCEPTED',
-      label: 'تأكيد موافقة العميل',
-      hint: 'بعد ما تتواصل مع العميل وتأكد السعر',
-    };
-  }
-  if (status === 'ACCEPTED') {
-    return hasDriver
-      ? { kind: 'advance', target: 'DRIVER_ASSIGNED', label: 'تأكيد تعيين السائق' }
-      : { kind: 'assign', label: 'تعيين سائق', hint: 'اختر سائق متاح للطلب' };
-  }
-  if (status === 'DRIVER_ASSIGNED') {
-    return {
-      kind: 'advance',
-      target: 'PICKED_UP',
-      label: 'استلم السائق الطلب',
-      hint: 'السائق لقي الطلب وحمله',
-    };
-  }
-  if (status === 'PICKED_UP') {
-    return { kind: 'advance', target: 'IN_ROUTE', label: 'السائق في الطريق' };
-  }
-  if (status === 'IN_ROUTE') {
-    return { kind: 'advance', target: 'DELIVERED', label: 'تم تسليم الطلب' };
-  }
-  if (status === 'DELIVERED') {
-    return { kind: 'advance', target: 'COMPLETED', label: 'إغلاق الطلب' };
-  }
-  return { kind: 'terminal', label: 'الطلب منتهي' };
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -167,13 +178,35 @@ export function OrderDetailPage() {
     qc.invalidateQueries({ queryKey: ['admin', 'order', id] });
   };
 
-  // Direct status advance (no dialog) — used by the smart-next button when
-  // we already have the prerequisites (price/driver) and just need to record
-  // the transition.
+  // Direct status advance — used by phase-2 (PRICED → ACCEPTED) and by the
+  // sequential completion walk below.
   const advanceMut = useMutation({
     mutationFn: (status: OrderStatus) => api.adminUpdateOrderStatus(id!, status),
-    onSuccess: (_d, status) => {
-      toast.success(`تم الانتقال إلى: ${ORDER_STATUS_AR[status]}`);
+    onError: (err: Error) => toast.error(err.message),
+  });
+
+  /**
+   * Phase 4 is a "skip the intermediate states" button. The state machine
+   * doesn't allow jumps (DRIVER_ASSIGNED → COMPLETED would be rejected), so
+   * we walk the lifecycle on the client. Each PATCH is recorded as a
+   * separate status-history row, which is exactly what we want for the
+   * audit log.
+   */
+  const completeMut = useMutation({
+    mutationFn: async (from: OrderStatus) => {
+      const walk: OrderStatus[] = ['DRIVER_ASSIGNED', 'PICKED_UP', 'IN_ROUTE', 'DELIVERED'];
+      const startIdx = walk.indexOf(from);
+      const tail: OrderStatus[] =
+        startIdx >= 0
+          ? walk.slice(startIdx + 1)
+          : (['PICKED_UP', 'IN_ROUTE', 'DELIVERED'] as OrderStatus[]);
+      const remaining: OrderStatus[] = [...tail, 'COMPLETED'];
+      for (const next of remaining) {
+        await api.adminUpdateOrderStatus(id!, next);
+      }
+    },
+    onSuccess: () => {
+      toast.success('تم إكمال الطلب');
       invalidate();
     },
     onError: (err: Error) => toast.error(err.message),
@@ -189,16 +222,38 @@ export function OrderDetailPage() {
   }
 
   const status = order.status as OrderStatus;
-  const next = nextActionFor(order);
   const isTerminal = status === 'COMPLETED' || status === 'CANCELLED' || status === 'REJECTED';
   const canCancel = (ORDER_TRANSITIONS[status] as readonly OrderStatus[]).includes('CANCELLED');
   const hasPrice = order.quotedPrice != null || order.finalPrice != null;
-  const hasDriver = !!order.assignedDriverId;
+  const phase = currentPhaseFor(status);
 
-  const fireNext = () => {
-    if (next.kind === 'price') return setDialog('price');
-    if (next.kind === 'assign') return setDialog('assign');
-    if (next.kind === 'advance' && next.target) return advanceMut.mutate(next.target);
+  const phasePending = advanceMut.isPending || completeMut.isPending;
+
+  // What each big card does when tapped — only the "current" phase is
+  // enabled; the rest are locked (already done or not yet reachable).
+  const onPhaseClick = (id: PhaseId) => {
+    if (phasePending) return;
+    if (id === 1) {
+      setDialog('price');
+      return;
+    }
+    if (id === 2) {
+      advanceMut.mutate('ACCEPTED', {
+        onSuccess: () => {
+          toast.success('تم قبول الطلب');
+          invalidate();
+        },
+      });
+      return;
+    }
+    if (id === 3) {
+      setDialog('assign');
+      return;
+    }
+    if (id === 4) {
+      completeMut.mutate(status);
+      return;
+    }
   };
 
   const customData = order.customData as Record<string, unknown> | undefined;
@@ -267,7 +322,7 @@ export function OrderDetailPage() {
       {/* ───────── Multi-merchant linkage banners ───────── */}
       {order.parentOrder && (
         <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 flex items-start gap-3">
-          <div className="text-2xl">↗</div>
+          <ChevronRight className="w-6 h-6 text-amber-700 rotate-180 mt-0.5" />
           <div className="flex-1">
             <div className="font-bold text-amber-900">هذا الطلب جزء من سلة متعددة المتاجر</div>
             <div className="text-sm text-amber-800 mt-1">
@@ -303,7 +358,8 @@ export function OrderDetailPage() {
         <div className="bg-white border border-border rounded-xl overflow-hidden">
           <div className="px-5 py-4 bg-brand-red/5 border-b border-brand-red/20">
             <div className="font-bold text-brand-dark flex items-center gap-2">
-              🛒 سلة متعددة المتاجر
+              <Package className="w-4 h-4 text-brand-red" />
+              سلة متعددة المتاجر
               <span className="text-xs font-bold px-2 py-0.5 rounded bg-brand-red/10 text-brand-red">
                 {order.subOrders.length} تجار
               </span>
@@ -388,7 +444,7 @@ export function OrderDetailPage() {
         </div>
       )}
 
-      {/* ───────── Hero: order # + workflow stepper + smart next action ───────── */}
+      {/* ───────── Hero: order # + 4 phase quick-action cards ───────── */}
       <div className="bg-white rounded-xl border border-border p-5 space-y-5">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
@@ -409,30 +465,36 @@ export function OrderDetailPage() {
           </div>
         </div>
 
-        <WorkflowStepper currentStatus={status} terminalKind={isTerminal ? status : null} />
+        {/* The 4 big phase buttons — primary UX. One of them is "current"
+            (clickable), the rest are locked (already done or not reachable
+            yet). Each card lights up in its phase color when active. */}
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+          {PHASES.map((p) => (
+            <PhaseCard
+              key={p.id}
+              phase={p}
+              state={
+                phase === 'cancelled'
+                  ? 'locked'
+                  : phase === 'done'
+                    ? 'done'
+                    : p.id < phase
+                      ? 'done'
+                      : p.id === phase
+                        ? 'current'
+                        : 'locked'
+              }
+              pending={phasePending && p.id === phase}
+              onClick={() => onPhaseClick(p.id)}
+            />
+          ))}
+        </div>
 
-        {/* Smart next action + cancel */}
-        {!isTerminal && (
-          <div className="flex flex-wrap items-center gap-3 pt-2 border-t border-border">
-            <div className="flex-1 min-w-[240px]">
-              <SmartNextButton
-                action={next}
-                pending={advanceMut.isPending}
-                onFire={fireNext}
-                hasPrice={hasPrice}
-                hasDriver={hasDriver}
-              />
-              {next.hint && (
-                <p className="text-xs text-muted-foreground mt-2 flex items-center gap-1">
-                  <Clock className="w-3 h-3" /> {next.hint}
-                </p>
-              )}
-            </div>
-            {canCancel && (
-              <Button variant="danger" onClick={() => setDialog('cancel')}>
-                <Ban className="w-4 h-4" /> إلغاء الطلب
-              </Button>
-            )}
+        {canCancel && !isTerminal && (
+          <div className="flex justify-end pt-2 border-t border-border">
+            <Button variant="danger" size="sm" onClick={() => setDialog('cancel')}>
+              <Ban className="w-4 h-4" /> إلغاء الطلب
+            </Button>
           </div>
         )}
 
@@ -453,6 +515,15 @@ export function OrderDetailPage() {
             )}
           </div>
         )}
+      </div>
+
+      {/* ───────── Detailed status timeline (kept for audit) ───────── */}
+      <div className="bg-white rounded-xl border border-border p-5">
+        <div className="text-xs uppercase tracking-wider text-muted-foreground font-bold mb-3 flex items-center gap-1.5">
+          <FileSearch className="w-4 h-4" />
+          مسار الحالة (للسجل)
+        </div>
+        <WorkflowStepper currentStatus={status} terminalKind={isTerminal ? status : null} />
       </div>
 
       {/* ───────── Main 2-col grid ───────── */}
@@ -527,7 +598,7 @@ export function OrderDetailPage() {
               <div className="whitespace-pre-wrap text-sm">{(order.notes as string) || '—'}</div>
               {Boolean(customData?.quickOrder) && (
                 <div className="mt-2 inline-flex items-center gap-1 bg-yellow-50 text-yellow-800 px-2 py-1 rounded text-xs font-bold">
-                  ⚡ طلب سريع · {String(customData?.mode ?? 'menu')}
+                  <Clock className="w-3 h-3" /> طلب سريع · {String(customData?.mode ?? 'menu')}
                 </div>
               )}
             </Card>
@@ -636,8 +707,8 @@ export function OrderDetailPage() {
               </div>
             ) : (
               <div className="space-y-2">
-                <p className="text-sm text-amber-700 bg-amber-50 rounded p-2">
-                  ⚠ الطلب لسه مش مسعّر
+                <p className="text-sm text-amber-700 bg-amber-50 rounded p-2 inline-flex items-center gap-1.5">
+                  <Clock className="w-3.5 h-3.5" /> الطلب لسه مش مسعّر
                 </p>
                 <Button size="sm" className="w-full" onClick={() => setDialog('price')}>
                   <DollarSign className="w-4 h-4" /> تسعير الطلب
@@ -735,6 +806,7 @@ export function OrderDetailPage() {
         <PriceDialog
           orderId={id!}
           initialPrice={order.quotedPrice ?? order.finalPrice}
+          currentStatus={status}
           onClose={() => {
             setDialog(null);
             invalidate();
@@ -840,63 +912,58 @@ function WorkflowStepper({
 }
 
 // ────────────────────────────────────────────────────────────────────────────
-// Smart next button — single big CTA that knows what to do given state.
+// Phase card — one of the 4 big quick-action buttons at the top.
+// Only the "current" phase is clickable; the others show their state but
+// can't be tapped (already done / not yet reachable).
 // ────────────────────────────────────────────────────────────────────────────
 
-function SmartNextButton({
-  action,
-  pending,
-  onFire,
-  hasPrice,
-  hasDriver,
-}: {
-  action: NextAction;
-  pending: boolean;
-  onFire: () => void;
-  hasPrice: boolean;
-  hasDriver: boolean;
-}) {
-  if (action.kind === 'wait-customer') {
-    return (
-      <div className="flex items-center gap-2 bg-blue-50 text-blue-800 rounded-lg px-4 py-3 text-sm">
-        <Clock className="w-5 h-5 animate-pulse" />
-        <span className="font-bold">{action.label}</span>
-      </div>
-    );
-  }
-  if (action.kind === 'terminal') {
-    return null;
-  }
+type PhaseCardState = 'current' | 'done' | 'locked';
 
-  // Tone: amber when we still need a precondition (price/driver), green-ish
-  // when we're just confirming progress.
-  const isPrereqOpen = action.kind === 'price' || action.kind === 'assign';
-  const Icon = action.kind === 'price' ? DollarSign : action.kind === 'assign' ? Truck : ArrowRight;
+function PhaseCard({
+  phase,
+  state,
+  pending,
+  onClick,
+}: {
+  phase: Phase;
+  state: PhaseCardState;
+  pending: boolean;
+  onClick: () => void;
+}) {
+  const isCurrent = state === 'current';
+  const isDone = state === 'done';
+
+  const toneClass = isCurrent ? phase.tone.current : isDone ? phase.tone.done : phase.tone.base;
+  const disabled = !isCurrent || pending;
 
   return (
     <button
       type="button"
-      onClick={onFire}
-      disabled={pending}
-      className={`w-full inline-flex items-center justify-center gap-2 px-5 py-3 rounded-xl font-bold transition disabled:opacity-60 disabled:cursor-not-allowed ${
-        isPrereqOpen
-          ? 'bg-amber-500 hover:bg-amber-600 text-white shadow-md shadow-amber-500/30'
-          : 'bg-brand-red hover:bg-brand-red/90 text-white shadow-md shadow-brand-red/30'
-      }`}
+      onClick={onClick}
+      disabled={disabled}
+      aria-current={isCurrent ? 'step' : undefined}
+      className={`relative text-right rounded-xl border p-4 transition flex flex-col gap-2 min-h-[110px] ${toneClass} ${
+        isCurrent ? 'hover:scale-[1.01] cursor-pointer shadow-sm' : 'cursor-not-allowed opacity-80'
+      } disabled:opacity-60`}
     >
-      {pending ? <Loader2 className="w-5 h-5 animate-spin" /> : <Icon className="w-5 h-5" />}
-      <span>{action.label}</span>
-      {!isPrereqOpen && !pending && <ArrowRight className="w-4 h-4 opacity-80" />}
-      {action.kind === 'price' && !hasPrice && (
-        <span className="bg-white/20 text-[10px] font-bold px-2 py-0.5 rounded-full ms-1">
-          مطلوب
-        </span>
-      )}
-      {action.kind === 'assign' && !hasDriver && (
-        <span className="bg-white/20 text-[10px] font-bold px-2 py-0.5 rounded-full ms-1">
-          مطلوب
-        </span>
-      )}
+      <div className="flex items-center justify-between">
+        <span className="text-[11px] font-bold opacity-70">المرحلة {phase.id}</span>
+        {isDone && (
+          <span className="inline-flex items-center gap-1 text-[11px] font-bold">
+            <Check className="w-3.5 h-3.5" /> مكتملة
+          </span>
+        )}
+        {isCurrent && !pending && (
+          <span className="inline-flex items-center gap-1 text-[11px] font-bold">
+            <Clock className="w-3.5 h-3.5 animate-pulse" /> الآن
+          </span>
+        )}
+        {pending && <Loader2 className="w-4 h-4 animate-spin" />}
+      </div>
+      <div className="flex items-center gap-2">
+        <phase.Icon className="w-6 h-6 shrink-0" />
+        <span className="text-sm font-black leading-tight">{phase.label}</span>
+      </div>
     </button>
   );
 }
@@ -1071,15 +1138,28 @@ function CustomDataRender({ data }: { data: Record<string, unknown> }) {
 function PriceDialog({
   orderId,
   initialPrice,
+  currentStatus,
   onClose,
 }: {
   orderId: string;
   initialPrice?: number | string | null;
+  /** When provided and the order is NEW, we promote it to UNDER_REVIEW first
+   *  so the backend's set-price endpoint can then auto-transition to PRICED.
+   *  This is what makes the "بدء المراجعة + تسعير" button a single click. */
+  currentStatus?: OrderStatus;
   onClose: () => void;
 }) {
   const [price, setPrice] = useState(initialPrice != null ? String(initialPrice) : '');
+  const [note, setNote] = useState('');
   const mut = useMutation({
-    mutationFn: () => api.adminSetPrice(orderId, Number(price)),
+    mutationFn: async () => {
+      // Phase-1 entry: if we're still on NEW, walk through UNDER_REVIEW first.
+      // The set-price endpoint then auto-transitions UNDER_REVIEW → PRICED.
+      if (currentStatus === 'NEW') {
+        await api.adminUpdateOrderStatus(orderId, 'UNDER_REVIEW');
+      }
+      return api.adminSetPrice(orderId, Number(price), note.trim() || undefined);
+    },
     onSuccess: () => {
       toast.success('تم حفظ السعر');
       onClose();
@@ -1096,6 +1176,14 @@ function PriceDialog({
           value={price}
           onChange={(e) => setPrice(e.target.value)}
           autoFocus
+        />
+      </Field>
+      <Field label="ملاحظات (اختياري)">
+        <Textarea
+          value={note}
+          onChange={(e) => setNote(e.target.value)}
+          rows={2}
+          placeholder="مثلاً: السعر يشمل التغليف..."
         />
       </Field>
       <div className="flex justify-end gap-2 mt-4">
@@ -1138,8 +1226,9 @@ function AssignDialog({ orderId, onClose }: { orderId: string; onClose: () => vo
           جاري تحميل السائقين المتاحين...
         </div>
       ) : items.length === 0 ? (
-        <p className="bg-amber-50 text-amber-800 rounded-lg p-3 text-sm">
-          ⚠ مفيش سائقين متاحين دلوقتي. خلي السائق يفعّل حالته من تطبيق الكابتن.
+        <p className="bg-amber-50 text-amber-800 rounded-lg p-3 text-sm inline-flex items-center gap-1.5">
+          <Clock className="w-4 h-4 shrink-0" />
+          مفيش سائقين متاحين دلوقتي. خلي السائق يفعّل حالته من تطبيق الكابتن.
         </p>
       ) : (
         <Field label="السائق المتاح" required>

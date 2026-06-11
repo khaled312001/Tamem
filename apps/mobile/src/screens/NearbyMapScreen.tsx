@@ -84,15 +84,14 @@ const FILTERS: Filter[] = [
 ];
 
 // Pin color per category
-function pinFor(m: Merchant): { color: string; label: string } {
+function pinFor(m: Merchant): { color: string } {
   const id = m.category?.id;
   const ar = m.category?.nameAr ?? '';
-  if (id === 'restaurants' || /مطعم|مطاعم/.test(ar)) return { color: '#EC7A2C', label: '🍔' };
-  if (id === 'supermarkets' || /سوبر|ماركت|بقالة/.test(ar))
-    return { color: '#E0301E', label: '🛍️' };
-  if (id === 'pharmacies' || /صيدل/.test(ar)) return { color: '#10B981', label: '💊' };
-  if (id === 'sweets' || /حلوى|حلويات/.test(ar)) return { color: '#F2A93B', label: '🍰' };
-  return { color: '#241310', label: '🏪' };
+  if (id === 'restaurants' || /مطعم|مطاعم/.test(ar)) return { color: '#EC7A2C' };
+  if (id === 'supermarkets' || /سوبر|ماركت|بقالة/.test(ar)) return { color: '#E0301E' };
+  if (id === 'pharmacies' || /صيدل/.test(ar)) return { color: '#10B981' };
+  if (id === 'sweets' || /حلوى|حلويات/.test(ar)) return { color: '#F2A93B' };
+  return { color: '#241310' };
 }
 
 const RADIUS_KM = 5;
