@@ -25,12 +25,19 @@ export const phoneSchema = z
 
 export const passwordSchema = z.string().min(8, 'كلمة المرور 8 أحرف على الأقل').max(72);
 
+// Role choice during signup. We only let users self-select between CUSTOMER and
+// MERCHANT — DRIVER/ADMIN are created by admins, never via the public signup
+// endpoint. Kept optional everywhere so older clients (and admin-created users)
+// continue to behave as CUSTOMER.
+export const signupRoleSchema = z.enum(['CUSTOMER', 'MERCHANT']);
+
 export const registerSchema = z.object({
   name: z.string().trim().min(2).max(100),
   phone: phoneSchema,
   password: passwordSchema,
   city: z.string().trim().min(2).max(100),
   address: z.string().trim().max(255).optional(),
+  role: signupRoleSchema.optional(),
 });
 
 export const loginSchema = z.object({
@@ -40,6 +47,9 @@ export const loginSchema = z.object({
 
 export const googleLoginSchema = z.object({
   idToken: z.string().min(10),
+  // Only honored when creating a brand-new Google user. Returning users keep
+  // their existing role regardless of what the client sends.
+  role: signupRoleSchema.optional(),
 });
 
 export const otpRequestSchema = z.object({

@@ -10,7 +10,7 @@ import { RoleChoiceScreen } from '../screens/RoleChoiceScreen';
 export type AuthStackParamList = {
   RoleChoice: undefined;
   Login: { initialRole?: 'CUSTOMER' | 'MERCHANT' } | undefined;
-  Register: undefined;
+  Register: { initialRole?: 'CUSTOMER' | 'MERCHANT' } | undefined;
   OtpVerify: { phone: string };
   ForgotPassword: undefined;
   MerchantSignup: undefined;

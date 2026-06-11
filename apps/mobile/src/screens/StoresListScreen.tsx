@@ -126,8 +126,17 @@ export function StoresListScreen() {
           ListEmptyComponent={
             <EmptyState
               icon={<Store size={36} color={colors.brand.red} />}
-              title="لا توجد محلات بهذا الفلتر"
-              subtitle="جرّب فلتر مختلف أو امسح البحث"
+              title={
+                'لا توجد محلات' +
+                (activeFilter !== 'all'
+                  ? ` في "${FILTERS.find((f) => f.key === activeFilter)?.label}"`
+                  : '')
+              }
+              subtitle={
+                activeFilter !== 'all' || search
+                  ? 'جرّب فلتر مختلف أو امسح البحث'
+                  : 'مفيش محلات متاحة حالياً'
+              }
             />
           }
           renderItem={({ item }) => (

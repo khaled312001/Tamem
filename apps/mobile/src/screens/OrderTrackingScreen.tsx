@@ -437,7 +437,10 @@ export function OrderTrackingScreen() {
             {order.subOrders.map((sub) => (
               <Pressable
                 key={sub.id}
-                onPress={() => navigation.push('OrderTracking', { orderId: sub.id })}
+                // navigate (not push) — avoids stacking nested OrderTracking
+                // screens that would trap the customer in a back-button loop
+                // when they tap between parent and sub-orders.
+                onPress={() => navigation.navigate('OrderTracking', { orderId: sub.id })}
                 style={({ pressed }) => [styles.subOrderRow, pressed && { opacity: 0.85 }]}
               >
                 <View style={{ flex: 1, gap: 4 }}>

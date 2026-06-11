@@ -16,6 +16,7 @@ import { Controller, useForm } from 'react-hook-form';
 import {
   Alert,
   KeyboardAvoidingView,
+  Modal,
   Platform,
   Pressable,
   ScrollView,
@@ -34,7 +35,7 @@ import { PrimaryButton } from '../components/ui';
 import { api } from '../lib/api';
 import { authErrorMessage } from '../lib/authErrors';
 import type { AuthStackParamList } from '../navigation/AuthStack';
-import { useAuth } from '../stores/auth';
+import { useAuth, type SignupRole } from '../stores/auth';
 import {
   colors,
   fontFamilies,
@@ -60,6 +61,33 @@ export function LoginScreen() {
   // via Alert.alert — web's RN Alert sometimes flashes too quickly to read,
   // so the inline banner is the reliable channel.
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  // ─────── Google sign-in role chooser ───────
+  // Google sign-in can be a signup OR a login — we don't know upfront whether
+  // the user already exists. To cover both cases we pop a modal asking for
+  // role choice when the user has no `initialRole` set (i.e. they reached
+  // login directly without going through RoleChoice). The backend ignores
+  // role on returning users, so a wrong tap on a returning customer is safe.
+  const [rolePickerOpen, setRolePickerOpen] = useState(false);
+  const [pendingResolve, setPendingResolve] = useState<((role: SignupRole | null) => void) | null>(
+    null,
+  );
+
+  /** Promise that resolves when the user picks a role or closes the modal. */
+  const resolveGoogleRole = (): Promise<SignupRole | null | undefined> => {
+    // If the user already selected a role on the RoleChoice screen, skip the
+    // modal entirely — pass that role straight to the backend.
+    if (initialRole) return Promise.resolve(initialRole);
+    return new Promise((resolve) => {
+      setPendingResolve(() => resolve);
+      setRolePickerOpen(true);
+    });
+  };
+
+  const handleRolePicked = (role: SignupRole | null) => {
+    setRolePickerOpen(false);
+    pendingResolve?.(role);
+    setPendingResolve(null);
+  };
 
   const {
     control,
@@ -191,11 +219,21 @@ export function LoginScreen() {
               <View style={styles.dividerLine} />
             </View>
 
-            <GoogleSignInButton onError={(msg) => Alert.alert('خطأ', msg)} />
+            <GoogleSignInButton
+              role={initialRole}
+              // Only used when no initialRole — modal asks the user "customer
+              // or merchant?" so brand-new Google users land in the right
+              // role. Returning users keep their existing role server-side.
+              onResolveRole={resolveGoogleRole}
+              onError={(msg) => Alert.alert('خطأ', msg)}
+            />
           </View>
 
           <Pressable
-            onPress={() => navigation.navigate('Register')}
+            // Forward the role choice so the Register screen lands on the same
+            // tile the user picked back on RoleChoice. They can still swap
+            // tiles on the Register screen if they change their mind.
+            onPress={() => navigation.navigate('Register', { initialRole })}
             style={({ pressed }) => [styles.registerLink, pressed && { opacity: 0.8 }]}
           >
             <Text style={styles.registerText}>
@@ -204,6 +242,42 @@ export function LoginScreen() {
           </Pressable>
         </ScrollView>
       </KeyboardAvoidingView>
+
+      {/* Google sign-in role chooser modal */}
+      <Modal
+        visible={rolePickerOpen}
+        transparent
+        animationType="fade"
+        onRequestClose={() => handleRolePicked(null)}
+      >
+        <View style={styles.modalBackdrop}>
+          <View style={styles.modalSheet}>
+            <Text style={styles.modalTitle}>هل أنت عميل أم تاجر؟</Text>
+            <Text style={styles.modalSubtitle}>
+              اختر نوع حسابك للمتابعة بتسجيل الدخول بحساب جوجل
+            </Text>
+            <View style={styles.modalTilesRow}>
+              <Pressable
+                style={({ pressed }) => [styles.modalTile, pressed && styles.modalTileActive]}
+                onPress={() => handleRolePicked('CUSTOMER')}
+              >
+                <UserIcon size={28} color={colors.brand.red} />
+                <Text style={styles.modalTileLabel}>عميل</Text>
+              </Pressable>
+              <Pressable
+                style={({ pressed }) => [styles.modalTile, pressed && styles.modalTileActive]}
+                onPress={() => handleRolePicked('MERCHANT')}
+              >
+                <Store size={28} color={colors.brand.red} />
+                <Text style={styles.modalTileLabel}>تاجر / مورد</Text>
+              </Pressable>
+            </View>
+            <Pressable onPress={() => handleRolePicked(null)} hitSlop={8}>
+              <Text style={styles.modalCancel}>إلغاء</Text>
+            </Pressable>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -329,5 +403,67 @@ const styles = StyleSheet.create({
     color: colors.white,
     fontSize: fontSizes.xs,
     fontFamily: fontFamilies.bodyExtraBold,
+  },
+  // ─────── Google role picker modal ───────
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.45)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: spacing.lg,
+  },
+  modalSheet: {
+    width: '100%',
+    maxWidth: 420,
+    backgroundColor: colors.white,
+    borderRadius: radii.xl,
+    padding: spacing.lg,
+    alignItems: 'center',
+  },
+  modalTitle: {
+    fontFamily: fontFamilies.headingBlack,
+    fontSize: fontSizes.lg,
+    color: colors.ink,
+    marginBottom: 6,
+    textAlign: 'center',
+  },
+  modalSubtitle: {
+    fontFamily: fontFamilies.body,
+    fontSize: fontSizes.sm,
+    color: colors.text.secondary,
+    textAlign: 'center',
+    marginBottom: spacing.lg,
+    lineHeight: 20,
+  },
+  modalTilesRow: {
+    flexDirection: 'row',
+    gap: spacing.md,
+    width: '100%',
+    marginBottom: spacing.lg,
+  },
+  modalTile: {
+    flex: 1,
+    borderWidth: 2,
+    borderColor: colors.line,
+    borderRadius: radii.lg,
+    paddingVertical: spacing.lg,
+    paddingHorizontal: spacing.sm,
+    alignItems: 'center',
+    gap: 8,
+  },
+  modalTileActive: {
+    borderColor: colors.brand.red,
+    backgroundColor: colors.brand.redLight,
+  },
+  modalTileLabel: {
+    fontFamily: fontFamilies.bodyExtraBold,
+    fontSize: fontSizes.sm,
+    color: colors.ink,
+  },
+  modalCancel: {
+    fontFamily: fontFamilies.bodyBold,
+    fontSize: fontSizes.sm,
+    color: colors.text.secondary,
+    paddingVertical: spacing.sm,
   },
 });

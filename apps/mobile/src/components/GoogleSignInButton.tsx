@@ -4,8 +4,7 @@ import { useEffect, useState } from 'react';
 import { ActivityIndicator, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import Svg, { Path } from 'react-native-svg';
 
-import { api } from '../lib/api';
-import { useAuth } from '../stores/auth';
+import { useAuth, type SignupRole } from '../stores/auth';
 import { fontFamilies, fontSizes, radii, spacing } from '../theme/tokens';
 
 WebBrowser.maybeCompleteAuthSession();
@@ -39,6 +38,19 @@ interface GoogleSignInButtonProps {
   label?: string;
   /** Called when sign-in fails (network/cancel/auth). */
   onError?: (message: string) => void;
+  /**
+   * Pre-selected role to send to the backend. ONLY honored by the backend
+   * when creating a brand-new user — returning users keep their existing role.
+   * Used by the role-aware signup flow (RoleChoice → Register → Google).
+   */
+  role?: SignupRole;
+  /**
+   * Called BEFORE the backend exchange happens, so the caller can show a
+   * role-choice modal when no role was pre-selected. Return the chosen role
+   * (or null to abort). Returning `undefined` means "no role" and the backend
+   * defaults to CUSTOMER.
+   */
+  onResolveRole?: () => Promise<SignupRole | null | undefined>;
 }
 
 // Read at module load — process.env values are inlined at build time in Expo.
@@ -66,8 +78,8 @@ export function GoogleSignInButton(props: GoogleSignInButtonProps) {
   return <ConfiguredGoogleButton {...props} />;
 }
 
-function ConfiguredGoogleButton({ label, onError }: GoogleSignInButtonProps) {
-  const setSession = useAuth((s) => s.setSession);
+function ConfiguredGoogleButton({ label, onError, role, onResolveRole }: GoogleSignInButtonProps) {
+  const loginWithGoogle = useAuth((s) => s.loginWithGoogle);
   const [loading, setLoading] = useState(false);
 
   const [request, response, promptAsync] = Google.useAuthRequest({
@@ -99,11 +111,26 @@ function ConfiguredGoogleButton({ label, onError }: GoogleSignInButtonProps) {
 
   async function exchangeWithBackend(idToken?: string, accessToken?: string) {
     try {
-      const res = await api.raw.post('/auth/google', {
-        idToken: idToken ?? accessToken,
-      });
-      const { user, tokens } = res.data.data;
-      await setSession(user, tokens);
+      // If no role was pre-selected (e.g. on the Login screen), let the
+      // caller pop a role-choice modal so brand-new Google users land in the
+      // correct role. Returning users keep their existing role server-side
+      // regardless of what we send.
+      let effectiveRole: SignupRole | null | undefined = role;
+      if (effectiveRole == null && onResolveRole) {
+        effectiveRole = await onResolveRole();
+        if (effectiveRole === null) {
+          // User cancelled the role chooser — abort the sign-in.
+          setLoading(false);
+          return;
+        }
+      }
+
+      const token = idToken ?? accessToken;
+      if (!token) {
+        onError?.('لم يتم استلام رمز التحقق من Google');
+        return;
+      }
+      await loginWithGoogle(token, effectiveRole ?? undefined);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'فشل ربط حساب Google بالسيرفر';
       onError?.(msg);

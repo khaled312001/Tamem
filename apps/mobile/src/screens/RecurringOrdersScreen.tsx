@@ -143,7 +143,9 @@ export function RecurringOrdersScreen() {
               title="مفيش طلبات متكررة"
               subtitle="حوّل طلب عادي لتكرار من شاشة تأكيد الطلب — مفيد للمياه والأدوية والمشاوير اليومية."
               actionLabel="ابدأ طلب جديد"
-              onAction={() => navigation.navigate('DeliveryServices')}
+              onAction={() =>
+                navigation.getParent()?.navigate('HomeTab', { screen: 'DeliveryServices' })
+              }
             />
           }
           renderItem={({ item }) => (

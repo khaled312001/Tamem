@@ -42,17 +42,31 @@ export const register: RequestHandler = async (req, res, next) => {
     if (existing) throw new ConflictError('Phone already registered', 'هذا الرقم مسجل بالفعل');
 
     const passwordHash = await bcrypt.hash(input.password, 12);
+    // Only allow CUSTOMER / MERCHANT via the public signup endpoint — DRIVER /
+    // ADMIN are admin-provisioned. Missing role → CUSTOMER (existing behavior).
+    const requestedRole: UserRole =
+      input.role === 'MERCHANT' ? UserRole.MERCHANT : UserRole.CUSTOMER;
+
     const user = await prisma.user.create({
       data: {
         phone: input.phone,
         name: input.name,
         passwordHash,
-        role: UserRole.CUSTOMER,
+        role: requestedRole,
         city: input.city,
         defaultAddress: input.address,
         isPhoneVerified: false, // OTP flow flips this
       },
     });
+
+    // When a brand-new user signs up as MERCHANT, seed a minimal
+    // MerchantProfile so the merchant onboarding flow always has a row to
+    // edit instead of forcing a separate "create profile first" step. The
+    // profile defaults are placeholders — the merchant fills them in later
+    // via the MerchantSignup screen.
+    if (requestedRole === UserRole.MERCHANT) {
+      await ensureMerchantProfile(user.id, input.city);
+    }
 
     const tokens = await issueTokens(user.id, user.role as UserRole, req);
 
@@ -64,6 +78,41 @@ export const register: RequestHandler = async (req, res, next) => {
     next(err);
   }
 };
+
+/**
+ * Seed a placeholder MerchantProfile for a user newly registered as MERCHANT.
+ * Uses the first active Category as a default — the merchant changes this
+ * during onboarding. No-op if a profile already exists (idempotent).
+ */
+async function ensureMerchantProfile(userId: string, city?: string): Promise<void> {
+  const existing = await prisma.merchantProfile.findUnique({ where: { userId } });
+  if (existing) return;
+
+  // Pick any category to satisfy the FK — preference for an active one.
+  const defaultCategory = await prisma.category.findFirst({
+    where: { isActive: true },
+    orderBy: { sortOrder: 'asc' },
+  });
+  if (!defaultCategory) {
+    // No categories configured yet — skip profile creation so signup still
+    // succeeds. The merchant will create the profile manually later.
+    return;
+  }
+
+  await prisma.merchantProfile.create({
+    data: {
+      userId,
+      storeName: 'متجري',
+      storeNameAr: 'متجري',
+      categoryId: defaultCategory.id,
+      addressLine: '',
+      lat: 0,
+      lng: 0,
+      governorate: city ?? '',
+      city: city ?? '',
+    },
+  });
+}
 
 export const login: RequestHandler = async (req, res, next) => {
   try {
@@ -150,7 +199,10 @@ export const googleLogin: RequestHandler = async (req, res, next) => {
     }
 
     if (user) {
-      // Link googleId if missing
+      // Link googleId if missing. Returning users keep their existing role —
+      // we deliberately ignore the `role` field on the request to prevent a
+      // customer from silently promoting themselves to MERCHANT via the
+      // Google flow.
       if (!user.googleId) {
         user = await prisma.user.update({
           where: { id: user.id },
@@ -158,7 +210,11 @@ export const googleLogin: RequestHandler = async (req, res, next) => {
         });
       }
     } else {
-      // First-time Google login — create a customer record. Phone collected later.
+      // First-time Google login — honor the requested role (CUSTOMER /
+      // MERCHANT only). Anything else (or missing) falls back to CUSTOMER.
+      const requestedRole: UserRole =
+        input.role === 'MERCHANT' ? UserRole.MERCHANT : UserRole.CUSTOMER;
+
       user = await prisma.user.create({
         data: {
           phone: `g_${payload.sub}`, // placeholder; user updates real phone after via /me
@@ -166,10 +222,14 @@ export const googleLogin: RequestHandler = async (req, res, next) => {
           email: payload.email,
           avatarUrl: payload.picture,
           googleId: payload.sub,
-          role: UserRole.CUSTOMER,
+          role: requestedRole,
           isPhoneVerified: false,
         },
       });
+
+      if (requestedRole === UserRole.MERCHANT) {
+        await ensureMerchantProfile(user.id);
+      }
     }
 
     const tokens = await issueTokens(user.id, user.role as UserRole, req);

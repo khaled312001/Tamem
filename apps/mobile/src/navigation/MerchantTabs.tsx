@@ -12,19 +12,19 @@ import { colors, fontFamilies } from '../theme/tokens';
 /**
  * Bottom tabs for the MERCHANT role.
  *
- * Tab order in source is LTR; the OS lays the bar out RTL so the right-most
- * (visually-first) tab is الرئيسية — matching customer AppTabs convention.
- * Order in source: حسابى → منتجاتى → طلباتى → الرئيسية.
+ * Under RTL + flex-direction:row, the FIRST source child renders on the
+ * visual right. So الرئيسية is registered first to land on the right —
+ * matching customer AppTabs convention.
  *
  * `MerchantOrderDetail` is intentionally not a tab — it's a stack screen the
  * orders list pushes onto its own navigator (see MerchantStack), so the tab
  * bar stays four icons wide.
  */
 export type MerchantTabsParamList = {
-  MerchantProfile: undefined;
-  MerchantProducts: undefined;
-  MerchantOrdersList: undefined;
   MerchantDashboard: undefined;
+  MerchantOrdersList: undefined;
+  MerchantProducts: undefined;
+  MerchantProfile: undefined;
 };
 
 const Tabs = createBottomTabNavigator<MerchantTabsParamList>();
@@ -65,22 +65,14 @@ export function MerchantTabs() {
           },
         }}
       >
-        {/* Source order is LTR; the right-most tab in RTL is the last one
-            registered — الرئيسية. This matches customer AppTabs. */}
+        {/* First-registered child lands on the visual RIGHT under RTL.
+            Order: الرئيسية → طلباتى → منتجاتى → حسابى. */}
         <Tabs.Screen
-          name="MerchantProfile"
-          component={MerchantProfileScreen}
+          name="MerchantDashboard"
+          component={MerchantDashboardScreen}
           options={{
-            title: 'حسابى',
-            tabBarIcon: ({ color }) => <UserIcon size={TAB_ICON_SIZE} color={color} />,
-          }}
-        />
-        <Tabs.Screen
-          name="MerchantProducts"
-          component={MerchantProductsScreen}
-          options={{
-            title: 'منتجاتى',
-            tabBarIcon: ({ color }) => <Package size={TAB_ICON_SIZE} color={color} />,
+            title: 'الرئيسية',
+            tabBarIcon: ({ color }) => <Home size={TAB_ICON_SIZE} color={color} />,
           }}
         />
         <Tabs.Screen
@@ -92,11 +84,19 @@ export function MerchantTabs() {
           }}
         />
         <Tabs.Screen
-          name="MerchantDashboard"
-          component={MerchantDashboardScreen}
+          name="MerchantProducts"
+          component={MerchantProductsScreen}
           options={{
-            title: 'الرئيسية',
-            tabBarIcon: ({ color }) => <Home size={TAB_ICON_SIZE} color={color} />,
+            title: 'منتجاتى',
+            tabBarIcon: ({ color }) => <Package size={TAB_ICON_SIZE} color={color} />,
+          }}
+        />
+        <Tabs.Screen
+          name="MerchantProfile"
+          component={MerchantProfileScreen}
+          options={{
+            title: 'حسابى',
+            tabBarIcon: ({ color }) => <UserIcon size={TAB_ICON_SIZE} color={color} />,
           }}
         />
       </Tabs.Navigator>

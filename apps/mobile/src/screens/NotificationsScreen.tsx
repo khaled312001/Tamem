@@ -149,8 +149,12 @@ export function NotificationsScreen() {
   const onPressNotif = (n: NotificationRow) => {
     if (!n.isRead) markRead.mutate(n.id);
     if (n.data?.orderId) {
+      // Notifications is rendered as a tab itself (no nested stack), so the
+      // tabs navigator is our parent. Routing via getParent() keeps the
+      // navigate call working even if we ever wrap this screen in its own
+      // stack later.
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (navigation as any).navigate('Orders', {
+      (navigation.getParent() as any)?.navigate('Orders', {
         screen: 'OrderTracking',
         params: { orderId: n.data.orderId },
       });
@@ -158,7 +162,7 @@ export function NotificationsScreen() {
     }
     if (n.type === 'PROMO' || n.type === 'promo') {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (navigation as any).navigate('ProfileTab', { screen: 'Coupons' });
+      (navigation.getParent() as any)?.navigate('ProfileTab', { screen: 'Coupons' });
       return;
     }
     // Generic system notification — show the full body as a toast so the

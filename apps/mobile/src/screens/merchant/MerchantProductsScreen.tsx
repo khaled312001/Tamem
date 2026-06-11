@@ -12,7 +12,7 @@
  * entering prices.
  */
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { CircleAlert, Pencil, Plus, ShoppingBag } from 'lucide-react-native';
+import { CircleAlert, Pencil, Plus, ShoppingBag, Trash2 } from 'lucide-react-native';
 import { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
@@ -144,8 +144,32 @@ export function MerchantProductsScreen() {
     onError: (err) => reportError(err, 'تعذّر تحديث المنتج'),
   });
 
+  const deleteMut = useMutation({
+    mutationFn: (id: string) => api.raw.delete(`/merchant/products/${id}`),
+    onSuccess: () => {
+      showToast({ title: 'تم حذف المنتج', tone: 'success' });
+      void qc.invalidateQueries({ queryKey: ['merchant', 'products'] });
+      void qc.invalidateQueries({ queryKey: ['merchant', 'me'] });
+    },
+    onError: (err) => reportError(err, 'تعذّر حذف المنتج'),
+  });
+
   const toggleAvailability = (product: MerchantProduct, next: boolean) => {
+    // Guard against rapid double-taps racing PATCH requests.
+    if (updateMut.isPending) return;
     updateMut.mutate({ id: product.id, payload: { isAvailable: next } });
+  };
+
+  const onDelete = (product: MerchantProduct) => {
+    const label = product.nameAr || product.name || 'هذا المنتج';
+    Alert.alert('حذف المنتج', `هل أنت متأكد من حذف "${label}"؟ لن يظهر بعد ذلك للعملاء.`, [
+      { text: 'إلغاء', style: 'cancel' },
+      {
+        text: 'حذف',
+        style: 'destructive',
+        onPress: () => deleteMut.mutate(product.id),
+      },
+    ]);
   };
 
   const onSubmit = () => {
@@ -190,7 +214,14 @@ export function MerchantProductsScreen() {
         refreshControl={
           <RefreshControl
             refreshing={productsQuery.isFetching && !productsQuery.isLoading}
-            onRefresh={() => productsQuery.refetch()}
+            onRefresh={() => {
+              // RefreshControl expects a void return — explicitly discard
+              // the refetch promise and surface any failure via toast.
+              productsQuery.refetch().catch((err) => {
+                const message = err instanceof Error ? err.message : undefined;
+                showToast({ title: 'تعذّر تحديث المنتجات', message, tone: 'error' });
+              });
+            }}
             tintColor={colors.brand.red}
           />
         }
@@ -209,21 +240,37 @@ export function MerchantProductsScreen() {
             </View>
             <View style={styles.cardActions}>
               <View style={styles.toggleWrap}>
-                <Text style={styles.toggleLabel}>{item.isAvailable ? 'متاح' : 'غير متاح'}</Text>
+                <Text style={styles.toggleLabel}>
+                  {updateMut.isPending ? 'جارٍ التحديث…' : item.isAvailable ? 'متاح' : 'غير متاح'}
+                </Text>
                 <Switch
                   value={item.isAvailable}
                   onValueChange={(v) => toggleAvailability(item, v)}
+                  disabled={updateMut.isPending}
                   trackColor={{ false: colors.line2, true: colors.success }}
                   thumbColor={colors.white}
                 />
               </View>
-              <Pressable
-                onPress={() => setEditing(item)}
-                style={({ pressed }) => [styles.editBtn, pressed && { opacity: 0.85 }]}
-              >
-                <Pencil size={14} color={colors.brand.red} />
-                <Text style={styles.editBtnText}>تعديل</Text>
-              </Pressable>
+              <View style={styles.actionBtnRow}>
+                <Pressable
+                  onPress={() => setEditing(item)}
+                  style={({ pressed }) => [styles.editBtn, pressed && { opacity: 0.85 }]}
+                >
+                  <Pencil size={14} color={colors.brand.red} />
+                  <Text style={styles.editBtnText}>تعديل</Text>
+                </Pressable>
+                <Pressable
+                  onPress={() => onDelete(item)}
+                  disabled={deleteMut.isPending}
+                  style={({ pressed }) => [
+                    styles.deleteBtn,
+                    (pressed || deleteMut.isPending) && { opacity: 0.85 },
+                  ]}
+                >
+                  <Trash2 size={14} color={colors.danger} />
+                  <Text style={styles.deleteBtnText}>حذف</Text>
+                </Pressable>
+              </View>
             </View>
           </View>
         )}
@@ -445,6 +492,11 @@ const styles = StyleSheet.create({
     color: colors.text.secondary,
     fontSize: fontSizes.xs,
   },
+  actionBtnRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+  },
   editBtn: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -457,6 +509,20 @@ const styles = StyleSheet.create({
   editBtnText: {
     fontFamily: fontFamilies.headingBold,
     color: colors.brand.red,
+    fontSize: fontSizes.xs,
+  },
+  deleteBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: spacing.md,
+    paddingVertical: 8,
+    borderRadius: radii.pill,
+    backgroundColor: colors.dangerLight,
+  },
+  deleteBtnText: {
+    fontFamily: fontFamilies.headingBold,
+    color: colors.danger,
     fontSize: fontSizes.xs,
   },
   // Empty

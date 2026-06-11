@@ -1,8 +1,8 @@
 import { zodResolver } from '@hookform/resolvers/zod';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, useRoute, type RouteProp } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { LinearGradient } from 'expo-linear-gradient';
-import { CheckCircle2, Home, Lock, MapPin, Phone, Truck, User } from 'lucide-react-native';
+import { CheckCircle2, Home, Lock, MapPin, Phone, Store, Truck, User } from 'lucide-react-native';
 import { useState } from 'react';
 import { Controller, useForm } from 'react-hook-form';
 import {
@@ -27,6 +27,7 @@ import { PrimaryButton } from '../components/ui';
 import { api } from '../lib/api';
 import { authErrorMessage, isPhoneAlreadyRegistered } from '../lib/authErrors';
 import type { AuthStackParamList } from '../navigation/AuthStack';
+import { useAuth, type SignupRole } from '../stores/auth';
 import {
   colors,
   fontFamilies,
@@ -38,10 +39,38 @@ import {
 } from '../theme/tokens';
 
 type NavProp = NativeStackNavigationProp<AuthStackParamList, 'Register'>;
+type RegisterRouteProp = RouteProp<AuthStackParamList, 'Register'>;
+
+interface RoleOption {
+  key: SignupRole;
+  label: string;
+  description: string;
+  Icon: typeof User;
+}
+
+const ROLE_OPTIONS: RoleOption[] = [
+  {
+    key: 'CUSTOMER',
+    label: 'عميل',
+    description: 'اطلب من متاجرك المفضلة',
+    Icon: User,
+  },
+  {
+    key: 'MERCHANT',
+    label: 'تاجر / مورد',
+    description: 'سجّل متجرك واستقبل الطلبات',
+    Icon: Store,
+  },
+];
 
 export function RegisterScreen() {
   const navigation = useNavigation<NavProp>();
+  const route = useRoute<RegisterRouteProp>();
+  const register = useAuth((s) => s.register);
   const [loading, setLoading] = useState(false);
+  // Default to whatever the previous screen (RoleChoice) requested, else
+  // CUSTOMER. Mirrored to react-hook-form via setValue so zod sees it on submit.
+  const [role, setRole] = useState<SignupRole>(route.params?.initialRole ?? 'CUSTOMER');
 
   const {
     control,
@@ -49,13 +78,37 @@ export function RegisterScreen() {
     formState: { errors },
   } = useForm<RegisterInput>({
     resolver: zodResolver(registerSchema),
-    defaultValues: { name: '', phone: '', password: '', city: 'قفط', address: '' },
+    defaultValues: {
+      name: '',
+      phone: '',
+      password: '',
+      city: 'قفط',
+      address: '',
+      role: route.params?.initialRole ?? 'CUSTOMER',
+    },
   });
 
   const onSubmit = async (values: RegisterInput) => {
     setLoading(true);
     try {
-      await api.raw.post('/auth/register', values);
+      // Always trust the local `role` state — react-hook-form's `values.role`
+      // would also be correct, but using state keeps the source of truth in
+      // one place and avoids stale-form-data bugs if the user taps a tile
+      // and submits before RHF re-renders.
+      const payload = { ...values, role };
+      if (role === 'MERCHANT') {
+        // Merchants skip the OTP step (they verify their store through the
+        // admin onboarding instead). Auto-login via the store so the App
+        // navigator re-renders straight into the merchant tabs.
+        await register(payload);
+        return;
+      }
+      // Customers go through the existing OTP verification flow — we
+      // deliberately don't call the store's register() here because it would
+      // auto-login the user and bypass OTP. Hit the endpoint directly and
+      // discard the returned tokens; OtpVerifyScreen issues fresh ones once
+      // the phone is verified.
+      await api.raw.post('/auth/register', payload);
       navigation.replace('OtpVerify', { phone: values.phone });
     } catch (err: unknown) {
       // If the phone is already registered, give the customer a direct
@@ -114,6 +167,37 @@ export function RegisterScreen() {
           showsVerticalScrollIndicator={false}
         >
           <View style={[styles.card, shadows.md]}>
+            {/* ─────── Role selector ───────
+                Two pressable tiles. Tap toggles `role` state, which is also
+                forwarded into the backend payload on submit. */}
+            <Text style={styles.fieldLabel}>نوع الحساب</Text>
+            <View style={styles.roleRow}>
+              {ROLE_OPTIONS.map(({ key, label, description, Icon }) => {
+                const isActive = role === key;
+                return (
+                  <Pressable
+                    key={key}
+                    onPress={() => setRole(key)}
+                    accessibilityRole="radio"
+                    accessibilityState={{ selected: isActive }}
+                    style={({ pressed }) => [
+                      styles.roleTile,
+                      isActive && styles.roleTileActive,
+                      pressed && { opacity: 0.85 },
+                    ]}
+                  >
+                    <View style={[styles.roleIconWrap, isActive && styles.roleIconWrapActive]}>
+                      <Icon size={22} color={isActive ? colors.brand.red : colors.text.secondary} />
+                    </View>
+                    <Text style={[styles.roleLabel, isActive && styles.roleLabelActive]}>
+                      {label}
+                    </Text>
+                    <Text style={styles.roleDescription}>{description}</Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+
             <Text style={styles.fieldLabel}>الاسم بالكامل</Text>
             <Controller
               control={control}
@@ -314,6 +398,54 @@ const styles = StyleSheet.create({
     marginTop: spacing.sm,
   },
   fieldsRow: { flexDirection: 'row', gap: spacing.sm },
+  // Role selector
+  roleRow: {
+    flexDirection: 'row',
+    gap: spacing.sm,
+    marginBottom: spacing.sm,
+  },
+  roleTile: {
+    flex: 1,
+    borderWidth: 2,
+    borderColor: colors.line,
+    borderRadius: radii.lg,
+    backgroundColor: colors.white,
+    paddingVertical: spacing.md,
+    paddingHorizontal: spacing.sm,
+    alignItems: 'center',
+  },
+  roleTileActive: {
+    borderColor: colors.brand.red,
+    backgroundColor: colors.brand.redLight,
+  },
+  roleIconWrap: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: colors.surface,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 6,
+  },
+  roleIconWrapActive: {
+    backgroundColor: colors.white,
+  },
+  roleLabel: {
+    fontFamily: fontFamilies.bodyExtraBold,
+    fontSize: fontSizes.sm,
+    color: colors.ink,
+    marginBottom: 2,
+  },
+  roleLabelActive: {
+    color: colors.brand.red,
+  },
+  roleDescription: {
+    fontFamily: fontFamilies.body,
+    fontSize: fontSizes.xs,
+    color: colors.text.secondary,
+    textAlign: 'center',
+    lineHeight: 16,
+  },
   trustRow: {
     flexDirection: 'row',
     alignItems: 'center',

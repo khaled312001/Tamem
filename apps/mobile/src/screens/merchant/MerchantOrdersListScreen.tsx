@@ -293,7 +293,15 @@ export function MerchantOrdersListScreen() {
         refreshControl={
           <RefreshControl
             refreshing={ordersQuery.isFetching && !ordersQuery.isLoading}
-            onRefresh={() => ordersQuery.refetch()}
+            onRefresh={() => {
+              // RefreshControl expects a void-returning handler — discard
+              // the refetch promise and surface errors via toast instead
+              // of letting them silently reject.
+              ordersQuery.refetch().catch((err) => {
+                const message = err instanceof Error ? err.message : undefined;
+                showToast({ title: 'تعذّر تحديث الطلبات', message, tone: 'error' });
+              });
+            }}
             tintColor={colors.brand.red}
           />
         }

@@ -65,6 +65,10 @@ export function CartCheckoutScreen() {
       api.raw.post('/orders/cart', payload).then((r) => r.data.data),
     onSuccess: (order) => {
       clearCart();
+      // Prefer landing the customer directly on OrderTracking via the Orders
+      // tab. If for any reason that's unreachable (parent missing, navigator
+      // not mounted yet), drop back to the Home tab — but never leave them
+      // stranded on the (now empty) checkout screen.
       try {
         const parent = navigation.getParent();
         if (parent) {
@@ -73,9 +77,17 @@ export function CartCheckoutScreen() {
             params: { orderId: order.id, justCreated: true },
           } as never);
         } else {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          (navigation as any).navigate('Home');
           navigation.popToTop();
         }
       } catch {
+        try {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          (navigation as any).navigate('Home');
+        } catch {
+          // ignore — last resort
+        }
         navigation.popToTop();
       }
       showToast({ title: 'تم إنشاء طلبك بنجاح', tone: 'success' });

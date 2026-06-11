@@ -63,16 +63,26 @@ export function MerchantProfileScreen() {
   const displayName = data?.storeNameAr || data?.storeName || 'متجرك';
   const subName = data?.storeNameAr && data?.storeName ? data.storeName : null;
 
-  // Stubbed actions — the dedicated screens haven't been built yet so
-  // we surface a friendly "coming soon" Alert instead of triggering a
-  // navigation error. When the screens land we'll swap these for
-  // navigation.navigate(...) calls.
+  // Stubbed actions — the dedicated screens haven't been built yet so we
+  // surface a friendly "coming soon" toast instead of triggering a
+  // navigation error. Toast (rather than Alert.alert) keeps the UX
+  // consistent across native + web; native Alert pops a ugly browser
+  // dialog on react-native-web. When the screens land we'll swap these
+  // for navigation.navigate(...) calls.
   const onEditStore = () => {
-    Alert.alert('قريباً', 'تعديل بيانات المتجر سيكون متاحاً قريباً من هنا.');
+    showToast({
+      title: 'قريباً',
+      message: 'تعديل بيانات المتجر سيكون متاحاً قريباً من هنا.',
+      tone: 'info',
+    });
   };
 
   const onEditHours = () => {
-    Alert.alert('قريباً', 'تغيير ساعات العمل سيكون متاحاً قريباً من هنا.');
+    showToast({
+      title: 'قريباً',
+      message: 'تغيير ساعات العمل سيكون متاحاً قريباً من هنا.',
+      tone: 'info',
+    });
   };
 
   const onLogout = () => {
@@ -107,7 +117,14 @@ export function MerchantProfileScreen() {
         refreshControl={
           <RefreshControl
             refreshing={query.isFetching && !query.isLoading}
-            onRefresh={() => query.refetch()}
+            onRefresh={() => {
+              // RefreshControl expects a void return — discard the refetch
+              // promise and surface errors via toast.
+              query.refetch().catch((err) => {
+                const message = err instanceof Error ? err.message : undefined;
+                showToast({ title: 'تعذّر تحديث البيانات', message, tone: 'error' });
+              });
+            }}
             tintColor={colors.brand.red}
           />
         }

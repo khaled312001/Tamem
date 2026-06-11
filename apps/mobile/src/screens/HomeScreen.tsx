@@ -184,19 +184,28 @@ export function HomeScreen() {
     );
   };
 
+  // Defer every authenticated query until the auth store has hydrated and
+  // a user is present — otherwise a cold-start race fires these against the
+  // API before the token loads from secure storage and the backend rejects
+  // them with 401.
+  const authReady = !!user;
+
   const { data: offers } = useQuery<Offer[]>({
     queryKey: ['offers'],
     queryFn: () => api.raw.get('/offers').then((r) => r.data.data),
+    enabled: authReady,
   });
 
   const { data: merchants, isLoading: loadingMerchants } = useQuery<Merchant[]>({
     queryKey: ['merchants'],
     queryFn: () => api.raw.get('/merchants').then((r) => r.data.data),
+    enabled: authReady,
   });
 
   const { data: myOrders } = useQuery<ActiveOrder[]>({
     queryKey: ['orders-mine'],
     queryFn: () => api.raw.get('/orders/mine').then((r) => r.data.data),
+    enabled: authReady,
   });
 
   // Saved addresses — used to (1) drive the location row in the hero so it
@@ -206,6 +215,7 @@ export function HomeScreen() {
   const { data: addresses } = useQuery<SavedAddress[]>({
     queryKey: ['my-addresses'],
     queryFn: () => api.raw.get('/me/addresses').then((r) => r.data.data),
+    enabled: authReady,
   });
   const defaultAddress = (addresses ?? []).find((a) => a.isDefault) ?? addresses?.[0];
   const needsAddress = (addresses?.length ?? 0) === 0;
@@ -218,6 +228,7 @@ export function HomeScreen() {
     // Stale for 5 min — admins rarely edit hourly, and we don't want every
     // tab switch to refetch.
     staleTime: 5 * 60_000,
+    enabled: authReady,
   });
 
   // Resolve the gradient: server-provided > brand default. We tuple it so

@@ -16,6 +16,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 
 import type { MerchantTabsParamList } from '../../navigation/MerchantTabs';
 import {
+  BarChart3,
   ClipboardList,
   Coins,
   Hourglass,
@@ -24,7 +25,6 @@ import {
   Star,
   Store,
   User,
-  Wallet,
 } from 'lucide-react-native';
 import type { LucideIcon } from 'lucide-react-native';
 import { useQuery } from '@tanstack/react-query';
@@ -62,21 +62,22 @@ interface MerchantSummary {
 }
 
 interface QuickTile {
-  key: 'orders' | 'products' | 'profile' | 'wallet';
+  key: 'orders' | 'products' | 'profile' | 'stats';
   label: string;
   Icon: LucideIcon;
   tint: string;
   color: string;
 }
 
-// Map each tile to the destination tab. Wallet has no dedicated screen
-// yet so it routes to Profile (where wallet info will live initially).
+// Map each tile to the destination tab. Stats has no dedicated screen yet
+// so it routes back to the dashboard (a useful aggregate of today's KPIs
+// already lives in the hero + secondary stats above).
 type TabRoute = 'MerchantDashboard' | 'MerchantOrdersList' | 'MerchantProducts' | 'MerchantProfile';
 const TILE_ROUTES: Record<QuickTile['key'], TabRoute> = {
   orders: 'MerchantOrdersList',
   products: 'MerchantProducts',
   profile: 'MerchantProfile',
-  wallet: 'MerchantProfile',
+  stats: 'MerchantDashboard',
 };
 
 const QUICK_TILES: QuickTile[] = [
@@ -102,9 +103,9 @@ const QUICK_TILES: QuickTile[] = [
     color: colors.info,
   },
   {
-    key: 'wallet',
-    label: 'المحفظة',
-    Icon: Wallet,
+    key: 'stats',
+    label: 'إحصائيات',
+    Icon: BarChart3,
     tint: colors.successLight,
     color: colors.success,
   },

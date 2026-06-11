@@ -167,7 +167,12 @@ export function SavedAddressesScreen() {
                   <Pressable
                     key={q.value}
                     onPress={() => setLabel(q.value)}
-                    style={[styles.chip, label === q.value && styles.chipActive]}
+                    disabled={createMut.isPending}
+                    style={[
+                      styles.chip,
+                      label === q.value && styles.chipActive,
+                      createMut.isPending && { opacity: 0.6 },
+                    ]}
                   >
                     <q.icon size={12} color={label === q.value ? colors.white : colors.brand.red} />
                     <Text style={[styles.chipText, label === q.value && styles.chipTextActive]}>
@@ -181,7 +186,8 @@ export function SavedAddressesScreen() {
                 placeholderTextColor={colors.text.muted}
                 value={label}
                 onChangeText={setLabel}
-                style={styles.input}
+                editable={!createMut.isPending}
+                style={[styles.input, createMut.isPending && { opacity: 0.6 }]}
               />
 
               <Text style={styles.fieldLabel}>العنوان بالتفصيل</Text>
@@ -191,7 +197,8 @@ export function SavedAddressesScreen() {
                 value={address}
                 onChangeText={setAddress}
                 multiline
-                style={styles.textArea}
+                editable={!createMut.isPending}
+                style={[styles.textArea, createMut.isPending && { opacity: 0.6 }]}
               />
 
               <Text style={styles.fieldLabel}>ملاحظات (اختياري)</Text>
@@ -200,7 +207,8 @@ export function SavedAddressesScreen() {
                 placeholderTextColor={colors.text.muted}
                 value={notes}
                 onChangeText={setNotes}
-                style={styles.input}
+                editable={!createMut.isPending}
+                style={[styles.input, createMut.isPending && { opacity: 0.6 }]}
               />
 
               <View style={styles.formActions}>
