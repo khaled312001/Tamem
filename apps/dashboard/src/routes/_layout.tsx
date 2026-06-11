@@ -8,6 +8,7 @@ import {
   ChevronsRight,
   CreditCard,
   DollarSign,
+  Globe,
   Home,
   Menu,
   MessageCircle,
@@ -60,6 +61,7 @@ const NAV_ITEMS: NavItem[] = [
   { to: '/reports/revenue', icon: BarChart3, label: 'تقرير الإيرادات' },
   { to: '/whatsapp', icon: MessageCircle, label: 'ربط واتساب' },
   { to: '/home-settings', icon: Smartphone, label: 'صفحة التطبيق' },
+  { to: '/site-settings', icon: Globe, label: 'صفحة الموقع' },
   { to: '/settings', icon: Settings, label: 'الإعدادات' },
 ];
 

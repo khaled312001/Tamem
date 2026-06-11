@@ -747,6 +747,17 @@ export class TamemClient {
     return this.request({ method: 'PATCH', url: '/admin/home-config', data });
   }
 
+  // ===== Site (landing page) config =====
+  async adminGetSiteConfig(): Promise<unknown> {
+    return this.request({ method: 'GET', url: '/admin/site-config' });
+  }
+  async adminUpdateSiteConfig(data: unknown): Promise<unknown> {
+    return this.request({ method: 'PUT', url: '/admin/site-config', data });
+  }
+  async getPublicSiteConfig(): Promise<unknown> {
+    return this.request({ method: 'GET', url: '/site-config' });
+  }
+
   // ===== Detailed revenue report =====
   async adminRevenueReport(params: Record<string, unknown>): Promise<unknown> {
     return this.request({ method: 'GET', url: '/admin/reports/revenue/detailed', params });

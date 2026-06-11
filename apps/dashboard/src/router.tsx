@@ -22,6 +22,7 @@ import { ReportsPage } from './routes/reports.js';
 import { RevenueReportPage } from './routes/revenue-report.js';
 import { ServiceEditPage } from './routes/service-edit.js';
 import { ServicesPage } from './routes/services.js';
+import { SiteSettingsPage } from './routes/site-settings.js';
 import { CouponsPage } from './routes/coupons.js';
 import { SettingsPage } from './routes/settings.js';
 import { WhatsAppPage } from './routes/whatsapp.js';
@@ -65,6 +66,7 @@ const routes: RouteObject[] = [
       { path: 'coupons', element: <CouponsPage /> },
       { path: 'settings', element: <SettingsPage /> },
       { path: 'home-settings', element: <HomeSettingsPage /> },
+      { path: 'site-settings', element: <SiteSettingsPage /> },
       { path: '*', element: <NotFoundPage /> },
     ],
   },

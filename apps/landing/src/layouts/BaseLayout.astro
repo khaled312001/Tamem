@@ -37,6 +37,54 @@ const {
   </head>
   <body class="font-body antialiased overflow-x-hidden text-white" style="background:#0F0805;">
     <slot />
+
+    {/* Site-config live hydration. Any element with a data-site attribute
+        gets its textContent / href / src replaced by the matching value
+        from GET /site-config. Failures are silent — the static fallback
+        baked into each Astro component stays visible. */}
+    <script is:inline>
+      (async () => {
+        try {
+          const apiBase =
+            window.localStorage.getItem('tamem-api-base') ||
+            (window.location.hostname === 'localhost'
+              ? 'http://localhost:4000/api/v1'
+              : 'https://api.tamem-delivery.com/api/v1');
+          const res = await fetch(`${apiBase}/site-config`, { credentials: 'omit' });
+          if (!res.ok) return;
+          const { data } = await res.json();
+          if (!data) return;
+
+          const set = (selector, value) => {
+            if (typeof value !== 'string' || !value) return;
+            document.querySelectorAll(selector).forEach((el) => {
+              if (el.tagName === 'A') el.setAttribute('href', value);
+              else el.textContent = value;
+            });
+          };
+
+          set('[data-site="heroTitle"]', data.heroTitle);
+          set('[data-site="heroSubtitle"]', data.heroSubtitle);
+          set('[data-site="heroCtaText"]', data.heroCtaText);
+          set('[data-site="address"]', data.addressAr);
+          set('[data-site="email"]', data.email);
+          set('[data-site="emailHref"]', data.email ? `mailto:${data.email}` : '');
+          set('[data-site="hours"]', data.workingHoursAr);
+
+          if (Array.isArray(data.contacts) && data.contacts.length) {
+            const primary = data.contacts[0];
+            const digits = primary.phone.replace(/[^\d]/g, '');
+            set('[data-site="primaryPhone"]', primary.phone);
+            set(
+              '[data-site="primaryWhatsapp"]',
+              `https://wa.me/${digits}${primary.whatsappMessage ? `?text=${encodeURIComponent(primary.whatsappMessage)}` : ''}`,
+            );
+          }
+        } catch {
+          /* network blip — static fallback stays */
+        }
+      })();
+    </script>
   </body>
 </html>
 

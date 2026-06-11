@@ -46,6 +46,7 @@ import {
   publicHomeConfigRouter,
 } from './modules/homeConfig/homeConfig.routes.js';
 import { recurringOrdersRouter } from './modules/recurring/recurring.routes.js';
+import { adminSiteRouter, publicSiteRouter } from './modules/site/site.routes.js';
 import { meRouter } from './modules/users/users.routes.js';
 import { whatsappRouter } from './modules/whatsapp/whatsapp.routes.js';
 import { logger } from './utils/logger.js';
@@ -143,6 +144,7 @@ export function createApp(): Express {
   v1.use('/me/wallet', meWalletRouter);
   v1.use('/me/recurring-orders', recurringOrdersRouter);
   v1.use('/home-config', publicHomeConfigRouter);
+  v1.use('/site-config', publicSiteRouter);
   v1.use('/payments', paymentsPublicRouter);
   v1.use('/payments', paymentsCustomerRouter);
   v1.use('/payments/webhook', easykashWebhookRouter);
@@ -171,6 +173,7 @@ export function createApp(): Express {
   adminRouter.use('/categories', adminCategoriesRouter);
   adminRouter.use('/offers', adminOffersRouter);
   adminRouter.use('/home-config', adminHomeConfigRouter);
+  adminRouter.use('/site-config', adminSiteRouter);
   adminRouter.use('/whatsapp', whatsappRouter);
   v1.use('/admin', adminRouter);
 
