@@ -1,10 +1,25 @@
+import { Platform } from 'react-native';
 import { io, type Socket } from 'socket.io-client';
 
 import { getAccessTokenAsync } from '../stores/auth';
 
 import { playInAppNotification } from './notificationSound';
 
-const wsUrl = process.env.EXPO_PUBLIC_WS_URL ?? 'http://localhost:4000';
+/**
+ * Same hostname-aware resolution as api.ts — on web we follow the page
+ * hostname so the dev-server LAN IP in .env doesn't strand the browser
+ * build. Native uses the env value so a real phone can hit the backend
+ * over Wi-Fi.
+ */
+function resolveWsUrl(): string {
+  if (Platform.OS === 'web' && typeof window !== 'undefined') {
+    const host = window.location.hostname || 'localhost';
+    return `http://${host}:4000`;
+  }
+  return process.env.EXPO_PUBLIC_WS_URL ?? 'http://localhost:4000';
+}
+
+const wsUrl = resolveWsUrl();
 
 let socket: Socket | null = null;
 let soundHandlersAttached = false;

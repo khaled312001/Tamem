@@ -25,6 +25,16 @@ const envSchema = z.object({
 
   FCM_SERVICE_ACCOUNT_JSON_PATH: z.string().optional(),
 
+  // SMS provider — fallback for OTP when the user doesn't have WhatsApp.
+  // Generic shape that works for Twilio, Vonage, MessageBird, Smsala, etc.
+  // Leave URL/TOKEN empty to disable; OTP request will still succeed but
+  // the channel will be "whatsapp-only".
+  SMS_PROVIDER_URL: z.string().url().optional(),
+  SMS_PROVIDER_TOKEN: z.string().optional(),
+  SMS_SENDER: z.string().optional(),
+  SMS_PROVIDER_TO_KEY: z.string().optional(),
+  SMS_PROVIDER_BODY_KEY: z.string().optional(),
+
   CORS_ORIGINS: z.string().default('http://localhost:5173,http://localhost:4321'),
 
   UPLOAD_DIR: z.string().default('./uploads'),

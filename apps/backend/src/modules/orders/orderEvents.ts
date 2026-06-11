@@ -32,47 +32,71 @@ interface StatusMessages {
   whatsapp?: boolean;
 }
 
-function messagesFor(order: Order, status: OrderStatus): StatusMessages | null {
+/**
+ * Per-event enrichment so customer-facing messages carry the data the
+ * user actually wants — driver name + phone on DRIVER_ASSIGNED, order
+ * summary on NEW, etc. We resolve this once in dispatch and reuse it
+ * across the IN_APP / FCM / WhatsApp fan-out so all three channels stay
+ * consistent.
+ */
+interface OrderContext {
+  customerName?: string;
+  driverName?: string;
+  driverPhone?: string;
+  pickupAddress?: string;
+  deliveryAddress?: string;
+}
+
+function messagesFor(
+  order: Order,
+  status: OrderStatus,
+  ctx: OrderContext = {},
+): StatusMessages | null {
   const num = order.orderNumber;
   const price = order.quotedPrice ? `${order.quotedPrice} ج.م` : '';
   const sig = '\n\n— تميم للتوصيل';
 
   switch (status) {
-    case 'NEW':
+    case 'NEW': {
+      const summary = [
+        ctx.customerName ? `العميل: ${ctx.customerName}` : '',
+        ctx.deliveryAddress ? `العنوان: ${ctx.deliveryAddress}` : '',
+        price ? `الإجمالي التقديري: ${price}` : '',
+      ]
+        .filter(Boolean)
+        .join('\n');
       return {
-        titleAr: '✓ تم استلام طلبك',
+        titleAr: 'تم استلام طلبك',
         bodyAr:
-          `أهلاً بك في تميم 👋\n` +
+          `أهلاً بك في تميم.\n` +
           `استلمنا طلبك رقم ${num} بنجاح.\n` +
+          (summary ? summary + '\n\n' : '') +
           `هتوصلك رسالة تأكيد تانية بمجرد ما الإدارة تراجع الطلب وتسعّره (خلال دقائق).` +
           sig,
         channel: 'IN_APP',
         whatsapp: true,
       };
+    }
     case 'UNDER_REVIEW':
       return {
-        titleAr: '🔍 طلبك قيد المراجعة',
-        bodyAr: `طلب ${num} قيد المراجعة.\n` + `الفريق بيتحقق من التفاصيل ويسعّره الآن.` + sig,
+        titleAr: 'طلبك قيد المراجعة',
+        bodyAr: `طلب ${num} قيد المراجعة.\nالفريق بيتحقق من التفاصيل ويسعّره الآن.` + sig,
         channel: 'IN_APP',
         whatsapp: true,
       };
     case 'PRICED':
       return {
-        titleAr: '💰 تم تسعير طلبك',
-        bodyAr:
-          `طلب ${num} جاهز.\n` +
-          `💵 السعر: ${price}\n\n` +
-          // `افتح التطبيق ووافق على السعر للبدء فوراً.` +
-          sig,
+        titleAr: 'تم تسعير طلبك',
+        bodyAr: `طلب ${num} جاهز.\nالسعر: ${price}\n` + sig,
         channel: 'IN_APP',
         whatsapp: true,
       };
     case 'AWAITING_CUSTOMER_APPROVAL':
       return {
-        titleAr: '⏳ بانتظار موافقتك',
+        titleAr: 'بانتظار موافقتك',
         bodyAr:
           `طلب ${num} في انتظار موافقتك.\n` +
-          (price ? `💵 السعر النهائي: ${price}\n\n` : '\n') +
+          (price ? `السعر النهائي: ${price}\n\n` : '\n') +
           `افتح التطبيق ووافق علشان نبدأ التجهيز.` +
           sig,
         channel: 'IN_APP',
@@ -80,53 +104,56 @@ function messagesFor(order: Order, status: OrderStatus): StatusMessages | null {
       };
     case 'ACCEPTED':
       return {
-        titleAr: '✅ تم قبول الطلب',
+        titleAr: 'تم قبول الطلب',
         bodyAr:
-          `شكراً ليك 🎉\n` +
-          `طلب ${num} تم قبوله، هنبدأ تجهيزه فوراً وندوّر على مندوب مناسب.` +
-          sig,
+          `شكراً ليك.\n` + `طلب ${num} تم قبوله، هنبدأ تجهيزه فوراً وندوّر على مندوب مناسب.` + sig,
         channel: 'IN_APP',
         whatsapp: true,
       };
-    case 'DRIVER_ASSIGNED':
+    case 'DRIVER_ASSIGNED': {
+      const driverLine = ctx.driverName
+        ? `المندوب: ${ctx.driverName}` +
+          (ctx.driverPhone ? `\nرقم التواصل: ${ctx.driverPhone}` : '')
+        : 'المندوب هيكلمك قريباً جداً.';
       return {
-        titleAr: '🛵 تم تعيين السائق',
-        bodyAr: `طلب ${num} في طريقه إليك.\n` + `المندوب هيكلمك قريباً جداً.` + sig,
+        titleAr: 'تم تعيين السائق',
+        bodyAr:
+          `طلب ${num} في طريقه إليك.\n` + driverLine + (price ? `\nالإجمالي: ${price}` : '') + sig,
         channel: 'IN_APP',
         whatsapp: true,
       };
+    }
     case 'PICKED_UP':
       return {
-        titleAr: '📦 تم استلام الطلب',
-        bodyAr: `المندوب استلم طلب ${num} وبدأ التحرك ليك.\n` + `استعد للاستلام خلال دقايق.` + sig,
+        titleAr: 'تم استلام الطلب من المتجر',
+        bodyAr: `المندوب استلم طلب ${num} وبدأ التحرك ليك.\nاستعد للاستلام خلال دقايق.` + sig,
         channel: 'IN_APP',
         whatsapp: true,
       };
     case 'IN_ROUTE':
       return {
-        titleAr: '🚀 الطلب في الطريق',
-        bodyAr: `طلب ${num} وصل لمنطقتك.\n` + `جهّز التواجد عند العنوان من فضلك.` + sig,
+        titleAr: 'الطلب في الطريق',
+        bodyAr: `طلب ${num} وصل لمنطقتك.\nجهّز التواجد عند العنوان من فضلك.` + sig,
         channel: 'IN_APP',
         whatsapp: true,
       };
     case 'DELIVERED':
       return {
-        titleAr: '🎁 تم تسليم الطلب',
-        bodyAr:
-          `تم تسليم طلب ${num} بنجاح.\n` + `شكراً لاختيارك تميم 🙏 — قيّم تجربتك من التطبيق.` + sig,
+        titleAr: 'تم تسليم الطلب',
+        bodyAr: `تم تسليم طلب ${num} بنجاح.\nشكراً لاختيارك تميم — قيّم تجربتك من التطبيق.` + sig,
         channel: 'IN_APP',
         whatsapp: true,
       };
     case 'COMPLETED':
       return {
-        titleAr: '⭐ تم إكمال الطلب',
-        bodyAr: `طلب ${num} مكتمل بالكامل.\n` + `نتمنى أن نخدمك مرة أخرى قريباً 💛` + sig,
+        titleAr: 'تم إكمال الطلب',
+        bodyAr: `طلب ${num} مكتمل بالكامل.\nنتمنى أن نخدمك مرة أخرى قريباً.` + sig,
         channel: 'IN_APP',
         whatsapp: true,
       };
     case 'CANCELLED':
       return {
-        titleAr: '🚫 تم إلغاء الطلب',
+        titleAr: 'تم إلغاء الطلب',
         bodyAr:
           `تم إلغاء طلب ${num}.` +
           (order.cancellationReason ? `\nالسبب: ${order.cancellationReason}` : '') +
@@ -137,7 +164,7 @@ function messagesFor(order: Order, status: OrderStatus): StatusMessages | null {
       };
     case 'REJECTED':
       return {
-        titleAr: '❌ تعذّر تنفيذ الطلب',
+        titleAr: 'تعذّر تنفيذ الطلب',
         bodyAr:
           `للأسف ما قدرناش ننفذ طلب ${num}.` +
           (order.cancellationReason ? `\nالسبب: ${order.cancellationReason}` : '') +
@@ -169,8 +196,37 @@ export async function dispatchOrderStatusChanged(
   // 1. Realtime — fan out to admin:orders, user:<customerId>, user:<driverId>, order:<id>
   emitOrderStatusChange(app.locals.io, order);
 
+  // 1b. Resolve enrichment context once so all 3 channels (in-app, push,
+  //     WhatsApp) carry identical info. Driver lookup only fires when the
+  //     status transition is one the customer needs driver details for.
+  const ctx: OrderContext = {
+    deliveryAddress: order.deliveryAddress ?? undefined,
+    pickupAddress: order.pickupAddress ?? undefined,
+  };
+  try {
+    const c = await prisma.user.findUnique({
+      where: { id: order.customerId },
+      select: { name: true },
+    });
+    ctx.customerName = c?.name ?? undefined;
+  } catch {
+    /* swallow — message just loses one field */
+  }
+  if (order.assignedDriverId) {
+    try {
+      const d = await prisma.user.findUnique({
+        where: { id: order.assignedDriverId },
+        select: { name: true, phone: true },
+      });
+      ctx.driverName = d?.name ?? undefined;
+      ctx.driverPhone = d?.phone ?? undefined;
+    } catch {
+      /* swallow */
+    }
+  }
+
   // 2. In-app notification for the customer
-  const msgs = messagesFor(order, newStatus);
+  const msgs = messagesFor(order, newStatus, ctx);
   if (msgs) {
     try {
       await prisma.notification.create({

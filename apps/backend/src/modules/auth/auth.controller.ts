@@ -310,9 +310,20 @@ export const otpRequest: RequestHandler = async (req, res, next) => {
     });
 
     const text = `كود التحقق الخاص بك في تميم للتوصيل: ${code}\nصالح لمدة 5 دقائق. لا تشاركه مع أحد.`;
-    const sent = await sendWhatsAppMessage({ toPhone: input.phone, text });
 
-    const channel = sent ? 'WHATSAPP' : 'NONE';
+    // Try WhatsApp first (preferred — branded sender + cheap), fall back
+    // to SMS for users without WhatsApp. If both fail, channel is NONE
+    // and the dev-mode debugCode echo still lets QA exercise the flow.
+    let channel: 'WHATSAPP' | 'SMS' | 'NONE' = 'NONE';
+    const waOk = await sendWhatsAppMessage({ toPhone: input.phone, text });
+    if (waOk) {
+      channel = 'WHATSAPP';
+    } else {
+      const { sendSms } = await import('../../integrations/sms.js');
+      const smsOk = await sendSms({ toPhone: input.phone, text });
+      if (smsOk) channel = 'SMS';
+    }
+
     const debugCode = env.NODE_ENV === 'production' ? undefined : code;
     ok(res, { sent: true, channel, ...(debugCode ? { debugCode } : {}) });
   } catch (err) {

@@ -5,6 +5,7 @@ import { OrderStatus, UserRole } from '@tamem/types';
 
 import { prisma } from '../../db/prisma.js';
 import { ForbiddenError, NotFoundError, UnauthorizedError } from '../../utils/errors.js';
+import { logger } from '../../utils/logger.js';
 import { created } from '../../utils/response.js';
 
 import { generateOrderNumber } from './orderNumber.js';
@@ -100,6 +101,17 @@ export const adminCreateManualOrder: RequestHandler = async (req, res, next) => 
       emitNewOrder(req.app.locals.io, order);
     } catch {
       /* not critical */
+    }
+
+    // Dispatch the same NEW-status fan-out that customer-created orders get
+    // so admin-typed orders also reach the customer over WhatsApp/SMS + push
+    // + in-app. Without this, a phone-in order silently goes "missing" from
+    // the customer's perspective until they happen to open the app.
+    try {
+      const { dispatchOrderStatusChanged } = await import('./orderEvents.js');
+      await dispatchOrderStatusChanged(req.app, order, 'NEW');
+    } catch (err) {
+      logger.warn({ err, orderId: order.id }, 'manual order dispatch failed');
     }
 
     created(res, order);

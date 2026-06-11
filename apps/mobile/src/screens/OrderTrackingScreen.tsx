@@ -104,21 +104,78 @@ interface DriverLocation {
   at: string;
 }
 
-const STAGE_ORDER: OrderStatus[] = [
-  'NEW',
-  'UNDER_REVIEW',
-  'PRICED',
-  'ACCEPTED',
-  'DRIVER_ASSIGNED',
-  'PICKED_UP',
-  'IN_ROUTE',
-  'DELIVERED',
+/**
+ * Visible order phases (4 stages) — collapses the backend's 12-state FSM
+ * into 4 buckets the customer cares about. Reduces cognitive load on the
+ * tracking screen + matches the simpler admin workflow in the dashboard.
+ *
+ *   1. ORDER_PLACED   ← NEW + UNDER_REVIEW
+ *   2. CONFIRMED      ← PRICED + AWAITING_CUSTOMER_APPROVAL + ACCEPTED
+ *   3. ON_THE_WAY     ← DRIVER_ASSIGNED + PICKED_UP + IN_ROUTE
+ *   4. DELIVERED      ← DELIVERED + COMPLETED
+ *
+ * The backend FSM and OrderStatusHistory stay unchanged — phase mapping
+ * is purely a presentation concern, so audit trails remain granular.
+ */
+type PhaseKey = 'ORDER_PLACED' | 'CONFIRMED' | 'ON_THE_WAY' | 'DELIVERED';
+
+interface PhaseDef {
+  key: PhaseKey;
+  /** Backend statuses that map to this phase. The FIRST one reached wins
+   *  as the phase's completedAt timestamp. */
+  statuses: OrderStatus[];
+  label: string;
+  description: string;
+  Icon: typeof CheckCircle2;
+}
+
+const PHASE_DEFS: PhaseDef[] = [
+  {
+    key: 'ORDER_PLACED',
+    statuses: ['NEW', 'UNDER_REVIEW'],
+    label: 'تم استلام طلبك',
+    description: 'وصلنا الطلب ونحن نراجع التفاصيل.',
+    Icon: ClipboardCheck,
+  },
+  {
+    key: 'CONFIRMED',
+    statuses: ['PRICED', 'AWAITING_CUSTOMER_APPROVAL', 'ACCEPTED'],
+    label: 'تم التأكيد والتسعير',
+    description: 'تم تأكيد الطلب. السائق هيتعيّن خلال دقائق.',
+    Icon: CheckCircle2,
+  },
+  {
+    key: 'ON_THE_WAY',
+    statuses: ['DRIVER_ASSIGNED', 'PICKED_UP', 'IN_ROUTE'],
+    label: 'في الطريق إليك',
+    description: 'السائق في الطريق. هتلاقيه عندك قريب.',
+    Icon: Truck,
+  },
+  {
+    key: 'DELIVERED',
+    statuses: ['DELIVERED', 'COMPLETED'],
+    label: 'تم التسليم',
+    description: 'تم تسليم الطلب بنجاح. شكراً لك.',
+    Icon: CheckCheck,
+  },
 ];
+
+const STATUS_TO_PHASE: Partial<Record<OrderStatus, PhaseKey>> = (() => {
+  const map: Partial<Record<OrderStatus, PhaseKey>> = {};
+  for (const p of PHASE_DEFS) for (const s of p.statuses) map[s] = p.key;
+  return map;
+})();
+
+function currentPhaseKey(status: OrderStatus): PhaseKey {
+  return STATUS_TO_PHASE[status] ?? 'ORDER_PLACED';
+}
+
+/** Per-status copy still kept so the headline + hint feel granular even
+ *  though the timeline only shows 4 bullets. */
 const STAGE_LABEL: Record<OrderStatus, string> = {
   NEW: 'تم استلام الطلب',
   UNDER_REVIEW: 'قيد المراجعة',
   PRICED: 'تم التسعير',
-  // Customer-approval step retired — kept here only for legacy orders.
   AWAITING_CUSTOMER_APPROVAL: 'قيد المعالجة',
   ACCEPTED: 'تم التأكيد',
   DRIVER_ASSIGNED: 'تعيين سائق',
@@ -139,8 +196,8 @@ const STAGE_HINT: Partial<Record<OrderStatus, string>> = {
   DRIVER_ASSIGNED: 'السائق في طريقه لاستلام الطلب.',
   PICKED_UP: 'الطلب مع السائق ومتجه إليك.',
   IN_ROUTE: 'الطلب في الطريق. هتلاقيه عندك قريب.',
-  DELIVERED: 'تم تسليم الطلب بنجاح ✓',
-  COMPLETED: 'الطلب مكتمل. شكراً لك ❤️',
+  DELIVERED: 'تم تسليم الطلب بنجاح.',
+  COMPLETED: 'الطلب مكتمل. شكراً لك.',
 };
 
 const CATEGORY_LABEL = {
@@ -412,7 +469,7 @@ export function OrderTrackingScreen() {
             <Text style={styles.sectionTitle}>مراحل الطلب</Text>
             <OrderTimeline
               stages={buildStages(order.statusHistory)}
-              currentStage={resolveEffectiveStage(order.status)}
+              currentStage={currentPhaseKey(order.status)}
             />
           </View>
         )}
@@ -696,6 +753,8 @@ export function OrderTrackingScreen() {
 // the primitive expects.
 // ════════════════════════════════════════════════════════════════════════════
 
+// STAGE_ICONS retained for the (unused) per-status timeline that some
+// legacy components still query — see void below to keep the lint quiet.
 const STAGE_ICONS: Record<string, typeof CheckCircle2> = {
   NEW: ClipboardCheck,
   UNDER_REVIEW: FileSearch,
@@ -706,27 +765,31 @@ const STAGE_ICONS: Record<string, typeof CheckCircle2> = {
   IN_ROUTE: Truck,
   DELIVERED: CheckCheck,
 };
+void STAGE_ICONS;
 
-function resolveEffectiveStage(status: OrderStatus): OrderStatus {
-  if (status === 'AWAITING_CUSTOMER_APPROVAL') return 'PRICED';
-  if (status === 'COMPLETED') return 'DELIVERED';
-  return status;
-}
-
+/**
+ * Build the 4 visible phases for the OrderTimeline. The completedAt for
+ * each phase is the earliest history entry whose toStatus belongs to the
+ * phase — so a phase appears "completed" the moment any of its underlying
+ * backend statuses was reached.
+ */
 function buildStages(history?: StatusHistoryItem[] | null): TimelineStage[] {
-  // Index history by stage so we can attach the completion timestamp.
   const timestamps = new Map<string, string>();
-  for (const h of history ?? []) {
-    // Latest entry per stage wins (history is chronological asc from server).
-    timestamps.set(h.toStatus, h.createdAt);
-  }
-  return STAGE_ORDER.map((stage) => ({
-    key: stage,
-    label: STAGE_LABEL[stage] ?? stage,
-    description: STAGE_HINT[stage],
-    Icon: STAGE_ICONS[stage],
-    completedAt: timestamps.get(stage) ?? null,
-  }));
+  for (const h of history ?? []) timestamps.set(h.toStatus, h.createdAt);
+  return PHASE_DEFS.map((phase) => {
+    let earliest: string | null = null;
+    for (const s of phase.statuses) {
+      const t = timestamps.get(s);
+      if (t && (!earliest || new Date(t) < new Date(earliest))) earliest = t;
+    }
+    return {
+      key: phase.key,
+      label: phase.label,
+      description: phase.description,
+      Icon: phase.Icon,
+      completedAt: earliest,
+    };
+  });
 }
 
 // ════════════════════════════════════════════════════════════════════════════
