@@ -67,13 +67,28 @@ export async function uploadFile(
       } as unknown as Blob);
     }
 
-    const token = await getAccessTokenAsync();
-    // No Content-Type header on purpose — let the runtime compute the boundary.
-    const res = await fetch(`${API_URL}/uploads`, {
-      method: 'POST',
-      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-      body: form,
-    });
+    // First attempt with the cached access token.
+    let res = await postWithToken(form);
+
+    // 401 → token expired / never set. Force a refresh through the shared
+    // axios client (which knows how to roll the refresh token + persist
+    // the new tokens to zustand) and retry once.
+    if (res.status === 401) {
+      const { useAuth } = await import('../stores/auth');
+      const { api } = await import('./api');
+      const tokens = useAuth.getState().tokens;
+      if (tokens?.refreshToken) {
+        try {
+          const fresh = await api.refresh(tokens.refreshToken);
+          await useAuth.getState().setTokens(fresh);
+          res = await postWithToken(form);
+        } catch {
+          // refresh failed — let the outer catch fall back to the
+          // original URI.
+        }
+      }
+    }
+
     if (!res.ok) {
       throw new Error(`upload failed: HTTP ${res.status}`);
     }
@@ -84,6 +99,15 @@ export async function uploadFile(
     console.warn('[uploadFile] failed, falling back to original URI:', err);
     return { url: uri, uploaded: false };
   }
+}
+
+async function postWithToken(form: FormData): Promise<Response> {
+  const token = await getAccessTokenAsync();
+  return fetch(`${API_URL}/uploads`, {
+    method: 'POST',
+    headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+    body: form,
+  });
 }
 
 function guessMime(uri: string): string {

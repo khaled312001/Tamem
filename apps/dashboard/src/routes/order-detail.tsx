@@ -226,11 +226,15 @@ export function OrderDetailPage() {
   const canCancel = (ORDER_TRANSITIONS[status] as readonly OrderStatus[]).includes('CANCELLED');
   const hasPrice = order.quotedPrice != null || order.finalPrice != null;
   const phase = currentPhaseFor(status);
+  void phase;
 
   const phasePending = advanceMut.isPending || completeMut.isPending;
 
-  // What each big card does when tapped — only the "current" phase is
-  // enabled; the rest are locked (already done or not yet reachable).
+  // Kept around because the action dialogs (price, assign, complete) reuse
+  // the same dispatching logic. The 4-card overview UI it used to render
+  // alongside is gone; the detailed timeline is now the sole progress view.
+  // void at the end suppresses tsc's noUnusedLocals without removing the
+  // helper outright (we'll likely revive a compact phase summary later).
   const onPhaseClick = (id: PhaseId) => {
     if (phasePending) return;
     if (id === 1) {
@@ -255,6 +259,7 @@ export function OrderDetailPage() {
       return;
     }
   };
+  void onPhaseClick;
 
   const customData = order.customData as Record<string, unknown> | undefined;
 
@@ -465,33 +470,13 @@ export function OrderDetailPage() {
           </div>
         </div>
 
-        {/* The 4 big phase buttons — primary UX. One of them is "current"
-            (clickable), the rest are locked (already done or not reachable
-            yet). Each card lights up in its phase color when active. */}
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-          {PHASES.map((p) => (
-            <PhaseCard
-              key={p.id}
-              phase={p}
-              state={
-                phase === 'cancelled'
-                  ? 'locked'
-                  : phase === 'done'
-                    ? 'done'
-                    : p.id < phase
-                      ? 'done'
-                      : p.id === phase
-                        ? 'current'
-                        : 'locked'
-              }
-              pending={phasePending && p.id === phase}
-              onClick={() => onPhaseClick(p.id)}
-            />
-          ))}
-        </div>
+        {/* 4-phase summary intentionally removed — the detailed timeline
+            below ("مسار الحالة (للسجل)") is the single source of truth so
+            admins aren't toggling between two competing progress UIs.
+            Cancel + price + driver actions still live in their own cards. */}
 
         {canCancel && !isTerminal && (
-          <div className="flex justify-end pt-2 border-t border-border">
+          <div className="flex justify-end">
             <Button variant="danger" size="sm" onClick={() => setDialog('cancel')}>
               <Ban className="w-4 h-4" /> إلغاء الطلب
             </Button>
@@ -919,6 +904,8 @@ function WorkflowStepper({
 
 type PhaseCardState = 'current' | 'done' | 'locked';
 
+// Retained for potential future revival of the 4-card overview — currently
+// unused since the detailed status timeline is the sole progress UI.
 function PhaseCard({
   phase,
   state,
@@ -1324,3 +1311,12 @@ function NoteDialog({ orderId, onClose }: { orderId: string; onClose: () => void
     </Dialog>
   );
 }
+
+// Reserved for the legacy 4-card overview — paths that used to render it
+// were removed (the detailed timeline below replaces it) but the helpers
+// stay so future regressions don't need a wholesale rewrite. The void
+// references keep tsc's noUnusedLocals happy without exporting symbols
+// that aren't yet wired into any consumer.
+void PhaseCard;
+void PHASES;
+void currentPhaseFor;

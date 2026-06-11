@@ -4,6 +4,8 @@ import {
   BarChart3,
   Box,
   ChevronLeft,
+  ChevronsLeft,
+  ChevronsRight,
   CreditCard,
   DollarSign,
   Home,
@@ -69,8 +71,18 @@ export function DashboardLayout() {
   const navigate = useNavigate();
   const location = useLocation();
 
-  // Sidebar state: on desktop it's always open; on mobile it overlays.
+  // Sidebar state: on mobile it overlays; on desktop it can be either
+  // wide (full labels + icons) or collapsed (icons only with tooltips).
+  // The collapsed choice persists across sessions so muscle memory holds.
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [collapsed, setCollapsed] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return false;
+    return window.localStorage.getItem('tamem-sidebar-collapsed') === '1';
+  });
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    window.localStorage.setItem('tamem-sidebar-collapsed', collapsed ? '1' : '0');
+  }, [collapsed]);
   const [searchValue, setSearchValue] = useState('');
 
   const submitSearch = (e: React.FormEvent) => {
@@ -120,29 +132,45 @@ export function DashboardLayout() {
           />
         )}
 
-        {/* Sidebar — gradient brand strip + glass-morphic backdrop */}
+        {/* Sidebar — collapsible (icons-only) on desktop, off-canvas on mobile.
+            Width transitions smoothly between 256px and 80px; nav items hide
+            their labels in the narrow mode and reveal them as native title
+            tooltips on hover. */}
         <aside
           className={cn(
             'fixed md:sticky top-0 inset-y-0 right-0 z-50 h-screen',
-            'w-72 md:w-64 flex flex-col',
-            'bg-white/90 backdrop-blur-xl border-l border-border/70',
+            'flex flex-col bg-white/95 backdrop-blur-xl border-l border-border/70',
             'shadow-[0_0_40px_-20px_rgba(224,48,30,0.25)]',
-            'transition-transform duration-300 ease-out',
+            'transition-[width,transform] duration-300 ease-out',
             mobileOpen ? 'translate-x-0' : 'translate-x-full md:translate-x-0',
+            collapsed ? 'w-72 md:w-20' : 'w-72 md:w-64',
           )}
         >
-          {/* Brand header with subtle gradient bar */}
-          <div className="relative p-5 border-b border-border/60">
+          {/* Brand header — when collapsed we shrink the logo + drop the
+              "لوحة التحكم" subtitle so it doesn't overflow the 80px width. */}
+          <div className="relative p-3 border-b border-border/60">
             <div className="absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-brand-red via-brand-gold to-brand-orange" />
-            <div className="flex items-start justify-between">
-              <div className="flex-1 flex flex-col items-center">
+            <div className="flex items-start justify-between gap-2">
+              <div
+                className={cn(
+                  'flex-1 flex flex-col items-center transition-all',
+                  collapsed && 'md:py-1',
+                )}
+              >
                 <div className="relative">
                   <div className="absolute inset-0 rounded-2xl bg-gradient-to-br from-brand-red/10 via-brand-orange/5 to-transparent blur-xl" />
-                  <Logo className="relative h-24 w-auto drop-shadow-md" />
+                  <Logo
+                    className={cn(
+                      'relative w-auto drop-shadow-md transition-all duration-300',
+                      collapsed ? 'h-10 md:h-12' : 'h-24',
+                    )}
+                  />
                 </div>
-                <div className="mt-2 text-[10px] uppercase tracking-[0.22em] text-muted-foreground font-bold">
-                  لوحة التحكم
-                </div>
+                {!collapsed && (
+                  <div className="mt-2 text-[10px] uppercase tracking-[0.22em] text-muted-foreground font-bold">
+                    لوحة التحكم
+                  </div>
+                )}
               </div>
               <button
                 onClick={() => setMobileOpen(false)}
@@ -152,20 +180,49 @@ export function DashboardLayout() {
                 <X className="w-5 h-5" />
               </button>
             </div>
+
+            {/* Collapse / expand toggle — desktop only. The button hangs
+                off the left edge of the sidebar like a tab so the user
+                always sees it even when the sidebar is at minimum width. */}
+            <button
+              onClick={() => setCollapsed((c) => !c)}
+              className={cn(
+                'hidden md:flex absolute -left-3 top-7',
+                'w-7 h-7 rounded-full bg-white border border-border shadow-md',
+                'items-center justify-center text-foreground/70',
+                'hover:bg-brand-red hover:text-white hover:border-brand-red hover:scale-110',
+                'transition-all duration-200',
+              )}
+              aria-label={collapsed ? 'فتح الشريط الجانبي' : 'طي الشريط الجانبي'}
+              title={collapsed ? 'فتح الشريط الجانبي' : 'طي الشريط الجانبي'}
+            >
+              {collapsed ? (
+                <ChevronsLeft className="w-3.5 h-3.5" />
+              ) : (
+                <ChevronsRight className="w-3.5 h-3.5" />
+              )}
+            </button>
           </div>
 
-          <nav className="flex-1 p-3 space-y-0.5 overflow-y-auto custom-scrollbar">
+          <nav
+            className={cn(
+              'flex-1 p-3 space-y-0.5 overflow-y-auto custom-scrollbar',
+              collapsed && 'md:px-2',
+            )}
+          >
             {NAV_ITEMS.map((item) => (
               <NavLink
                 key={item.to}
                 to={item.to}
+                title={collapsed ? item.label : undefined}
                 className={({ isActive }) =>
                   cn(
-                    'group relative flex items-center justify-between gap-3 px-3 py-2.5 rounded-xl text-sm overflow-hidden',
+                    'group relative flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm overflow-hidden',
                     'transition-all duration-200',
+                    collapsed ? 'md:justify-center md:px-2' : 'justify-between',
                     isActive
                       ? 'text-white font-bold shadow-lg shadow-brand-red/30'
-                      : 'text-foreground/80 hover:text-foreground hover:bg-brand-red/5 hover:translate-x-[-2px]',
+                      : 'text-foreground/80 hover:text-foreground hover:bg-brand-red/5',
                   )
                 }
               >
@@ -177,19 +234,27 @@ export function DashboardLayout() {
                     {isActive && (
                       <span className="absolute right-0 top-1/2 -translate-y-1/2 w-1 h-6 rounded-l-full bg-white/80" />
                     )}
-                    <span className="relative flex items-center gap-3">
+                    <span
+                      className={cn(
+                        'relative flex items-center gap-3',
+                        collapsed && 'md:justify-center',
+                      )}
+                    >
                       <item.icon
                         className={cn(
                           'w-4 h-4 transition-transform duration-200',
                           isActive ? 'scale-110' : 'group-hover:scale-110',
+                          collapsed && 'md:w-5 md:h-5',
                         )}
                       />
-                      {item.label}
+                      <span className={cn(collapsed && 'md:hidden')}>{item.label}</span>
                     </span>
                     {item.countKey && counts[item.countKey] > 0 && (
                       <span
                         className={cn(
                           'relative min-w-[1.4rem] h-[1.4rem] px-1.5 inline-flex items-center justify-center rounded-full text-[10px] font-black',
+                          collapsed &&
+                            'md:absolute md:-top-1 md:-right-1 md:min-w-[1.1rem] md:h-[1.1rem] md:px-1 md:text-[9px]',
                           isActive
                             ? 'bg-white/25 text-white'
                             : item.urgent

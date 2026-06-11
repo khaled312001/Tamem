@@ -500,7 +500,12 @@ function ServicesTab({
       </div>
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
         {services.map((s) => {
-          const selected = form.visibleServiceKeys?.includes(s.key) ?? false;
+          // visibleServiceKeys === null means "show every service" — paint
+          // every checkbox as ticked so the UI matches the badge above
+          // ("✓ كل الخدمات تظهر"). The first untick will switch the field
+          // to an explicit array (handled by the parent's toggleInArray).
+          const selected =
+            form.visibleServiceKeys === null ? true : form.visibleServiceKeys.includes(s.key);
           return (
             <CheckRow
               key={s.id}
