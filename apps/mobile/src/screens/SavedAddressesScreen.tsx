@@ -31,10 +31,12 @@ interface SavedAddress {
   createdAt: string;
 }
 
+// Only the two canonical labels — "ماما" was removed per product request
+// to keep the picker focused. The free-text input below still lets the
+// customer name an address whatever they want.
 const QUICK_LABELS: { value: string; icon: typeof Home }[] = [
   { value: 'البيت', icon: Home },
   { value: 'الشغل', icon: Briefcase },
-  { value: 'عند ماما', icon: MapPin },
 ];
 
 export function SavedAddressesScreen() {

@@ -11,11 +11,13 @@ import { useAuth } from '../stores/auth';
 
 import { AppTabs } from './AppTabs';
 import { AuthStack } from './AuthStack';
+import { MerchantTabs } from './MerchantTabs';
 
 export type RootStackParamList = {
   Splash: undefined;
   Auth: undefined;
   App: undefined;
+  MerchantApp: undefined;
   CollectPhone: undefined;
 };
 
@@ -68,6 +70,10 @@ export function RootNavigator() {
           <Stack.Screen name="Auth" component={AuthStack} />
         ) : mustCollectPhone ? (
           <Stack.Screen name="CollectPhone" component={CollectPhoneScreen} />
+        ) : user.role === 'MERCHANT' ? (
+          // Merchants get an entirely separate tab graph (dashboard / orders /
+          // products / profile). They never see the customer-facing AppTabs.
+          <Stack.Screen name="MerchantApp" component={MerchantTabs} />
         ) : (
           <Stack.Screen name="App" component={AppTabs} />
         )}

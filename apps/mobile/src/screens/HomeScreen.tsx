@@ -533,9 +533,13 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.surface },
   // Hero
   hero: {
+    // Tightened spacing — the hero used to push the scroll content well
+    // below the fold. paddingTop is small now (status-bar safe area
+    // handles the top inset), paddingBottom only as much as it takes to
+    // round the corners cleanly into the white scroll surface.
     paddingHorizontal: spacing.lg,
-    paddingTop: spacing.md,
-    paddingBottom: spacing.xl,
+    paddingTop: spacing.xs,
+    paddingBottom: spacing.md,
     borderBottomLeftRadius: radii.xxl,
     borderBottomRightRadius: radii.xxl,
   },

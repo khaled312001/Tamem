@@ -15,6 +15,8 @@
 import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useQuery } from '@tanstack/react-query';
+import { useRef } from 'react';
+import type { ScrollView as ScrollViewType } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import {
   Apple,
@@ -44,6 +46,8 @@ import type { HomeStackParamList } from '../../navigation/HomeStack';
 import { colors, fontFamilies, fontSizes, radii, shadows, spacing } from '../../theme/tokens';
 
 import { SectionHeader } from '../ui';
+
+import { useWebDragScroll } from './useWebDragScroll';
 
 type NavProp = NativeStackNavigationProp<HomeStackParamList, 'Home'>;
 
@@ -97,6 +101,8 @@ const GRADIENTS: Array<[string, string]> = [
 
 export function CategoriesStrip() {
   const navigation = useNavigation<NavProp>();
+  const scrollRef = useRef<ScrollViewType>(null);
+  useWebDragScroll(scrollRef);
 
   const { data: categories, isLoading } = useQuery<Category[]>({
     queryKey: ['home-categories'],
@@ -117,6 +123,7 @@ export function CategoriesStrip() {
         }}
       />
       <ScrollView
+        ref={scrollRef}
         horizontal
         showsHorizontalScrollIndicator={false}
         contentContainerStyle={styles.scrollContent}

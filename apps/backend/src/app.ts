@@ -21,6 +21,7 @@ import {
 import { adminCategoriesRouter } from './modules/categories/categories.routes.js';
 import { adminCustomersRouter } from './modules/customers/customers.routes.js';
 import { adminDriversRouter } from './modules/drivers/drivers.routes.js';
+import { merchantRouter } from './modules/merchant/merchant.routes.js';
 import { adminMerchantsRouter } from './modules/merchants/merchants.routes.js';
 import { notificationsRouter } from './modules/notifications/notifications.routes.js';
 import { adminOffersRouter } from './modules/offers/offers.routes.js';
@@ -149,6 +150,7 @@ export function createApp(): Express {
   v1.use('/payments', paymentsCustomerRouter);
   v1.use('/payments/webhook', easykashWebhookRouter);
   v1.use('/promos', promosRouter);
+  v1.use('/merchant', merchantRouter);
 
   // ----- Admin namespace -----
   // Order matters: requireAuth → requireRole(ADMIN) → adminAuditLog.
