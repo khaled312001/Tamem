@@ -130,7 +130,7 @@ export const get: RequestHandler = async (req, res, next) => {
     // Quick stats — totalDeliveries is computed live from the orders
     // table so it always matches reality, independent of the (unused)
     // DriverProfile.totalDeliveries counter.
-    const [totalOrders, activeOrders, totalDeliveries] = await Promise.all([
+    const [totalOrders, activeOrders, totalDeliveries, reviews, ratingAgg] = await Promise.all([
       prisma.order.count({ where: { assignedDriverId: driver.id } }),
       prisma.order.count({
         where: {
@@ -144,12 +144,48 @@ export const get: RequestHandler = async (req, res, next) => {
           status: { in: ['COMPLETED', 'DELIVERED'] },
         },
       }),
+      // Recent reviews where this driver was rated — used by the dashboard
+      // to render the "Reviews" tab on the driver detail dialog.
+      prisma.orderReview.findMany({
+        where: { driverId: driver.id, driverRating: { not: null } },
+        orderBy: { createdAt: 'desc' },
+        take: 20,
+        select: {
+          id: true,
+          rating: true,
+          driverRating: true,
+          comment: true,
+          createdAt: true,
+          order: { select: { id: true, orderNumber: true } },
+        },
+      }),
+      // Live driverRating average so the value matches the reviews list.
+      prisma.orderReview.aggregate({
+        where: { driverId: driver.id, driverRating: { not: null } },
+        _avg: { driverRating: true },
+        _count: { driverRating: true },
+      }),
     ]);
 
+    const liveRating = ratingAgg._avg.driverRating;
     const enriched = {
       ...driver,
-      driverProfile: driver.driverProfile ? { ...driver.driverProfile, totalDeliveries } : null,
-      stats: { totalOrders, activeOrders, totalDeliveries },
+      driverProfile: driver.driverProfile
+        ? {
+            ...driver.driverProfile,
+            totalDeliveries,
+            // Prefer the just-recomputed average so a stale row never shows.
+            rating: liveRating ?? driver.driverProfile.rating,
+          }
+        : null,
+      stats: {
+        totalOrders,
+        activeOrders,
+        totalDeliveries,
+        reviewCount: ratingAgg._count.driverRating,
+        averageRating: liveRating ?? null,
+      },
+      reviews,
     };
     ok(res, enriched);
   } catch (err) {

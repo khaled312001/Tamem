@@ -21,6 +21,7 @@ import { PricingPage } from './routes/pricing.js';
 import { ProductsPage } from './routes/products.js';
 import { ReportsPage } from './routes/reports.js';
 import { RevenueReportPage } from './routes/revenue-report.js';
+import { ReviewsPage } from './routes/reviews.js';
 import { ServiceEditPage } from './routes/service-edit.js';
 import { ServicesPage } from './routes/services.js';
 import { SiteSettingsPage } from './routes/site-settings.js';
@@ -62,6 +63,7 @@ const routes: RouteObject[] = [
       { path: 'payment-gateway', element: <PaymentGatewayPage /> },
       { path: 'reports', element: <ReportsPage /> },
       { path: 'reports/revenue', element: <RevenueReportPage /> },
+      { path: 'reviews', element: <ReviewsPage /> },
       { path: 'alerts', element: <AlertsPage /> },
       { path: 'whatsapp', element: <WhatsAppPage /> },
       { path: 'broadcast', element: <BroadcastPage /> },

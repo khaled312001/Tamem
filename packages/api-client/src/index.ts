@@ -579,6 +579,12 @@ export class TamemClient {
     }>({ method: 'GET', url: '/admin/alerts', params });
     return { alerts: res.data.data, stats: res.data.meta?.stats };
   }
+  // ===== Admin Reviews =====
+  /** Paginated list of all order reviews with optional driver/merchant filter. */
+  async adminListReviews(params?: Record<string, unknown>): Promise<Paginated<unknown>> {
+    return this.requestPaginated({ method: 'GET', url: '/admin/reviews', params });
+  }
+
   async adminResolveAlert(id: string, note: string): Promise<unknown> {
     return this.request({
       method: 'POST',

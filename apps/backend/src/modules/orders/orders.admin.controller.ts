@@ -198,6 +198,7 @@ export const adminGet: RequestHandler = async (req, res, next) => {
         },
         payments: true,
         alerts: { where: { isResolved: false } },
+        review: true,
         // Multi-merchant cart linkage — admin needs both directions:
         // parent → list of children with merchant + status; child → link
         // back to parent + its siblings so they can be reviewed together.

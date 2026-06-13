@@ -31,7 +31,6 @@ import {
   Pressable,
   RefreshControl,
   ScrollView,
-  Share,
   StyleSheet,
   Text,
   TextInput,
@@ -53,7 +52,9 @@ import {
 } from '../components/ui';
 import { api } from '../lib/api';
 import { connectSocket, subscribeToOrder, unsubscribeFromOrder } from '../lib/socket';
+import { shareReceipt } from '../lib/receipt';
 import { showToast } from '../lib/toast';
+import { useAuth } from '../stores/auth';
 import type { OrdersStackParamList } from '../navigation/OrdersStack';
 import { colors, fontFamilies, fontSizes, radii, shadows, spacing } from '../theme/tokens';
 
@@ -249,6 +250,7 @@ export function OrderTrackingScreen() {
   const navigation =
     useNavigation<NativeStackNavigationProp<OrdersStackParamList, 'OrderTracking'>>();
   const qc = useQueryClient();
+  const authUser = useAuth((s) => s.user);
   const { orderId, justCreated } = route.params;
   const [showWaBanner, setShowWaBanner] = useState(!!justCreated);
   const [driverLoc, setDriverLoc] = useState<DriverLocation | null>(null);
@@ -645,53 +647,67 @@ export function OrderTrackingScreen() {
           {isCompleted ? (
             <View style={{ marginBottom: spacing.md }}>
               <GhostButton
-                label="إيصال الطلب"
+                label="تحميل إيصال PDF"
                 Icon={Receipt}
                 onPress={async () => {
-                  const lines = [
-                    `إيصال طلب #${order.orderNumber}`,
-                    `الخدمة: ${order.service?.nameAr ?? '—'}`,
-                    `السعر: ${price ? `${Number(price).toLocaleString('ar-EG')} ج.م` : '—'}`,
-                    order.deliveryAddress ? `العنوان: ${order.deliveryAddress}` : null,
-                    order.assignedDriver ? `السائق: ${order.assignedDriver.name}` : null,
-                    `التاريخ: ${new Date(order.createdAt).toLocaleString('ar-EG')}`,
-                  ]
-                    .filter(Boolean)
-                    .join('\n');
-
-                  if (Platform.OS === 'web') {
-                    // Web: prefer the Web Share API if the browser exposes
-                    // it (mobile browsers do). Fall back to copy + open
-                    // WhatsApp so the receipt actually leaves the screen.
-                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                    const nav = typeof navigator !== 'undefined' ? (navigator as any) : null;
-                    if (nav?.share) {
-                      try {
-                        await nav.share({ title: 'إيصال الطلب', text: lines });
-                        return;
-                      } catch {
-                        /* user dismissed — fall through to fallback */
-                      }
-                    }
-                    try {
-                      await nav?.clipboard?.writeText(lines);
-                      showToast({ title: 'تم نسخ الإيصال', tone: 'success' });
-                    } catch {
-                      /* ignore — clipboard might be blocked */
-                    }
-                    openWhatsApp(lines);
-                    return;
-                  }
-
-                  // Native: open the system share sheet.
                   try {
-                    await Share.share({ title: 'إيصال الطلب', message: lines });
+                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                    const items = Array.isArray((order as any).items)
+                      ? // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                        (
+                          (order as any).items as Array<{
+                            productNameSnapshot: string;
+                            quantity: number;
+                            unitPriceSnapshot?: string | number | null;
+                            merchantId?: string | null;
+                            merchant?: { storeNameAr?: string } | null;
+                          }>
+                        ).map((it) => ({
+                          name: it.productNameSnapshot,
+                          quantity: it.quantity,
+                          unitPrice:
+                            it.unitPriceSnapshot != null ? Number(it.unitPriceSnapshot) : null,
+                          merchantName: it.merchant?.storeNameAr ?? null,
+                        }))
+                      : [];
+                    const paymentMethodMap: Record<string, string> = {
+                      CASH: 'كاش عند الاستلام',
+                      VODAFONE_CASH: 'فودافون كاش',
+                      INSTAPAY: 'إنستا باي',
+                    };
+                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                    const pm = (order as any).paymentMethod as string | null | undefined;
+                    await shareReceipt({
+                      orderNumber: order.orderNumber,
+                      // /orders/:id (customer) doesn't include the customer
+                      // relation — the auth user is the one looking at it.
+                      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                      customerName: (order as any).customer?.name ?? authUser?.name ?? '—',
+                      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                      customerPhone: (order as any).customer?.phone ?? authUser?.phone ?? null,
+                      serviceNameAr: order.service?.nameAr ?? null,
+                      status: ORDER_STATUS_AR[order.status] ?? order.status,
+                      createdAt: order.createdAt,
+                      deliveryAddress: order.deliveryAddress ?? null,
+                      pickupAddress: order.pickupAddress ?? null,
+                      paymentMethodAr: pm ? (paymentMethodMap[pm] ?? pm) : null,
+                      paymentStatus: order.paymentStatus ?? null,
+                      total: price != null ? Number(price) : null,
+                      notes: order.notes ?? null,
+                      driver: order.assignedDriver
+                        ? {
+                            name: order.assignedDriver.name,
+                            phone: order.assignedDriver.phone,
+                          }
+                        : null,
+                      items,
+                    });
                   } catch (err) {
-                    // If the share sheet fails (rare), fall back to the
-                    // existing WhatsApp deep link so the user still has a
-                    // way to get the receipt out.
-                    openWhatsApp(lines);
-                    void err;
+                    showToast({
+                      title: 'تعذّر تجهيز الإيصال',
+                      message: err instanceof Error ? err.message : undefined,
+                      tone: 'error',
+                    });
                   }
                 }}
               />

@@ -720,6 +720,8 @@ export function OrderDetailPage() {
             <ItemsByMerchantCard items={order.items} />
           )}
 
+          {order.review && <ReviewCard review={order.review} />}
+
           {customData &&
             Object.entries(customData).filter(([k]) => !renderedKeys.has(k)).length > 0 && (
               <Card title="بيانات إضافية" icon={<Phone className="w-4 h-4" />}>
@@ -1169,6 +1171,80 @@ function BackBar({ onBack }: { onBack: () => void }) {
       <ChevronRight className="w-4 h-4" />
       العودة لقائمة الطلبات
     </button>
+  );
+}
+
+/** Renders five star icons filled up to `rating` (0..5). */
+function Stars({ rating, size = 14 }: { rating: number; size?: number }) {
+  return (
+    <span className="inline-flex items-center gap-0.5" aria-label={`${rating} من 5`}>
+      {[1, 2, 3, 4, 5].map((i) => (
+        <span
+          key={i}
+          style={{ fontSize: size, lineHeight: 1, color: i <= rating ? '#F2A93B' : '#D1D5DB' }}
+        >
+          ★
+        </span>
+      ))}
+    </span>
+  );
+}
+
+/**
+ * The customer's review of this order. Always shows the overall rating;
+ * driver/merchant breakdowns and the free-text comment appear only when
+ * the customer filled them in.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function ReviewCard({ review }: { review: any }) {
+  const overall = Number(review.rating) || 0;
+  const driverR = review.driverRating != null ? Number(review.driverRating) : null;
+  const merchantR = review.merchantRating != null ? Number(review.merchantRating) : null;
+  return (
+    <Card title="تقييم العميل" icon={<CheckCircle2 className="w-4 h-4" />}>
+      <div className="space-y-3">
+        <div className="flex items-center justify-between">
+          <span className="text-sm font-bold">التقييم العام</span>
+          <div className="flex items-center gap-2">
+            <Stars rating={overall} size={18} />
+            <span className="font-black text-brand-red">{overall}/5</span>
+          </div>
+        </div>
+        {(driverR != null || merchantR != null) && (
+          <div className="grid grid-cols-2 gap-3 text-sm">
+            {driverR != null && (
+              <div className="bg-muted/30 rounded-lg p-2">
+                <div className="text-xs text-muted-foreground">السائق</div>
+                <div className="flex items-center gap-1 mt-1">
+                  <Stars rating={driverR} />
+                  <span className="font-bold">{driverR}/5</span>
+                </div>
+              </div>
+            )}
+            {merchantR != null && (
+              <div className="bg-muted/30 rounded-lg p-2">
+                <div className="text-xs text-muted-foreground">التاجر</div>
+                <div className="flex items-center gap-1 mt-1">
+                  <Stars rating={merchantR} />
+                  <span className="font-bold">{merchantR}/5</span>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+        {review.comment && (
+          <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-sm leading-relaxed">
+            <span className="text-muted-foreground text-xs block mb-1">التعليق</span>
+            <span className="italic">"{review.comment}"</span>
+          </div>
+        )}
+        {review.createdAt && (
+          <div className="text-xs text-muted-foreground text-end">
+            {new Date(review.createdAt).toLocaleString('ar-EG')}
+          </div>
+        )}
+      </div>
+    </Card>
   );
 }
 

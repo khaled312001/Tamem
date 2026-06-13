@@ -214,8 +214,51 @@ export const adminListReviews: RequestHandler = async (req, res, next) => {
       }),
       prisma.orderReview.count({ where }),
     ]);
+
+    // The customerId / driverId / merchantId columns aren't Prisma relations
+    // (kept as bare IDs in the schema). Hydrate them in a single batched
+    // lookup so the dashboard can show real names instead of cuids.
+    const customerIds = Array.from(new Set(items.map((r) => r.customerId)));
+    const driverIds = Array.from(
+      new Set(items.map((r) => r.driverId).filter((x): x is string => !!x)),
+    );
+    const merchantIds = Array.from(
+      new Set(items.map((r) => r.merchantId).filter((x): x is string => !!x)),
+    );
+
+    const [customers, drivers, merchants] = await Promise.all([
+      customerIds.length
+        ? prisma.user.findMany({
+            where: { id: { in: customerIds } },
+            select: { id: true, name: true, phone: true },
+          })
+        : Promise.resolve([]),
+      driverIds.length
+        ? prisma.user.findMany({
+            where: { id: { in: driverIds } },
+            select: { id: true, name: true, phone: true },
+          })
+        : Promise.resolve([]),
+      merchantIds.length
+        ? prisma.merchantProfile.findMany({
+            where: { id: { in: merchantIds } },
+            select: { id: true, storeNameAr: true, logoUrl: true },
+          })
+        : Promise.resolve([]),
+    ]);
+    const customerById = new Map(customers.map((c) => [c.id, c]));
+    const driverById = new Map(drivers.map((d) => [d.id, d]));
+    const merchantById = new Map(merchants.map((m) => [m.id, m]));
+
+    const enriched = items.map((r) => ({
+      ...r,
+      customer: customerById.get(r.customerId) ?? null,
+      driver: r.driverId ? (driverById.get(r.driverId) ?? null) : null,
+      merchant: r.merchantId ? (merchantById.get(r.merchantId) ?? null) : null,
+    }));
+
     res.json({
-      data: items,
+      data: enriched,
       meta: {
         pagination: {
           page: q.page,
