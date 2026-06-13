@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Loader2, Pencil, Phone, Plus, Save, Truck, X } from 'lucide-react';
+import { Loader2, MessageSquare, Pencil, Phone, Plus, Save, Star, Truck, X } from 'lucide-react';
 import { useState } from 'react';
 import { toast } from 'sonner';
 
@@ -19,6 +19,7 @@ export function DriversPage() {
   const qc = useQueryClient();
   const [createOpen, setCreateOpen] = useState(false);
   const [editing, setEditing] = useState<Row | null>(null);
+  const [viewingReviews, setViewingReviews] = useState<Row | null>(null);
 
   const { data, isLoading } = useQuery({
     queryKey: ['admin', 'drivers'],
@@ -108,12 +109,20 @@ export function DriversPage() {
                   </button>
                 ))}
               </div>
-              <button
-                onClick={() => setEditing(d)}
-                className="mt-3 inline-flex items-center gap-1 text-xs text-brand-red hover:underline"
-              >
-                <Pencil className="w-3 h-3" /> تعديل البيانات
-              </button>
+              <div className="mt-3 flex flex-wrap gap-3">
+                <button
+                  onClick={() => setEditing(d)}
+                  className="inline-flex items-center gap-1 text-xs text-brand-red hover:underline"
+                >
+                  <Pencil className="w-3 h-3" /> تعديل البيانات
+                </button>
+                <button
+                  onClick={() => setViewingReviews(d)}
+                  className="inline-flex items-center gap-1 text-xs text-brand-orange hover:underline"
+                >
+                  <Star className="w-3 h-3" /> التقييمات
+                </button>
+              </div>
             </div>
           ))}
         </div>
@@ -121,6 +130,9 @@ export function DriversPage() {
 
       {createOpen && <CreateDriverDialog onClose={() => setCreateOpen(false)} />}
       {editing && <EditDriverDialog driver={editing} onClose={() => setEditing(null)} />}
+      {viewingReviews && (
+        <DriverReviewsDialog driver={viewingReviews} onClose={() => setViewingReviews(null)} />
+      )}
     </div>
   );
 }
@@ -246,6 +258,102 @@ function EditDriverDialog({ driver, onClose }: { driver: Row; onClose: () => voi
           </button>
         </div>
       </div>
+    </Dialog>
+  );
+}
+
+function Stars({ rating, size = 14 }: { rating: number; size?: number }) {
+  return (
+    <span className="inline-flex items-center gap-0.5">
+      {[1, 2, 3, 4, 5].map((i) => (
+        <span
+          key={i}
+          style={{ fontSize: size, lineHeight: 1, color: i <= rating ? '#F2A93B' : '#D1D5DB' }}
+        >
+          ★
+        </span>
+      ))}
+    </span>
+  );
+}
+
+function DriverReviewsDialog({ driver, onClose }: { driver: Row; onClose: () => void }) {
+  const { data, isLoading } = useQuery({
+    queryKey: ['admin', 'driver', driver.id, 'with-reviews'],
+    queryFn: () => api.adminGetDriver(driver.id) as Promise<Row>,
+  });
+
+  const reviews: Row[] = data?.reviews ?? [];
+  const avg = data?.stats?.averageRating;
+  const count = data?.stats?.reviewCount ?? 0;
+
+  return (
+    <Dialog
+      open
+      onOpenChange={(o) => !o && onClose()}
+      title={`تقييمات السائق · ${driver.name}`}
+      size="lg"
+    >
+      {isLoading ? (
+        <div className="py-8 text-center text-muted-foreground">
+          <Loader2 className="w-5 h-5 animate-spin inline" /> جاري التحميل…
+        </div>
+      ) : (
+        <div className="space-y-4">
+          {/* Summary */}
+          <div className="grid grid-cols-2 gap-3">
+            <div className="bg-amber-50 border border-amber-200 rounded-xl p-4">
+              <div className="text-xs font-bold text-amber-900/70">المتوسط</div>
+              <div className="flex items-center gap-2 mt-1">
+                <Stars rating={Math.round(avg ?? 0)} size={20} />
+                <span className="text-2xl font-black text-amber-900">
+                  {avg != null ? Number(avg).toFixed(2) : '—'}
+                </span>
+              </div>
+            </div>
+            <div className="bg-blue-50 border border-blue-200 rounded-xl p-4">
+              <div className="text-xs font-bold text-blue-900/70">عدد التقييمات</div>
+              <div className="text-2xl font-black text-blue-900 mt-1">{count}</div>
+            </div>
+          </div>
+
+          {/* Reviews list */}
+          {reviews.length === 0 ? (
+            <div className="bg-muted/30 rounded-xl p-8 text-center text-sm text-muted-foreground">
+              لا توجد تقييمات بعد لهذا السائق
+            </div>
+          ) : (
+            <div>
+              <div className="text-xs font-bold uppercase tracking-wider text-muted-foreground mb-2 flex items-center gap-1.5">
+                <MessageSquare className="w-3.5 h-3.5" /> آخر التقييمات
+              </div>
+              <ul className="space-y-2 max-h-[400px] overflow-y-auto">
+                {reviews.map((r) => (
+                  <li key={r.id} className="bg-white border border-border rounded-xl p-3">
+                    <div className="flex items-center gap-2 text-sm">
+                      <Stars rating={Number(r.driverRating ?? r.rating)} size={14} />
+                      <span className="font-bold">{Number(r.driverRating ?? r.rating)}/5</span>
+                      {r.order?.orderNumber && (
+                        <span className="font-mono text-xs text-brand-red ms-1">
+                          #{r.order.orderNumber}
+                        </span>
+                      )}
+                      <span className="text-xs text-muted-foreground ms-auto">
+                        {new Date(r.createdAt).toLocaleDateString('ar-EG')}
+                      </span>
+                    </div>
+                    {r.comment && (
+                      <p className="mt-2 text-sm italic bg-amber-50 border border-amber-100 rounded p-2">
+                        "{r.comment}"
+                      </p>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </div>
+      )}
     </Dialog>
   );
 }

@@ -448,6 +448,10 @@ export class TamemClient {
   async adminListDrivers(params?: Record<string, unknown>): Promise<Paginated<unknown>> {
     return this.requestPaginated({ method: 'GET', url: '/admin/drivers', params });
   }
+  /** Driver detail with live rating + recent reviews. */
+  async adminGetDriver(id: string): Promise<unknown> {
+    return this.request({ method: 'GET', url: `/admin/drivers/${id}` });
+  }
   async adminCreateDriver(data: unknown): Promise<unknown> {
     return this.request({ method: 'POST', url: '/admin/drivers', data });
   }

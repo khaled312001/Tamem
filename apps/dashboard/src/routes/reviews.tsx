@@ -61,9 +61,15 @@ export function ReviewsPage() {
 
   // Leaderboards — group by driverId / merchantId, average the breakout
   // ratings (not the overall, because the overall mixes both targets).
-  const driverStats = useMemo(() => groupAverage(reviews, 'driverId', 'driverRating'), [reviews]);
+  // Resolve the display name from the first review row of each group so
+  // leaderboard rows show "محمود حسن" instead of an opaque cuid.
+  const driverStats = useMemo(
+    () => groupAverage(reviews, 'driverId', 'driverRating', (r) => r.driver?.name ?? null),
+    [reviews],
+  );
   const merchantStats = useMemo(
-    () => groupAverage(reviews, 'merchantId', 'merchantRating'),
+    () =>
+      groupAverage(reviews, 'merchantId', 'merchantRating', (r) => r.merchant?.storeNameAr ?? null),
     [reviews],
   );
 
@@ -162,7 +168,7 @@ export function ReviewsPage() {
               <li key={r.id} className="p-4 hover:bg-muted/30 transition">
                 <div className="flex items-start gap-3">
                   <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 text-sm">
+                    <div className="flex items-center gap-2 text-sm flex-wrap">
                       <Stars rating={Number(r.rating)} size={16} />
                       <span className="font-bold">{Number(r.rating)}/5</span>
                       {r.order?.orderNumber && (
@@ -177,21 +183,37 @@ export function ReviewsPage() {
                         {new Date(r.createdAt).toLocaleDateString('ar-EG')}
                       </span>
                     </div>
-                    {(r.driverRating != null || r.merchantRating != null) && (
-                      <div className="flex items-center gap-4 mt-2 text-xs text-muted-foreground">
-                        {r.driverRating != null && (
-                          <span className="inline-flex items-center gap-1">
-                            السائق:
-                            <Stars rating={Number(r.driverRating)} size={12} />
-                            <span className="font-bold">{r.driverRating}</span>
+                    {/* Who reviewed (customer) — shown first so it's obvious. */}
+                    {r.customer && (
+                      <div className="text-xs text-muted-foreground mt-1">
+                        <span className="font-bold text-foreground">
+                          {r.customer.name ?? 'عميل'}
+                        </span>
+                        {r.customer.phone && (
+                          <span className="ms-2 font-mono" dir="ltr">
+                            {r.customer.phone}
                           </span>
                         )}
+                      </div>
+                    )}
+                    {/* Per-target breakdowns with real names */}
+                    {(r.driverRating != null || r.merchantRating != null) && (
+                      <div className="flex items-center gap-4 mt-2 text-xs flex-wrap">
+                        {r.driverRating != null && (
+                          <div className="inline-flex items-center gap-1.5 bg-blue-50 border border-blue-100 rounded-lg px-2 py-1">
+                            <span className="text-muted-foreground">🚚 السائق:</span>
+                            <span className="font-bold">{r.driver?.name ?? '—'}</span>
+                            <Stars rating={Number(r.driverRating)} size={11} />
+                            <span className="font-bold">{r.driverRating}</span>
+                          </div>
+                        )}
                         {r.merchantRating != null && (
-                          <span className="inline-flex items-center gap-1">
-                            التاجر:
-                            <Stars rating={Number(r.merchantRating)} size={12} />
+                          <div className="inline-flex items-center gap-1.5 bg-orange-50 border border-orange-100 rounded-lg px-2 py-1">
+                            <span className="text-muted-foreground">🏪 التاجر:</span>
+                            <span className="font-bold">{r.merchant?.storeNameAr ?? '—'}</span>
+                            <Stars rating={Number(r.merchantRating)} size={11} />
                             <span className="font-bold">{r.merchantRating}</span>
-                          </span>
+                          </div>
                         )}
                       </div>
                     )}
@@ -222,23 +244,30 @@ export function ReviewsPage() {
 
 interface Stat {
   id: string;
+  name: string | null;
   count: number;
   avg: number;
 }
 
-function groupAverage(reviews: ReviewRow[], groupKey: string, ratingKey: string): Stat[] {
-  const map = new Map<string, { sum: number; count: number }>();
+function groupAverage(
+  reviews: ReviewRow[],
+  groupKey: string,
+  ratingKey: string,
+  resolveName: (r: ReviewRow) => string | null = () => null,
+): Stat[] {
+  const map = new Map<string, { sum: number; count: number; name: string | null }>();
   for (const r of reviews) {
     const id = r[groupKey];
     const v = Number(r[ratingKey]);
     if (!id || !Number.isFinite(v)) continue;
-    const cur = map.get(id) ?? { sum: 0, count: 0 };
+    const cur = map.get(id) ?? { sum: 0, count: 0, name: resolveName(r) };
     cur.sum += v;
     cur.count += 1;
+    if (!cur.name) cur.name = resolveName(r);
     map.set(id, cur);
   }
   return Array.from(map.entries())
-    .map(([id, v]) => ({ id, count: v.count, avg: v.sum / v.count }))
+    .map(([id, v]) => ({ id, name: v.name, count: v.count, avg: v.sum / v.count }))
     .sort((a, b) => b.avg - a.avg);
 }
 
@@ -255,11 +284,9 @@ function Leaderboard({ title, rows, accent }: { title: string; rows: Stat[]; acc
               key={r.id}
               className="px-4 py-2 flex items-center justify-between text-sm hover:bg-muted/30"
             >
-              <div className="flex items-center gap-2 min-w-0">
+              <div className="flex items-center gap-2 min-w-0 flex-1">
                 <span className="text-xs text-muted-foreground w-5">#{i + 1}</span>
-                <span className="font-mono text-xs text-muted-foreground truncate">
-                  {r.id.slice(-8)}
-                </span>
+                <span className="font-bold truncate">{r.name ?? '— غير معروف —'}</span>
               </div>
               <div className="flex items-center gap-2 shrink-0">
                 <Stars rating={Math.round(r.avg)} />
