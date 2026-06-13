@@ -31,6 +31,7 @@ import {
   Pressable,
   RefreshControl,
   ScrollView,
+  Share,
   StyleSheet,
   Text,
   TextInput,
@@ -52,6 +53,7 @@ import {
 } from '../components/ui';
 import { api } from '../lib/api';
 import { connectSocket, subscribeToOrder, unsubscribeFromOrder } from '../lib/socket';
+import { showToast } from '../lib/toast';
 import type { OrdersStackParamList } from '../navigation/OrdersStack';
 import { colors, fontFamilies, fontSizes, radii, shadows, spacing } from '../theme/tokens';
 
@@ -637,13 +639,15 @@ export function OrderTrackingScreen() {
           )}
 
           {/* Receipt — visible after delivery so the customer has a printable
-              trail. Used to import Receipt icon without ever rendering it. */}
+              trail. Uses the native Share sheet on iOS/Android and a
+              window-based fallback on web (Alert.alert is silently no-op
+              there, which is why the old version "did nothing"). */}
           {isCompleted ? (
             <View style={{ marginBottom: spacing.md }}>
               <GhostButton
                 label="إيصال الطلب"
                 Icon={Receipt}
-                onPress={() => {
+                onPress={async () => {
                   const lines = [
                     `إيصال طلب #${order.orderNumber}`,
                     `الخدمة: ${order.service?.nameAr ?? '—'}`,
@@ -654,13 +658,41 @@ export function OrderTrackingScreen() {
                   ]
                     .filter(Boolean)
                     .join('\n');
-                  Alert.alert('إيصال الطلب', lines, [
-                    {
-                      text: 'مشاركة عبر واتساب',
-                      onPress: () => openWhatsApp(lines),
-                    },
-                    { text: 'إغلاق', style: 'cancel' },
-                  ]);
+
+                  if (Platform.OS === 'web') {
+                    // Web: prefer the Web Share API if the browser exposes
+                    // it (mobile browsers do). Fall back to copy + open
+                    // WhatsApp so the receipt actually leaves the screen.
+                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                    const nav = typeof navigator !== 'undefined' ? (navigator as any) : null;
+                    if (nav?.share) {
+                      try {
+                        await nav.share({ title: 'إيصال الطلب', text: lines });
+                        return;
+                      } catch {
+                        /* user dismissed — fall through to fallback */
+                      }
+                    }
+                    try {
+                      await nav?.clipboard?.writeText(lines);
+                      showToast({ title: 'تم نسخ الإيصال', tone: 'success' });
+                    } catch {
+                      /* ignore — clipboard might be blocked */
+                    }
+                    openWhatsApp(lines);
+                    return;
+                  }
+
+                  // Native: open the system share sheet.
+                  try {
+                    await Share.share({ title: 'إيصال الطلب', message: lines });
+                  } catch (err) {
+                    // If the share sheet fails (rare), fall back to the
+                    // existing WhatsApp deep link so the user still has a
+                    // way to get the receipt out.
+                    openWhatsApp(lines);
+                    void err;
+                  }
                 }}
               />
             </View>

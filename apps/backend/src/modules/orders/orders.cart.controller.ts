@@ -204,70 +204,62 @@ export const createCartOrder: RequestHandler = async (req, res, next) => {
       return;
     }
 
-    // ── 5. Multi-merchant: parent + N children in one transaction ────────
-    console.log('[orders/cart] creating parent + %d children', merchantSummaries.length);
-    const result = await prisma.$transaction(async (tx) => {
-      const parent = await tx.order.create({
-        data: {
-          orderNumber: generateOrderNumber(),
-          serviceId: service.id,
-          customerId: req.user!.id,
-          category: ServiceCategory.DELIVERY,
-          status: OrderStatus.NEW,
-          // No merchantId on the parent — it's a logistics-level wrapper.
-          deliveryAddress: input.deliveryAddress,
-          deliveryLat: input.deliveryLat,
-          deliveryLng: input.deliveryLng,
-          paymentMethod: input.paymentMethod,
-          quotedPrice: grandTotal,
-          notes: input.notes,
-          scheduledFor,
-          couponCode: input.couponCode,
-        },
-      });
+    // ── 5. Multi-merchant: ONE merged Order. ──────────────────────────────
+    // Items keep their merchantId tag so the dashboard / WhatsApp brief /
+    // mobile detail can still group them by store. Single driver, single
+    // status, single workflow — admin sees one row instead of three.
+    // Per-merchant notes are stitched together with a merchant-name prefix;
+    // per-merchant images are merged into a single imageUrls array.
+    const mergedNotes = [
+      input.notes?.trim(),
+      ...merchantSummaries
+        .filter((m) => m.notes?.trim())
+        .map((m) => `[${merchantNameById.get(m.merchantId) ?? m.merchantId}] ${m.notes!.trim()}`),
+    ]
+      .filter(Boolean)
+      .join('\n');
+    const mergedImages = Array.from(
+      new Set(merchantSummaries.flatMap((m) => m.imageUrls ?? []).filter(Boolean)),
+    );
+    const allItems = merchantSummaries.flatMap((m) =>
+      m.items.map((it) => ({
+        productId: it.productId,
+        productNameSnapshot: it.nameAr,
+        unitPriceSnapshot: it.price,
+        quantity: it.quantity,
+        merchantId: m.merchantId,
+      })),
+    );
 
-      const children = [];
-      for (const m of merchantSummaries) {
-        const child = await tx.order.create({
-          data: {
-            orderNumber: generateOrderNumber(),
-            serviceId: service.id,
-            customerId: req.user!.id,
-            category: ServiceCategory.DELIVERY,
-            status: OrderStatus.NEW,
-            merchantId: m.merchantId,
-            // Each child inherits the same delivery address + payment.
-            deliveryAddress: input.deliveryAddress,
-            deliveryLat: input.deliveryLat,
-            deliveryLng: input.deliveryLng,
-            paymentMethod: input.paymentMethod,
-            quotedPrice: m.subtotal,
-            merchantSubtotal: m.subtotal,
-            notes: m.notes,
-            imageUrls: m.imageUrls,
-            scheduledFor,
-            parentOrderId: parent.id,
-            items: {
-              create: m.items.map((it) => ({
-                productId: it.productId,
-                productNameSnapshot: it.nameAr,
-                unitPriceSnapshot: it.price,
-                quantity: it.quantity,
-                merchantId: m.merchantId,
-              })),
-            },
-          },
-        });
-        children.push(child);
-      }
-
-      return { parent, children };
+    const order = await prisma.order.create({
+      data: {
+        orderNumber: generateOrderNumber(),
+        serviceId: service.id,
+        customerId: req.user.id,
+        category: ServiceCategory.DELIVERY,
+        status: OrderStatus.NEW,
+        // merchantId left null — flag for "multi-merchant cart". The
+        // dashboard list can show "X متاجر" badge by counting distinct
+        // OrderItem.merchantId values.
+        merchantId: null,
+        deliveryAddress: input.deliveryAddress,
+        deliveryLat: input.deliveryLat,
+        deliveryLng: input.deliveryLng,
+        paymentMethod: input.paymentMethod,
+        quotedPrice: grandTotal,
+        // merchantSubtotal is per-merchant — leave null on the merged order.
+        // The accountant report can compute per-merchant subtotals from the
+        // grouped OrderItem rows when needed.
+        notes: mergedNotes || null,
+        imageUrls: mergedImages.length > 0 ? (mergedImages as unknown as object) : undefined,
+        scheduledFor,
+        couponCode: input.couponCode,
+        items: { create: allItems },
+      },
+      include: { items: true },
     });
 
-    created(res, {
-      ...result.parent,
-      subOrders: result.children,
-    });
+    created(res, order);
   } catch (err) {
     // Surface the real cause in the backend terminal — the response is
     // still a generic 500, but the operator needs the stack to debug.

@@ -2,6 +2,7 @@ import type { RequestHandler } from 'express';
 import { z } from 'zod';
 
 import { prisma } from '../../db/prisma.js';
+import { sendPushToUser } from '../../integrations/fcm.js';
 import {
   ConflictError,
   ForbiddenError,
@@ -9,7 +10,10 @@ import {
   UnauthorizedError,
   ValidationError,
 } from '../../utils/errors.js';
+import { logger } from '../../utils/logger.js';
 import { created, ok } from '../../utils/response.js';
+
+import { notify } from '../notifications/notifications.controller.js';
 
 const reviewSchema = z.object({
   rating: z.number().int().min(1).max(5),
@@ -105,6 +109,55 @@ export const createOrderReview: RequestHandler = async (req, res, next) => {
     ]).catch(() => {
       /* don't care — averages are best-effort, the review is the source of truth */
     });
+
+    // Notify the rated parties so the review reaches the driver / merchant
+    // in real time, not just as a silent number on their average. Notifies
+    // are fire-and-forget — a failure mustn't block the review save.
+    void (async () => {
+      try {
+        const stars = (n: number) => '★'.repeat(n) + '☆'.repeat(5 - n);
+        const trimmed = input.comment?.trim();
+
+        if (order.assignedDriverId && input.driverRating) {
+          const titleAr = `تقييم جديد للطلب ${order.orderNumber}`;
+          const bodyAr = `${stars(input.driverRating)} (${input.driverRating}/5)${
+            trimmed ? ` — "${trimmed}"` : ''
+          }`;
+          await notify(order.assignedDriverId, 'SYSTEM', titleAr, bodyAr, {
+            data: { orderId, reviewId: review.id, kind: 'driver_review' },
+          });
+          await sendPushToUser(order.assignedDriverId, {
+            title: titleAr,
+            body: bodyAr,
+            data: { orderId, reviewId: review.id, kind: 'driver_review' },
+          }).catch(() => undefined);
+        }
+
+        if (order.merchantId && input.merchantRating) {
+          // Merchant ratings go to the merchant's owner user account.
+          const merchant = await prisma.merchantProfile.findUnique({
+            where: { id: order.merchantId },
+            select: { userId: true },
+          });
+          if (merchant?.userId) {
+            const titleAr = `تقييم جديد للطلب ${order.orderNumber}`;
+            const bodyAr = `${stars(input.merchantRating)} (${input.merchantRating}/5)${
+              trimmed ? ` — "${trimmed}"` : ''
+            }`;
+            await notify(merchant.userId, 'SYSTEM', titleAr, bodyAr, {
+              data: { orderId, reviewId: review.id, kind: 'merchant_review' },
+            });
+            await sendPushToUser(merchant.userId, {
+              title: titleAr,
+              body: bodyAr,
+              data: { orderId, reviewId: review.id, kind: 'merchant_review' },
+            }).catch(() => undefined);
+          }
+        }
+      } catch (err) {
+        logger.warn({ err, reviewId: review.id }, 'review notification dispatch failed');
+      }
+    })();
 
     created(res, review);
   } catch (err) {

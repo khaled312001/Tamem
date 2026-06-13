@@ -582,8 +582,23 @@ export function OrdersPage() {
                   {(data.items as OrderRow[]).map((o) => {
                     const next = nextStatusFor(o);
                     const isSelected = selectedIds.has(o.id);
+                    // Two flavours of "multi-merchant" can show on this row:
+                    //   1) Legacy parent (has subOrders) — expandable below.
+                    //   2) Merged order — single Order with items tagged by
+                    //      merchantId. Count distinct merchant IDs on the
+                    //      items array for the badge.
                     const subCount = o._count?.subOrders ?? 0;
+                    const mergedMerchantCount = Array.isArray(o.items)
+                      ? new Set(
+                          (o.items as Array<{ merchantId?: string | null }>)
+                            .map((i) => i.merchantId)
+                            .filter((x): x is string => !!x),
+                        ).size
+                      : 0;
                     const isParent = subCount > 0;
+                    const isMergedMulti = !isParent && mergedMerchantCount > 1;
+                    const merchantBadgeCount = isParent ? subCount : mergedMerchantCount;
+                    const showMerchantBadge = isParent || isMergedMulti;
                     const isExpanded = expandedParents.has(o.id);
                     return (
                       <Fragment key={o.id}>
@@ -629,12 +644,14 @@ export function OrdersPage() {
                               )}
                               <span>{o.orderNumber}</span>
                             </div>
-                            {/* Multi-merchant linkage badges — make it obvious
-                              when 3 rows came from the same checkout. */}
-                            {isParent && (
+                            {/* Multi-merchant badge — shown for both legacy
+                              parent/child orders and the new merged orders
+                              (single Order with items spread across
+                              multiple merchants). */}
+                            {showMerchantBadge && (
                               <span className="inline-flex items-center gap-1 mt-1 px-1.5 py-0.5 rounded text-[10px] font-bold bg-brand-red/10 text-brand-red">
                                 <Store className="w-3 h-3" />
-                                سلة من {subCount} متاجر
+                                سلة من {merchantBadgeCount} متاجر
                               </span>
                             )}
                           </td>

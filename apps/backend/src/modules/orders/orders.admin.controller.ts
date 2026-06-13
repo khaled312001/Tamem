@@ -135,14 +135,12 @@ export const adminList: RequestHandler = async (req, res, next) => {
               },
             },
           },
-          // Surface the multi-merchant cart linkage so the dashboard can
-          // badge children ("جزء من #PARENT") and parents ("3 متاجر")
-          // — otherwise the admin sees 3 disconnected rows and can't tell
-          // they came from the same checkout.
+          // Multi-merchant linkage — kept for legacy parent/child orders
+          // created before the merged-order refactor. New multi-merchant
+          // carts produce ONE order with items tagged by merchantId, which
+          // we detect by counting distinct OrderItem.merchantId values.
           parentOrder: { select: { id: true, orderNumber: true } },
           _count: { select: { subOrders: true } },
-          // Inline sub-order summary so the expandable parent row can
-          // render every merchant in-place without a second request.
           subOrders: {
             orderBy: { createdAt: 'asc' },
             select: {
@@ -156,6 +154,9 @@ export const adminList: RequestHandler = async (req, res, next) => {
               items: { select: { productNameSnapshot: true, quantity: true } },
             },
           },
+          // Cheap merchant ID list so the dashboard can badge merged
+          // multi-merchant orders ("3 متاجر") without a follow-up call.
+          items: { select: { merchantId: true } },
         },
       }),
       prisma.order.count({ where }),
@@ -253,7 +254,26 @@ export const adminGet: RequestHandler = async (req, res, next) => {
       }));
     }
 
-    ok(res, { ...order, subOrders: subOrdersEnriched, siblings });
+    // Multi-merchant merged orders carry the per-merchant info on the
+    // OrderItem rows. Enrich each item with the merchant's name so the
+    // dashboard can group the items section by store without follow-up
+    // queries. Single-merchant orders still go through this path (no-op).
+    const itemMerchantIds = Array.from(
+      new Set((order.items ?? []).map((i) => i.merchantId).filter((x): x is string => !!x)),
+    );
+    const itemMerchants = itemMerchantIds.length
+      ? await prisma.merchantProfile.findMany({
+          where: { id: { in: itemMerchantIds } },
+          select: { id: true, storeNameAr: true, logoUrl: true },
+        })
+      : [];
+    const itemMerchantById = new Map(itemMerchants.map((m) => [m.id, m]));
+    const itemsEnriched = (order.items ?? []).map((it) => ({
+      ...it,
+      merchant: it.merchantId ? (itemMerchantById.get(it.merchantId) ?? null) : null,
+    }));
+
+    ok(res, { ...order, items: itemsEnriched, subOrders: subOrdersEnriched, siblings });
   } catch (err) {
     next(err);
   }
@@ -466,10 +486,29 @@ export const adminAssignDriver: RequestHandler = async (req, res, next) => {
           include: {
             service: { select: { nameAr: true } },
             customer: { select: { name: true, phone: true } },
-            items: { select: { productNameSnapshot: true, quantity: true } },
+            items: {
+              select: {
+                productNameSnapshot: true,
+                quantity: true,
+                unitPriceSnapshot: true,
+                merchantId: true,
+              },
+            },
           },
         });
         if (!full || !driver.phone) return;
+        // Pre-resolve merchant names so the driver's brief can group items
+        // by store. For single-merchant orders this is a no-op.
+        const merchantIds = Array.from(
+          new Set(full.items.map((i) => i.merchantId).filter((x): x is string => !!x)),
+        );
+        const merchants = merchantIds.length
+          ? await prisma.merchantProfile.findMany({
+              where: { id: { in: merchantIds } },
+              select: { id: true, storeNameAr: true },
+            })
+          : [];
+        const merchantNameById = new Map(merchants.map((m) => [m.id, m.storeNameAr] as const));
         const text = buildDriverAssignmentText({
           orderNumber: full.orderNumber,
           customerName: full.customer?.name ?? '—',
@@ -493,6 +532,8 @@ export const adminAssignDriver: RequestHandler = async (req, res, next) => {
           items: full.items.map((it) => ({
             name: it.productNameSnapshot,
             quantity: it.quantity,
+            price: it.unitPriceSnapshot ? Number(it.unitPriceSnapshot) : null,
+            merchantName: it.merchantId ? (merchantNameById.get(it.merchantId) ?? null) : null,
           })),
           // Quick orders ship the customer's description in customData,
           // not as catalog items. Forward both so the driver sees it.
@@ -510,6 +551,42 @@ export const adminAssignDriver: RequestHandler = async (req, res, next) => {
             { orderId: order.id, driverPhone: driver.phone },
             'driver assignment WhatsApp not delivered',
           );
+        }
+
+        // Also notify the customer that a driver was assigned, with the
+        // driver's name + phone so they can identify / contact them.
+        if (full.customer?.phone) {
+          const driverPhoneClean = driver.phone ?? '—';
+          const vehicle = driver.driverProfile
+            ? `${driver.driverProfile.vehicleType ?? ''} ${driver.driverProfile.vehiclePlate ?? ''}`.trim()
+            : '';
+          const customerText = [
+            `🛵 *تم تعيين سائق لطلبك*`,
+            `رقم الطلب: ${full.orderNumber}`,
+            `━━━━━━━━━━━━━━━`,
+            `عزيزنا ${full.customer.name}،`,
+            `طلبك في طريقه إليك.`,
+            ``,
+            `👤 *السائق:* ${driver.name}`,
+            `📞 *رقمه:* ${driverPhoneClean}`,
+            vehicle ? `🛵 *المركبة:* ${vehicle}` : '',
+            ``,
+            `يمكنك متابعة الطلب من داخل التطبيق.`,
+            `تَميم — التوصيل لعبتنا 🛵`,
+          ]
+            .filter((l) => l !== '')
+            .join('\n');
+
+          const customerSent = await sendWhatsAppMessage({
+            toPhone: full.customer.phone,
+            text: customerText,
+          });
+          if (!customerSent) {
+            logger.warn(
+              { orderId: order.id, customerPhone: full.customer.phone },
+              'customer driver-assigned WhatsApp not delivered',
+            );
+          }
         }
       } catch (err) {
         logger.error({ err, orderId: order.id }, 'driver assignment WhatsApp send failed');

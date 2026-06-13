@@ -204,9 +204,13 @@ export function OrderDetailPage() {
   };
 
   // Direct status advance — used by phase-2 (PRICED → ACCEPTED) and by the
-  // sequential completion walk below.
+  // sequential completion walk below. Always invalidate on success so the
+  // cached order/list reflects the new status; otherwise the next click
+  // sees the old status and tries to transition to the same state
+  // ("Cannot transition from ACCEPTED to ACCEPTED").
   const advanceMut = useMutation({
     mutationFn: (status: OrderStatus) => api.adminUpdateOrderStatus(id!, status),
+    onSuccess: () => invalidate(),
     onError: (err: Error) => toast.error(err.message),
   });
 
@@ -713,25 +717,7 @@ export function OrderDetailPage() {
           )}
 
           {Array.isArray(order.items) && order.items.length > 0 && (
-            <Card
-              title={`المنتجات (${order.items.length})`}
-              icon={<MessageSquare className="w-4 h-4" />}
-            >
-              <ul className="divide-y divide-border">
-                {order.items.map((it: Order, i: number) => (
-                  <li key={i} className="py-2 flex items-center justify-between text-sm">
-                    <span>
-                      <span className="font-bold">{it.quantity}×</span> {it.productNameSnapshot}
-                    </span>
-                    {it.unitPriceSnapshot && (
-                      <span className="text-muted-foreground">
-                        {(Number(it.unitPriceSnapshot) * it.quantity).toLocaleString('ar-EG')} ج.م
-                      </span>
-                    )}
-                  </li>
-                ))}
-              </ul>
-            </Card>
+            <ItemsByMerchantCard items={order.items} />
           )}
 
           {customData &&
@@ -1183,6 +1169,87 @@ function BackBar({ onBack }: { onBack: () => void }) {
       <ChevronRight className="w-4 h-4" />
       العودة لقائمة الطلبات
     </button>
+  );
+}
+
+/**
+ * Renders order items grouped by merchant. For a single-merchant order it
+ * looks like a regular product list with one header; for a merged
+ * multi-merchant cart it shows each store in its own section with its
+ * logo / name / subtotal — which is exactly what makes "سلة متعددة المتاجر"
+ * easy to scan as ONE order instead of three.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function ItemsByMerchantCard({ items }: { items: any[] }) {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const groups = new Map<string, { merchant: any; items: any[]; subtotal: number }>();
+  for (const it of items) {
+    const key = it.merchantId ?? '__nomerchant__';
+    let g = groups.get(key);
+    if (!g) {
+      g = { merchant: it.merchant ?? null, items: [], subtotal: 0 };
+      groups.set(key, g);
+    }
+    g.items.push(it);
+    g.subtotal += Number(it.unitPriceSnapshot ?? 0) * it.quantity;
+  }
+  const groupArr = Array.from(groups.values());
+  const isMulti = groupArr.length > 1;
+
+  return (
+    <Card
+      title={
+        isMulti
+          ? `🛒 المنتجات — من ${groupArr.length} متاجر (${items.length})`
+          : `المنتجات (${items.length})`
+      }
+      icon={<MessageSquare className="w-4 h-4" />}
+    >
+      <div className="space-y-3">
+        {groupArr.map((g, gi) => (
+          <div key={gi} className={isMulti ? 'border border-border rounded-lg' : ''}>
+            {isMulti && (
+              <div className="px-3 py-2 bg-brand-red/5 border-b border-border flex items-center gap-2">
+                {g.merchant?.logoUrl ? (
+                  <img
+                    src={g.merchant.logoUrl}
+                    alt={g.merchant.storeNameAr}
+                    className="w-7 h-7 rounded object-cover"
+                  />
+                ) : (
+                  <div className="w-7 h-7 rounded bg-brand-orange/10 text-brand-orange flex items-center justify-center font-bold text-xs">
+                    {g.merchant?.storeNameAr?.[0] ?? '?'}
+                  </div>
+                )}
+                <div className="flex-1 min-w-0">
+                  <div className="font-bold text-sm truncate">
+                    {g.merchant?.storeNameAr ?? '— تاجر غير معروف —'}
+                  </div>
+                  <div className="text-[10px] text-muted-foreground">{g.items.length} منتج</div>
+                </div>
+                <div className="text-sm font-bold text-brand-red">
+                  {g.subtotal.toLocaleString('ar-EG')} ج.م
+                </div>
+              </div>
+            )}
+            <ul className={`divide-y divide-border ${isMulti ? 'px-3' : ''}`}>
+              {g.items.map((it, i) => (
+                <li key={i} className="py-2 flex items-center justify-between text-sm">
+                  <span>
+                    <span className="font-bold">{it.quantity}×</span> {it.productNameSnapshot}
+                  </span>
+                  {it.unitPriceSnapshot && (
+                    <span className="text-muted-foreground">
+                      {(Number(it.unitPriceSnapshot) * it.quantity).toLocaleString('ar-EG')} ج.م
+                    </span>
+                  )}
+                </li>
+              ))}
+            </ul>
+          </div>
+        ))}
+      </div>
+    </Card>
   );
 }
 

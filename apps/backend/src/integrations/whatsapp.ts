@@ -79,6 +79,235 @@ export function buildOrderConfirmationText(opts: {
 }
 
 /**
+ * Rich, professional order-details WhatsApp message.
+ *
+ * Single source of truth for both the customer's confirmation and the
+ * driver's assignment brief — both audiences need the same data, only the
+ * header line and a few footer hints differ. Sections appear only when
+ * the underlying field is populated, so a quick voice-note order looks
+ * just as clean as a 10-item cart checkout.
+ *
+ * Media URLs (images, audio) are dropped in as plain links — WhatsApp
+ * automatically previews images and lets the user open audio in the
+ * browser. The URLs come from the backend's /uploads handler so they're
+ * absolute (env.API_BASE_URL prefixed).
+ */
+export type Audience = 'customer' | 'driver';
+
+export interface OrderDetailsOpts {
+  audience: Audience;
+  orderNumber: string;
+  customerName: string;
+  customerPhone: string;
+  serviceNameAr: string;
+  notes?: string | null;
+  paymentMethodAr?: string | null;
+  /** Sum the recipient ultimately needs to know. */
+  total?: number | null;
+  pickupAddress?: string | null;
+  pickupLat?: number | null;
+  pickupLng?: number | null;
+  deliveryAddress?: string | null;
+  deliveryLat?: number | null;
+  deliveryLng?: number | null;
+  items?: Array<{
+    name: string;
+    quantity: number;
+    price?: number | null;
+    /** Optional merchant name for multi-merchant orders — when present,
+     *  items are grouped by merchant under sub-headers. */
+    merchantName?: string | null;
+  }>;
+  customData?: Record<string, unknown> | null;
+  imageUrls?: string[] | null;
+  /** Scheduled delivery time, if customer picked one. */
+  scheduledFor?: string | Date | null;
+}
+
+export function buildOrderDetailsText(opts: OrderDetailsOpts): string {
+  const mapsLink = (lat?: number | null, lng?: number | null): string | null =>
+    lat != null && lng != null ? `https://maps.google.com/?q=${lat},${lng}` : null;
+  const pickupMap = mapsLink(opts.pickupLat, opts.pickupLng);
+  const deliveryMap = mapsLink(opts.deliveryLat, opts.deliveryLng);
+  const divider = '━━━━━━━━━━━━━━━';
+
+  const lines: string[] = [];
+
+  // ── Header — distinct per audience ─────────────────────────────────
+  if (opts.audience === 'driver') {
+    lines.push(`🚚 *تعيين جديد لك*`);
+    lines.push(`رقم الطلب: ${opts.orderNumber}`);
+  } else {
+    lines.push(`✅ *تم استلام طلبك*`);
+    lines.push(`رقم الطلب: ${opts.orderNumber}`);
+    lines.push(`عزيزنا ${opts.customerName}، شكراً لاختيارك تَميم 🙏`);
+  }
+  lines.push(divider);
+
+  // ── Service / Customer block ───────────────────────────────────────
+  lines.push(`📦 الخدمة: ${opts.serviceNameAr}`);
+  if (opts.audience === 'driver') {
+    lines.push(`👤 العميل: ${opts.customerName}`);
+    lines.push(`📞 الرقم: ${opts.customerPhone}`);
+  }
+  if (opts.scheduledFor) {
+    const when =
+      opts.scheduledFor instanceof Date ? opts.scheduledFor : new Date(opts.scheduledFor);
+    lines.push(
+      `⏰ ميعاد التسليم: ${when.toLocaleString('ar-EG', { weekday: 'long', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}`,
+    );
+  }
+  lines.push('');
+
+  // ── Catalog items ──────────────────────────────────────────────────
+  if (opts.items && opts.items.length > 0) {
+    // Group by merchant name when present. Multi-merchant orders get a
+    // sub-header per store so the driver knows where to pick up what.
+    const merchantNames = Array.from(
+      new Set(
+        opts.items
+          .map((i) => i.merchantName)
+          .filter((x): x is string => typeof x === 'string' && x.length > 0),
+      ),
+    );
+    const isMulti = merchantNames.length > 1;
+
+    if (isMulti) {
+      lines.push(`🛒 *المنتجات* (من ${merchantNames.length} متاجر):`);
+      const byMerchant = new Map<string, typeof opts.items>();
+      for (const it of opts.items) {
+        const key = it.merchantName ?? '— غير محدد —';
+        if (!byMerchant.has(key)) byMerchant.set(key, []);
+        byMerchant.get(key)!.push(it);
+      }
+      for (const [name, list] of byMerchant) {
+        lines.push(`  🏪 *${name}*`);
+        for (const it of list) {
+          const priceTag = it.price != null ? ` — ${it.price} ج.م` : '';
+          lines.push(`    • ${it.name} ×${it.quantity}${priceTag}`);
+        }
+      }
+    } else {
+      lines.push('🛒 *المنتجات:*');
+      for (const it of opts.items) {
+        const priceTag = it.price != null ? ` — ${it.price} ج.م` : '';
+        lines.push(`  • ${it.name} ×${it.quantity}${priceTag}`);
+      }
+    }
+    lines.push('');
+  }
+
+  // ── customData: free-text description + media references ───────────
+  const imageUrlsFromCustom: string[] = [];
+  const audioUrls: string[] = [];
+  const seenText = new Set<string>();
+  if (opts.customData && typeof opts.customData === 'object') {
+    for (const [key, raw] of Object.entries(opts.customData)) {
+      if (raw == null) continue;
+      // Audio
+      if (
+        (key === 'audioUri' || key === 'audio' || key === 'voice' || key === 'voiceNote') &&
+        typeof raw === 'string' &&
+        raw.length > 0
+      ) {
+        audioUrls.push(raw);
+        continue;
+      }
+      // Images (array)
+      if (
+        (key === 'attachment' ||
+          key === 'attachments' ||
+          key === 'images' ||
+          key === 'imageUrls') &&
+        Array.isArray(raw)
+      ) {
+        for (const u of raw) if (typeof u === 'string' && u) imageUrlsFromCustom.push(u);
+        continue;
+      }
+      // Labelled text
+      const label = CUSTOM_DATA_LABELS[key];
+      if (!label) continue;
+      const value =
+        typeof raw === 'string' || typeof raw === 'number' || typeof raw === 'boolean'
+          ? String(raw).trim()
+          : Array.isArray(raw)
+            ? raw.filter((x) => typeof x === 'string').join('، ')
+            : '';
+      if (value && !seenText.has(value)) {
+        seenText.add(value);
+        lines.push(`📝 *${label}:* ${value}`);
+      }
+    }
+    if (lines[lines.length - 1] !== '') lines.push('');
+  }
+
+  // ── Addresses ──────────────────────────────────────────────────────
+  if (opts.pickupAddress) {
+    lines.push('📍 *الاستلام من:*');
+    lines.push(opts.pickupAddress);
+    if (pickupMap) lines.push(pickupMap);
+    lines.push('');
+  }
+  if (opts.deliveryAddress) {
+    lines.push(opts.audience === 'driver' ? '🏠 *التوصيل إلى:*' : '🏠 *عنوان التوصيل:*');
+    lines.push(opts.deliveryAddress);
+    if (deliveryMap) lines.push(deliveryMap);
+    lines.push('');
+  }
+
+  // ── Notes ──────────────────────────────────────────────────────────
+  if (opts.notes && opts.notes.trim()) {
+    lines.push(`📝 *ملاحظات إضافية:* ${opts.notes.trim()}`);
+    lines.push('');
+  }
+
+  // ── Media — voice notes and photos ─────────────────────────────────
+  if (audioUrls.length > 0) {
+    lines.push(`🎙️ *تسجيل صوتي:*`);
+    for (const u of audioUrls) lines.push(u);
+    lines.push('');
+  }
+  const allImages = Array.from(
+    new Set([...(opts.imageUrls ?? []), ...imageUrlsFromCustom].filter(Boolean)),
+  );
+  if (allImages.length > 0) {
+    lines.push(`📷 *الصور المرفقة (${allImages.length}):*`);
+    for (const url of allImages) lines.push(url);
+    lines.push('');
+  }
+
+  // ── Payment / total ────────────────────────────────────────────────
+  if (opts.paymentMethodAr || opts.total != null) {
+    lines.push(divider);
+    if (opts.paymentMethodAr) lines.push(`💳 طريقة الدفع: ${opts.paymentMethodAr}`);
+    if (opts.total != null) {
+      const label = opts.audience === 'driver' ? '💰 المبلغ المطلوب تحصيله' : '💰 الإجمالي';
+      lines.push(`${label}: ${opts.total} ج.م`);
+    }
+    lines.push('');
+  }
+
+  // ── Footer ────────────────────────────────────────────────────────
+  if (opts.audience === 'customer') {
+    lines.push('سنتواصل معك فور بدء التنفيذ. تَميم — التوصيل لعبتنا 🛵');
+  }
+
+  return lines
+    .join('\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+/**
+ * @deprecated Use buildOrderDetailsText({ audience: 'driver', ... }) instead.
+ * Kept as a thin wrapper so legacy callers (orders.admin.controller) keep
+ * working without a sweeping change.
+ */
+export function buildDriverAssignmentText(opts: Omit<OrderDetailsOpts, 'audience'>): string {
+  return buildOrderDetailsText({ ...opts, audience: 'driver' });
+}
+
+/**
  * Field labels we surface from the order's free-text `customData` blob.
  * Quick orders ("اطلب أي حاجة") write whatever the customer typed into
  * `order_text` / `details` / `notes`, and uploaded photos into `attachment`
@@ -94,116 +323,3 @@ const CUSTOM_DATA_LABELS: Record<string, string> = {
   size: 'الحجم',
   fragile: 'هش / قابل للكسر',
 };
-
-/**
- * Built when the admin assigns a driver to an order. Includes everything
- * the driver needs to start the pickup: addresses (with Google Maps
- * links), customer contact, items / free-text description, attached
- * images, and the total to collect on COD.
- */
-export function buildDriverAssignmentText(opts: {
-  orderNumber: string;
-  customerName: string;
-  customerPhone: string;
-  serviceNameAr: string;
-  notes?: string | null;
-  paymentMethodAr?: string | null;
-  total?: number | null;
-  pickupAddress?: string | null;
-  pickupLat?: number | null;
-  pickupLng?: number | null;
-  deliveryAddress?: string | null;
-  deliveryLat?: number | null;
-  deliveryLng?: number | null;
-  items?: Array<{ name: string; quantity: number }>;
-  /** Free-text fields the customer filled (quick orders / dynamic forms). */
-  customData?: Record<string, unknown> | null;
-  /** Hosted image URLs uploaded on the order (separate from customData). */
-  imageUrls?: string[] | null;
-}): string {
-  const mapsLink = (lat?: number | null, lng?: number | null): string | null =>
-    lat != null && lng != null ? `https://maps.google.com/?q=${lat},${lng}` : null;
-  const pickupMap = mapsLink(opts.pickupLat, opts.pickupLng);
-  const deliveryMap = mapsLink(opts.deliveryLat, opts.deliveryLng);
-
-  const lines: Array<string | false> = [
-    `🚚 تم تعيينك لطلب جديد ${opts.orderNumber}`,
-    '',
-    `📦 الخدمة: ${opts.serviceNameAr}`,
-    `👤 العميل: ${opts.customerName}`,
-    `📞 رقمه: ${opts.customerPhone}`,
-    '',
-  ];
-
-  // Catalog items (cart checkout) — printed when present.
-  if (opts.items && opts.items.length > 0) {
-    lines.push('🛒 المنتجات:');
-    for (const it of opts.items) lines.push(`  • ${it.name} ×${it.quantity}`);
-    lines.push('');
-  }
-
-  // Free-text customer description + any other dynamic form fields.
-  // Quick orders ("اطلب أي حاجة") live entirely inside customData, so
-  // skipping this would send the driver an empty brief.
-  const imageUrlsFromCustom: string[] = [];
-  if (opts.customData && typeof opts.customData === 'object') {
-    for (const [key, raw] of Object.entries(opts.customData)) {
-      if (raw == null) continue;
-      // Collect image arrays for the dedicated section below.
-      if (
-        (key === 'attachment' ||
-          key === 'attachments' ||
-          key === 'images' ||
-          key === 'imageUrls') &&
-        Array.isArray(raw)
-      ) {
-        for (const u of raw) if (typeof u === 'string' && u) imageUrlsFromCustom.push(u);
-        continue;
-      }
-      const label = CUSTOM_DATA_LABELS[key];
-      if (!label) continue; // skip technical keys (deliveryLat/Lng/etc)
-      const value =
-        typeof raw === 'string' || typeof raw === 'number' || typeof raw === 'boolean'
-          ? String(raw).trim()
-          : Array.isArray(raw)
-            ? raw.join('، ')
-            : '';
-      if (value) lines.push(`📝 ${label}: ${value}`);
-    }
-    if (lines[lines.length - 1] !== '') lines.push('');
-  }
-
-  if (opts.pickupAddress) {
-    lines.push('📍 الاستلام من:');
-    lines.push(opts.pickupAddress);
-    if (pickupMap) lines.push(pickupMap);
-    lines.push('');
-  }
-  if (opts.deliveryAddress) {
-    lines.push('🏠 التوصيل إلى:');
-    lines.push(opts.deliveryAddress);
-    if (deliveryMap) lines.push(deliveryMap);
-    lines.push('');
-  }
-
-  if (opts.notes) {
-    lines.push(`📝 ملاحظات إضافية: ${opts.notes}`);
-    lines.push('');
-  }
-
-  // Photos — combined: explicit order.imageUrls + ones lifted from
-  // customData. Dedup so the same image never appears twice.
-  const allImages = Array.from(
-    new Set([...(opts.imageUrls ?? []), ...imageUrlsFromCustom].filter(Boolean)),
-  );
-  if (allImages.length > 0) {
-    lines.push(`📷 الصور المرفقة (${allImages.length}):`);
-    for (const url of allImages) lines.push(url);
-    lines.push('');
-  }
-
-  if (opts.paymentMethodAr) lines.push(`💳 الدفع: ${opts.paymentMethodAr}`);
-  if (opts.total != null) lines.push(`💰 المبلغ المطلوب: ${opts.total} ج.م`);
-
-  return lines.filter((l): l is string => typeof l === 'string').join('\n');
-}

@@ -245,24 +245,86 @@ export const createOrder: RequestHandler = async (req, res, next) => {
       // realtime not critical
     }
 
-    // Server-side WhatsApp confirmation (no-op if cloud API not configured —
-    // the mobile app's deep-link is the primary path).
+    // Server-side WhatsApp confirmation — full receipt with addresses,
+    // items, voice notes, photos and total so the customer gets a
+    // complete record of what they ordered.
     try {
-      const { sendWhatsAppMessage, buildOrderConfirmationText } =
+      const { sendWhatsAppMessage, buildOrderDetailsText } =
         await import('../../integrations/whatsapp.js');
       const customer = await prisma.user.findUnique({
         where: { id: req.user.id },
         select: { phone: true, name: true },
       });
       if (customer?.phone) {
-        void sendWhatsAppMessage({
-          toPhone: customer.phone,
-          text: buildOrderConfirmationText({
-            orderNumber: order.orderNumber,
-            serviceNameAr: service.nameAr,
-            customerName: customer.name,
-          }),
-        }).then((sent) => {
+        // Re-fetch the order with items so the receipt is complete.
+        const fullOrder = await prisma.order.findUnique({
+          where: { id: order.id },
+          include: {
+            items: {
+              select: {
+                productNameSnapshot: true,
+                quantity: true,
+                unitPriceSnapshot: true,
+                merchantId: true,
+              },
+            },
+          },
+        });
+        // Resolve merchant names so the customer receipt also groups items
+        // by store for multi-merchant carts.
+        const _merchantIds = Array.from(
+          new Set(
+            (fullOrder?.items ?? []).map((i) => i.merchantId).filter((x): x is string => !!x),
+          ),
+        );
+        const _merchants = _merchantIds.length
+          ? await prisma.merchantProfile.findMany({
+              where: { id: { in: _merchantIds } },
+              select: { id: true, storeNameAr: true },
+            })
+          : [];
+        const _merchantNameById = new Map(_merchants.map((m) => [m.id, m.storeNameAr] as const));
+        const paymentMethodAr = fullOrder?.paymentMethod
+          ? ((
+              {
+                CASH: 'كاش عند الاستلام',
+                VODAFONE_CASH: 'فودافون كاش',
+                INSTAPAY: 'إنستا باي',
+              } as Record<string, string>
+            )[fullOrder.paymentMethod] ?? null)
+          : null;
+        const text = buildOrderDetailsText({
+          audience: 'customer',
+          orderNumber: order.orderNumber,
+          customerName: customer.name,
+          customerPhone: customer.phone,
+          serviceNameAr: service.nameAr,
+          notes: fullOrder?.notes,
+          paymentMethodAr,
+          total: fullOrder?.finalPrice
+            ? Number(fullOrder.finalPrice)
+            : fullOrder?.quotedPrice
+              ? Number(fullOrder.quotedPrice)
+              : null,
+          pickupAddress: fullOrder?.pickupAddress,
+          pickupLat: fullOrder?.pickupLat ? Number(fullOrder.pickupLat) : null,
+          pickupLng: fullOrder?.pickupLng ? Number(fullOrder.pickupLng) : null,
+          deliveryAddress: fullOrder?.deliveryAddress,
+          deliveryLat: fullOrder?.deliveryLat ? Number(fullOrder.deliveryLat) : null,
+          deliveryLng: fullOrder?.deliveryLng ? Number(fullOrder.deliveryLng) : null,
+          items: fullOrder?.items.map((it) => ({
+            name: it.productNameSnapshot,
+            quantity: it.quantity,
+            price: it.unitPriceSnapshot ? Number(it.unitPriceSnapshot) : null,
+            merchantName: it.merchantId ? (_merchantNameById.get(it.merchantId) ?? null) : null,
+          })),
+          customData: (fullOrder?.customData ?? null) as Record<string, unknown> | null,
+          imageUrls: Array.isArray(fullOrder?.imageUrls)
+            ? (fullOrder.imageUrls.filter((u) => typeof u === 'string') as string[])
+            : null,
+          scheduledFor: fullOrder?.scheduledFor ?? null,
+        });
+        void sendWhatsAppMessage({ toPhone: customer.phone, text }).then((sent) => {
           if (sent) {
             void prisma.order.update({
               where: { id: order.id },
