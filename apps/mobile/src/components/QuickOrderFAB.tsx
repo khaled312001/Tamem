@@ -1,52 +1,78 @@
 /**
- * Floating Action Button — a glowing brass-ringed Lottie talisman that
- * lives in the bottom-right corner of HomeScreen and opens QuickOrderSheet.
+ * Floating Action Button — a glowing magic lamp that lives in the bottom-
+ * right corner of HomeScreen and opens QuickOrderSheet on press.
  *
- * The hand-rolled SVG genie lamp + six smoke-wisp Animated.Values that this
- * file used to carry have been replaced by a professionally authored Lottie
- * animation (a golden "wish star" sparkle). Lottie owns all the looping
- * motion; we only drive a short press-jolt + a quick replay-from-frame-0
- * burst when the user taps, so the talisman feels alive on press.
+ * The lamp itself is a hand-illustrated PNG (`assets/magic-lamp.png`)
+ * floating on a soft white disc with a warm golden halo behind it. The
+ * halo is centered around the lamp circle so the FAB reads as a single,
+ * round object — no off-axis offset.
  *
- * Asset: `src/assets/animations/genie-lamp.json` — bundled at build time
- * so there is zero runtime network dependency. The animation is rendered
- * inside a circular brass ring (LinearGradient + warm border) that carries
- * the Aladdin theme even though the Lottie itself is a generic gold star.
+ * Motion: a slow up-and-down bob keeps the lamp alive; a press-jolt
+ * (squash + spring back) gives tactile feedback, and the QuickOrderSheet
+ * opens just as the bounce finishes so it feels like the wish summoned it.
  */
-import { LinearGradient } from 'expo-linear-gradient';
-import LottieView from 'lottie-react-native';
-import { useRef, useState } from 'react';
-import { Animated, Easing, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
+import { useEffect, useRef, useState } from 'react';
+import { Animated, Easing, Image, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { QuickOrderSheet } from './QuickOrderSheet';
 
 import { colors, fontFamilies, spacing } from '../theme/tokens';
 
-// Bundled — Metro inlines this. License: Lottie Simple License (free for
-// commercial use, no attribution required).
-// eslint-disable-next-line @typescript-eslint/no-var-requires
-const genieLamp = require('../assets/animations/genie-lamp.json');
-
 const LAMP_SIZE = 76;
+const GLOW_PAD = 18; // halo extends this far past the lamp on every side
 const useNative = Platform.OS !== 'web';
+
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const lampImage = require('../assets/magic-lamp.png');
 
 export function QuickOrderFAB() {
   const [open, setOpen] = useState(false);
-  const lottieRef = useRef<LottieView>(null);
 
-  // Press-jolt — squash + bounce-back. Lottie handles all the looping idle
-  // motion, but a tactile scale-pulse on tap is what makes the button feel
-  // pressable rather than merely decorative.
+  // Slow idle bob — ~5px up/down on a 1.6s loop. Native driver where
+  // supported so the bob is buttery and doesn't fight other work.
+  const bob = useRef(new Animated.Value(0)).current;
+  // Press squash — 0..1 .. springs back to 0.
   const press = useRef(new Animated.Value(0)).current;
-  const pressScale = press.interpolate({ inputRange: [0, 1], outputRange: [1, 0.86] });
+  // Subtle halo pulse so the FAB never feels static.
+  const glow = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    Animated.loop(
+      Animated.sequence([
+        Animated.timing(bob, {
+          toValue: 1,
+          duration: 1600,
+          easing: Easing.inOut(Easing.sin),
+          useNativeDriver: useNative,
+        }),
+        Animated.timing(bob, {
+          toValue: 0,
+          duration: 1600,
+          easing: Easing.inOut(Easing.sin),
+          useNativeDriver: useNative,
+        }),
+      ]),
+    ).start();
+
+    Animated.loop(
+      Animated.sequence([
+        Animated.timing(glow, {
+          toValue: 1,
+          duration: 1100,
+          easing: Easing.inOut(Easing.quad),
+          useNativeDriver: useNative,
+        }),
+        Animated.timing(glow, {
+          toValue: 0,
+          duration: 1100,
+          easing: Easing.inOut(Easing.quad),
+          useNativeDriver: useNative,
+        }),
+      ]),
+    ).start();
+  }, [bob, glow]);
 
   const onPress = () => {
-    // 1. Replay the lottie from frame 0 at 1.5x speed — feels like the
-    //    talisman "reacts" to the touch with a burst of sparkle.
-    lottieRef.current?.reset();
-    lottieRef.current?.play();
-
-    // 2. Quick mechanical squash so the press registers in muscle memory.
     press.setValue(0);
     Animated.sequence([
       Animated.timing(press, {
@@ -57,55 +83,49 @@ export function QuickOrderFAB() {
       }),
       Animated.spring(press, {
         toValue: 0,
-        damping: 8,
+        damping: 7,
         mass: 0.5,
         stiffness: 200,
         useNativeDriver: useNative,
       }),
     ]).start();
 
-    // 3. Open the sheet just after the sparkle reaches its peak — feels
-    //    like the wish summoned it.
-    setTimeout(() => setOpen(true), 360);
+    setTimeout(() => setOpen(true), 320);
   };
+
+  const translateY = bob.interpolate({ inputRange: [0, 1], outputRange: [0, -5] });
+  const pressScale = press.interpolate({ inputRange: [0, 1], outputRange: [1, 0.86] });
+  const glowOpacity = glow.interpolate({ inputRange: [0, 1], outputRange: [0.45, 0.85] });
+  const glowScale = glow.interpolate({ inputRange: [0, 1], outputRange: [1, 1.12] });
 
   return (
     <>
       <View style={[styles.layer, { pointerEvents: 'box-none' }]}>
-        {/* Soft golden halo behind the talisman — a thin glow that
-            anchors the FAB visually. No animation needed; the Lottie
-            inside already pulses. */}
-        <View pointerEvents="none" style={styles.glow} />
-
+        {/* Lamp + halo container — both share the same center so the glow
+            sits perfectly behind the lamp instead of leaking to one side. */}
         <Animated.View
           style={[
-            styles.lampWrap,
-            { transform: [{ scale: pressScale }] },
+            styles.lampSlot,
+            { transform: [{ translateY }, { scale: pressScale }] },
             { pointerEvents: 'box-none' },
           ]}
         >
+          {/* Glow halo — absolute, inset negative so it extends past the
+              lamp by GLOW_PAD on every side, centered on the same point. */}
+          <Animated.View
+            pointerEvents="none"
+            style={[styles.glow, { opacity: glowOpacity, transform: [{ scale: glowScale }] }]}
+          />
+
           <Pressable
             onPress={onPress}
             accessibilityRole="button"
             accessibilityLabel="طلب سريع"
             style={({ pressed }) => [styles.pressable, pressed && { opacity: 0.96 }]}
           >
-            <LinearGradient
-              colors={['#FFE082', '#F2A93B', '#B66B0A']}
-              start={{ x: 0, y: 0 }}
-              end={{ x: 1, y: 1 }}
-              style={styles.ring}
-            >
-              <LottieView
-                ref={lottieRef}
-                source={genieLamp}
-                autoPlay
-                loop
-                speed={1}
-                resizeMode="contain"
-                style={styles.lottie}
-              />
-            </LinearGradient>
+            <View style={styles.disc}>
+              <Image source={lampImage} style={styles.lampImg} resizeMode="contain" />
+            </View>
           </Pressable>
         </Animated.View>
 
@@ -123,54 +143,59 @@ const styles = StyleSheet.create({
   layer: {
     position: 'absolute',
     bottom: 24,
-    insetInlineStart: spacing.md, // RTL-aware: hugs the right side in Arabic
+    insetInlineStart: spacing.md, // RTL: hugs the right side in Arabic
     alignItems: 'center',
-    width: LAMP_SIZE + 24,
+    width: LAMP_SIZE + GLOW_PAD * 2,
     zIndex: 50,
   },
-  // Soft golden halo behind the talisman.
+  // The slot houses both the halo and the lamp disc, both centered.
+  lampSlot: {
+    width: LAMP_SIZE,
+    height: LAMP_SIZE,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  // Halo extends past the lamp by GLOW_PAD on every side, perfectly centered.
   glow: {
     position: 'absolute',
-    bottom: 24,
-    width: LAMP_SIZE + 28,
-    height: LAMP_SIZE + 28,
-    borderRadius: (LAMP_SIZE + 28) / 2,
+    top: -GLOW_PAD,
+    bottom: -GLOW_PAD,
+    insetInlineStart: -GLOW_PAD,
+    insetInlineEnd: -GLOW_PAD,
+    borderRadius: (LAMP_SIZE + GLOW_PAD * 2) / 2,
     backgroundColor: '#F2A93B',
-    opacity: 0.55,
     ...(Platform.OS === 'web'
-      ? { boxShadow: '0 0 32px 10px rgba(242,169,59,0.65)' }
+      ? { boxShadow: '0 0 36px 12px rgba(242,169,59,0.55)' }
       : {
           shadowColor: '#F2A93B',
           shadowOpacity: 0.9,
-          shadowRadius: 28,
+          shadowRadius: 32,
           shadowOffset: { width: 0, height: 0 },
         }),
   },
-  lampWrap: {
+  pressable: {
     width: LAMP_SIZE,
     height: LAMP_SIZE,
     borderRadius: LAMP_SIZE / 2,
+    overflow: 'hidden',
     ...(Platform.OS === 'web'
-      ? { boxShadow: '0 10px 28px rgba(176, 100, 10, 0.55)' }
+      ? { boxShadow: '0 10px 24px rgba(176, 100, 10, 0.5)' }
       : { elevation: 14 }),
   },
-  pressable: {
-    width: '100%',
-    height: '100%',
-    borderRadius: LAMP_SIZE / 2,
-    overflow: 'hidden',
-  },
-  ring: {
+  // White disc behind the lamp PNG — makes the gold lamp pop against any
+  // page background.
+  disc: {
     flex: 1,
+    backgroundColor: colors.white,
+    borderRadius: LAMP_SIZE / 2,
+    borderWidth: 3,
+    borderColor: '#FFE082',
     alignItems: 'center',
     justifyContent: 'center',
-    borderWidth: 3,
-    borderColor: '#FFF6D5',
-    borderRadius: LAMP_SIZE / 2,
   },
-  lottie: {
-    width: '100%',
-    height: '100%',
+  lampImg: {
+    width: '70%',
+    height: '70%',
   },
   labelBubble: {
     marginTop: 6,

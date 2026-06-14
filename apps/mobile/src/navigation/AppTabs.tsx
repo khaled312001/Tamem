@@ -4,8 +4,6 @@ import { Bell, Home, Package, ShoppingCart, User } from 'lucide-react-native';
 import { Platform, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { FloatingCartBar } from '../components/FloatingCartBar';
-
 import { CartScreen } from '../screens/CartScreen';
 import { NotificationsScreen } from '../screens/NotificationsScreen';
 import { api } from '../lib/api';
@@ -118,9 +116,6 @@ export function AppTabs() {
   const bottomInset = Platform.OS === 'web' ? 8 : Math.max(insets.bottom, 8);
   const unread = useUnreadCount();
   const cartCount = useCart().count;
-  // Tab bar height we add as the floating cart's `bottomOffset` so the bar
-  // sits just above the tab bar instead of overlapping it.
-  const tabBarHeight = 68 + bottomInset;
 
   return (
     <View style={{ flex: 1 }}>
@@ -243,9 +238,6 @@ export function AppTabs() {
           }}
         />
       </Tabs.Navigator>
-      {/* Sticky cart bar — only renders when the cart has items. Sits just
-          above the tab bar at the bottom of the screen. */}
-      <FloatingCartBar bottomOffset={tabBarHeight} />
     </View>
   );
 }

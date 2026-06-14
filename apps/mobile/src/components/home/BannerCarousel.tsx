@@ -165,6 +165,13 @@ export function BannerCarousel() {
 
   // Auto-rotate. Disabled when there's only one slide (no rotation makes
   // sense) and when the user is mid-drag.
+  //
+  // Why the manual rAF tween on web: react-native-web's
+  // ScrollView.scrollTo({animated: true}) is a no-op in Chromium when the
+  // node uses `direction: rtl` (the smooth-scroll polyfill bails). We get
+  // the underlying DOM node and tween scrollLeft ourselves with a
+  // requestAnimationFrame loop + easeInOutQuad so the banners actually
+  // glide between slides instead of jump-cutting.
   useEffect(() => {
     if (slides.length <= 1) return;
     const timer = setInterval(() => {
@@ -172,17 +179,28 @@ export function BannerCarousel() {
       const next = (activeIndex + 1) % slides.length;
       const x = next * SNAP;
       if (Platform.OS === 'web') {
-        // react-native-web's ScrollView.scrollTo with animated:true is a
-        // no-op in many browsers because it relies on the (deprecated)
-        // smooth-scroll polyfill. Drop down to the underlying DOM node and
-        // use the native smooth-scroll API instead.
         const node = scrollRef.current?.getScrollableNode?.() as
-          | (HTMLElement & { scrollTo?: (opts: ScrollToOptions) => void })
+          | (HTMLElement & { scrollLeft: number })
           | undefined;
-        if (node?.scrollTo) {
-          node.scrollTo({ left: x, behavior: 'smooth' });
-        } else {
-          scrollRef.current?.scrollTo({ x, animated: true });
+        if (node) {
+          const startLeft = node.scrollLeft;
+          const startTime =
+            typeof performance !== 'undefined' && typeof performance.now === 'function'
+              ? performance.now()
+              : Date.now();
+          const duration = 480;
+          const change = x - startLeft;
+          const step = (now: number) => {
+            const elapsed = Math.min((now - startTime) / duration, 1);
+            // easeInOutQuad
+            const eased =
+              elapsed < 0.5 ? 2 * elapsed * elapsed : 1 - Math.pow(-2 * elapsed + 2, 2) / 2;
+            node.scrollLeft = startLeft + change * eased;
+            if (elapsed < 1 && !userInteractingRef.current) {
+              requestAnimationFrame(step);
+            }
+          };
+          requestAnimationFrame(step);
         }
       } else {
         scrollRef.current?.scrollTo({ x, animated: true });
