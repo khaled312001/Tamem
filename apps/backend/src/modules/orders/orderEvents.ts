@@ -23,6 +23,7 @@ import { sendPushToUser } from '../../integrations/fcm.js';
 import { sendWhatsAppMessage } from '../../integrations/whatsapp.js';
 import { emitOrderStatusChange } from '../../realtime/channels.js';
 import { logger } from '../../utils/logger.js';
+import { notifyOnShiftSupervisor } from '../supervisors/supervisors.service.js';
 
 type NotifChannel = 'IN_APP' | 'WHATSAPP' | 'PUSH';
 
@@ -43,7 +44,7 @@ interface StatusMessages {
  * across the IN_APP / FCM / WhatsApp fan-out so all three channels stay
  * consistent.
  */
-interface OrderContext {
+export interface OrderContext {
   customerName?: string;
   driverName?: string;
   driverPhone?: string;
@@ -437,6 +438,14 @@ export async function dispatchOrderStatusChanged(
     } catch (err) {
       logger.warn({ err, orderId: order.id }, 'admin whatsapp failed');
     }
+  }
+
+  // 4e. Supervisor on shift — only fires on NEW so the duty supervisor sees
+  //     every fresh order on their WhatsApp. notifyOnShiftSupervisor catches
+  //     its own errors internally so a missing supervisor or a WhatsApp
+  //     outage never propagates to the order pipeline.
+  if (newStatus === 'NEW') {
+    await notifyOnShiftSupervisor(order, ctx);
   }
 
   // 5. Notify the driver too on assignment so they see a "new ride" message

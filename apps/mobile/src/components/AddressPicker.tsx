@@ -6,8 +6,10 @@ import { useEffect, useState } from 'react';
 import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 
 import { api } from '../lib/api';
+import { getAddressZone } from '../lib/addressZoneCache';
 import { showToast } from '../lib/toast';
 import { colors, fontFamilies, fontSizes, radii, spacing } from '../theme/tokens';
+import { DeliveryZonePicker, type DeliveryZoneSelection } from './DeliveryZonePicker';
 
 export interface PickedAddress {
   address: string;
@@ -15,6 +17,8 @@ export interface PickedAddress {
   lng: number;
   /** True when the user typed it freely. */
   isFreeText?: boolean;
+  /** Delivery zone metadata — IDs and the advisory delivery fee. */
+  zone?: DeliveryZoneSelection | null;
 }
 
 interface SavedAddress {
@@ -114,7 +118,7 @@ export function AddressPicker({ value, onChange }: AddressPickerProps) {
     }
   };
 
-  const pickSaved = (a: SavedAddress) => {
+  const pickSaved = async (a: SavedAddress): Promise<void> => {
     if (typeof a.lat !== 'number' || typeof a.lng !== 'number') {
       showToast({
         title: 'العنوان غير مكتمل',
@@ -123,7 +127,16 @@ export function AddressPicker({ value, onChange }: AddressPickerProps) {
       });
       return;
     }
-    const picked: PickedAddress = { address: a.address, lat: a.lat, lng: a.lng };
+    // Pull zone metadata cached when the user originally saved this address.
+    // If the cache is empty (app reinstall / address created on another
+    // device) the caller can prompt for it via the in-place zone picker.
+    const zone = await getAddressZone(a.id);
+    const picked: PickedAddress = {
+      address: a.address,
+      lat: a.lat,
+      lng: a.lng,
+      zone,
+    };
     onChange(picked);
     setFreeText('');
     void AsyncStorage.setItem(LAST_ADDRESS_KEY, JSON.stringify(picked));
@@ -151,7 +164,9 @@ export function AddressPicker({ value, onChange }: AddressPickerProps) {
             return (
               <Pressable
                 key={a.id}
-                onPress={() => pickSaved(a)}
+                onPress={() => {
+                  void pickSaved(a);
+                }}
                 style={({ pressed }) => [
                   styles.chip,
                   active && styles.chipActive,
@@ -208,6 +223,30 @@ export function AddressPicker({ value, onChange }: AddressPickerProps) {
           <Text style={styles.warnText}>
             كتبت العنوان يدوي بدون GPS. الإدارة هتتواصل معاك تأكيد الموقع قبل السائق.
           </Text>
+        </View>
+      ) : null}
+
+      {/* Zone refinement — only shown once the user has *some* address; this
+          way the cascading selects don't fire HTTP for users still on the
+          empty state. We keep the picker visible at all times so they can
+          re-pick if they originally saved without a zone. */}
+      {value ? (
+        <View style={styles.zoneSection}>
+          <View style={styles.zoneHeader}>
+            <MapPin size={14} color={colors.brand.red} />
+            <Text style={styles.zoneTitle}>منطقة التوصيل</Text>
+          </View>
+          <Text style={styles.zoneHint}>
+            لازم نحدد المدينة → القرية → النجع علشان نحسب رسوم التوصيل بدقة
+          </Text>
+          <DeliveryZonePicker
+            value={value.zone ?? null}
+            onChange={(zone) => {
+              const next: PickedAddress = { ...value, zone };
+              onChange(next);
+              void AsyncStorage.setItem(LAST_ADDRESS_KEY, JSON.stringify(next));
+            }}
+          />
         </View>
       ) : null}
     </View>
@@ -299,6 +338,25 @@ const styles = StyleSheet.create({
     flex: 1,
     color: '#9A6B16',
     fontFamily: fontFamilies.bodyBold,
+    fontSize: fontSizes.xs,
+    lineHeight: 18,
+  },
+  zoneSection: {
+    marginTop: spacing.sm,
+    paddingTop: spacing.md,
+    borderTopWidth: 1,
+    borderTopColor: colors.line,
+    gap: spacing.sm,
+  },
+  zoneHeader: { flexDirection: 'row', alignItems: 'center', gap: spacing.xs },
+  zoneTitle: {
+    fontFamily: fontFamilies.bodyExtraBold,
+    color: colors.ink,
+    fontSize: fontSizes.sm,
+  },
+  zoneHint: {
+    fontFamily: fontFamilies.body,
+    color: colors.text.muted,
     fontSize: fontSizes.xs,
     lineHeight: 18,
   },

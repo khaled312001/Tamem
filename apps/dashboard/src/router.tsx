@@ -26,6 +26,7 @@ import { ServicesPage } from './routes/services.js';
 import { SiteSettingsPage } from './routes/site-settings.js';
 import { CouponsPage } from './routes/coupons.js';
 import { SettingsPage } from './routes/settings.js';
+import { SupervisorsPage } from './routes/supervisors.js';
 import { WhatsAppPage } from './routes/whatsapp.js';
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
@@ -65,6 +66,7 @@ const routes: RouteObject[] = [
       { path: 'alerts', element: <AlertsPage /> },
       { path: 'whatsapp', element: <WhatsAppPage /> },
       { path: 'broadcast', element: <BroadcastPage /> },
+      { path: 'supervisors', element: <SupervisorsPage /> },
       { path: 'coupons', element: <CouponsPage /> },
       { path: 'settings', element: <SettingsPage /> },
       { path: 'home-settings', element: <HomeSettingsPage /> },

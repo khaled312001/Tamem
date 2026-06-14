@@ -139,11 +139,22 @@ export function CartCheckoutScreen() {
       deliveryAddress: address.address,
       deliveryLat: address.lat,
       deliveryLng: address.lng,
+      // Forward the zone IDs so the backend can re-quote and persist the
+      // authoritative delivery fee (the price we render below is ADVISORY).
+      cityId: address.zone?.cityId,
+      villageId: address.zone?.villageId,
+      areaId: address.zone?.areaId,
       paymentMethod,
       scheduledFor: scheduledFor ?? undefined,
       merchants,
     });
   };
+
+  // Advisory delivery fee surfaced from the picked address's zone metadata.
+  // Backend recomputes — never trust this for billing.
+  const deliveryFee = address?.zone?.deliveryFee ?? null;
+  const grandTotal = cart.subtotal + (deliveryFee ?? 0);
+  const zoneReady = !!(address?.zone?.cityId && address?.zone?.villageId && address?.zone?.areaId);
 
   if (cart.items.length === 0) {
     return (
@@ -336,9 +347,23 @@ export function CartCheckoutScreen() {
           ))}
           <View style={styles.totalDivider} />
           <View style={styles.totalLine}>
-            <Text style={styles.grandTotalLabel}>الإجمالي الكلي</Text>
-            <MoneyText amount={cart.subtotal} size="lg" tone="brand" />
+            <Text style={styles.totalLineLabel}>إجمالي المنتجات</Text>
+            <MoneyText amount={cart.subtotal} size="sm" />
           </View>
+          <View style={styles.totalLine}>
+            <Text style={styles.totalLineLabel}>سعر التوصيل</Text>
+            {deliveryFee != null ? (
+              <MoneyText amount={deliveryFee} size="sm" tone="brand" />
+            ) : (
+              <Text style={styles.totalPlaceholder}>{zoneReady ? '—' : 'حدد المنطقة'}</Text>
+            )}
+          </View>
+          <View style={styles.totalDivider} />
+          <View style={styles.totalLine}>
+            <Text style={styles.grandTotalLabel}>الإجمالي الكلي</Text>
+            <MoneyText amount={grandTotal} size="lg" tone="brand" />
+          </View>
+          <Text style={styles.advisoryNote}>(المبلغ غير نهائي - سيُحدّث عند الموافقة)</Text>
         </View>
 
         <View style={{ height: 120 }} />
@@ -529,6 +554,19 @@ const styles = StyleSheet.create({
     marginInlineEnd: spacing.sm,
   },
   totalDivider: { height: 1, backgroundColor: colors.line, marginVertical: spacing.xs },
+  totalPlaceholder: {
+    fontFamily: fontFamilies.bodyBold,
+    color: colors.text.muted,
+    fontSize: fontSizes.xs,
+  },
+  advisoryNote: {
+    marginTop: spacing.xs,
+    fontFamily: fontFamilies.body,
+    color: colors.text.muted,
+    fontSize: fontSizes.xs,
+    textAlign: 'center',
+    fontStyle: 'italic',
+  },
   grandTotalLabel: {
     fontFamily: fontFamilies.headingBlack,
     color: colors.ink,

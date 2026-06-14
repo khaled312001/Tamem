@@ -226,10 +226,21 @@ model CustomerAddress {
   lng       Decimal? @db.Decimal(10, 7)
   notes     String?  @db.VarChar(500)
   isDefault Boolean  @default(false)
+  /// Delivery-zone snapshot — normalized from lat/lng on create, used for
+  /// faster zone-aware lookups and so the customer sees "المنطقة: ..." on
+  /// the address card. Advisory only — server recomputes from these IDs
+  /// on order create (Order.deliveryFee is authoritative).
+  cityId    String?
+  villageId String?
+  areaId    String?
+  city      City?    @relation(fields: [cityId], references: [id])
+  village   Village? @relation(fields: [villageId], references: [id])
+  area      Area?    @relation(fields: [areaId], references: [id])
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@index([userId, isDefault])
+  @@index([userId, cityId, villageId])
 }
 
 model DriverProfile {
@@ -434,6 +445,14 @@ model Order {
   deliveryLng         Decimal?        @db.Decimal(10, 7)
   deliveryAddress     String?         @db.VarChar(500)
 
+  // delivery-zone snapshot (city/village/area)
+  cityId              String?
+  villageId           String?
+  areaId              String?
+  city                City?           @relation(fields: [cityId], references: [id])
+  village             Village?        @relation(fields: [villageId], references: [id])
+  area                Area?           @relation(fields: [areaId], references: [id])
+
   // shipping-specific
   weightKg            Decimal?        @db.Decimal(8, 2)
   sizeCategory        SizeCategory?
@@ -490,6 +509,7 @@ model Order {
   alerts              Alert[]
   review              OrderReview?
   couponRedemption    CouponRedemption?
+  supervisorDispatches SupervisorOrderDispatch[]
 
   /// Multi-merchant carts produce one "parent" order (no merchantId,
   /// holds the totals + payment) and N child orders (one per merchant,
@@ -505,6 +525,7 @@ model Order {
   @@index([category])
   @@index([serviceId])
   @@index([parentOrderId])
+  @@index([cityId, villageId, areaId])
 }
 
 /// One review per completed order. Customer rates the experience overall and
@@ -1190,4 +1211,128 @@ model ProductSyncLog {
 
   @@index([merchantId, startedAt(sort: Desc)])
   @@index([configId, startedAt(sort: Desc)])
+}
+
+// ============================================
+// Supervisor Management with Shifts
+// ============================================
+
+enum ShiftKind {
+  MORNING
+  EVENING
+  CUSTOM
+}
+
+model Supervisor {
+  id                String   @id @default(cuid())
+  name              String
+  whatsappPhone     String   @db.VarChar(20)
+  isActive          Boolean  @default(true)
+  notes             String?  @db.VarChar(500)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  shifts            SupervisorShift[]
+  dispatches        SupervisorOrderDispatch[]
+
+  @@index([isActive])
+  @@index([createdAt(sort: Desc)])
+}
+
+model SupervisorShift {
+  id                String     @id @default(cuid())
+  supervisorId      String
+  supervisor        Supervisor @relation(fields: [supervisorId], references: [id], onDelete: Cascade)
+  kind              ShiftKind
+  startTime         String     @db.VarChar(5) /// HH:mm format, e.g. "08:00"
+  endTime           String     @db.VarChar(5) /// HH:mm format, e.g. "16:00"
+  /// JSON array of integers (0=Sunday..6=Saturday). Empty array = all days.
+  daysOfWeek        Json       @default("[]")
+  isActive          Boolean    @default(true)
+  createdAt         DateTime   @default(now())
+  updatedAt         DateTime   @updatedAt
+
+  @@index([supervisorId, isActive])
+  @@index([kind])
+}
+
+model SupervisorOrderDispatch {
+  id                String     @id @default(cuid())
+  supervisorId      String
+  supervisor        Supervisor @relation(fields: [supervisorId], references: [id], onDelete: Cascade)
+  orderId           String
+  order             Order      @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  sentAt            DateTime   @default(now())
+  status            String     @default("SENT") @db.VarChar(10) /// "SENT" or "FAILED"
+  errorMessage      String?    @db.VarChar(500)
+  createdAt         DateTime   @default(now())
+
+  @@index([supervisorId, createdAt(sort: Desc)])
+  @@index([orderId])
+  @@index([createdAt(sort: Desc)])
+  @@index([status])
+}
+
+// ============================================
+// Delivery Zones — city / village / area hierarchy with pricing
+// ============================================
+// 3-level hierarchy used to compute the delivery fee for each order. Admin
+// manages cities (we ship from Qift, so right now there's only one), and
+// for each village/area sets an optional price. Resolution falls back from
+// area → village → null (in which case the order is refused).
+//
+// Soft delete via isActive — cascading rows still reference dead zones
+// but the public address picker hides them.
+
+model City {
+  id        String   @id @default(cuid())
+  nameAr    String
+  nameEn    String?
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  villages       Village[]
+  orders         Order[]
+  savedAddresses CustomerAddress[]
+
+  @@unique([nameAr])
+  @@index([isActive])
+}
+
+model Village {
+  id                String   @id @default(cuid())
+  cityId            String
+  city              City     @relation(fields: [cityId], references: [id], onDelete: Cascade)
+  nameAr            String
+  nameEn            String?
+  baseDeliveryPrice Decimal? @db.Decimal(10, 2)
+  isActive          Boolean  @default(true)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  areas          Area[]
+  orders         Order[]
+  savedAddresses CustomerAddress[]
+
+  @@unique([cityId, nameAr])
+  @@index([cityId, isActive])
+}
+
+model Area {
+  id            String   @id @default(cuid())
+  villageId     String
+  village       Village  @relation(fields: [villageId], references: [id], onDelete: Cascade)
+  nameAr        String
+  nameEn        String?
+  deliveryPrice Decimal? @db.Decimal(10, 2)
+  isActive      Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  orders         Order[]
+  savedAddresses CustomerAddress[]
+
+  @@unique([villageId, nameAr])
+  @@index([villageId, isActive])
 }

@@ -42,7 +42,9 @@ import { adminProductsRouter } from './modules/products/products.routes.js';
 import { adminReportsRouter } from './modules/reports/reports.routes.js';
 import { adminServicesRouter, publicServicesRouter } from './modules/services/services.routes.js';
 import { adminSettingsRouter } from './modules/settings/settings.routes.js';
+import { adminSupervisorsRouter } from './modules/supervisors/supervisors.routes.js';
 import { uploadsRouter } from './modules/uploads/uploads.routes.js';
+import { adminZonesRouter, publicZonesRouter } from './modules/zones/zones.routes.js';
 import {
   adminHomeConfigRouter,
   publicHomeConfigRouter,
@@ -152,6 +154,7 @@ export function createApp(): Express {
   v1.use('/payments/webhook', easykashWebhookRouter);
   v1.use('/promos', promosRouter);
   v1.use('/merchant', merchantRouter);
+  v1.use('/zones', publicZonesRouter);
 
   // ----- Admin namespace -----
   // Order matters: requireAuth → requireRole(ADMIN) → adminAuditLog.
@@ -179,6 +182,8 @@ export function createApp(): Express {
   adminRouter.use('/site-config', adminSiteRouter);
   adminRouter.use('/whatsapp', whatsappRouter);
   adminRouter.use('/broadcast', adminBroadcastRouter);
+  adminRouter.use('/supervisors', adminSupervisorsRouter);
+  adminRouter.use('/zones', adminZonesRouter);
   v1.use('/admin', adminRouter);
 
   app.use('/api/v1', v1);
