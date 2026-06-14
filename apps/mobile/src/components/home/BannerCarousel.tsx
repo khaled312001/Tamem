@@ -148,9 +148,20 @@ export function BannerCarousel() {
     staleTime: 5 * 60_000,
   });
 
-  // Build the slide list — prefer server offers, fall back to defaults.
-  const slides: BannerSlide[] =
-    offers && offers.length > 0 ? offers.map(offerToSlide) : DEFAULT_BANNERS;
+  // Build the slide list — server offers come FIRST, then top up with the
+  // brand defaults so the carousel always has at least 3 cards rotating.
+  // A single TAMEM20 server offer on its own makes the carousel feel dead;
+  // padding to 3 keeps the "روح في التطبيق" the user asked for.
+  const slides: BannerSlide[] = (() => {
+    const fromServer = offers && offers.length > 0 ? offers.map(offerToSlide) : [];
+    if (fromServer.length >= 3) return fromServer;
+    const serverIds = new Set(fromServer.map((s) => s.id));
+    const padding = DEFAULT_BANNERS.filter((b) => !serverIds.has(b.id)).slice(
+      0,
+      3 - fromServer.length,
+    );
+    return [...fromServer, ...padding];
+  })();
 
   // Auto-rotate. Disabled when there's only one slide (no rotation makes
   // sense) and when the user is mid-drag.
@@ -159,7 +170,23 @@ export function BannerCarousel() {
     const timer = setInterval(() => {
       if (userInteractingRef.current) return;
       const next = (activeIndex + 1) % slides.length;
-      scrollRef.current?.scrollTo({ x: next * SNAP, animated: true });
+      const x = next * SNAP;
+      if (Platform.OS === 'web') {
+        // react-native-web's ScrollView.scrollTo with animated:true is a
+        // no-op in many browsers because it relies on the (deprecated)
+        // smooth-scroll polyfill. Drop down to the underlying DOM node and
+        // use the native smooth-scroll API instead.
+        const node = scrollRef.current?.getScrollableNode?.() as
+          | (HTMLElement & { scrollTo?: (opts: ScrollToOptions) => void })
+          | undefined;
+        if (node?.scrollTo) {
+          node.scrollTo({ left: x, behavior: 'smooth' });
+        } else {
+          scrollRef.current?.scrollTo({ x, animated: true });
+        }
+      } else {
+        scrollRef.current?.scrollTo({ x, animated: true });
+      }
       setActiveIndex(next);
     }, AUTO_ROTATE_MS);
     return () => clearInterval(timer);

@@ -1,64 +1,110 @@
+/**
+ * Floating Action Button — a glowing brass-ringed Lottie talisman that
+ * lives in the bottom-right corner of HomeScreen and opens QuickOrderSheet.
+ *
+ * The hand-rolled SVG genie lamp + six smoke-wisp Animated.Values that this
+ * file used to carry have been replaced by a professionally authored Lottie
+ * animation (a golden "wish star" sparkle). Lottie owns all the looping
+ * motion; we only drive a short press-jolt + a quick replay-from-frame-0
+ * burst when the user taps, so the talisman feels alive on press.
+ *
+ * Asset: `src/assets/animations/genie-lamp.json` — bundled at build time
+ * so there is zero runtime network dependency. The animation is rendered
+ * inside a circular brass ring (LinearGradient + warm border) that carries
+ * the Aladdin theme even though the Lottie itself is a generic gold star.
+ */
 import { LinearGradient } from 'expo-linear-gradient';
-import { Zap } from 'lucide-react-native';
-import { useEffect, useRef, useState } from 'react';
-import { Animated, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
+import LottieView from 'lottie-react-native';
+import { useRef, useState } from 'react';
+import { Animated, Easing, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { QuickOrderSheet } from './QuickOrderSheet';
 
-import { colors, fontFamilies, gradients, spacing } from '../theme/tokens';
+import { colors, fontFamilies, spacing } from '../theme/tokens';
 
-const spacingMd = spacing.md;
+// Bundled — Metro inlines this. License: Lottie Simple License (free for
+// commercial use, no attribution required).
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const genieLamp = require('../assets/animations/genie-lamp.json');
 
-/**
- * Floating Action Button — circular lightning icon with "طلب سريع" label
- * underneath. Lives inside HomeScreen only.
- */
+const LAMP_SIZE = 76;
+const useNative = Platform.OS !== 'web';
+
 export function QuickOrderFAB() {
   const [open, setOpen] = useState(false);
-  const pulse = useRef(new Animated.Value(1)).current;
+  const lottieRef = useRef<LottieView>(null);
 
-  useEffect(() => {
-    // Gentle pulse to draw attention, then settle — a permanent loop is
-    // exhausting in peripheral vision and was overlapping the trust strip
-    // before the user even scrolled.
-    Animated.loop(
-      Animated.sequence([
-        Animated.timing(pulse, {
-          toValue: 1.06,
-          duration: 1200,
-          useNativeDriver: Platform.OS !== 'web',
-        }),
-        Animated.timing(pulse, {
-          toValue: 1,
-          duration: 1200,
-          useNativeDriver: Platform.OS !== 'web',
-        }),
-      ]),
-      { iterations: 3 },
-    ).start();
-  }, [pulse]);
+  // Press-jolt — squash + bounce-back. Lottie handles all the looping idle
+  // motion, but a tactile scale-pulse on tap is what makes the button feel
+  // pressable rather than merely decorative.
+  const press = useRef(new Animated.Value(0)).current;
+  const pressScale = press.interpolate({ inputRange: [0, 1], outputRange: [1, 0.86] });
+
+  const onPress = () => {
+    // 1. Replay the lottie from frame 0 at 1.5x speed — feels like the
+    //    talisman "reacts" to the touch with a burst of sparkle.
+    lottieRef.current?.reset();
+    lottieRef.current?.play();
+
+    // 2. Quick mechanical squash so the press registers in muscle memory.
+    press.setValue(0);
+    Animated.sequence([
+      Animated.timing(press, {
+        toValue: 1,
+        duration: 140,
+        easing: Easing.out(Easing.cubic),
+        useNativeDriver: useNative,
+      }),
+      Animated.spring(press, {
+        toValue: 0,
+        damping: 8,
+        mass: 0.5,
+        stiffness: 200,
+        useNativeDriver: useNative,
+      }),
+    ]).start();
+
+    // 3. Open the sheet just after the sparkle reaches its peak — feels
+    //    like the wish summoned it.
+    setTimeout(() => setOpen(true), 360);
+  };
 
   return (
     <>
       <View style={[styles.layer, { pointerEvents: 'box-none' }]}>
+        {/* Soft golden halo behind the talisman — a thin glow that
+            anchors the FAB visually. No animation needed; the Lottie
+            inside already pulses. */}
+        <View pointerEvents="none" style={styles.glow} />
+
         <Animated.View
-          style={[styles.fabWrap, { transform: [{ scale: pulse }], pointerEvents: 'box-none' }]}
+          style={[
+            styles.lampWrap,
+            { transform: [{ scale: pressScale }] },
+            { pointerEvents: 'box-none' },
+          ]}
         >
           <Pressable
-            onPress={() => setOpen(true)}
-            style={({ pressed }) => [
-              styles.fabPressable,
-              pressed && { transform: [{ scale: 0.95 }] },
-            ]}
+            onPress={onPress}
+            accessibilityRole="button"
             accessibilityLabel="طلب سريع"
+            style={({ pressed }) => [styles.pressable, pressed && { opacity: 0.96 }]}
           >
             <LinearGradient
-              colors={gradients.brand}
+              colors={['#FFE082', '#F2A93B', '#B66B0A']}
               start={{ x: 0, y: 0 }}
               end={{ x: 1, y: 1 }}
-              style={styles.fabInner}
+              style={styles.ring}
             >
-              <Zap size={28} color={colors.white} strokeWidth={2.5} fill={colors.white} />
+              <LottieView
+                ref={lottieRef}
+                source={genieLamp}
+                autoPlay
+                loop
+                speed={1}
+                resizeMode="contain"
+                style={styles.lottie}
+              />
             </LinearGradient>
           </Pressable>
         </Animated.View>
@@ -77,31 +123,54 @@ const styles = StyleSheet.create({
   layer: {
     position: 'absolute',
     bottom: 24,
-    insetInlineStart: spacingMd, // RTL-aware: hugs the right side in Arabic
+    insetInlineStart: spacing.md, // RTL-aware: hugs the right side in Arabic
     alignItems: 'center',
+    width: LAMP_SIZE + 24,
     zIndex: 50,
   },
-  fabWrap: {
-    width: 60,
-    height: 60,
-    borderRadius: 30,
+  // Soft golden halo behind the talisman.
+  glow: {
+    position: 'absolute',
+    bottom: 24,
+    width: LAMP_SIZE + 28,
+    height: LAMP_SIZE + 28,
+    borderRadius: (LAMP_SIZE + 28) / 2,
+    backgroundColor: '#F2A93B',
+    opacity: 0.55,
     ...(Platform.OS === 'web'
-      ? { boxShadow: '0 8px 24px rgba(224,48,30,0.45)' }
-      : { elevation: 12 }),
+      ? { boxShadow: '0 0 32px 10px rgba(242,169,59,0.65)' }
+      : {
+          shadowColor: '#F2A93B',
+          shadowOpacity: 0.9,
+          shadowRadius: 28,
+          shadowOffset: { width: 0, height: 0 },
+        }),
   },
-  fabPressable: {
+  lampWrap: {
+    width: LAMP_SIZE,
+    height: LAMP_SIZE,
+    borderRadius: LAMP_SIZE / 2,
+    ...(Platform.OS === 'web'
+      ? { boxShadow: '0 10px 28px rgba(176, 100, 10, 0.55)' }
+      : { elevation: 14 }),
+  },
+  pressable: {
     width: '100%',
     height: '100%',
-    borderRadius: 30,
+    borderRadius: LAMP_SIZE / 2,
     overflow: 'hidden',
   },
-  fabInner: {
+  ring: {
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
     borderWidth: 3,
-    borderColor: colors.white,
-    borderRadius: 30,
+    borderColor: '#FFF6D5',
+    borderRadius: LAMP_SIZE / 2,
+  },
+  lottie: {
+    width: '100%',
+    height: '100%',
   },
   labelBubble: {
     marginTop: 6,

@@ -14,7 +14,7 @@ import { StoresListScreen } from '../screens/StoresListScreen';
 
 export type HomeStackParamList = {
   Home: undefined;
-  StoresList: { categoryId?: string } | undefined;
+  StoresList: { categoryId?: string; search?: string } | undefined;
   NearbyMap: { search?: string } | undefined;
   MerchantDetail: { merchantId: string };
   ProductDetail: { productId: string };

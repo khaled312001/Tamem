@@ -19,6 +19,7 @@ import {
   Phone,
   Truck,
   User,
+  UserCheck,
 } from 'lucide-react';
 import { useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
@@ -831,6 +832,57 @@ export function OrderDetailPage() {
                   </Button>
                 )}
               </div>
+            )}
+          </Card>
+
+          {/* Supervisor on-shift dispatch — populated automatically when
+              the order entered NEW status. Read-only audit card so the
+              admin can see who got pinged on WhatsApp. */}
+          <Card title="المشرف المُخطَر" icon={<UserCheck className="w-4 h-4" />}>
+            {Array.isArray(order.supervisorDispatches) && order.supervisorDispatches.length > 0 ? (
+              (() => {
+                const latest = order.supervisorDispatches[0];
+                const ok = latest.status === 'SENT';
+                const ts = new Date(latest.sentAt).toLocaleString('ar-EG', {
+                  dateStyle: 'short',
+                  timeStyle: 'short',
+                });
+                return (
+                  <div className="space-y-2">
+                    <div className="font-bold">{latest.supervisor?.name ?? '— تم حذف المشرف'}</div>
+                    {latest.supervisor?.whatsappPhone && (
+                      <a
+                        href={`https://wa.me/${latest.supervisor.whatsappPhone.replace(/[^\d]/g, '')}`}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="text-sm text-brand-red block"
+                        dir="ltr"
+                      >
+                        {latest.supervisor.whatsappPhone}
+                      </a>
+                    )}
+                    <div
+                      className={`text-xs inline-flex items-center gap-1 px-2 py-0.5 rounded ${
+                        ok ? 'bg-green-100 text-green-800' : 'bg-amber-100 text-amber-800'
+                      }`}
+                    >
+                      {ok ? '✓ تم إرسال الواتساب' : '⚠ فشل الإرسال'} · {ts}
+                    </div>
+                    {!ok && latest.errorMessage && (
+                      <div className="text-xs text-muted-foreground">{latest.errorMessage}</div>
+                    )}
+                    {order.supervisorDispatches.length > 1 && (
+                      <div className="text-xs text-muted-foreground pt-1 border-t">
+                        + {order.supervisorDispatches.length - 1} محاولة إرسال سابقة
+                      </div>
+                    )}
+                  </div>
+                );
+              })()
+            ) : (
+              <p className="text-sm text-muted-foreground">
+                لم يتم إخطار مشرف — لا يوجد مشرف على الشيفت لحظة استلام الطلب.
+              </p>
             )}
           </Card>
 

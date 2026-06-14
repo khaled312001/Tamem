@@ -9,25 +9,26 @@ import {
   Gift,
   MapPin,
   Package,
+  Search,
   ShoppingBag,
   Store,
   Truck,
 } from 'lucide-react-native';
 import { useState } from 'react';
-import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Alert, Image, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { HeartButton } from '../components/HeartButton';
 import { QuickOrderFAB } from '../components/QuickOrderFAB';
 import { BannerCarousel } from '../components/home/BannerCarousel';
 import { CategoriesStrip } from '../components/home/CategoriesStrip';
+import { SearchOverlay } from '../components/home/SearchOverlay';
 import {
   AnimatedListItem,
   Badge,
   ForwardChevron,
   MerchantSkeleton,
   Rating,
-  SearchBar,
   SectionHeader,
   ServiceTile,
   StatusPill,
@@ -159,13 +160,9 @@ const tickHaptic = () => haptic.tap();
 export function HomeScreen() {
   const navigation = useNavigation<NavProp>();
   const user = useAuth((s) => s.user);
-  const [searchValue, setSearchValue] = useState('');
-
-  const submitSearch = () => {
-    const q = searchValue.trim();
-    if (!q) return;
-    navigation.navigate('NearbyMap', { search: q });
-  };
+  // Search starts collapsed as a tappable pill; tapping it opens the
+  // SearchOverlay which owns the actual TextInput + live suggestions.
+  const [searchOpen, setSearchOpen] = useState(false);
 
   const onPromo = async () => {
     // Prefer the coupon code resolved by the backend → free-text override
@@ -274,66 +271,76 @@ export function HomeScreen() {
         end={{ x: 1, y: 1 }}
         style={styles.hero}
       >
-        <View style={styles.heroRow}>
-          <Pressable
-            onPress={() => {
-              tickHaptic();
-              // Tapping the location row now takes the customer to manage
-              // their saved addresses — that's the source of truth.
-              // eslint-disable-next-line @typescript-eslint/no-explicit-any
-              (navigation.getParent() as any)?.navigate('ProfileTab', {
-                screen: 'SavedAddresses',
-              });
-            }}
-            style={({ pressed }) => [styles.locationBtn, pressed && { opacity: 0.85 }]}
-            accessibilityLabel="تغيير العنوان"
-          >
-            <View style={styles.locationLabelRow}>
-              <Text style={styles.locationLabel}>
-                {needsAddress ? 'لازم تسجّل عنوان' : 'التوصيل إلى'}
-              </Text>
-              <ChevronDown size={14} color="rgba(255,255,255,0.85)" />
+        {/* Top toolbar: logo + greeting + bell */}
+        <View style={styles.toolbar}>
+          <View style={styles.brandWrap}>
+            <View style={styles.brandLogoCircle}>
+              <Image
+                source={require('../assets/logo.jpg')}
+                style={styles.brandLogo}
+                resizeMode="cover"
+              />
             </View>
-            <View style={styles.locationValueRow}>
-              <MapPin size={14} color={colors.white} />
-              <Text style={styles.locationValue} numberOfLines={1}>
-                {defaultAddress
-                  ? `${defaultAddress.label} · ${defaultAddress.address}`
-                  : 'اضغط هنا لإضافة عنوان'}
-              </Text>
-            </View>
-          </Pressable>
+            <Text style={styles.brandName}>تميم</Text>
+          </View>
+
+          <Text style={styles.greeting} numberOfLines={1}>
+            أهلاً {user?.name?.split(' ')[0] ?? 'بك'} 👋
+          </Text>
 
           <Pressable
             onPress={() => {
               tickHaptic();
               navigation.getParent()?.navigate('Notifications' as never);
             }}
-            style={({ pressed }) => [styles.heroIconBtn, pressed && { opacity: 0.7 }]}
+            style={({ pressed }) => [styles.bellBtn, pressed && { opacity: 0.7 }]}
             accessibilityLabel="الإشعارات"
             hitSlop={6}
           >
-            <Bell size={18} color={colors.white} />
+            <Bell size={16} color={colors.white} />
             <View style={styles.bellDot} />
           </Pressable>
         </View>
 
-        <Text style={styles.heroGreeting}>
-          {homeConfig?.heroGreeting ?? `أهلاً ${user?.name?.split(' ')[0] ?? 'بك'} 👋`}
-        </Text>
-        <Text style={styles.heroSubtitle}>
-          {homeConfig?.heroSubtitle ?? 'ايه اللي محتاج توصيله النهارده؟'}
-        </Text>
+        {/* Compact location pill — taps open SavedAddresses */}
+        <Pressable
+          onPress={() => {
+            tickHaptic();
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            (navigation.getParent() as any)?.navigate('ProfileTab', {
+              screen: 'SavedAddresses',
+            });
+          }}
+          style={({ pressed }) => [styles.locationPill, pressed && { opacity: 0.9 }]}
+          accessibilityLabel="تغيير العنوان"
+        >
+          <MapPin size={14} color={colors.white} />
+          <Text style={styles.locationPillText} numberOfLines={1}>
+            {defaultAddress
+              ? `${defaultAddress.label} · ${defaultAddress.address}`
+              : needsAddress
+                ? 'اضغط لإضافة عنوان توصيل'
+                : 'اختر عنوان التوصيل'}
+          </Text>
+          <ChevronDown size={14} color="rgba(255,255,255,0.9)" />
+        </Pressable>
 
-        <View style={styles.searchOuter}>
-          <SearchBar
-            value={searchValue}
-            onChangeText={setSearchValue}
-            onSubmit={submitSearch}
-            placeholder="ابحث عن مطعم، محل، أو منتج…"
-          />
-        </View>
+        {/* Collapsed search pill — opens the SearchOverlay (which auto-
+            focuses an input + shows live suggestions). */}
+        <Pressable
+          onPress={() => setSearchOpen(true)}
+          style={({ pressed }) => [styles.searchPill, pressed && { opacity: 0.92 }]}
+          accessibilityRole="search"
+          accessibilityLabel="افتح البحث"
+        >
+          <Search size={18} color={colors.text.muted} />
+          <Text style={styles.searchPillText} numberOfLines={1}>
+            ابحث عن مطعم، محل، أو منتج…
+          </Text>
+        </Pressable>
       </LinearGradient>
+
+      <SearchOverlay visible={searchOpen} onClose={() => setSearchOpen(false)} />
 
       <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
         {/* ─────── No-address banner — blocks the customer from any order
@@ -544,50 +551,57 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.surface },
   // Hero
   hero: {
-    // Tightened spacing — the hero used to push the scroll content well
-    // below the fold. paddingTop is small now (status-bar safe area
-    // handles the top inset), paddingBottom only as much as it takes to
-    // round the corners cleanly into the white scroll surface.
-    paddingHorizontal: spacing.lg,
-    paddingTop: spacing.xs,
-    paddingBottom: spacing.md,
-    borderBottomLeftRadius: radii.xxl,
-    borderBottomRightRadius: radii.xxl,
-  },
-  heroRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
+    // Redesigned hero: 3 stacked rows (toolbar / location pill / search
+    // pill). ~140px total, logo in the corner, no decorative subtitle.
+    paddingHorizontal: spacing.md,
+    paddingTop: 4,
+    paddingBottom: spacing.sm,
+    borderBottomLeftRadius: radii.xl,
+    borderBottomRightRadius: radii.xl,
     gap: spacing.sm,
   },
-  locationBtn: {
+  // ── Row 1: brand + greeting + bell ──
+  toolbar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+  },
+  brandWrap: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  brandLogoCircle: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    backgroundColor: colors.white,
+    alignItems: 'center',
+    justifyContent: 'center',
+    overflow: 'hidden',
+    padding: 2,
+  },
+  brandLogo: {
+    width: 26,
+    height: 26,
+    borderRadius: 13,
+  },
+  brandName: {
+    color: colors.white,
+    fontFamily: fontFamilies.headingBlack,
+    fontSize: fontSizes.sm,
+    letterSpacing: 0.3,
+  },
+  greeting: {
     flex: 1,
-    paddingVertical: 4,
-  },
-  locationLabelRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-  },
-  locationLabel: {
-    color: 'rgba(255,255,255,0.85)',
-    fontFamily: fontFamilies.body,
-    fontSize: fontSizes.xs,
-  },
-  locationValueRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    marginTop: 2,
-  },
-  locationValue: {
+    textAlign: 'center',
     color: colors.white,
     fontFamily: fontFamilies.headingBold,
-    fontSize: fontSizes.md,
+    fontSize: fontSizes.sm,
   },
-  heroIconBtn: {
-    width: 42,
-    height: 42,
+  bellBtn: {
+    width: 32,
+    height: 32,
     borderRadius: radii.md,
     backgroundColor: 'rgba(255,255,255,0.18)',
     alignItems: 'center',
@@ -596,26 +610,47 @@ const styles = StyleSheet.create({
   },
   bellDot: {
     position: 'absolute',
-    top: 9,
-    end: 10,
+    top: 6,
+    end: 6,
     width: 7,
     height: 7,
     borderRadius: 4,
     backgroundColor: colors.brand.gold,
   },
-  heroGreeting: {
+  // ── Row 2: location pill ──
+  locationPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: spacing.md,
+    paddingVertical: 7,
+    backgroundColor: 'rgba(255,255,255,0.18)',
+    borderRadius: 99,
+  },
+  locationPillText: {
+    flex: 1,
     color: colors.white,
-    fontSize: fontSizes.xl,
-    fontFamily: fontFamilies.headingBlack,
-    marginTop: spacing.md,
+    fontFamily: fontFamilies.bodyBold,
+    fontSize: fontSizes.xs,
+    textAlign: 'right',
   },
-  heroSubtitle: {
-    color: 'rgba(255,255,255,0.85)',
-    fontSize: fontSizes.sm,
+  // ── Row 3: search pill ──
+  searchPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    height: 42,
+    paddingHorizontal: spacing.md,
+    backgroundColor: colors.white,
+    borderRadius: 99,
+  },
+  searchPillText: {
+    flex: 1,
     fontFamily: fontFamilies.body,
-    marginTop: 2,
+    fontSize: fontSizes.xs,
+    color: colors.text.muted,
+    textAlign: 'right',
   },
-  searchOuter: { marginTop: spacing.lg },
   // Address warning — colored loud (brand-red bg) so it can't be missed
   addressWarn: {
     flexDirection: 'row',
