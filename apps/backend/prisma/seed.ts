@@ -10,11 +10,22 @@ async function main() {
   // ============================================
   // Admin user
   // ============================================
-  const adminPhone = '+201010254819';
-  const adminPassword = await bcrypt.hash('admin123!', 12);
+  // Read admin credentials from env so the actual secret never lives in
+  // source. Fallbacks below let `pnpm seed` work in a fresh dev clone, but
+  // production must set both vars in apps/backend/.env before seeding.
+  const adminPhone = process.env.ADMIN_PHONE ?? '+201024804294';
+  const adminPasswordPlain = process.env.ADMIN_PASSWORD;
+  if (!adminPasswordPlain) {
+    throw new Error(
+      'ADMIN_PASSWORD env var is required to seed the admin user. ' +
+        'Set it in apps/backend/.env or export it before running the seed.',
+    );
+  }
+  const adminPassword = await bcrypt.hash(adminPasswordPlain, 12);
+  // Update phone + password on re-seed so secret rotation actually applies.
   const admin = await prisma.user.upsert({
     where: { phone: adminPhone },
-    update: {},
+    update: { passwordHash: adminPassword },
     create: {
       phone: adminPhone,
       name: 'مدير تميم',
@@ -26,7 +37,7 @@ async function main() {
       governorate: 'قنا',
     },
   });
-  console.info(`✅ Admin: ${admin.phone} (password: admin123!)`);
+  console.info(`✅ Admin: ${admin.phone}`);
 
   // ============================================
   // Categories — store categories (restaurants, pharmacies, ...)
@@ -503,7 +514,7 @@ async function main() {
 
   console.info('\n🎉 Seed complete!\n');
   console.info('Login credentials:');
-  console.info(`  Admin    : ${adminPhone}      / admin123!`);
+  console.info(`  Admin    : ${adminPhone}      / (rotated — see DEPLOYMENT.md)`);
   console.info(`  Customer : +201000000001      / customer123`);
   console.info(`  Driver   : +201000000002      / driver123`);
 }
