@@ -1,14 +1,14 @@
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { useQuery } from '@tanstack/react-query';
-import { Bell, Home, Package, User } from 'lucide-react-native';
+import { Bell, Home, Package, ShoppingCart, User } from 'lucide-react-native';
 import { Platform, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { FloatingCartBar } from '../components/FloatingCartBar';
-
+import { CartScreen } from '../screens/CartScreen';
 import { NotificationsScreen } from '../screens/NotificationsScreen';
 import { api } from '../lib/api';
 import { clearAppBadge } from '../lib/push';
+import { useCart } from '../stores/cart';
 
 import { HomeStack } from './HomeStack';
 import { OrdersStack } from './OrdersStack';
@@ -18,6 +18,7 @@ import { colors, fontFamilies } from '../theme/tokens';
 
 export type AppTabsParamList = {
   HomeTab: undefined;
+  CartTab: undefined;
   Orders: undefined;
   Notifications: undefined;
   ProfileTab: undefined;
@@ -39,6 +40,24 @@ function BellWithBadge({ color, count }: { color: string; count: number }) {
   return (
     <View style={badgeStyles.wrap}>
       <Bell size={TAB_ICON_SIZE} color={color} />
+      {count > 0 && (
+        <View style={badgeStyles.badge}>
+          <Text style={badgeStyles.badgeText} numberOfLines={1}>
+            {label}
+          </Text>
+        </View>
+      )}
+    </View>
+  );
+}
+
+/** Cart icon with the live item-count badge so the customer can see
+ *  there's something in the basket without opening the tab. */
+function CartWithBadge({ color, count }: { color: string; count: number }) {
+  const label = count > 99 ? '99+' : String(count);
+  return (
+    <View style={badgeStyles.wrap}>
+      <ShoppingCart size={TAB_ICON_SIZE} color={color} />
       {count > 0 && (
         <View style={badgeStyles.badge}>
           <Text style={badgeStyles.badgeText} numberOfLines={1}>
@@ -96,9 +115,7 @@ export function AppTabs() {
   const insets = useSafeAreaInsets();
   const bottomInset = Platform.OS === 'web' ? 8 : Math.max(insets.bottom, 8);
   const unread = useUnreadCount();
-  // Tab bar height we add as the floating cart's `bottomOffset` so the bar
-  // sits just above the tab bar instead of overlapping it.
-  const tabBarHeight = 68 + bottomInset;
+  const cartCount = useCart().count;
 
   return (
     <View style={{ flex: 1 }}>
@@ -146,6 +163,27 @@ export function AppTabs() {
           options={{
             title: 'الرئيسية',
             tabBarIcon: ({ color }) => <Home size={TAB_ICON_SIZE} color={color} />,
+          }}
+        />
+        {/* CartTab is a redirect — taps always send the user to HomeTab > Cart
+            because CartScreen lives inside HomeStack (it shares product /
+            checkout routes with the rest of the catalog). We still register
+            a component prop because React Navigation requires one; in
+            practice the component is never actually rendered because the
+            tabPress listener calls preventDefault first. */}
+        <Tabs.Screen
+          name="CartTab"
+          component={CartScreen}
+          listeners={({ navigation }) => ({
+            tabPress: (e) => {
+              e.preventDefault();
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              (navigation as any).navigate('HomeTab', { screen: 'Cart' });
+            },
+          })}
+          options={{
+            title: 'السلة',
+            tabBarIcon: ({ color }) => <CartWithBadge color={color} count={cartCount} />,
           }}
         />
         <Tabs.Screen
@@ -200,9 +238,6 @@ export function AppTabs() {
           }}
         />
       </Tabs.Navigator>
-      {/* Sticky cart bar — only renders when the cart has items. Sits just
-          above the tab bar at the bottom of the screen. */}
-      <FloatingCartBar bottomOffset={tabBarHeight} />
     </View>
   );
 }

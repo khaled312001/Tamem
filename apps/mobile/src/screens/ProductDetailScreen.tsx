@@ -27,9 +27,10 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { EmptyState, MoneyText, PrimaryButton } from '../components/ui';
 import { api } from '../lib/api';
+import { navigationRef } from '../lib/push';
 import { showToast } from '../lib/toast';
 import type { HomeStackParamList } from '../navigation/HomeStack';
-import { addToCart } from '../stores/cart';
+import { addToCart, useCart } from '../stores/cart';
 import { BackChevron } from '../theme/rtl';
 import { colors, fontFamilies, fontSizes, radii, shadows, spacing } from '../theme/tokens';
 
@@ -126,6 +127,14 @@ export function ProductDetailScreen() {
   const productInStock =
     data.isAvailable && !data.isHidden && (data.stock == null || data.stock > 0);
   const canAdd = productInStock && merchantOpen;
+  // Reactive cart state so the "view cart" shortcut appears the instant
+  // the user adds something — without leaving the product page.
+  const cart = useCart();
+
+  const openCart = () => {
+    if (!navigationRef.isReady()) return;
+    navigationRef.navigate('App', { screen: 'HomeTab', params: { screen: 'Cart' } });
+  };
 
   const onAddToCart = () => {
     if (!canAdd) return;
@@ -256,6 +265,35 @@ export function ProductDetailScreen() {
 
       {/* ─────── Sticky bottom bar: quantity + Add to cart ─────── */}
       <SafeAreaView edges={['bottom']} style={styles.bottomBar}>
+        {/* "View cart" shortcut — appears the moment the user has anything
+            in the cart, so they don't need to leave the product page to
+            find the checkout. */}
+        {cart.count > 0 && (
+          <Pressable
+            onPress={openCart}
+            style={({ pressed }) => [styles.viewCart, pressed && { opacity: 0.92 }]}
+            accessibilityRole="button"
+            accessibilityLabel={`فتح السلة، ${cart.count} منتج`}
+          >
+            <LinearGradient
+              colors={['#1FA463', '#0F6B3C']}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 0 }}
+              style={styles.viewCartBar}
+            >
+              <View style={styles.viewCartIcon}>
+                <ShoppingCart size={16} color={colors.white} />
+                <View style={styles.viewCartBadge}>
+                  <Text style={styles.viewCartBadgeText}>
+                    {cart.count > 99 ? '99+' : cart.count}
+                  </Text>
+                </View>
+              </View>
+              <Text style={styles.viewCartLabel}>عرض السلة وإتمام الطلب</Text>
+              <MoneyText amount={cart.subtotal} tone="inverse" size="sm" showCurrency />
+            </LinearGradient>
+          </Pressable>
+        )}
         <View style={styles.bottomInner}>
           {/* Quantity stepper */}
           <View style={styles.qtyWrap}>
@@ -519,6 +557,55 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   qtyBtnDisabled: { backgroundColor: colors.line },
+  // "View cart" shortcut bar — sits above the qty+add row
+  viewCart: {
+    paddingHorizontal: spacing.md,
+    paddingTop: spacing.sm,
+  },
+  viewCartBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    height: 44,
+    paddingHorizontal: spacing.md,
+    borderRadius: radii.lg,
+  },
+  viewCartIcon: {
+    width: 28,
+    height: 28,
+    borderRadius: radii.sm,
+    backgroundColor: 'rgba(255,255,255,0.20)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    position: 'relative',
+  },
+  viewCartBadge: {
+    position: 'absolute',
+    top: -5,
+    insetInlineEnd: -5,
+    minWidth: 16,
+    height: 16,
+    borderRadius: 8,
+    backgroundColor: colors.brand.gold,
+    paddingHorizontal: 3,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1.5,
+    borderColor: '#0F6B3C',
+  },
+  viewCartBadgeText: {
+    color: colors.brand.dark,
+    fontFamily: fontFamilies.headingBlack,
+    fontSize: 10,
+    lineHeight: 12,
+    includeFontPadding: false,
+  },
+  viewCartLabel: {
+    flex: 1,
+    color: colors.white,
+    fontFamily: fontFamilies.headingBold,
+    fontSize: fontSizes.sm,
+  },
   qtyValue: {
     width: 32,
     textAlign: 'center',

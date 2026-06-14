@@ -203,6 +203,17 @@ export const adminGet: RequestHandler = async (req, res, next) => {
         // parent → list of children with merchant + status; child → link
         // back to parent + its siblings so they can be reviewed together.
         parentOrder: { select: { id: true, orderNumber: true, status: true } },
+        // Supervisor on-shift dispatch — created automatically on NEW status
+        // by notifyOnShiftSupervisor. Most orders have 0 or 1 row; include
+        // them ordered newest-first so the UI can surface the latest attempt.
+        supervisorDispatches: {
+          orderBy: { sentAt: 'desc' },
+          include: {
+            supervisor: {
+              select: { id: true, name: true, whatsappPhone: true, isActive: true },
+            },
+          },
+        },
         subOrders: {
           orderBy: { createdAt: 'asc' },
           select: {

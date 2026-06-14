@@ -6,6 +6,7 @@ import { cancelOrderSchema, createOrderSchema, pricingEstimateSchema } from '@ta
 
 import { prisma } from '../../db/prisma.js';
 import {
+  BadRequestError,
   ConflictError,
   ForbiddenError,
   NotFoundError,
@@ -15,6 +16,7 @@ import {
 import { created, ok, paginated } from '../../utils/response.js';
 
 import { getMerchantOpenness } from '../merchants/merchantHours.js';
+import { getDeliveryPriceFor } from '../zones/zones.service.js';
 
 import { generateOrderNumber } from './orderNumber.js';
 import { assertTransition } from './transitions.js';
@@ -86,7 +88,56 @@ export const createOrder: RequestHandler = async (req, res, next) => {
         (input as { deliveryAddress?: string }).deliveryAddress = fallback.address;
         (input as { deliveryLat?: number }).deliveryLat = Number(fallback.lat);
         (input as { deliveryLng?: number }).deliveryLng = Number(fallback.lng);
+        // Inherit the saved address's zone selection too so we can compute
+        // the delivery fee below. The fallback path is opt-in — older saved
+        // addresses without zone IDs simply skip the zone block.
+        if (fallback.cityId && !input.cityId)
+          (input as { cityId?: string }).cityId = fallback.cityId;
+        if (fallback.villageId && !input.villageId)
+          (input as { villageId?: string }).villageId = fallback.villageId;
+        if (fallback.areaId && !input.areaId)
+          (input as { areaId?: string }).areaId = fallback.areaId;
       }
+    }
+
+    // ── Delivery-zone pricing (anti-tamper) ───────────────────────────────
+    // When the mobile picker has tagged the order with (cityId, villageId,
+    // areaId) we recompute the delivery fee server-side. The client never
+    // gets to choose the price — even if it sent a deliveryFee in the body
+    // we'd ignore it. Mismatched IDs (area not in village, etc.) hard-fail
+    // with a clear code so the picker can re-prompt.
+    let resolvedDeliveryFee: number | undefined;
+    let resolvedCityId: string | undefined;
+    let resolvedVillageId: string | undefined;
+    let resolvedAreaId: string | undefined;
+    if (input.cityId || input.villageId || input.areaId) {
+      if (!input.cityId || !input.villageId || !input.areaId) {
+        throw new BadRequestError('INVALID_ZONE', 'اختيارات العنوان غير صحيحة');
+      }
+      const priced = await getDeliveryPriceFor({
+        cityId: input.cityId,
+        villageId: input.villageId,
+        areaId: input.areaId,
+      });
+      if (!priced.ok) {
+        if (priced.error === 'INVALID_HIERARCHY') {
+          throw new BadRequestError('INVALID_ZONE', 'اختيارات العنوان غير صحيحة');
+        }
+        if (priced.error === 'INACTIVE_ZONE') {
+          throw new BadRequestError(
+            'INACTIVE_ZONE',
+            'هذه المنطقة غير مفعّلة حالياً. اختر منطقة أخرى.',
+          );
+        }
+        throw new BadRequestError(
+          'NO_DELIVERY_PRICE',
+          'لا يوجد سعر توصيل لهذه المنطقة. تواصل مع الإدارة لإضافة السعر.',
+        );
+      }
+      resolvedDeliveryFee = priced.value.price;
+      resolvedCityId = priced.value.cityId;
+      resolvedVillageId = priced.value.villageId;
+      resolvedAreaId = priced.value.areaId;
     }
 
     const orderNumber = generateOrderNumber();
@@ -124,6 +175,13 @@ export const createOrder: RequestHandler = async (req, res, next) => {
       scheduledFor: input.scheduledFor ?? undefined,
       couponCode: input.couponCode?.trim().toUpperCase(),
       discountAmount: couponDiscount > 0 ? couponDiscount : undefined,
+      // Server-computed delivery fee + zone snapshot. Null when the order
+      // didn't supply zone IDs (legacy flow) — admin can still price the
+      // order manually via the dashboard.
+      deliveryFee: resolvedDeliveryFee,
+      cityId: resolvedCityId,
+      villageId: resolvedVillageId,
+      areaId: resolvedAreaId,
     };
 
     let order: Awaited<ReturnType<typeof prisma.order.create>>;

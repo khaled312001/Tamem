@@ -10,11 +10,22 @@ async function main() {
   // ============================================
   // Admin user
   // ============================================
-  const adminPhone = '+201010254819';
-  const adminPassword = await bcrypt.hash('admin123!', 12);
+  // Read admin credentials from env so the actual secret never lives in
+  // source. Fallbacks below let `pnpm seed` work in a fresh dev clone, but
+  // production must set both vars in apps/backend/.env before seeding.
+  const adminPhone = process.env.ADMIN_PHONE ?? '+201024804294';
+  const adminPasswordPlain = process.env.ADMIN_PASSWORD;
+  if (!adminPasswordPlain) {
+    throw new Error(
+      'ADMIN_PASSWORD env var is required to seed the admin user. ' +
+        'Set it in apps/backend/.env or export it before running the seed.',
+    );
+  }
+  const adminPassword = await bcrypt.hash(adminPasswordPlain, 12);
+  // Update phone + password on re-seed so secret rotation actually applies.
   const admin = await prisma.user.upsert({
     where: { phone: adminPhone },
-    update: {},
+    update: { passwordHash: adminPassword },
     create: {
       phone: adminPhone,
       name: 'مدير تميم',
@@ -26,7 +37,7 @@ async function main() {
       governorate: 'قنا',
     },
   });
-  console.info(`✅ Admin: ${admin.phone} (password: admin123!)`);
+  console.info(`✅ Admin: ${admin.phone}`);
 
   // ============================================
   // Categories — store categories (restaurants, pharmacies, ...)
@@ -493,11 +504,143 @@ async function main() {
     console.info(`ℹ️  Mock orders already exist - skipped`);
   }
 
+  // ============================================
+  // Delivery Zones — Qift city + villages + areas
+  // ============================================
+  // Idempotent: uses composite unique keys (City.nameAr, Village(cityId,nameAr),
+  // Area(villageId,nameAr)) so re-running seed never duplicates rows. All
+  // prices start null — admin sets them via /admin/zones/areas later.
+  await seedDeliveryZones();
+
   console.info('\n🎉 Seed complete!\n');
   console.info('Login credentials:');
-  console.info(`  Admin    : ${adminPhone}      / admin123!`);
+  console.info(`  Admin    : ${adminPhone}      / (rotated — see DEPLOYMENT.md)`);
   console.info(`  Customer : +201000000001      / customer123`);
   console.info(`  Driver   : +201000000002      / driver123`);
+}
+
+async function seedDeliveryZones(): Promise<void> {
+  const cityData = {
+    nameAr: 'قفط',
+    nameEn: 'Qift',
+  };
+
+  const city = await prisma.city.upsert({
+    where: { nameAr: cityData.nameAr },
+    update: {},
+    create: { ...cityData, isActive: true },
+  });
+
+  const villagesData: { nameAr: string; nameEn: string; baseDeliveryPrice: null }[] = [
+    { nameAr: 'قفط المدينة', nameEn: 'Qift City', baseDeliveryPrice: null },
+    { nameAr: 'البراهمة', nameEn: 'El Brahmah', baseDeliveryPrice: null },
+    { nameAr: 'الشيخية', nameEn: 'El Sheikhia', baseDeliveryPrice: null },
+    { nameAr: 'القلعة', nameEn: "El Qal'a", baseDeliveryPrice: null },
+    { nameAr: 'الكلاحين', nameEn: 'El Kalalhin', baseDeliveryPrice: null },
+    { nameAr: 'اللقيطة', nameEn: 'El Loqeita', baseDeliveryPrice: null },
+    { nameAr: 'الظافرية', nameEn: 'El Zafaria', baseDeliveryPrice: null },
+    { nameAr: 'العويضات', nameEn: 'El Owaidat', baseDeliveryPrice: null },
+    { nameAr: 'بير عنبر', nameEn: 'Bir Anbar', baseDeliveryPrice: null },
+  ];
+
+  const areasData: Record<string, { nameAr: string; nameEn?: string; deliveryPrice?: null }[]> = {
+    'قفط المدينة': [
+      { nameAr: 'قفط المدينة', nameEn: 'Qift City Center', deliveryPrice: null },
+      { nameAr: 'المنشية الجديدة', nameEn: 'El Monsheya El Gedida', deliveryPrice: null },
+      { nameAr: 'المحطة', nameEn: 'El Mahatta', deliveryPrice: null },
+      { nameAr: 'السوق', nameEn: 'El Sooq', deliveryPrice: null },
+      { nameAr: 'كوم المؤمنين', nameEn: 'Kom El Mumenin', deliveryPrice: null },
+      { nameAr: 'أخرى داخل مدينة قفط', nameEn: 'Other - Qift City', deliveryPrice: null },
+    ],
+    البراهمة: [
+      { nameAr: 'البراهمة', nameEn: 'El Brahmah Center', deliveryPrice: null },
+      { nameAr: 'العروبة', nameEn: 'El Arouba', deliveryPrice: null },
+      { nameAr: 'البارود', nameEn: 'El Baroud', deliveryPrice: null },
+      { nameAr: 'الأشراف', nameEn: 'El Ashraf', deliveryPrice: null },
+      { nameAr: 'نجع محروس', nameEn: 'Naga Mahrous', deliveryPrice: null },
+      { nameAr: 'أخرى داخل البراهمة', nameEn: 'Other - El Brahmah', deliveryPrice: null },
+    ],
+    الشيخية: [
+      { nameAr: 'الشيخية', nameEn: 'El Sheikhia Center', deliveryPrice: null },
+      { nameAr: 'العويضات', nameEn: 'El Owaidat', deliveryPrice: null },
+      { nameAr: 'أخرى داخل الشيخية', nameEn: 'Other - El Sheikhia', deliveryPrice: null },
+    ],
+    القلعة: [
+      { nameAr: 'القلعة', nameEn: "El Qal'a Center", deliveryPrice: null },
+      { nameAr: 'نجع رشوان', nameEn: 'Naga Reshan', deliveryPrice: null },
+      { nameAr: 'نجع الرماش', nameEn: 'Naga El Remash', deliveryPrice: null },
+      { nameAr: 'نجع العكرمي', nameEn: 'Naga El Akrami', deliveryPrice: null },
+      { nameAr: 'نجع الحيطان', nameEn: 'Naga El Haytan', deliveryPrice: null },
+      { nameAr: 'الزقيم', nameEn: 'El Zaqim', deliveryPrice: null },
+      { nameAr: 'أخرى داخل القلعة', nameEn: "Other - El Qal'a", deliveryPrice: null },
+    ],
+    الكلاحين: [
+      { nameAr: 'الكلاحين', nameEn: 'El Kalalhin Center', deliveryPrice: null },
+      { nameAr: 'معين', nameEn: "Ma'in", deliveryPrice: null },
+      { nameAr: 'نجع أبو الحجاج', nameEn: 'Naga Abu El Hajjaj', deliveryPrice: null },
+      { nameAr: 'نجع الجامع', nameEn: "Naga El Jame'a", deliveryPrice: null },
+      { nameAr: 'الحميرة', nameEn: 'El Hameera', deliveryPrice: null },
+      { nameAr: 'العبابدة', nameEn: 'El Ababda', deliveryPrice: null },
+      { nameAr: 'المكرنفين', nameEn: 'El Makarnafin', deliveryPrice: null },
+      { nameAr: 'جبارة', nameEn: 'Gebara', deliveryPrice: null },
+      { nameAr: 'أخرى داخل الكلاحين', nameEn: 'Other - El Kalalhin', deliveryPrice: null },
+    ],
+    اللقيطة: [
+      { nameAr: 'اللقيطة', nameEn: 'El Loqeita Center', deliveryPrice: null },
+      { nameAr: 'أخرى داخل اللقيطة', nameEn: 'Other - El Loqeita', deliveryPrice: null },
+    ],
+    الظافرية: [
+      { nameAr: 'الظافرية', nameEn: 'El Zafaria Center', deliveryPrice: null },
+      { nameAr: 'أخرى داخل الظافرية', nameEn: 'Other - El Zafaria', deliveryPrice: null },
+    ],
+    العويضات: [
+      { nameAr: 'العويضات', nameEn: 'El Owaidat Center', deliveryPrice: null },
+      { nameAr: 'أخرى داخل العويضات', nameEn: 'Other - El Owaidat', deliveryPrice: null },
+    ],
+    'بير عنبر': [
+      { nameAr: 'بير عنبر', nameEn: 'Bir Anbar Center', deliveryPrice: null },
+      { nameAr: 'أخرى داخل بير عنبر', nameEn: 'Other - Bir Anbar', deliveryPrice: null },
+    ],
+  };
+
+  let villageCount = 0;
+  let areaCount = 0;
+
+  for (const v of villagesData) {
+    const village = await prisma.village.upsert({
+      where: { cityId_nameAr: { cityId: city.id, nameAr: v.nameAr } },
+      update: {},
+      create: {
+        cityId: city.id,
+        nameAr: v.nameAr,
+        nameEn: v.nameEn,
+        baseDeliveryPrice: v.baseDeliveryPrice,
+        isActive: true,
+      },
+    });
+    villageCount += 1;
+
+    const areas = areasData[v.nameAr] ?? [];
+    for (const a of areas) {
+      await prisma.area.upsert({
+        where: { villageId_nameAr: { villageId: village.id, nameAr: a.nameAr } },
+        update: {},
+        create: {
+          villageId: village.id,
+          nameAr: a.nameAr,
+          nameEn: a.nameEn,
+          deliveryPrice: a.deliveryPrice,
+          isActive: true,
+        },
+      });
+      areaCount += 1;
+    }
+  }
+
+  console.info(
+    `✅ Seeded 1 city (قفط), ${villageCount} villages, ${areaCount} areas. ` +
+      `All prices null by default — admin sets via /admin/zones/areas`,
+  );
 }
 
 main()

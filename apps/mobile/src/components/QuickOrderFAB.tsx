@@ -1,65 +1,131 @@
-import { LinearGradient } from 'expo-linear-gradient';
-import { Zap } from 'lucide-react-native';
+/**
+ * Floating Action Button — a glowing magic lamp that lives in the bottom-
+ * right corner of HomeScreen and opens QuickOrderSheet on press.
+ *
+ * The lamp itself is a hand-illustrated PNG (`assets/magic-lamp.png`)
+ * floating on a soft white disc with a warm golden halo behind it. The
+ * halo is centered around the lamp circle so the FAB reads as a single,
+ * round object — no off-axis offset.
+ *
+ * Motion: a slow up-and-down bob keeps the lamp alive; a press-jolt
+ * (squash + spring back) gives tactile feedback, and the QuickOrderSheet
+ * opens just as the bounce finishes so it feels like the wish summoned it.
+ */
 import { useEffect, useRef, useState } from 'react';
-import { Animated, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Animated, Easing, Image, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { QuickOrderSheet } from './QuickOrderSheet';
 
-import { colors, fontFamilies, gradients, spacing } from '../theme/tokens';
+import { colors, fontFamilies, spacing } from '../theme/tokens';
 
-const spacingMd = spacing.md;
+const LAMP_SIZE = 76;
+const GLOW_PAD = 18; // halo extends this far past the lamp on every side
+const useNative = Platform.OS !== 'web';
 
-/**
- * Floating Action Button — circular lightning icon with "طلب سريع" label
- * underneath. Lives inside HomeScreen only.
- */
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const lampImage = require('../assets/magic-lamp.png');
+
 export function QuickOrderFAB() {
   const [open, setOpen] = useState(false);
-  const pulse = useRef(new Animated.Value(1)).current;
+
+  // Slow idle bob — ~5px up/down on a 1.6s loop. Native driver where
+  // supported so the bob is buttery and doesn't fight other work.
+  const bob = useRef(new Animated.Value(0)).current;
+  // Press squash — 0..1 .. springs back to 0.
+  const press = useRef(new Animated.Value(0)).current;
+  // Subtle halo pulse so the FAB never feels static.
+  const glow = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
-    // Gentle pulse to draw attention, then settle — a permanent loop is
-    // exhausting in peripheral vision and was overlapping the trust strip
-    // before the user even scrolled.
     Animated.loop(
       Animated.sequence([
-        Animated.timing(pulse, {
-          toValue: 1.06,
-          duration: 1200,
-          useNativeDriver: Platform.OS !== 'web',
-        }),
-        Animated.timing(pulse, {
+        Animated.timing(bob, {
           toValue: 1,
-          duration: 1200,
-          useNativeDriver: Platform.OS !== 'web',
+          duration: 1600,
+          easing: Easing.inOut(Easing.sin),
+          useNativeDriver: useNative,
+        }),
+        Animated.timing(bob, {
+          toValue: 0,
+          duration: 1600,
+          easing: Easing.inOut(Easing.sin),
+          useNativeDriver: useNative,
         }),
       ]),
-      { iterations: 3 },
     ).start();
-  }, [pulse]);
+
+    Animated.loop(
+      Animated.sequence([
+        Animated.timing(glow, {
+          toValue: 1,
+          duration: 1100,
+          easing: Easing.inOut(Easing.quad),
+          useNativeDriver: useNative,
+        }),
+        Animated.timing(glow, {
+          toValue: 0,
+          duration: 1100,
+          easing: Easing.inOut(Easing.quad),
+          useNativeDriver: useNative,
+        }),
+      ]),
+    ).start();
+  }, [bob, glow]);
+
+  const onPress = () => {
+    press.setValue(0);
+    Animated.sequence([
+      Animated.timing(press, {
+        toValue: 1,
+        duration: 140,
+        easing: Easing.out(Easing.cubic),
+        useNativeDriver: useNative,
+      }),
+      Animated.spring(press, {
+        toValue: 0,
+        damping: 7,
+        mass: 0.5,
+        stiffness: 200,
+        useNativeDriver: useNative,
+      }),
+    ]).start();
+
+    setTimeout(() => setOpen(true), 320);
+  };
+
+  const translateY = bob.interpolate({ inputRange: [0, 1], outputRange: [0, -5] });
+  const pressScale = press.interpolate({ inputRange: [0, 1], outputRange: [1, 0.86] });
+  const glowOpacity = glow.interpolate({ inputRange: [0, 1], outputRange: [0.45, 0.85] });
+  const glowScale = glow.interpolate({ inputRange: [0, 1], outputRange: [1, 1.12] });
 
   return (
     <>
       <View style={[styles.layer, { pointerEvents: 'box-none' }]}>
+        {/* Lamp + halo container — both share the same center so the glow
+            sits perfectly behind the lamp instead of leaking to one side. */}
         <Animated.View
-          style={[styles.fabWrap, { transform: [{ scale: pulse }], pointerEvents: 'box-none' }]}
+          style={[
+            styles.lampSlot,
+            { transform: [{ translateY }, { scale: pressScale }] },
+            { pointerEvents: 'box-none' },
+          ]}
         >
+          {/* Glow halo — absolute, inset negative so it extends past the
+              lamp by GLOW_PAD on every side, centered on the same point. */}
+          <Animated.View
+            pointerEvents="none"
+            style={[styles.glow, { opacity: glowOpacity, transform: [{ scale: glowScale }] }]}
+          />
+
           <Pressable
-            onPress={() => setOpen(true)}
-            style={({ pressed }) => [
-              styles.fabPressable,
-              pressed && { transform: [{ scale: 0.95 }] },
-            ]}
+            onPress={onPress}
+            accessibilityRole="button"
             accessibilityLabel="طلب سريع"
+            style={({ pressed }) => [styles.pressable, pressed && { opacity: 0.96 }]}
           >
-            <LinearGradient
-              colors={gradients.brand}
-              start={{ x: 0, y: 0 }}
-              end={{ x: 1, y: 1 }}
-              style={styles.fabInner}
-            >
-              <Zap size={28} color={colors.white} strokeWidth={2.5} fill={colors.white} />
-            </LinearGradient>
+            <View style={styles.disc}>
+              <Image source={lampImage} style={styles.lampImg} resizeMode="contain" />
+            </View>
           </Pressable>
         </Animated.View>
 
@@ -77,31 +143,59 @@ const styles = StyleSheet.create({
   layer: {
     position: 'absolute',
     bottom: 24,
-    insetInlineStart: spacingMd, // RTL-aware: hugs the right side in Arabic
+    insetInlineStart: spacing.md, // RTL: hugs the right side in Arabic
     alignItems: 'center',
+    width: LAMP_SIZE + GLOW_PAD * 2,
     zIndex: 50,
   },
-  fabWrap: {
-    width: 60,
-    height: 60,
-    borderRadius: 30,
-    ...(Platform.OS === 'web'
-      ? { boxShadow: '0 8px 24px rgba(224,48,30,0.45)' }
-      : { elevation: 12 }),
-  },
-  fabPressable: {
-    width: '100%',
-    height: '100%',
-    borderRadius: 30,
-    overflow: 'hidden',
-  },
-  fabInner: {
-    flex: 1,
+  // The slot houses both the halo and the lamp disc, both centered.
+  lampSlot: {
+    width: LAMP_SIZE,
+    height: LAMP_SIZE,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  // Halo extends past the lamp by GLOW_PAD on every side, perfectly centered.
+  glow: {
+    position: 'absolute',
+    top: -GLOW_PAD,
+    bottom: -GLOW_PAD,
+    insetInlineStart: -GLOW_PAD,
+    insetInlineEnd: -GLOW_PAD,
+    borderRadius: (LAMP_SIZE + GLOW_PAD * 2) / 2,
+    backgroundColor: '#F2A93B',
+    ...(Platform.OS === 'web'
+      ? { boxShadow: '0 0 36px 12px rgba(242,169,59,0.55)' }
+      : {
+          shadowColor: '#F2A93B',
+          shadowOpacity: 0.9,
+          shadowRadius: 32,
+          shadowOffset: { width: 0, height: 0 },
+        }),
+  },
+  pressable: {
+    width: LAMP_SIZE,
+    height: LAMP_SIZE,
+    borderRadius: LAMP_SIZE / 2,
+    overflow: 'hidden',
+    ...(Platform.OS === 'web'
+      ? { boxShadow: '0 10px 24px rgba(176, 100, 10, 0.5)' }
+      : { elevation: 14 }),
+  },
+  // White disc behind the lamp PNG — makes the gold lamp pop against any
+  // page background.
+  disc: {
+    flex: 1,
+    backgroundColor: colors.white,
+    borderRadius: LAMP_SIZE / 2,
     borderWidth: 3,
-    borderColor: colors.white,
-    borderRadius: 30,
+    borderColor: '#FFE082',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  lampImg: {
+    width: '70%',
+    height: '70%',
   },
   labelBubble: {
     marginTop: 6,

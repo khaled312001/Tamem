@@ -148,18 +148,63 @@ export function BannerCarousel() {
     staleTime: 5 * 60_000,
   });
 
-  // Build the slide list — prefer server offers, fall back to defaults.
-  const slides: BannerSlide[] =
-    offers && offers.length > 0 ? offers.map(offerToSlide) : DEFAULT_BANNERS;
+  // Build the slide list — server offers come FIRST, then top up with the
+  // brand defaults so the carousel always has at least 3 cards rotating.
+  // A single TAMEM20 server offer on its own makes the carousel feel dead;
+  // padding to 3 keeps the "روح في التطبيق" the user asked for.
+  const slides: BannerSlide[] = (() => {
+    const fromServer = offers && offers.length > 0 ? offers.map(offerToSlide) : [];
+    if (fromServer.length >= 3) return fromServer;
+    const serverIds = new Set(fromServer.map((s) => s.id));
+    const padding = DEFAULT_BANNERS.filter((b) => !serverIds.has(b.id)).slice(
+      0,
+      3 - fromServer.length,
+    );
+    return [...fromServer, ...padding];
+  })();
 
   // Auto-rotate. Disabled when there's only one slide (no rotation makes
   // sense) and when the user is mid-drag.
+  //
+  // Why the manual rAF tween on web: react-native-web's
+  // ScrollView.scrollTo({animated: true}) is a no-op in Chromium when the
+  // node uses `direction: rtl` (the smooth-scroll polyfill bails). We get
+  // the underlying DOM node and tween scrollLeft ourselves with a
+  // requestAnimationFrame loop + easeInOutQuad so the banners actually
+  // glide between slides instead of jump-cutting.
   useEffect(() => {
     if (slides.length <= 1) return;
     const timer = setInterval(() => {
       if (userInteractingRef.current) return;
       const next = (activeIndex + 1) % slides.length;
-      scrollRef.current?.scrollTo({ x: next * SNAP, animated: true });
+      const x = next * SNAP;
+      if (Platform.OS === 'web') {
+        const node = scrollRef.current?.getScrollableNode?.() as
+          | (HTMLElement & { scrollLeft: number })
+          | undefined;
+        if (node) {
+          const startLeft = node.scrollLeft;
+          const startTime =
+            typeof performance !== 'undefined' && typeof performance.now === 'function'
+              ? performance.now()
+              : Date.now();
+          const duration = 480;
+          const change = x - startLeft;
+          const step = (now: number) => {
+            const elapsed = Math.min((now - startTime) / duration, 1);
+            // easeInOutQuad
+            const eased =
+              elapsed < 0.5 ? 2 * elapsed * elapsed : 1 - Math.pow(-2 * elapsed + 2, 2) / 2;
+            node.scrollLeft = startLeft + change * eased;
+            if (elapsed < 1 && !userInteractingRef.current) {
+              requestAnimationFrame(step);
+            }
+          };
+          requestAnimationFrame(step);
+        }
+      } else {
+        scrollRef.current?.scrollTo({ x, animated: true });
+      }
       setActiveIndex(next);
     }, AUTO_ROTATE_MS);
     return () => clearInterval(timer);

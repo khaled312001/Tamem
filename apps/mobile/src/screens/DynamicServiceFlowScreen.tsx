@@ -162,6 +162,10 @@ export function DynamicServiceFlowScreen() {
         deliveryAddress: finalAddress,
         deliveryLat: finalLat,
         deliveryLng: finalLng,
+        // Zone metadata is advisory — backend re-quotes via /zones/quote-delivery.
+        cityId: address?.zone?.cityId,
+        villageId: address?.zone?.villageId,
+        areaId: address?.zone?.areaId,
         notes: notes || undefined,
         imageUrls,
         paymentMethod,

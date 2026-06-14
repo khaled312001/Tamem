@@ -62,6 +62,14 @@ const optionsShape = {
   walletAmount: z.number().nonnegative().max(100_000).optional(),
   /** If set, the order is scheduled for this future timestamp instead of "now". */
   scheduledFor: z.coerce.date().optional(),
+  /**
+   * Delivery-zone selection — the mobile address picker stores these on
+   * the saved address and echoes them on order create so the backend can
+   * recompute the delivery fee server-side (anti-tamper).
+   */
+  cityId: z.string().min(1).optional(),
+  villageId: z.string().min(1).optional(),
+  areaId: z.string().min(1).optional(),
 };
 
 export const createOrderSchema = z.discriminatedUnion('category', [

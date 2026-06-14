@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Briefcase, Home, MapPin, Plus, Star, Trash2 } from 'lucide-react-native';
-import { useState } from 'react';
+import { Briefcase, Home, MapPin, Plus, Star, Trash2, Truck } from 'lucide-react-native';
+import { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -15,9 +15,12 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { DeliveryZonePicker, type DeliveryZoneSelection } from '../components/DeliveryZonePicker';
 import { GradientButton } from '../components/GradientButton';
 import { ScreenHeader } from '../components/ScreenHeader';
+import { MoneyText } from '../components/ui';
 import { api } from '../lib/api';
+import { getAddressZone, removeAddressZone, setAddressZone } from '../lib/addressZoneCache';
 import { colors, fontFamilies, fontSizes, radii, spacing } from '../theme/tokens';
 
 interface SavedAddress {
@@ -39,30 +42,66 @@ const QUICK_LABELS: { value: string; icon: typeof Home }[] = [
   { value: 'الشغل', icon: Briefcase },
 ];
 
+interface AddressZoneMap {
+  [addressId: string]: DeliveryZoneSelection | null;
+}
+
 export function SavedAddressesScreen() {
   const qc = useQueryClient();
   const [adding, setAdding] = useState(false);
   const [label, setLabel] = useState('');
   const [address, setAddress] = useState('');
   const [notes, setNotes] = useState('');
+  const [zone, setZone] = useState<DeliveryZoneSelection | null>(null);
+  // Mirror cached zone metadata so we can render the resolved area on each
+  // card. Populated lazily as the list loads.
+  const [zoneByAddress, setZoneByAddress] = useState<AddressZoneMap>({});
 
   const { data: list = [], isLoading } = useQuery<SavedAddress[]>({
     queryKey: ['my-addresses'],
     queryFn: () => api.raw.get('/me/addresses').then((r) => r.data.data),
   });
 
+  // Hydrate zone metadata for any address we haven't loaded yet.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const next: AddressZoneMap = {};
+      for (const a of list) {
+        next[a.id] = await getAddressZone(a.id);
+      }
+      if (!cancelled) setZoneByAddress((prev) => ({ ...prev, ...next }));
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [list]);
+
   const createMut = useMutation({
     mutationFn: () =>
-      api.raw.post('/me/addresses', {
-        label: label.trim(),
-        address: address.trim(),
-        notes: notes.trim() || undefined,
-        isDefault: list.length === 0, // first address becomes default automatically
-      }),
-    onSuccess: () => {
+      api.raw
+        .post('/me/addresses', {
+          label: label.trim(),
+          address: address.trim(),
+          notes: notes.trim() || undefined,
+          isDefault: list.length === 0, // first address becomes default automatically
+          // Advisory zone fields — the backend currently strips them. Once
+          // the CustomerAddress migration ships they'll be persisted server-
+          // side and the local cache becomes redundant.
+          cityId: zone?.cityId,
+          villageId: zone?.villageId,
+          areaId: zone?.areaId,
+          deliveryFee: zone?.deliveryFee,
+        })
+        .then((r) => r.data.data as { id: string }),
+    onSuccess: async (created) => {
+      if (zone && created?.id) {
+        await setAddressZone(created.id, zone);
+      }
       setLabel('');
       setAddress('');
       setNotes('');
+      setZone(null);
       setAdding(false);
       qc.invalidateQueries({ queryKey: ['my-addresses'] });
     },
@@ -78,10 +117,26 @@ export function SavedAddressesScreen() {
 
   const deleteMut = useMutation({
     mutationFn: (id: string) => api.raw.delete(`/me/addresses/${id}`),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['my-addresses'] }),
+    onSuccess: async (_data, id) => {
+      await removeAddressZone(id);
+      setZoneByAddress((prev) => {
+        const next = { ...prev };
+        delete next[id];
+        return next;
+      });
+      qc.invalidateQueries({ queryKey: ['my-addresses'] });
+    },
   });
 
+  // Zone is optional on save — keeps the legacy "type-only" flow working for
+  // users who don't see the cascading selects (e.g. offline backend).
   const canSave = label.trim().length >= 1 && address.trim().length >= 2;
+  // But if they STARTED picking a zone, require all three so we don't persist
+  // half-selections.
+  const zonePartiallyPicked =
+    (zone?.cityId || zone?.villageId || zone?.areaId) &&
+    !(zone?.cityId && zone?.villageId && zone?.areaId);
+  const saveBlocked = !canSave || !!zonePartiallyPicked;
 
   return (
     <SafeAreaView edges={['top']} style={styles.container}>
@@ -126,6 +181,28 @@ export function SavedAddressesScreen() {
                   <Text style={styles.cardAddress} numberOfLines={2}>
                     {addr.address}
                   </Text>
+                  {zoneByAddress[addr.id] ? (
+                    <View style={styles.cardZoneRow}>
+                      <MapPin size={11} color={colors.brand.red} />
+                      <Text style={styles.cardZoneText} numberOfLines={1}>
+                        المنطقة:{' '}
+                        {[zoneByAddress[addr.id]?.areaName, zoneByAddress[addr.id]?.villageName]
+                          .filter(Boolean)
+                          .join(' — ')}
+                      </Text>
+                      {typeof zoneByAddress[addr.id]?.deliveryFee === 'number' && (
+                        <>
+                          <View style={{ flex: 1 }} />
+                          <Truck size={11} color={colors.brand.red} />
+                          <MoneyText
+                            amount={zoneByAddress[addr.id]!.deliveryFee!}
+                            size="sm"
+                            tone="brand"
+                          />
+                        </>
+                      )}
+                    </View>
+                  ) : null}
                   {addr.notes && <Text style={styles.cardNotes}>{addr.notes}</Text>}
                   <View style={styles.cardActions}>
                     {!addr.isDefault && (
@@ -190,9 +267,16 @@ export function SavedAddressesScreen() {
                 style={[styles.input, createMut.isPending && { opacity: 0.6 }]}
               />
 
+              <Text style={styles.fieldLabel}>المنطقة الإدارية</Text>
+              <Text style={styles.fieldHint}>
+                اختر المدينة ثم القرية ثم النجع لتحديد رسوم التوصيل
+              </Text>
+              <DeliveryZonePicker value={zone} onChange={setZone} />
+
               <Text style={styles.fieldLabel}>العنوان بالتفصيل</Text>
+              <Text style={styles.fieldHint}>اسم العمارة، الدور، علامة مميزة…</Text>
               <TextInput
-                placeholder="الشارع، رقم العمارة، الدور، علامة مميزة…"
+                placeholder="مثال: شارع المدارس، عمارة 12، الدور الثالث، فوق صيدلية الشفاء"
                 placeholderTextColor={colors.text.muted}
                 value={address}
                 onChangeText={setAddress}
@@ -218,6 +302,7 @@ export function SavedAddressesScreen() {
                     setLabel('');
                     setAddress('');
                     setNotes('');
+                    setZone(null);
                   }}
                   style={styles.cancelBtn}
                 >
@@ -226,9 +311,9 @@ export function SavedAddressesScreen() {
                 <View style={{ flex: 1 }}>
                   <GradientButton
                     label={createMut.isPending ? 'جاري الحفظ…' : 'حفظ العنوان'}
-                    onPress={() => canSave && createMut.mutate()}
+                    onPress={() => !saveBlocked && createMut.mutate()}
                     loading={createMut.isPending}
-                    disabled={!canSave}
+                    disabled={saveBlocked}
                   />
                 </View>
               </View>
@@ -370,6 +455,28 @@ const styles = StyleSheet.create({
     color: colors.text.primary,
     marginBottom: spacing.xs,
     marginTop: spacing.sm,
+  },
+  fieldHint: {
+    fontSize: fontSizes.xs,
+    fontFamily: fontFamilies.body,
+    color: colors.text.muted,
+    marginBottom: spacing.xs,
+    lineHeight: 16,
+  },
+  cardZoneRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    marginTop: spacing.xs,
+    paddingTop: spacing.xs,
+    borderTopWidth: 1,
+    borderTopColor: colors.line,
+  },
+  cardZoneText: {
+    fontFamily: fontFamilies.bodyBold,
+    fontSize: fontSizes.xs,
+    color: colors.text.secondary,
+    flexShrink: 1,
   },
   quickLabels: {
     flexDirection: 'row',
