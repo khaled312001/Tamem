@@ -1377,11 +1377,12 @@ function ManualOrderDialog({ onClose }: { onClose: () => void }) {
           </Field>
         </div>
         <div className="col-span-2">
-          <Field label="ملاحظات">
-            <Input
+          <Field label="ملاحظات" hint="تفاصيل الطلب من العميل — أي معلومات إضافية">
+            <Textarea
               value={form.notes}
               onChange={(e) => setForm({ ...form, notes: e.target.value })}
-              placeholder="تفاصيل الطلب من العميل"
+              placeholder="مثال: 2 كيلو سكر، زيت، 3 علب تونة..."
+              rows={5}
             />
           </Field>
         </div>

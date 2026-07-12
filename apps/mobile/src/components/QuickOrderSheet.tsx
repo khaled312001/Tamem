@@ -170,12 +170,45 @@ export function QuickOrderSheet({ visible, onClose }: QuickOrderSheetProps) {
 
       const finalNotes = [payload.notes, productsNotes].filter(Boolean).join('\n\n') || undefined;
 
+      // Resolve the customer's default delivery address from their saved
+      // book. Previously we shipped the order with the placeholder
+      // "الرجاء تأكيد العنوان مع الإدارة" + Qift coordinates, which forced
+      // the admin to chase the customer for the real address.
+      let addressLine: string | null = null;
+      let addressLat: number | null = null;
+      let addressLng: number | null = null;
+      try {
+        const addrRes = await api.raw.get('/me/addresses');
+        const list = (addrRes.data?.data ?? []) as Array<{
+          address: string;
+          lat?: number | string | null;
+          lng?: number | string | null;
+          isDefault?: boolean;
+        }>;
+        const chosen = list.find((a) => a.isDefault) ?? list[0];
+        if (chosen) {
+          addressLine = chosen.address;
+          if (chosen.lat != null) addressLat = Number(chosen.lat);
+          if (chosen.lng != null) addressLng = Number(chosen.lng);
+        }
+      } catch {
+        // /me/addresses may be empty or fail — handled below.
+      }
+      if (!addressLine || addressLat == null || addressLng == null) {
+        showToast({
+          title: 'مفيش عنوان توصيل محفوظ',
+          message: 'أضف عنوان من صفحة "حسابي" قبل إرسال الطلب السريع.',
+          tone: 'error',
+        });
+        return;
+      }
+
       const res = await api.raw.post('/orders', {
         category: 'DELIVERY',
         serviceId: fallback.id,
-        deliveryAddress: 'الرجاء تأكيد العنوان مع الإدارة',
-        deliveryLat: 26.0297,
-        deliveryLng: 32.8146,
+        deliveryAddress: addressLine,
+        deliveryLat: addressLat,
+        deliveryLng: addressLng,
         paymentMethod: 'CASH',
         notes: finalNotes,
         imageUrls: hostedImages,
