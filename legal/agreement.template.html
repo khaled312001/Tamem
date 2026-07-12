@@ -11,13 +11,7 @@
     --sub: #4B5563;
     --muted: #6B7280;
     --line: #D1D5DB;
-    --line-strong: #9CA3AF;
-    --brand: #1E3A8A;
-    --brand-tint: #E8ECF7;
-    --alert: #B91C1C;
-    --alert-tint: #FEF2F2;
-    --ok: #047857;
-    --ok-tint: #ECFDF5;
+    --line-strong: #6B7280;
     --font: "Cairo", "Tajawal", "Segoe UI", "Tahoma", Arial, sans-serif;
     --font-body: "Tajawal", "Segoe UI", "Tahoma", Arial, sans-serif;
     --font-num: "Segoe UI", Consolas, monospace;
@@ -62,7 +56,7 @@
 
   .sheet-head {
     padding-bottom: 3mm;
-    margin-bottom: 6mm;
+    margin-bottom: 5mm;
     border-bottom: 2px solid var(--ink);
     display: flex;
     align-items: baseline;
@@ -88,7 +82,7 @@
   .sheet-foot {
     margin-top: 5mm;
     padding-top: 3mm;
-    border-top: 1px solid var(--line);
+    border-top: 1px solid var(--line-strong);
     display: flex;
     align-items: center;
     justify-content: space-between;
@@ -111,26 +105,25 @@
     gap: 10px;
     padding-bottom: 2mm;
     margin-bottom: 3mm;
-    border-bottom: 1px solid var(--line);
+    border-bottom: 1px solid var(--ink);
   }
   .clause h2 .num {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    min-width: 40px;
-    height: 20px;
+    min-width: 44px;
+    height: 22px;
     padding: 0 8px;
-    background: var(--brand);
-    color: #fff;
+    background: #fff;
+    color: var(--ink);
+    border: 1.5px solid var(--ink);
     font-family: var(--font);
-    font-weight: 700;
+    font-weight: 800;
     font-size: 10px;
-    letter-spacing: 0.06em;
+    letter-spacing: 0.04em;
     border-radius: 2px;
     white-space: nowrap;
   }
-  .clause h2 .num.alert { background: var(--alert); }
-  .clause h2 .num.ok { background: var(--ok); }
   .clause h2 .txt {
     font-family: var(--font);
     font-weight: 800;
@@ -139,9 +132,9 @@
     line-height: 1.3;
   }
 
-  p { margin-bottom: 3px; color: var(--sub); font-size: 11.5px; }
+  p { margin-bottom: 3px; color: var(--ink); font-size: 11.5px; }
   p.lead { color: var(--ink); font-weight: 500; }
-  strong { color: var(--ink); font-weight: 700; }
+  strong { color: var(--ink); font-weight: 800; }
 
   ol {
     padding-inline-start: 5mm;
@@ -150,14 +143,14 @@
   ol li {
     padding-inline-start: 3mm;
     margin-bottom: 3px;
-    color: var(--sub);
+    color: var(--ink);
     font-size: 11.2px;
     line-height: 1.65;
   }
   ol li::marker {
-    color: var(--brand);
+    color: var(--ink);
     font-family: var(--font-num);
-    font-weight: 700;
+    font-weight: 800;
     font-variant-numeric: tabular-nums;
   }
   ol.tight li { margin-bottom: 2px; font-size: 10.8px; line-height: 1.55; }
@@ -193,22 +186,23 @@
   .cover .head .sep {
     width: 1px;
     height: 74px;
-    background: var(--line-strong);
+    background: var(--ink);
     align-self: center;
   }
 
   .cover .title-block {
     text-align: center;
     padding: 20mm 0 16mm;
-    border-bottom: 1px solid var(--line);
+    border-bottom: 1px solid var(--ink);
   }
   .cover .kicker {
     display: inline-block;
     padding: 4px 14px;
-    background: var(--brand-tint);
-    color: var(--brand);
+    background: #fff;
+    color: var(--ink);
+    border: 1.5px solid var(--ink);
     font-family: var(--font);
-    font-weight: 700;
+    font-weight: 800;
     font-size: 10.5px;
     letter-spacing: 0.14em;
     border-radius: 2px;
@@ -228,19 +222,19 @@
     max-width: 140mm;
     font-size: 12.5px;
     line-height: 1.85;
-    color: var(--sub);
+    color: var(--ink);
   }
 
   .cover .meta {
     display: grid;
-    grid-template-columns: repeat(3, 1fr);
+    grid-template-columns: repeat(2, 1fr);
     margin: 10mm 0 0;
-    border: 1px solid var(--line);
+    border: 1.5px solid var(--ink);
   }
   .cover .meta > div {
     padding: 5mm 8px;
     text-align: center;
-    border-inline-end: 1px solid var(--line);
+    border-inline-end: 1px solid var(--ink);
   }
   .cover .meta > div:last-child { border-inline-end: none; }
   .cover .meta small {
@@ -275,13 +269,14 @@
   .preamble {
     padding: 4mm 6mm;
     background: var(--tint);
-    border-inline-start: 3px solid var(--brand);
+    border: 1px solid var(--line);
+    border-inline-start: 3px solid var(--ink);
     font-size: 11.2px;
-    color: var(--sub);
+    color: var(--ink);
     line-height: 1.85;
     margin-bottom: 5mm;
   }
-  .preamble p { margin-bottom: 2mm; color: var(--sub); font-size: 11.2px; }
+  .preamble p { margin-bottom: 2mm; color: var(--ink); font-size: 11.2px; }
   .preamble p:last-child { margin: 0; }
 
   .parties {
@@ -289,22 +284,23 @@
     grid-template-columns: 1fr 1fr;
     gap: 4mm;
   }
-  .party { border: 1px solid var(--line); }
+  .party { border: 1.5px solid var(--ink); }
   .party > .hd {
-    background: var(--ink);
-    color: #fff;
+    background: #fff;
+    color: var(--ink);
     padding: 5px 10px;
     font-family: var(--font);
-    font-weight: 700;
-    font-size: 10.5px;
+    font-weight: 800;
+    font-size: 11px;
     letter-spacing: 0.06em;
+    border-bottom: 1.5px solid var(--ink);
   }
   .party > .hd small {
     display: block;
     font-family: var(--font);
-    font-weight: 500;
-    font-size: 9px;
-    color: rgba(255,255,255,0.65);
+    font-weight: 700;
+    font-size: 9.5px;
+    color: var(--muted);
     letter-spacing: 0.1em;
     margin-bottom: 2px;
   }
@@ -316,7 +312,7 @@
     column-gap: 10px;
     font-size: 11px;
   }
-  .party dt { color: var(--muted); font-weight: 700; }
+  .party dt { color: var(--ink); font-weight: 800; font-family: var(--font); }
   .party dd { color: var(--ink); font-weight: 600; word-break: break-word; }
   .party dd.ltr {
     direction: ltr;
@@ -343,13 +339,13 @@
     border-bottom: 1px solid var(--line);
     vertical-align: baseline;
     line-height: 1.55;
-    color: var(--sub);
+    color: var(--ink);
   }
   table.defs td.term {
     width: 26%;
     font-family: var(--font);
     color: var(--ink);
-    font-weight: 700;
+    font-weight: 800;
   }
   table.defs tr:last-child td { border-bottom: none; }
 
@@ -358,28 +354,31 @@
     width: 100%;
     border-collapse: collapse;
     margin: 3mm 0;
-    font-size: 11px;
+    font-size: 10.5px;
     font-variant-numeric: tabular-nums;
   }
   table.grid th, table.grid td {
-    padding: 6px 8px;
+    padding: 5px 6px;
     text-align: right;
-    border: 1px solid var(--line);
-    color: var(--sub);
+    border: 1px solid var(--ink);
+    color: var(--ink);
+    vertical-align: middle;
   }
   table.grid thead th {
-    background: var(--tint2);
+    background: #fff;
     color: var(--ink);
     font-family: var(--font);
-    font-weight: 700;
+    font-weight: 800;
     font-size: 10.5px;
     letter-spacing: 0.04em;
+    border-bottom: 2px solid var(--ink);
   }
   table.grid td.n {
-    width: 8%;
+    width: 6%;
     text-align: center;
-    color: var(--muted);
+    color: var(--ink);
     font-family: var(--font-num);
+    font-weight: 700;
   }
   table.grid td.amt {
     font-family: var(--font-num);
@@ -388,18 +387,21 @@
   }
   table.grid .blank {
     display: inline-block;
-    min-width: 60px;
+    min-width: 50px;
+    width: 100%;
     border-bottom: 1px dotted var(--line-strong);
+    min-height: 12px;
   }
   table.grid tr.total td {
-    background: var(--ink);
-    color: #fff;
-    font-weight: 800;
-    font-size: 12px;
-    border-color: var(--ink);
+    background: #fff;
+    color: var(--ink);
+    font-weight: 900;
+    font-size: 11.5px;
+    border: 1.5px solid var(--ink);
+    border-top-width: 3px;
   }
 
-  /* DELIVERED / PENDING WORK BOXES */
+  /* WORK BOXES (DELIVERED / PENDING) */
   .work-grid {
     display: grid;
     grid-template-columns: 1fr 1fr;
@@ -407,19 +409,22 @@
     margin: 3mm 0;
   }
   .work-box {
-    border: 1px solid var(--line);
-    background: var(--paper);
+    border: 1.5px solid var(--ink);
+    background: #fff;
   }
-  .work-box.done .hd { background: var(--ok); color: #fff; }
-  .work-box.pending .hd { background: var(--alert); color: #fff; }
   .work-box .hd {
-    padding: 4px 8px;
+    padding: 5px 10px;
+    background: #fff;
+    color: var(--ink);
     font-family: var(--font);
-    font-weight: 700;
+    font-weight: 800;
     font-size: 10.5px;
     letter-spacing: 0.04em;
+    border-bottom: 1.5px solid var(--ink);
   }
-  .work-box .bd { padding: 3mm 4mm; font-size: 10.5px; color: var(--sub); }
+  .work-box.done .hd::before { content: "✔ منجز · "; font-weight: 800; }
+  .work-box.pending .hd::before { content: "✗ غير منجز · "; font-weight: 800; }
+  .work-box .bd { padding: 3mm 4mm; font-size: 10.5px; color: var(--ink); }
   .work-box .bd ul { list-style: none; padding: 0; margin: 0; }
   .work-box .bd ul li {
     padding-block: 1.5px;
@@ -432,20 +437,10 @@
     position: absolute;
     inset-inline-start: 0.8mm;
     top: 1px;
-    color: var(--muted);
-    font-weight: 700;
+    color: var(--ink);
+    font-weight: 800;
     line-height: 1;
   }
-  .work-box .bd h4 {
-    font-family: var(--font);
-    font-weight: 800;
-    font-size: 11px;
-    color: var(--ink);
-    margin: 2mm 0 1mm;
-    padding-bottom: 1mm;
-    border-bottom: 1px solid var(--line);
-  }
-  .work-box .bd h4:first-child { margin-top: 0; }
 
   /* NOTES / CALLOUTS */
   .note-box {
@@ -455,17 +450,15 @@
     border: 1px solid var(--line);
     border-inline-start: 3px solid var(--ink);
     font-size: 11px;
-    color: var(--sub);
+    color: var(--ink);
   }
   .note-box .h {
     font-family: var(--font);
-    font-weight: 700;
+    font-weight: 800;
     color: var(--ink);
     margin-bottom: 2mm;
     font-size: 11px;
   }
-  .note-box.warn { border-inline-start-color: var(--alert); }
-  .note-box.warn .h { color: var(--alert); }
   .note-box ol { margin-top: 1mm; }
   .note-box ol li { font-size: 10.8px; }
 
@@ -474,44 +467,47 @@
     width: 100%;
     border-collapse: collapse;
     margin: 3mm 0;
-    font-size: 11px;
+    font-size: 10.5px;
     font-variant-numeric: tabular-nums;
   }
   table.revenue th, table.revenue td {
-    padding: 6px 10px;
+    padding: 5px 6px;
     text-align: center;
-    border: 1px solid var(--line);
+    border: 1px solid var(--ink);
+    color: var(--ink);
   }
   table.revenue thead th {
-    background: var(--brand);
-    color: #fff;
+    background: #fff;
+    color: var(--ink);
     font-family: var(--font);
-    font-weight: 700;
-    font-size: 10.5px;
+    font-weight: 800;
+    font-size: 10px;
+    border-bottom: 2px solid var(--ink);
   }
   table.revenue td.blank {
-    background: var(--tint);
-    min-height: 20px;
+    background: #fff;
+    min-height: 22px;
   }
   table.revenue tr.avg td {
-    background: var(--brand-tint);
-    font-weight: 700;
+    background: #fff;
+    font-weight: 800;
     color: var(--ink);
+    border-top: 2px solid var(--ink);
   }
   .ack-line {
     margin-top: 5mm;
     padding: 3mm 5mm;
-    background: var(--tint2);
-    border: 1.5px dashed var(--line-strong);
+    background: var(--tint);
+    border: 1.5px dashed var(--ink);
     display: flex;
-    gap: 12mm;
+    gap: 8mm;
     justify-content: space-between;
     font-size: 10.5px;
-    color: var(--sub);
+    color: var(--ink);
     font-family: var(--font);
     font-weight: 700;
+    flex-wrap: wrap;
   }
-  .ack-line b { color: var(--ink); font-family: var(--font); font-weight: 700; }
   .ack-line .fill {
     display: inline-block;
     min-width: 60px;
@@ -523,29 +519,31 @@
   .sig-lead {
     padding: 4mm 6mm;
     background: var(--tint);
-    border-inline-start: 3px solid var(--brand);
-    color: var(--sub);
+    border: 1px solid var(--line);
+    border-inline-start: 3px solid var(--ink);
+    color: var(--ink);
     font-size: 11.2px;
     line-height: 1.85;
     margin-bottom: 5mm;
   }
   .sig-party {
-    border: 1px solid var(--line);
+    border: 1.5px solid var(--ink);
     margin-bottom: 4mm;
   }
   .sig-party .hd {
-    background: var(--ink);
-    color: #fff;
+    background: #fff;
+    color: var(--ink);
     padding: 5px 10px;
     font-family: var(--font);
-    font-weight: 700;
-    font-size: 10.5px;
+    font-weight: 800;
+    font-size: 11px;
+    border-bottom: 1.5px solid var(--ink);
   }
   .sig-party .hd small {
     display: block;
-    font-weight: 500;
+    font-weight: 700;
     font-size: 9.5px;
-    color: rgba(255,255,255,0.65);
+    color: var(--muted);
     letter-spacing: 0.1em;
     margin-bottom: 2px;
   }
@@ -566,13 +564,13 @@
   .sig-person .role {
     grid-column: 1 / -1;
     padding: 2px 8px;
-    background: var(--tint2);
+    background: #fff;
     color: var(--ink);
+    border: 1px solid var(--ink);
     font-family: var(--font);
-    font-weight: 700;
+    font-weight: 800;
     font-size: 10.5px;
     margin-bottom: 1mm;
-    border-radius: 2px;
     display: flex;
     justify-content: space-between;
     align-items: center;
@@ -580,12 +578,12 @@
   .sig-person .role .phone {
     font-family: var(--font-num);
     font-variant-numeric: tabular-nums;
-    color: var(--sub);
+    color: var(--ink);
     font-weight: 700;
     letter-spacing: 0.03em;
     direction: ltr;
   }
-  .sig-person .lbl { color: var(--muted); font-weight: 700; font-family: var(--font); }
+  .sig-person .lbl { color: var(--ink); font-weight: 800; font-family: var(--font); }
   .sig-person .line { display: block; border-bottom: 1px solid var(--ink); min-height: 15px; }
   .sig-person .line.tall { min-height: 26px; }
 
@@ -594,14 +592,14 @@
     grid-template-columns: 1fr 1fr;
     gap: 4mm;
     padding: 4mm 5mm;
-    border: 1px solid var(--line);
+    border: 1px solid var(--ink);
     background: var(--tint);
     margin-bottom: 4mm;
   }
   .witnesses > div { font-size: 11px; }
   .witnesses .h {
     font-family: var(--font);
-    font-weight: 700;
+    font-weight: 800;
     color: var(--ink);
     letter-spacing: 0.06em;
     font-size: 10.5px;
@@ -615,22 +613,22 @@
     margin-bottom: 3mm;
   }
   .witnesses .row:last-child { margin-bottom: 0; }
-  .witnesses .row span { color: var(--muted); font-weight: 700; font-family: var(--font); }
+  .witnesses .row span { color: var(--ink); font-weight: 800; font-family: var(--font); }
   .witnesses .line { border-bottom: 1px solid var(--ink); min-height: 15px; }
 
   .notary {
     padding: 4mm 6mm;
-    border: 1px solid var(--line);
+    border: 1.5px solid var(--ink);
     text-align: center;
     font-size: 11px;
-    color: var(--sub);
+    color: var(--ink);
     line-height: 2;
   }
   .notary b {
     display: block;
     color: var(--ink);
     font-family: var(--font);
-    font-weight: 700;
+    font-weight: 800;
     letter-spacing: 0.06em;
     margin-bottom: 2mm;
     font-size: 11px;
@@ -675,7 +673,7 @@
     <div class="kicker">اتفاقية شراكة استثمارية</div>
     <h1>عقد شراكة وتمويل مؤجل<br>بين شركة برمجلي وشركة تميم للتوصيل</h1>
     <p class="brief">
-      اتفاق تُمنح بموجبه شركة برمجلي حصة استثمارية دائمة بنسبة عشرين بالمئة من صافي إيرادات
+      اتفاق تُمنح بموجبه شركة برمجلي حصة استثمارية بنسبة عشرين بالمئة من صافي إيرادات
       شركة تميم للتوصيل بجميع خدماتها الحالية والمستقبلية، مقابل تطوير المشروع كاملاً وتشغيله،
       وسداد مؤجل لتكاليف التنفيذ خلال اثني عشر شهراً من تاريخ التوقيع.
     </p>
@@ -684,7 +682,6 @@
   <div class="meta">
     <div><small>تاريخ الإبرام</small><b>__ / __ / 2026 م</b></div>
     <div><small>مكان الإبرام</small><b>قفط · قنا</b></div>
-    <div><small>رقم النسخة</small><b>TAM-BRG-002</b></div>
   </div>
 
   <div class="note">وثيقة رسمية · نسختان أصليتان بيد كل طرف · نسخة ثالثة لدى المحامي</div>
@@ -694,7 +691,6 @@
 <section class="sheet">
   <div class="sheet-head">
     <div class="name">عقد شراكة استثمارية · برمجلي × تميم للتوصيل</div>
-    <div class="ref">TAM-BRG-002</div>
   </div>
   <div class="sheet-body">
     <section class="clause">
@@ -709,7 +705,7 @@
           نظراً لرغبة الطرف الثاني (تميم للتوصيل) في إطلاق منصة توصيل رقمية متكاملة تخدم قفط
           وقنا والصعيد، ولحاجته إلى تطوير تطبيق ولوحة تحكم إدارية وبنية استضافة قابلة للتوسع؛
           ولقيام الطرف الأول (برمجلي) فعلياً بتنفيذ منظومة المشروع وتسليمها للطرف الثاني وفق
-          البيان المفصل في البند الثالث من هذا العقد؛ فقد اتفق الطرفان — عن رضا واختيار
+          البيان المفصل في البند الثالث مكرر من هذا العقد؛ فقد اتفق الطرفان — عن رضا واختيار
           كاملين — على تنظيم علاقتهما التعاقدية والاستثمارية بموجب البنود التالية:
         </p>
       </div>
@@ -755,7 +751,6 @@
 <section class="sheet">
   <div class="sheet-head">
     <div class="name">عقد شراكة استثمارية · برمجلي × تميم للتوصيل</div>
-    <div class="ref">TAM-BRG-002</div>
   </div>
   <div class="sheet-body">
     <section class="clause">
@@ -766,10 +761,10 @@
         <tr><td class="term">الأنظمة</td><td>جميع الأكواد المصدرية، الملفات، الأصول التقنية، الوثائق الفنية، وقواعد البيانات المرتبطة بالمشروع.</td></tr>
         <tr><td class="term">الخدمات</td><td>جميع الأنشطة التجارية للطرف الثاني، وتشمل — دون حصر — التوصيل داخل المدن، الشحن بين المحافظات، طلبات الجملة، خدمات التجار، وأي خدمات جديدة يطلقها المشروع.</td></tr>
         <tr><td class="term">الإيراد الإجمالي</td><td>مجموع ما يدخل خزينة الطرف الثاني من رسوم توصيل، عمولات التجار، رسوم الشحن، وأي دخل مباشر أو غير مباشر من الخدمات.</td></tr>
-        <tr><td class="term">صافي الإيرادات</td><td>الإيراد الإجمالي مطروحاً منه رسوم بوابات الدفع، عمولات السائقين المستحقة، الضرائب الرسمية، والمصروفات التشغيلية المباشرة الموثقة بمستندات — وفق حدود البند الخامس (فقرة 4).</td></tr>
+        <tr><td class="term">صافي الإيرادات</td><td>الإيراد الإجمالي مطروحاً منه رسوم بوابات الدفع، عمولات السائقين المستحقة، الضرائب الرسمية، والمصروفات التشغيلية المباشرة الموثقة بمستندات — وفق حدود البند السادس (فقرة 4).</td></tr>
         <tr><td class="term">الحصة الاستثمارية</td><td>نسبة عشرين بالمئة (20%) من صافي الإيرادات الشهرية لجميع الخدمات، مستحقة لصالح الطرف الأول اعتباراً من تاريخ إطلاق المشروع رسمياً.</td></tr>
-        <tr><td class="term">التكاليف المؤجلة</td><td>إجمالي قيمة أعمال التطوير والاستضافة والدومين والحسابات التشغيلية الموضحة في البند السابع، والمستحقة السداد بعد اثني عشر شهراً من تاريخ التوقيع.</td></tr>
-        <tr><td class="term">الأعمال المُسلَّمة</td><td>المكونات التقنية التي أنجزها الطرف الأول وسلَّمها للطرف الثاني في تاريخ توقيع هذا العقد، والمبيّنة تفصيلاً في البند الثالث (فقرة أ).</td></tr>
+        <tr><td class="term">التكاليف المؤجلة</td><td>إجمالي قيمة أعمال التطوير والاستضافة السحابية (3,000 ج.م) واسم النطاق (450 ج.م) وحسابات النشر (Google Play بواقع 25 دولار مدفوع فعلياً، وApple Developer بواقع 114 دولار عند الشراء لاحقاً) وبقية الحسابات التشغيلية الموضحة في البند السابع، والمستحقة السداد بعد اثني عشر شهراً من تاريخ التوقيع.</td></tr>
+        <tr><td class="term">الأعمال المُسلَّمة</td><td>المكونات التقنية التي أنجزها الطرف الأول وسلَّمها للطرف الثاني في تاريخ توقيع هذا العقد، والمبيّنة تفصيلاً في البند الثالث مكرر.</td></tr>
         <tr><td class="term">الأعمال الإضافية</td><td>أي تطبيق أو ميزة جديدة أو تعديل جوهري خارج نطاق الأعمال المُسلَّمة، ويشمل — دون حصر — تطبيق التاجر المستقل وتطبيق السائق (الكابتن)، ويستحق مقابلاً مالياً منفصلاً بموجب البند الرابع.</td></tr>
         <tr><td class="term">الأصول التشغيلية</td><td>جميع المركبات والمعدات وأصول العمل التي يستخدمها الطرف الثاني في تسيير الخدمات، بما فيها الدراجات النارية والسيارات والتروسيكلات ومقار العمل.</td></tr>
       </table>
@@ -785,7 +780,6 @@
 <section class="sheet">
   <div class="sheet-head">
     <div class="name">عقد شراكة استثمارية · برمجلي × تميم للتوصيل</div>
-    <div class="ref">TAM-BRG-002</div>
   </div>
   <div class="sheet-body">
     <section class="clause">
@@ -795,7 +789,7 @@
         المُسلَّمة فعلياً وتشغيلها لصالح الطرف الثاني (تميم) دون مقابل نقدي مسبق، مقابل أمرين متلازمين:
       </p>
       <ol>
-        <li>حصة استثمارية دائمة بنسبة <strong>عشرين بالمئة (20%)</strong> من صافي إيرادات كل خدمات الطرف الثاني، تُصرف شهرياً بأثر رجعي من تاريخ الإطلاق الرسمي.</li>
+        <li>حصة استثمارية بنسبة <strong>عشرين بالمئة (20%)</strong> من صافي إيرادات كل خدمات الطرف الثاني، تُصرف شهرياً بأثر رجعي من تاريخ الإطلاق الرسمي.</li>
         <li>سداد كامل قيمة التكاليف الموثقة للتطوير والاستضافة والحسابات التشغيلية بعد <strong>اثني عشر شهراً</strong> من تاريخ توقيع هذا العقد، وفق الجدول الموضح في البند السابع.</li>
       </ol>
       <p style="margin-top:3mm;">ولا يعتبر هذا العقد بيعاً للحصص، بل شراكة تشغيلية استثمارية بموجب أحكام القانون المدني المصري.</p>
@@ -810,11 +804,11 @@
       <ol>
         <li>توفير استضافة سحابية (VPS) موثوقة لمدة سنة كاملة من تاريخ الإطلاق الرسمي.</li>
         <li>الاحتفاظ بحجز اسم النطاق (Domain) وشهادات الأمان (SSL) لمدة سنة، مع نقل ملكيتها للطرف الثاني بعد سداد التكاليف المؤجلة.</li>
-        <li>الصيانة الفنية وتصحيح الأعطال (Bug Fixes) على الأعمال المُسلَّمة لمدة اثني عشر شهراً من تاريخ الإطلاق مجاناً.</li>
+        <li>الصيانة الفنية وتصحيح الأعطال (Bug Fixes) على الأعمال المُسلَّمة لمدة <strong>شهرين فقط</strong> من تاريخ الإطلاق مجاناً، وبعدها تكون الصيانة والدعم بمقابل مالي يُتفق عليه بموجب ملحق منفصل.</li>
         <li>تدريب فريق العمل لدى الطرف الثاني على استخدام لوحة التحكم واستقبال الطلبات ومتابعة السائقين.</li>
         <li>تقديم تقارير فنية شهرية عن استقرار الخدمة ووقت الاستجابة وعدد المستخدمين النشطين.</li>
         <li>تسليم كامل بيانات الاعتماد (Credentials) للأنظمة والحسابات إلى الطرف الثاني عند اكتمال السداد المؤجل.</li>
-        <li>الاستجابة لطلبات الدعم الفني خلال 48 ساعة عمل من ورودها كتابياً.</li>
+        <li>الاستجابة لطلبات الدعم الفني خلال 48 ساعة عمل من ورودها كتابياً خلال فترة الصيانة المجانية.</li>
       </ol>
     </section>
   </div>
@@ -828,11 +822,10 @@
 <section class="sheet">
   <div class="sheet-head">
     <div class="name">عقد شراكة استثمارية · برمجلي × تميم للتوصيل</div>
-    <div class="ref">TAM-BRG-002</div>
   </div>
   <div class="sheet-body">
     <section class="clause">
-      <h2><span class="num ok">البند 3 مكرر</span><span class="txt">بيان الأعمال المُسلَّمة والمُنجزة</span></h2>
+      <h2><span class="num">البند 3 مكرر</span><span class="txt">بيان الأعمال المُسلَّمة والمُنجزة</span></h2>
       <p class="lead">
         يقر الطرف الثاني بأن الطرف الأول قد سلَّمه فعلياً في تاريخ توقيع هذا العقد المكونات
         التالية بحالة تشغيلية كاملة، ويعتبر هذا البيان جزءاً لا يتجزأ من العقد يُحتج به عند
@@ -841,7 +834,7 @@
 
       <div class="work-grid">
         <div class="work-box done">
-          <div class="hd">تم تسليمه · تطبيق العميل (Android + Web)</div>
+          <div class="hd">تطبيق العميل (Android + Web)</div>
           <div class="bd">
             <ul>
               <li>تسجيل حساب + تسجيل دخول (هاتف / Google)</li>
@@ -857,7 +850,7 @@
         </div>
 
         <div class="work-box done">
-          <div class="hd">تم تسليمه · لوحة تحكم الإدارة (Web Dashboard)</div>
+          <div class="hd">لوحة تحكم الإدارة (Web Dashboard)</div>
           <div class="bd">
             <ul>
               <li>إدارة الطلبات (12 حالة · 4 مراحل رئيسية)</li>
@@ -873,7 +866,7 @@
         </div>
 
         <div class="work-box done">
-          <div class="hd">تم تسليمه · البنية الخلفية والموقع</div>
+          <div class="hd">البنية الخلفية والموقع</div>
           <div class="bd">
             <ul>
               <li>Backend API متكامل (Node.js + Express + Prisma)</li>
@@ -887,7 +880,7 @@
         </div>
 
         <div class="work-box done">
-          <div class="hd">تم تسليمه · الحسابات التشغيلية</div>
+          <div class="hd">الحسابات التشغيلية</div>
           <div class="bd">
             <ul>
               <li>حساب Google Play Developer باسم الطرف الثاني</li>
@@ -919,11 +912,10 @@
 <section class="sheet">
   <div class="sheet-head">
     <div class="name">عقد شراكة استثمارية · برمجلي × تميم للتوصيل</div>
-    <div class="ref">TAM-BRG-002</div>
   </div>
   <div class="sheet-body">
     <section class="clause">
-      <h2><span class="num alert">البند 4</span><span class="txt">الأعمال الإضافية والتعديلات المستقبلية</span></h2>
+      <h2><span class="num">البند 4</span><span class="txt">الأعمال الإضافية والتعديلات المستقبلية</span></h2>
       <p class="lead">
         يقر الطرفان بأن الأعمال التالية <strong>لا تدخل ضمن نطاق العقد الأصلي</strong>، وتتطلب اتفاقاً
         مالياً منفصلاً يُلحق بهذا العقد كملحق مستقل يوقعه الطرفان قبل الشروع في التنفيذ:
@@ -931,7 +923,7 @@
 
       <div class="work-grid">
         <div class="work-box pending">
-          <div class="hd">غير مُنجز · تطبيق التاجر المستقل</div>
+          <div class="hd">تطبيق التاجر المستقل</div>
           <div class="bd">
             تطبيق مستقل مخصص للتجار (Android + Web) — منفصل عن تطبيق العميل — يحتوي على
             شاشات إدارة المتجر، الطلبات، المنتجات، الإحصائيات، السحب المالي، وواجهات
@@ -940,7 +932,7 @@
         </div>
 
         <div class="work-box pending">
-          <div class="hd">غير مُنجز · تطبيق السائق (الكابتن)</div>
+          <div class="hd">تطبيق السائق (الكابتن)</div>
           <div class="bd">
             تطبيق مستقل مخصص للسائقين (Android) يحتوي على استقبال الطلبات، الملاحة GPS،
             تتبع الرحلات، الأرباح اليومية، تقييم العميل، والتواصل المباشر. يستحق مقابلاً
@@ -952,18 +944,18 @@
       <h3 style="margin-top:5mm; font-family: var(--font); font-weight: 800; font-size: 12.5px;">قواعد تنظيم الأعمال الإضافية:</h3>
       <ol>
         <li>أي طلب من الطرف الثاني لتطوير <strong>تطبيق التاجر المستقل</strong> أو <strong>تطبيق السائق</strong> يستحق مقابلاً مالياً منفصلاً يُتفق عليه كتابياً قبل الشروع في التنفيذ، ولا يدخل ضمن التكاليف المؤجلة المذكورة في البند السابع.</li>
-        <li>أي <strong>تعديل جوهري</strong> على التطبيقات القائمة (شاشات جديدة، ميزات لم تُذكر في البند الثالث مكرر، إعادة تصميم كامل) يستحق مقابلاً مالياً منفصلاً، ويُعرَّف التعديل الجوهري بأنه ما يتجاوز عشر ساعات عمل تطوير من مطوّر واحد.</li>
-        <li>التعديلات <strong>البسيطة والصيانة الدورية</strong> (تصحيح الأعطال، تحديثات الأمان، تحسينات الأداء، إضافة حقل أو خيار بسيط) تدخل ضمن التزامات الصيانة المجانية للسنة الأولى.</li>
+        <li>أي <strong>تعديل جوهري</strong> على التطبيقات القائمة (شاشات جديدة، ميزات لم تُذكر في البند الثالث مكرر، إعادة تصميم كامل) يستحق مقابلاً مالياً منفصلاً، ويُعرَّف التعديل الجوهري بأنه ما يتجاوز <strong>أربع ساعات</strong> عمل تطوير من مطوّر واحد.</li>
+        <li>التعديلات <strong>البسيطة والصيانة الدورية</strong> (تصحيح الأعطال، تحديثات الأمان، تحسينات الأداء، إضافة حقل أو خيار بسيط) تدخل ضمن التزامات الصيانة المجانية <strong>لمدة الشهرين الأولين</strong> من تاريخ الإطلاق فقط.</li>
         <li>يُقدَّر مقابل الأعمال الإضافية بسعر ساعة العمل الفني الذي يتفق عليه الطرفان في الملحق، ويُسدَّد الأربعون بالمئة (40%) عند التوقيع على الملحق، والستون بالمئة (60%) الباقية عند التسليم.</li>
-        <li>لا تؤثر الأعمال الإضافية على الحصة الاستثمارية للطرف الأول، ولا تُخصم قيمتها من الحصة، بل تُسدد استقلالاً كخدمة مستقلة.</li>
+        <li>لا تؤثر الأعمال الإضافية على الحصة الاستثمارية للطرف الأول، ولا تُخصم قيمتها من الحصة، بل تُسدَّد استقلالاً كخدمة مستقلة.</li>
         <li>عند إنجاز أي عمل إضافي وتسليمه، يُلحق كمكوّن جديد من الأعمال المُسلَّمة ويسري عليه ما يسري على البند الثالث مكرر من قواعد ملكية فكرية وصيانة.</li>
       </ol>
 
-      <div class="note-box warn">
+      <div class="note-box">
         <div class="h">تنبيه</div>
         لا يُعتد بأي طلب شفهي أو رسالة إلكترونية غير موقعة تتضمن اتفاقاً على أعمال إضافية،
-        ولا يلتزم الطرف الأول بتنفيذ أي عمل جديد إلا بموجب ملحق كتابي موقّع بختم وتوقيع
-        الطرفين، مع تحديد النطاق والمقابل والجدول الزمني.
+        ولا يلتزم الطرف الأول بتنفيذ أي عمل جديد إلا بموجب ملحق كتابي موقّع من الطرفين،
+        مع تحديد النطاق والمقابل والجدول الزمني.
       </div>
     </section>
   </div>
@@ -977,7 +969,6 @@
 <section class="sheet">
   <div class="sheet-head">
     <div class="name">عقد شراكة استثمارية · برمجلي × تميم للتوصيل</div>
-    <div class="ref">TAM-BRG-002</div>
   </div>
   <div class="sheet-body">
     <section class="clause">
@@ -996,13 +987,13 @@
     </section>
 
     <section class="clause">
-      <h2><span class="num">البند 6</span><span class="txt">الحصة الاستثمارية وأصولها</span></h2>
+      <h2><span class="num">البند 6</span><span class="txt">الحصة الاستثمارية وقواعد حسابها</span></h2>
       <ol class="tight">
-        <li>تُعد الحصة حقاً مالياً دائماً للطرف الأول، لا يسقط بالتقادم، ولا يجوز إلغاؤه إلا بإجراء التخارج المنصوص عليه في البند الثالث عشر.</li>
+        <li>تُعد الحصة حقاً مالياً مستحقاً للطرف الأول طوال مدة سريان العقد ومدد تجديده، ولا يجوز إلغاؤه إلا بإجراء التخارج المنصوص عليه في البند الثاني عشر.</li>
         <li>تُحسب الحصة على كل الخدمات الحالية والمستقبلية تحت العلامة "تميم" أو أي علامة فرعية.</li>
         <li>يحق للطرف الأول تعيين مراقب مالي مستقل لمراجعة الدفاتر مرة كل ثلاثة أشهر على حساب الطرف الثاني إذا وُجدت مؤشرات على عدم دقة التقارير.</li>
         <li><strong>حماية الوعاء الحاسبي:</strong> لا تُخصم المصروفات التشغيلية المباشرة عند حساب صافي الإيرادات بما يجاوز <strong>ثلاثين بالمئة (30%)</strong> من الإيراد الإجمالي، وما زاد عن ذلك لا يُعتد به إلا بموافقة كتابية مسبقة من الطرف الأول مدعومة بمستندات صرف رسمية.</li>
-        <li>عند وجود فارق بين ما تم صرفه وما هو مستحق، يلتزم الطرف الثاني بسداد الفارق خلال ثلاثين يوماً مع فائدة تأخير قدرها 12% سنوياً محسوبة يومياً.</li>
+        <li>عند وجود فارق بين ما تم صرفه وما هو مستحق، يلتزم الطرف الثاني بسداد الفارق خلال ثلاثين يوماً مع <strong>غرامة تأخير</strong> قدرها 12% سنوياً محسوبة يومياً.</li>
         <li>يجوز للطرف الأول — بموافقة كتابية من الطرف الثاني — تحويل حصته أو جزء منها إلى شخصية اعتبارية تابعة له.</li>
       </ol>
     </section>
@@ -1013,11 +1004,10 @@
   </div>
 </section>
 
-<!-- 8. REVENUE DECLARATION + CURRENT ASSETS -->
+<!-- 8. REVENUE DECLARATION -->
 <section class="sheet">
   <div class="sheet-head">
     <div class="name">عقد شراكة استثمارية · برمجلي × تميم للتوصيل</div>
-    <div class="ref">TAM-BRG-002</div>
   </div>
   <div class="sheet-body">
     <section class="clause">
@@ -1030,22 +1020,28 @@
       <table class="revenue">
         <thead>
           <tr>
-            <th>الشهر</th>
-            <th>الإيراد الإجمالي (ج.م)</th>
-            <th>صافي الإيرادات (ج.م)</th>
+            <th rowspan="2">الشهر</th>
+            <th colspan="2">الإيراد الإجمالي (ج.م)</th>
+            <th colspan="2">صافي الإيرادات (ج.م)</th>
+          </tr>
+          <tr>
+            <th>رقماً</th>
+            <th>كتابةً بالعربي</th>
+            <th>رقماً</th>
+            <th>كتابةً بالعربي</th>
           </tr>
         </thead>
         <tbody>
-          <tr><td>________ / 2026</td><td class="blank"></td><td class="blank"></td></tr>
-          <tr><td>________ / 2026</td><td class="blank"></td><td class="blank"></td></tr>
-          <tr><td>________ / 2026</td><td class="blank"></td><td class="blank"></td></tr>
-          <tr class="avg"><td>المتوسط الشهري</td><td class="blank"></td><td class="blank"></td></tr>
+          <tr><td>________ / 2026</td><td class="blank"></td><td class="blank"></td><td class="blank"></td><td class="blank"></td></tr>
+          <tr><td>________ / 2026</td><td class="blank"></td><td class="blank"></td><td class="blank"></td><td class="blank"></td></tr>
+          <tr><td>________ / 2026</td><td class="blank"></td><td class="blank"></td><td class="blank"></td><td class="blank"></td></tr>
+          <tr class="avg"><td>المتوسط الشهري</td><td class="blank"></td><td class="blank"></td><td class="blank"></td><td class="blank"></td></tr>
         </tbody>
       </table>
       <ol class="tight">
         <li>يُعد هذا الإقرار جزءاً لا يتجزأ من العقد، ويُتخذ حداً أدنى مرجعياً يُسترشد به عند تقدير صافي الإيرادات وحساب الحصة الاستثمارية.</li>
         <li>إذا انخفض صافي الإيرادات المُبَلَّغ عنه في أي شهر لاحق للإطلاق الرسمي عن متوسط الأشهر الثلاثة المذكورة أعلاه، التزم الطرف الثاني بتقديم بيان مكتوب مدعوم بالمستندات يوضح أسباب الانخفاض خلال خمسة عشر يوماً، ويحق للطرف الأول تعيين مراقب مالي مستقل على نفقة الطرف الثاني للتحقق من صحة البيان.</li>
-        <li>إذا ثبت أن الأرقام المُقَرَّة أعلاه غير صحيحة أو مُقَلَّلة عمداً، اعتُبر ذلك غشاً تعاقدياً يخوّل الطرف الأول: (أ) المطالبة بفرق الحصة عن كامل المدة مع فائدة تأخير 12% سنوياً، (ب) استحقاق كامل التكاليف المؤجلة فوراً، (ج) فسخ العقد مع بقاء حقه في الحصة والتعويض.</li>
+        <li>إذا ثبت أن الأرقام المُقَرَّة أعلاه غير صحيحة أو مُقَلَّلة عمداً، اعتُبر ذلك غشاً تعاقدياً يخوّل الطرف الأول: (أ) المطالبة بفرق الحصة عن كامل المدة مع <strong>غرامة تأخير</strong> 12% سنوياً، (ب) استحقاق كامل التكاليف المؤجلة فوراً، (ج) فسخ العقد مع بقاء حقه في الحصة والتعويض.</li>
         <li>تُرفق كشوف الحساب البنكية وكشوف بوابات الدفع وتقارير المحاسب عن الأشهر الثلاثة كمرفق رقم (1) بهذا العقد، موقّعاً من الطرفين، ويُعد جزءاً مكملاً له.</li>
       </ol>
       <div class="ack-line">
@@ -1064,7 +1060,6 @@
 <section class="sheet">
   <div class="sheet-head">
     <div class="name">عقد شراكة استثمارية · برمجلي × تميم للتوصيل</div>
-    <div class="ref">TAM-BRG-002</div>
   </div>
   <div class="sheet-body">
     <section class="clause">
@@ -1077,20 +1072,21 @@
       <table class="grid">
         <thead>
           <tr>
-            <th class="n">م</th>
-            <th>نوع الأصل</th>
-            <th style="width:14%;">العدد</th>
-            <th>الحالة</th>
-            <th style="width:22%;">ملكية كاملة / بأقساط</th>
+            <th style="width:5%;">م</th>
+            <th style="width:24%;">نوع الأصل</th>
+            <th style="width:10%;">العدد رقماً</th>
+            <th style="width:20%;">العدد كتابةً بالعربي</th>
+            <th style="width:16%;">الحالة</th>
+            <th style="width:25%;">ملكية كاملة / بأقساط</th>
           </tr>
         </thead>
         <tbody>
-          <tr><td class="n">1</td><td>دراجات نارية (موتوسيكل)</td><td class="amt"><span class="blank"></span></td><td><span class="blank"></span></td><td><span class="blank"></span></td></tr>
-          <tr><td class="n">2</td><td>تروسيكلات</td><td class="amt"><span class="blank"></span></td><td><span class="blank"></span></td><td><span class="blank"></span></td></tr>
-          <tr><td class="n">3</td><td>سيارات نقل / شحن</td><td class="amt"><span class="blank"></span></td><td><span class="blank"></span></td><td><span class="blank"></span></td></tr>
-          <tr><td class="n">4</td><td>مقر رئيسي / فروع</td><td class="amt"><span class="blank"></span></td><td><span class="blank"></span></td><td><span class="blank"></span></td></tr>
-          <tr><td class="n">5</td><td>معدات وأجهزة تشغيل</td><td class="amt"><span class="blank"></span></td><td><span class="blank"></span></td><td><span class="blank"></span></td></tr>
-          <tr><td class="n">6</td><td>أخرى (يُبيّن نوعها): <span class="blank"></span></td><td class="amt"><span class="blank"></span></td><td><span class="blank"></span></td><td><span class="blank"></span></td></tr>
+          <tr><td class="n">1</td><td>دراجات نارية (موتوسيكل)</td><td class="amt"><span class="blank"></span></td><td><span class="blank"></span></td><td><span class="blank"></span></td><td><span class="blank"></span></td></tr>
+          <tr><td class="n">2</td><td>تروسيكلات</td><td class="amt"><span class="blank"></span></td><td><span class="blank"></span></td><td><span class="blank"></span></td><td><span class="blank"></span></td></tr>
+          <tr><td class="n">3</td><td>سيارات نقل / شحن</td><td class="amt"><span class="blank"></span></td><td><span class="blank"></span></td><td><span class="blank"></span></td><td><span class="blank"></span></td></tr>
+          <tr><td class="n">4</td><td>مقر رئيسي / فروع</td><td class="amt"><span class="blank"></span></td><td><span class="blank"></span></td><td><span class="blank"></span></td><td><span class="blank"></span></td></tr>
+          <tr><td class="n">5</td><td>معدات وأجهزة تشغيل</td><td class="amt"><span class="blank"></span></td><td><span class="blank"></span></td><td><span class="blank"></span></td><td><span class="blank"></span></td></tr>
+          <tr><td class="n">6</td><td>أخرى (يُبيّن نوعها): <span class="blank"></span></td><td class="amt"><span class="blank"></span></td><td><span class="blank"></span></td><td><span class="blank"></span></td><td><span class="blank"></span></td></tr>
         </tbody>
       </table>
     </section>
@@ -1111,7 +1107,7 @@
       <ol class="tight">
         <li>أي فرع جديد يفتحه الطرف الثاني في مدينة أو منطقة جغرافية جديدة يظل ضمن نطاق هذا العقد، وتُحسب حصة الطرف الأول بنسبة <strong>عشرين بالمئة (20%)</strong> من صافي إيرادات الفرع الجديد أيضاً — دون الحاجة إلى ملحق منفصل.</li>
         <li>تكاليف إنشاء الفرع الجديد (عقار، تجهيزات، رواتب، تسويق) تُعامل معاملة الأصول التشغيلية الجديدة الواردة في البند السادس رابعاً، ولا تُخصم من الوعاء الحاسبي للحصة.</li>
-        <li>إذا احتاج الفرع الجديد إلى تعديلات برمجية بسيطة (إضافة مناطق توصيل، أسعار خاصة، تعديل ساعات العمل) فإنها تدخل ضمن الصيانة المجانية.</li>
+        <li>إذا احتاج الفرع الجديد إلى تعديلات برمجية بسيطة (إضافة مناطق توصيل، أسعار خاصة، تعديل ساعات العمل) فإنها تدخل ضمن الصيانة المجانية لمدة الشهرين الأولين فقط، وبعدها بمقابل يُتفق عليه.</li>
         <li>إذا احتاج الفرع الجديد إلى تخصيصات جوهرية (تطبيق منفصل، لوحة تحكم مخصصة، تكاملات جديدة) فإنها تُعامل كأعمال إضافية تستحق مقابلاً منفصلاً وفق البند الرابع.</li>
       </ol>
     </section>
@@ -1126,7 +1122,6 @@
 <section class="sheet">
   <div class="sheet-head">
     <div class="name">عقد شراكة استثمارية · برمجلي × تميم للتوصيل</div>
-    <div class="ref">TAM-BRG-002</div>
   </div>
   <div class="sheet-body">
     <section class="clause">
@@ -1135,23 +1130,25 @@
       <table class="grid">
         <thead>
           <tr>
-            <th class="n">م</th>
+            <th style="width:5%;">م</th>
             <th>الوصف</th>
-            <th class="amt" style="width:26%; text-align:end;">القيمة (ج.م)</th>
+            <th style="width:20%; text-align:end;">القيمة رقماً (ج.م)</th>
+            <th style="width:30%; text-align:end;">القيمة كتابةً بالعربي</th>
           </tr>
         </thead>
         <tbody>
-          <tr><td class="n">1</td><td>تطوير تطبيق العميل (Android + Web)</td><td class="amt"><span class="blank"></span></td></tr>
-          <tr><td class="n">2</td><td>تطوير لوحة التحكم الإدارية</td><td class="amt"><span class="blank"></span></td></tr>
-          <tr><td class="n">3</td><td>البنية الخلفية (Backend) وقواعد البيانات</td><td class="amt"><span class="blank"></span></td></tr>
-          <tr><td class="n">4</td><td>الموقع التعريفي (Landing Page)</td><td class="amt"><span class="blank"></span></td></tr>
-          <tr><td class="n">5</td><td>الاستضافة السحابية وشهادات الأمان (سنة كاملة)</td><td class="amt"><span class="blank"></span></td></tr>
-          <tr><td class="n">6</td><td>حجز اسم النطاق للسنة الأولى</td><td class="amt"><span class="blank"></span></td></tr>
-          <tr><td class="n">7</td><td>اشتراك Google Play Developer</td><td class="amt"><span class="blank"></span></td></tr>
-          <tr><td class="n">8</td><td>تكامل واتساب وبوابات الدفع (EasyKash + Paymob)</td><td class="amt"><span class="blank"></span></td></tr>
-          <tr><td class="n">9</td><td>التصميم والهوية البصرية والأصول الجرافيكية</td><td class="amt"><span class="blank"></span></td></tr>
-          <tr><td class="n">10</td><td>الصيانة والدعم الفني (سنة كاملة)</td><td class="amt"><span class="blank"></span></td></tr>
-          <tr class="total"><td></td><td>الإجمالي المستحق بعد اثني عشر شهراً</td><td class="amt"><span class="blank"></span></td></tr>
+          <tr><td class="n">1</td><td>تطوير تطبيق العميل (Android + Web)</td><td class="amt"><span class="blank"></span></td><td><span class="blank"></span></td></tr>
+          <tr><td class="n">2</td><td>تطوير لوحة التحكم الإدارية</td><td class="amt"><span class="blank"></span></td><td><span class="blank"></span></td></tr>
+          <tr><td class="n">3</td><td>البنية الخلفية (Backend) وقواعد البيانات</td><td class="amt"><span class="blank"></span></td><td><span class="blank"></span></td></tr>
+          <tr><td class="n">4</td><td>الموقع التعريفي (Landing Page)</td><td class="amt"><span class="blank"></span></td><td><span class="blank"></span></td></tr>
+          <tr><td class="n">5</td><td>الاستضافة السحابية وشهادات الأمان (سنة كاملة)</td><td class="amt">3,000 ج.م</td><td>ثلاثة آلاف جنيه مصري لا غير</td></tr>
+          <tr><td class="n">6</td><td>حجز اسم النطاق (Domain) للسنة الأولى</td><td class="amt">450 ج.م</td><td>أربعمائة وخمسون جنيهاً مصرياً لا غير</td></tr>
+          <tr><td class="n">7</td><td>اشتراك Google Play Developer (مدفوع فعلياً)</td><td class="amt">25 دولار أمريكي</td><td>خمسة وعشرون دولاراً أمريكياً لا غير</td></tr>
+          <tr><td class="n">8</td><td>تكامل واتساب وبوابات الدفع (EasyKash + Paymob)</td><td class="amt"><span class="blank"></span></td><td><span class="blank"></span></td></tr>
+          <tr><td class="n">9</td><td>التصميم والهوية البصرية والأصول الجرافيكية</td><td class="amt"><span class="blank"></span></td><td><span class="blank"></span></td></tr>
+          <tr><td class="n">10</td><td>الصيانة والدعم الفني (شهران فقط مجاناً)</td><td class="amt"><span class="blank"></span></td><td><span class="blank"></span></td></tr>
+          <tr><td class="n">11</td><td>اشتراك Apple Developer <em>(يُشترى لاحقاً حسب الحاجة)</em></td><td class="amt">114 دولار أمريكي</td><td>مائة وأربعة عشر دولاراً أمريكياً — يستحق عند الشراء</td></tr>
+          <tr class="total"><td></td><td>الإجمالي المستحق بعد اثني عشر شهراً</td><td class="amt"><span class="blank"></span></td><td><span class="blank"></span></td></tr>
         </tbody>
       </table>
 
@@ -1159,7 +1156,7 @@
         <div class="h">ملاحظات على السداد</div>
         <ol>
           <li>في حالة السداد المبكر قبل اكتمال الاثني عشر شهراً، يمنح الطرف الأول خصماً قدره 5% من الإجمالي.</li>
-          <li>في حالة التأخر عن السداد بعد الاستحقاق، تُحتسب فائدة تأخير قانونية بنسبة 12% سنوياً من تاريخ الاستحقاق حتى تمام السداد.</li>
+          <li>في حالة التأخر عن السداد بعد الاستحقاق، تُحتسب <strong>غرامة تأخير</strong> بنسبة 12% سنوياً من تاريخ الاستحقاق حتى تمام السداد.</li>
           <li>يحرر الطرف الثاني كمبيالة على الأمر (Promissory Note) بقيمة الإجمالي المستحق ضماناً للسداد، تُحفظ لدى محامي التوثيق ولا تُصرف إلا عند التأخر.</li>
           <li>لا تشمل هذه القيم مقابل الأعمال الإضافية (تطبيق التاجر / تطبيق السائق / تعديلات جوهرية)، فتلك تُسدَّد استقلالاً بموجب ملاحقها.</li>
         </ol>
@@ -1176,7 +1173,6 @@
 <section class="sheet">
   <div class="sheet-head">
     <div class="name">عقد شراكة استثمارية · برمجلي × تميم للتوصيل</div>
-    <div class="ref">TAM-BRG-002</div>
   </div>
   <div class="sheet-body">
     <section class="clause">
@@ -1202,11 +1198,12 @@
     </section>
 
     <section class="clause">
-      <h2><span class="num">البند 10</span><span class="txt">مدة الاتفاق والتجديد</span></h2>
+      <h2><span class="num">البند 10</span><span class="txt">مدة الاتفاق</span></h2>
       <ol class="tight">
-        <li>مدة هذا العقد <strong>خمس (5) سنوات</strong> ميلادية تبدأ من تاريخ التوقيع.</li>
-        <li>يتجدد العقد تلقائياً لمدد مماثلة ما لم يخطر أحد الطرفين الآخر برغبته في عدم التجديد قبل انتهاء المدة بستين يوماً على الأقل، بموجب إخطار كتابي مسجل.</li>
-        <li>الحصة الاستثمارية للطرف الأول لا ترتبط بمدة العقد وتظل سارية طالما استمر المشروع تحت أي شكل قانوني، ما لم يتم التخارج الرسمي.</li>
+        <li>مدة هذا العقد <strong>اثني عشر (12) شهراً</strong> ميلادياً تبدأ من تاريخ التوقيع.</li>
+        <li><strong>يُجدَّد العقد باتفاق كتابي جديد</strong> بين الطرفين، ولا يتجدد تلقائياً. ولاستمرار التعاون بعد انتهاء المدة، يلتزم الطرفان بالتفاوض قبل انتهاء المدة الأصلية بستين يوماً على الأقل، والتوقيع على اتفاق كتابي جديد تُحدَّد فيه المدة الجديدة والنسبة الاستثمارية وباقي الشروط، بما يسمح بمراجعة النسبة (زيادة أو نقصان) وفق ما يراه الطرفان مناسباً.</li>
+        <li>الحصة الاستثمارية للطرف الأول عن الفترة المُبرَم عليها العقد تظل مستحقة عن كامل الإيرادات المتحققة خلال سريان العقد ومدد تجديده، ولا تشمل أي إيرادات بعد انتهاء العقد إذا لم يُجدَّد.</li>
+        <li>عند انتهاء العقد دون تجديد، ينتقل ترخيص استخدام الأنظمة للطرف الثاني وفق ما ورد في البند الثامن (فقرة 2)، ويظل حق الملكية الفكرية للأنظمة على ما هو عليه.</li>
       </ol>
     </section>
   </div>
@@ -1220,7 +1217,6 @@
 <section class="sheet">
   <div class="sheet-head">
     <div class="name">عقد شراكة استثمارية · برمجلي × تميم للتوصيل</div>
-    <div class="ref">TAM-BRG-002</div>
   </div>
   <div class="sheet-body">
     <section class="clause">
@@ -1234,23 +1230,36 @@
     </section>
 
     <section class="clause">
-      <h2><span class="num">البند 12</span><span class="txt">حق التخارج (Exit)</span></h2>
+      <h2><span class="num">البند 12</span><span class="txt">حق التخارج — بيع الحصة</span></h2>
+      <p class="lead" style="margin-bottom:2mm;">
+        <strong>معنى التخارج:</strong> هو أن يقرر الطرف الأول (برمجلي) الانسحاب من الشراكة عن طريق
+        بيع حصته الاستثمارية البالغة 20% واسترداد قيمتها المالية، سواء ببيعها للطرف الثاني نفسه
+        أو لشخص أو شركة أخرى.
+      </p>
       <ol class="tight">
-        <li>يحق للطرف الأول التخارج الكلي أو الجزئي من حصته بعد مرور ثلاث سنوات من تاريخ التوقيع.</li>
-        <li>يتم تقييم الحصة عند التخارج بواسطة مقيّم مالي محايد يختاره الطرفان مناصفةً.</li>
-        <li>للطرف الثاني حق الشفعة في شراء الحصة قبل عرضها على أي طرف ثالث خلال ثلاثين يوماً من قرار التخارج.</li>
-        <li>في حالة عجز الطرف الثاني عن الشراء، يحق للطرف الأول بيع حصته لطرف ثالث بذات الشروط المعروضة.</li>
+        <li><strong>مدة الالتزام الأدنى:</strong> لا يحق للطرف الأول التخارج قبل مرور ثلاث سنوات كاملة من تاريخ توقيع هذا العقد.</li>
+        <li><strong>تقدير قيمة الحصة:</strong> عند رغبة الطرف الأول في التخارج، تُقدَّر قيمة الحصة (20%) بواسطة مقيّم مالي محايد يختاره الطرفان معاً بالتساوي، ويكون تقديره ملزماً للطرفين ولا يُطعن فيه.</li>
+        <li><strong>حق الأولوية للطرف الثاني (حق الشفعة):</strong> قبل عرض الحصة على أي مشترٍ خارجي، يلتزم الطرف الأول بعرضها أولاً على الطرف الثاني بنفس القيمة المُقدَّرة، وللطرف الثاني مهلة ثلاثين يوماً ليقرر شراءها من عدمه.</li>
+        <li><strong>البيع لطرف خارجي:</strong> إذا رفض الطرف الثاني الشراء أو انتهت المهلة دون رد كتابي، جاز للطرف الأول بيع الحصة لأي طرف ثالث بنفس السعر والشروط التي عُرضت على الطرف الثاني.</li>
       </ol>
     </section>
 
     <section class="clause">
-      <h2><span class="num">البند 13</span><span class="txt">القوة القاهرة</span></h2>
-      <p>
-        إذا حالت ظروف قوة قاهرة (كوارث طبيعية، حروب، أوبئة، قرارات حكومية مانعة، انقطاع
-        البنية التحتية للإنترنت لفترات طويلة) دون تنفيذ التزامات أحد الطرفين، تتوقف
-        الالتزامات المتأثرة دون مسؤولية على أي منهما، ويُعاد النظر في الجداول الزمنية
-        والمالية بعد زوال السبب. ولا يُعد التأخر في السداد قوة قاهرة.
+      <h2><span class="num">البند 13</span><span class="txt">الظروف الطارئة (القوة القاهرة)</span></h2>
+      <p class="lead" style="margin-bottom:2mm;">
+        <strong>معنى الظروف الطارئة:</strong> هي أي حدث خارج عن إرادة الطرفين لا يمكن توقعه أو
+        تجنبه، ويمنع أحدهما من الوفاء بالتزاماته المذكورة في هذا العقد.
       </p>
+      <p style="margin-bottom:2mm;">
+        <strong>أمثلة عليها:</strong> كوارث طبيعية (زلازل، فيضانات)، حروب أو اضطرابات عامة،
+        أوبئة صحية، قرارات حكومية تمنع تشغيل النشاط، انقطاع الإنترنت في المنطقة لفترة طويلة يتعذر معها العمل.
+      </p>
+      <p style="margin-bottom:1mm;"><strong>ما يترتب على وقوعها:</strong></p>
+      <ol class="tight">
+        <li>تتوقف الالتزامات المتأثرة مؤقتاً دون أن يتحمل أي طرف مسؤولية عن التأخير.</li>
+        <li>يُعاد الاتفاق بين الطرفين على الجدول الزمني والمالي بعد انتهاء الظرف الطارئ.</li>
+        <li><strong>التأخر في سداد المستحقات المالية لا يُعتبر ظرفاً طارئاً</strong>، ولا يعفي الطرف الثاني من التزامه بالسداد.</li>
+      </ol>
     </section>
 
     <section class="clause">
@@ -1283,7 +1292,6 @@
 <section class="sheet">
   <div class="sheet-head">
     <div class="name">عقد شراكة استثمارية · برمجلي × تميم للتوصيل</div>
-    <div class="ref">TAM-BRG-002</div>
   </div>
   <div class="sheet-body">
     <section class="clause">
