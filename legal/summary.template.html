@@ -1,0 +1,781 @@
+<meta charset="utf-8">
+<title>عقد شراكة استثمارية · ملخص · برمجلي وتميم للتوصيل</title>
+<style>
+  @page { size: A4; margin: 0; }
+
+  :root {
+    --paper: #FFFFFF;
+    --tint: #F5F6F8;
+    --ink: #111214;
+    --sub: #4B5563;
+    --muted: #6B7280;
+    --line: #D1D5DB;
+    --line-strong: #6B7280;
+    --font: "Cairo", "Tajawal", "Segoe UI", "Tahoma", Arial, sans-serif;
+    --font-body: "Tajawal", "Segoe UI", "Tahoma", Arial, sans-serif;
+    --font-num: "Segoe UI", Consolas, monospace;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  html { background: #E7EAEF; }
+  body {
+    font-family: var(--font-body);
+    font-size: 12px;
+    line-height: 1.7;
+    color: var(--ink);
+    padding: 24px 0 40px;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .sheet {
+    width: 210mm;
+    height: 297mm;
+    margin: 0 auto 22px;
+    padding: 13mm 18mm 10mm;
+    background: var(--paper);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    box-shadow: 0 6px 20px -10px rgba(0,0,0,0.25);
+    color: var(--ink);
+  }
+
+  @media print {
+    html, body { background: #fff; }
+    body { padding: 0; }
+    .sheet {
+      margin: 0;
+      box-shadow: none;
+      break-after: page;
+      page-break-after: always;
+    }
+    .sheet:last-child { break-after: auto; page-break-after: auto; }
+  }
+
+  .sheet-head {
+    padding-bottom: 2.5mm;
+    margin-bottom: 3.5mm;
+    border-bottom: 2px solid var(--ink);
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    flex-shrink: 0;
+  }
+  .sheet-head .name {
+    font-family: var(--font);
+    font-weight: 700;
+    font-size: 10.5px;
+    letter-spacing: 0.04em;
+    color: var(--ink);
+  }
+  .sheet-head .badge {
+    font-family: var(--font);
+    font-weight: 800;
+    font-size: 9.5px;
+    color: var(--ink);
+    border: 1.2px solid var(--ink);
+    padding: 2px 8px;
+    letter-spacing: 0.06em;
+  }
+
+  .sheet-body { flex: 1; min-height: 0; overflow: hidden; }
+
+  .sheet-foot {
+    margin-top: 3mm;
+    padding-top: 2mm;
+    border-top: 1px solid var(--line-strong);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-size: 9.5px;
+    color: var(--muted);
+    flex-shrink: 0;
+  }
+  .sheet-foot .pg {
+    font-family: var(--font-num);
+    font-weight: 700;
+    color: var(--ink);
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* ─── SUMMARY CLAUSES ─── */
+  .intro {
+    padding: 2.5mm 4mm;
+    background: var(--tint);
+    border: 1px solid var(--line);
+    border-inline-start: 3px solid var(--ink);
+    font-size: 10.8px;
+    color: var(--ink);
+    line-height: 1.6;
+    margin-bottom: 3.5mm;
+  }
+  .intro strong { font-weight: 800; }
+
+  .item {
+    margin-bottom: 2.5mm;
+    padding-bottom: 2mm;
+    border-bottom: 1px solid var(--line);
+  }
+  .item:last-child { border-bottom: none; padding-bottom: 0; margin-bottom: 0; }
+
+  .item-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 1.5mm;
+  }
+  .item-head .num {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 42px;
+    height: 20px;
+    padding: 0 8px;
+    background: #fff;
+    color: var(--ink);
+    border: 1.5px solid var(--ink);
+    font-family: var(--font);
+    font-weight: 800;
+    font-size: 10px;
+    letter-spacing: 0.04em;
+    border-radius: 2px;
+    white-space: nowrap;
+  }
+  .item-head .ttl {
+    font-family: var(--font);
+    font-weight: 800;
+    font-size: 11.8px;
+    color: var(--ink);
+    line-height: 1.3;
+  }
+
+  .item-body {
+    padding-inline-start: 50px;
+    font-size: 10.7px;
+    line-height: 1.55;
+    color: var(--ink);
+  }
+  .item-body p { margin-bottom: 1mm; color: var(--ink); }
+  .item-body p:last-child { margin-bottom: 0; }
+  .item-body strong { font-weight: 800; }
+  .item-body ul { list-style: none; padding: 0; margin: 0.5mm 0 0; }
+  .item-body ul li {
+    padding-inline-start: 4mm;
+    position: relative;
+    margin-bottom: 0.5mm;
+    line-height: 1.5;
+  }
+  .item-body ul li::before {
+    content: "◂";
+    position: absolute;
+    inset-inline-start: 0;
+    top: 1px;
+    color: var(--ink);
+    font-weight: 800;
+    font-size: 9px;
+    line-height: 1.4;
+  }
+
+  /* ─── COVER SHEET ─── */
+  .cover { padding: 22mm 24mm; }
+  .cover .head {
+    display: grid;
+    grid-template-columns: 1fr auto 1fr;
+    align-items: center;
+    gap: 16px;
+    padding-bottom: 8mm;
+    border-bottom: 3px double var(--ink);
+  }
+  .cover .head figure { text-align: center; }
+  .cover .head img { height: 74px; width: auto; display: block; margin: 0 auto; }
+  .cover .head figcaption {
+    margin-top: 6px;
+    font-family: var(--font);
+    font-weight: 700;
+    font-size: 11px;
+    color: var(--ink);
+  }
+  .cover .head figcaption span {
+    display: block;
+    font-family: var(--font-num);
+    font-size: 9px;
+    letter-spacing: 0.14em;
+    color: var(--muted);
+    font-weight: 500;
+    margin-top: 2px;
+  }
+  .cover .head .sep {
+    width: 1px;
+    height: 74px;
+    background: var(--ink);
+    align-self: center;
+  }
+
+  .cover .title-block {
+    text-align: center;
+    padding: 20mm 0 16mm;
+    border-bottom: 1px solid var(--ink);
+  }
+  .cover .kicker {
+    display: inline-block;
+    padding: 4px 14px;
+    background: #fff;
+    color: var(--ink);
+    border: 1.5px solid var(--ink);
+    font-family: var(--font);
+    font-weight: 800;
+    font-size: 10.5px;
+    letter-spacing: 0.14em;
+    border-radius: 2px;
+    margin-bottom: 8mm;
+  }
+  .cover h1 {
+    font-family: var(--font);
+    font-weight: 800;
+    font-size: 32px;
+    line-height: 1.25;
+    color: var(--ink);
+    max-width: 150mm;
+    margin: 0 auto;
+  }
+  .cover .brief {
+    margin: 8mm auto 0;
+    max-width: 140mm;
+    font-size: 12.5px;
+    line-height: 1.85;
+    color: var(--ink);
+  }
+
+  .cover .meta {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    margin: 10mm 0 0;
+    border: 1.5px solid var(--ink);
+  }
+  .cover .meta > div {
+    padding: 5mm 8px;
+    text-align: center;
+    border-inline-end: 1px solid var(--ink);
+  }
+  .cover .meta > div:last-child { border-inline-end: none; }
+  .cover .meta small {
+    display: block;
+    font-family: var(--font);
+    font-size: 10px;
+    letter-spacing: 0.16em;
+    color: var(--muted);
+    font-weight: 700;
+    margin-bottom: 4px;
+  }
+  .cover .meta b {
+    font-family: var(--font-num);
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--ink);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .cover .note {
+    margin-top: auto;
+    padding-top: 8mm;
+    text-align: center;
+    font-family: var(--font);
+    font-weight: 700;
+    font-size: 10.5px;
+    letter-spacing: 0.1em;
+    color: var(--muted);
+  }
+
+  /* ─── SIGNATURES SHEET (same as full) ─── */
+  .clause h2 {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding-bottom: 2mm;
+    margin-bottom: 3mm;
+    border-bottom: 1px solid var(--ink);
+  }
+  .clause h2 .num {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 44px;
+    height: 22px;
+    padding: 0 8px;
+    background: #fff;
+    color: var(--ink);
+    border: 1.5px solid var(--ink);
+    font-family: var(--font);
+    font-weight: 800;
+    font-size: 10px;
+    letter-spacing: 0.04em;
+    border-radius: 2px;
+    white-space: nowrap;
+  }
+  .clause h2 .txt {
+    font-family: var(--font);
+    font-weight: 800;
+    font-size: 14px;
+    color: var(--ink);
+    line-height: 1.3;
+  }
+
+  .sig-lead {
+    padding: 4mm 6mm;
+    background: var(--tint);
+    border: 1px solid var(--line);
+    border-inline-start: 3px solid var(--ink);
+    color: var(--ink);
+    font-size: 11.2px;
+    line-height: 1.85;
+    margin-bottom: 5mm;
+  }
+  .sig-party {
+    border: 1.5px solid var(--ink);
+    margin-bottom: 4mm;
+  }
+  .sig-party .hd {
+    background: #fff;
+    color: var(--ink);
+    padding: 5px 10px;
+    font-family: var(--font);
+    font-weight: 800;
+    font-size: 11px;
+    border-bottom: 1.5px solid var(--ink);
+  }
+  .sig-party .hd small {
+    display: block;
+    font-weight: 700;
+    font-size: 9.5px;
+    color: var(--muted);
+    letter-spacing: 0.1em;
+    margin-bottom: 2px;
+  }
+  .sig-party .bd {
+    padding: 4mm 5mm;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 5mm;
+  }
+  .sig-person {
+    display: grid;
+    grid-template-columns: 66px 1fr;
+    row-gap: 4mm;
+    column-gap: 8px;
+    align-items: end;
+    font-size: 10.8px;
+  }
+  .sig-person .role {
+    grid-column: 1 / -1;
+    padding: 2px 8px;
+    background: #fff;
+    color: var(--ink);
+    border: 1px solid var(--ink);
+    font-family: var(--font);
+    font-weight: 800;
+    font-size: 10.5px;
+    margin-bottom: 1mm;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .sig-person .role .phone {
+    font-family: var(--font-num);
+    font-variant-numeric: tabular-nums;
+    color: var(--ink);
+    font-weight: 700;
+    letter-spacing: 0.03em;
+    direction: ltr;
+  }
+  .sig-person .lbl { color: var(--ink); font-weight: 800; font-family: var(--font); }
+  .sig-person .line { display: block; border-bottom: 1px solid var(--ink); min-height: 15px; }
+  .sig-person .line.tall { min-height: 26px; }
+
+  .witnesses {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 4mm;
+    padding: 4mm 5mm;
+    border: 1px solid var(--ink);
+    background: var(--tint);
+    margin-bottom: 4mm;
+  }
+  .witnesses > div { font-size: 11px; }
+  .witnesses .h {
+    font-family: var(--font);
+    font-weight: 800;
+    color: var(--ink);
+    letter-spacing: 0.06em;
+    font-size: 10.5px;
+    margin-bottom: 3mm;
+  }
+  .witnesses .row {
+    display: grid;
+    grid-template-columns: 66px 1fr;
+    align-items: end;
+    gap: 8px;
+    margin-bottom: 3mm;
+  }
+  .witnesses .row:last-child { margin-bottom: 0; }
+  .witnesses .row span { color: var(--ink); font-weight: 800; font-family: var(--font); }
+  .witnesses .line { border-bottom: 1px solid var(--ink); min-height: 15px; }
+
+  .notary {
+    padding: 4mm 6mm;
+    border: 1.5px solid var(--ink);
+    text-align: center;
+    font-size: 11px;
+    color: var(--ink);
+    line-height: 2;
+  }
+  .notary b {
+    display: block;
+    color: var(--ink);
+    font-family: var(--font);
+    font-weight: 800;
+    letter-spacing: 0.06em;
+    margin-bottom: 2mm;
+    font-size: 11px;
+  }
+  .notary .line {
+    display: inline-block;
+    min-width: 80px;
+    border-bottom: 1px dotted var(--line-strong);
+  }
+
+  @media (max-width: 720px) {
+    body { padding: 8px 0 30px; }
+    .sheet {
+      width: 100%;
+      height: auto;
+      min-height: auto;
+      padding: 18px 16px;
+    }
+    .witnesses, .cover .meta, .cover .head, .sig-party .bd { grid-template-columns: 1fr; }
+    .cover .head .sep { display: none; }
+    .cover h1 { font-size: 22px; }
+    .item-body { padding-inline-start: 12px; }
+  }
+</style>
+
+<article lang="ar" dir="rtl">
+
+<!-- ═════════════════════ 1. COVER ═════════════════════ -->
+<section class="sheet cover">
+  <div class="head">
+    <figure>
+      <img src="__BARMAGLY_LOGO__" alt="شركة برمجلي">
+      <figcaption>شركة برمجلي<span>BARMAGLY TECH</span></figcaption>
+    </figure>
+    <div class="sep"></div>
+    <figure>
+      <img src="__TAMEM_LOGO__" alt="شركة تميم للتوصيل">
+      <figcaption>تميم للتوصيل<span>TAMEM DELIVERY</span></figcaption>
+    </figure>
+  </div>
+
+  <div class="title-block">
+    <div class="kicker">ملخص عقد الشراكة الاستثمارية</div>
+    <h1>عقد شراكة وتمويل مؤجل<br>بين شركة برمجلي وشركة تميم للتوصيل</h1>
+    <p class="brief">
+      نسخة ملخصة بأهم بنود العقد الأصلي، تُقرأ وتُوقَّع مع النسخة الكاملة المُلحق بها،
+      وتُعدّ جزءاً لا يتجزأ منها لأغراض المراجعة السريعة.
+    </p>
+  </div>
+
+  <div class="meta">
+    <div><small>تاريخ الإبرام</small><b>__ / __ / 2026 م</b></div>
+    <div><small>مكان الإبرام</small><b>قفط · قنا</b></div>
+  </div>
+
+  <div class="note">وثيقة رسمية · تُوقَّع مع النسخة الكاملة</div>
+</section>
+
+<!-- ═════════════════════ 2. SUMMARY PART 1 ═════════════════════ -->
+<section class="sheet">
+  <div class="sheet-head">
+    <div class="name">ملخص عقد الشراكة الاستثمارية · برمجلي × تميم للتوصيل</div>
+    <div class="badge">أهم البنود</div>
+  </div>
+  <div class="sheet-body">
+
+    <div class="intro">
+      يُقر الطرفان بأن هذا الملخص عرض مختصر لأهم بنود العقد الأصلي، ولا يُغني عن قراءة النسخة الكاملة
+      والاطلاع على الجداول والملاحق المرفقة بها. عند أي تعارض في التفسير، تكون العبرة بالنص الكامل.
+    </div>
+
+    <div class="item">
+      <div class="item-head">
+        <span class="num">البند 1</span>
+        <span class="ttl">أطراف العقد</span>
+      </div>
+      <div class="item-body">
+        <p><strong>الطرف الأول:</strong> شركة برمجلي (BARMAGLY) — المطور والمستثمر. يمثله خالد أحمد حجاجي وأحمد كمال محمد.</p>
+        <p><strong>الطرف الثاني:</strong> شركة تميم للتوصيل (TAMEM) — صاحب المشروع. مقره مدينة قفط، محافظة قنا.</p>
+      </div>
+    </div>
+
+    <div class="item">
+      <div class="item-head">
+        <span class="num">البند 2</span>
+        <span class="ttl">موضوع الاتفاق</span>
+      </div>
+      <div class="item-body">
+        <p>تنفّذ برمجلي منظومة المشروع لصالح تميم دون مقابل نقدي مسبق، مقابل التزامين متلازمين:</p>
+        <ul>
+          <li><strong>حصة استثمارية 20%</strong> من صافي إيرادات كل خدمات تميم، تُصرف شهرياً.</li>
+          <li><strong>سداد كامل التكاليف الموثقة</strong> بعد اثني عشر شهراً من التوقيع.</li>
+        </ul>
+        <p>لا يُعتبر هذا العقد بيعاً للحصص، بل شراكة تشغيلية استثمارية بموجب القانون المدني المصري.</p>
+      </div>
+    </div>
+
+    <div class="item">
+      <div class="item-head">
+        <span class="num">البند 3</span>
+        <span class="ttl">الأعمال المُسلَّمة فعلياً في تاريخ التوقيع</span>
+      </div>
+      <div class="item-body">
+        <ul>
+          <li>تطبيق العميل (Android + Web) بجميع ميزاته: تسجيل، عناوين، سلة، دفع، تتبع، إشعارات، محفظة، كوبونات.</li>
+          <li>لوحة تحكم الإدارة الشاملة: الطلبات، السائقون، التجار، المشرفون، الشيفتات، مناطق التوصيل، التقارير، البث الإعلاني.</li>
+          <li>البنية الخلفية (Backend) وقواعد البيانات مع تكاملات: WhatsApp / EasyKash / Paymob / FCM / Google.</li>
+          <li>الموقع التعريفي (Landing Page) + الحسابات التشغيلية (Google Play، الاستضافة، النطاق، الهوية البصرية).</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="item">
+      <div class="item-head">
+        <span class="num">البند 4</span>
+        <span class="ttl">الأعمال الإضافية — مقابل منفصل</span>
+      </div>
+      <div class="item-body">
+        <p>الأعمال التالية <strong>غير مُسلَّمة</strong> ولا تدخل ضمن العقد الأصلي، وتحتاج ملحقاً كتابياً بمقابل مالي منفصل:</p>
+        <ul>
+          <li><strong>تطبيق التاجر المستقل</strong> (منفصل عن تطبيق العميل).</li>
+          <li><strong>تطبيق السائق / الكابتن</strong>.</li>
+          <li>أي تعديل جوهري على التطبيقات القائمة يتجاوز <strong>أربع ساعات</strong> عمل تطوير.</li>
+        </ul>
+        <p>الصيانة المجانية لمدة <strong>شهرين فقط</strong> من تاريخ الإطلاق تشمل التصحيحات البسيطة فقط.</p>
+      </div>
+    </div>
+
+    <div class="item">
+      <div class="item-head">
+        <span class="num">البند 5</span>
+        <span class="ttl">الحصة الاستثمارية (20%) — قواعد الحسبة</span>
+      </div>
+      <div class="item-body">
+        <ul>
+          <li>حق مالي مستحق لبرمجلي طوال مدة سريان العقد، على كل خدمات تميم الحالية والمستقبلية.</li>
+          <li>تُصرف خلال <strong>خمسة عشر يوماً</strong> من نهاية كل شهر ميلادي.</li>
+          <li>لا تُخصم المصروفات التشغيلية بما يجاوز <strong>30%</strong> من الإيراد الإجمالي إلا بموافقة كتابية.</li>
+          <li>عند التأخر في السداد: <strong>غرامة تأخير 12% سنوياً</strong> محسوبة يومياً.</li>
+          <li>لبرمجلي حق تعيين مراقب مالي مستقل على حساب تميم عند أي شك في دقة التقارير.</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="item">
+      <div class="item-head">
+        <span class="num">البند 6</span>
+        <span class="ttl">التكاليف المؤجلة</span>
+      </div>
+      <div class="item-body">
+        <p>تُسدَّد كامل التكاليف الموثقة بعد <strong>اثني عشر شهراً</strong> من تاريخ التوقيع، وتشمل أعمال التطوير + الاستضافة السحابية (<strong>3,000 ج.م</strong>) + اسم النطاق (<strong>450 ج.م</strong>) + اشتراك Google Play (<strong>25 دولاراً</strong> مدفوع فعلياً) + اشتراك Apple Developer (<strong>114 دولاراً</strong> عند الشراء لاحقاً) + بقية الحسابات التشغيلية، وفق الجدول التفصيلي المُلحق بالنسخة الكاملة.</p>
+        <ul>
+          <li>خصم <strong>5%</strong> عند السداد المبكر.</li>
+          <li>غرامة <strong>12% سنوياً</strong> عند التأخر بعد الاستحقاق.</li>
+          <li>يحرر تميم <strong>كمبيالة على الأمر</strong> بقيمة الإجمالي ضماناً للسداد، تُودَع لدى محامي التوثيق.</li>
+        </ul>
+      </div>
+    </div>
+
+  </div>
+  <div class="sheet-foot">
+    <div>ملخص العقد · 2026 م</div>
+    <div class="pg">صفحة 2 من 4</div>
+  </div>
+</section>
+
+<!-- ═════════════════════ 3. SUMMARY PART 2 ═════════════════════ -->
+<section class="sheet">
+  <div class="sheet-head">
+    <div class="name">ملخص عقد الشراكة الاستثمارية · برمجلي × تميم للتوصيل</div>
+    <div class="badge">أهم البنود</div>
+  </div>
+  <div class="sheet-body">
+
+    <div class="item">
+      <div class="item-head">
+        <span class="num">البند 7</span>
+        <span class="ttl">إقرار الإيرادات السابقة</span>
+      </div>
+      <div class="item-body">
+        <p>يُقر تميم بأن متوسط صافي إيراداته الشهرية خلال الأشهر الثلاثة السابقة على التوقيع هو الأساس المرجعي لحساب الحصة، وفق الجدول المُلحق بالنسخة الكاملة (مرفق رقم 1).</p>
+        <ul>
+          <li>أي انخفاض لاحق عن المتوسط يستوجب بياناً كتابياً مدعوماً بالمستندات خلال 15 يوماً.</li>
+          <li>الغش أو التقليل العمدي للأرقام = <strong>فسخ العقد + استحقاق كامل التكاليف فوراً + بقاء الحصة والتعويض</strong>.</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="item">
+      <div class="item-head">
+        <span class="num">البند 8</span>
+        <span class="ttl">الأصول التشغيلية والفروع الجديدة</span>
+      </div>
+      <div class="item-body">
+        <ul>
+          <li><strong>الأصول الحالية</strong> (دراجات، سيارات، تروسيكل، مقار، معدات): تُجرد في جدول مُلحق كأساس مرجعي.</li>
+          <li><strong>الأصول المُشتراة بعد التوقيع</strong> (نقداً أو بأقساط): ملكية خاصة لتميم — <strong>لا تُخصم أقساطها من الوعاء الحاسبي</strong>، بل من نصيب تميم (80%) وحده.</li>
+          <li><strong>الفروع الجديدة</strong>: تظل ضمن نطاق العقد بنفس نسبة الحصة <strong>20%</strong> — دون ملحق منفصل. أي تخصيصات برمجية جوهرية للفرع = ملحق بمقابل منفصل.</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="item">
+      <div class="item-head">
+        <span class="num">البند 9</span>
+        <span class="ttl">الملكية الفكرية</span>
+      </div>
+      <div class="item-body">
+        <ul>
+          <li>الكود المصدري والأنظمة تظل ملكاً لبرمجلي حتى استيفاء كامل التكاليف المؤجلة.</li>
+          <li>بعد السداد: تحصل تميم على <strong>ترخيص استخدام حصري</strong> للأنظمة لأغراض تشغيل مشروع تميم فقط.</li>
+          <li>العلامة التجارية "تميم" وبيانات العملاء والتجار والسائقين تظل ملكاً خالصاً لتميم.</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="item">
+      <div class="item-head">
+        <span class="num">البند 10</span>
+        <span class="ttl">الضمانات</span>
+      </div>
+      <div class="item-body">
+        <ul>
+          <li>كمبيالة على الأمر مودعة لدى محامي التوثيق ضماناً للسداد.</li>
+          <li>عند التأخر شهرين متتاليين: إنذار كتابي بمهلة 15 يوماً، وبعدها يحق لبرمجلي <strong>إيقاف الخدمة تقنياً</strong>.</li>
+          <li>لا يجوز لتميم بيع الشركة أو أصولها دون إخطار برمجلي كتابياً قبل 60 يوماً مع تحويل التزامات العقد للمشتري الجديد.</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="item">
+      <div class="item-head">
+        <span class="num">البند 11</span>
+        <span class="ttl">مدة العقد — بدون تجديد تلقائي</span>
+      </div>
+      <div class="item-body">
+        <ul>
+          <li>مدة العقد <strong>اثني عشر (12) شهراً</strong> ميلادياً تبدأ من تاريخ التوقيع.</li>
+          <li><strong>يُجدَّد باتفاق كتابي جديد</strong> بين الطرفين، ولا يتجدد تلقائياً. يلتزم الطرفان بالتفاوض قبل انتهاء المدة بستين يوماً، وقد تُعدَّل النسبة الاستثمارية زيادةً أو نقصاناً وفق اتفاقهما.</li>
+          <li>الحصة عن الفترة المُبرَم عليها العقد تظل مستحقة عن كامل الإيرادات المتحققة خلال سريان العقد.</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="item">
+      <div class="item-head">
+        <span class="num">البند 12</span>
+        <span class="ttl">الظروف الطارئة وحل النزاعات</span>
+      </div>
+      <div class="item-body">
+        <ul>
+          <li>عند وقوع ظرف طارئ (كوارث، حروب، أوبئة، قرارات حكومية مانعة، انقطاع إنترنت طويل): تتوقف الالتزامات المتأثرة مؤقتاً ويُعاد الاتفاق على الجدول الزمني والمالي.</li>
+          <li><strong>التأخر في السداد لا يُعتبر ظرفاً طارئاً</strong>.</li>
+          <li>حل النزاعات: صلح ودّي (30 يوماً) → محكمة قنا الابتدائية والاقتصادية، أو التحكيم بمركز القاهرة (CRCICA) باتفاق كتابي.</li>
+        </ul>
+      </div>
+    </div>
+
+  </div>
+  <div class="sheet-foot">
+    <div>ملخص العقد · 2026 م</div>
+    <div class="pg">صفحة 3 من 4</div>
+  </div>
+</section>
+
+<!-- ═════════════════════ 4. SIGNATURES ═════════════════════ -->
+<section class="sheet">
+  <div class="sheet-head">
+    <div class="name">ملخص عقد الشراكة الاستثمارية · برمجلي × تميم للتوصيل</div>
+    <div class="badge">التوقيعات</div>
+  </div>
+  <div class="sheet-body">
+    <section class="clause">
+      <h2><span class="num">التوقيعات</span><span class="txt">إثبات وتوقيع الأطراف والشهود</span></h2>
+      <div class="sig-lead">
+        وقد اطلع كل طرف على جميع بنود هذا الملخص والنسخة الكاملة للعقد قبل التوقيع،
+        وأقر بفهمها وقبولها، وتم التوقيع في يوم ____________ الموافق ____ / ____ / 2026 م
+        بمدينة قفط، محافظة قنا.
+      </div>
+
+      <div class="sig-party">
+        <div class="hd"><small>الطرف الأول · المطور والمستثمر</small>شركة برمجلي (BARMAGLY)</div>
+        <div class="bd">
+          <div class="sig-person">
+            <div class="role">الممثل الأول <span class="phone">01204593124</span></div>
+            <span class="lbl">الاسم</span><span class="line">خالد أحمد حجاجي</span>
+            <span class="lbl">التوقيع</span><span class="line tall"></span>
+            <span class="lbl">التاريخ</span><span class="line"></span>
+          </div>
+          <div class="sig-person">
+            <div class="role">الممثل الثاني <span class="phone">01060049287</span></div>
+            <span class="lbl">الاسم</span><span class="line">أحمد كمال محمد</span>
+            <span class="lbl">التوقيع</span><span class="line tall"></span>
+            <span class="lbl">التاريخ</span><span class="line"></span>
+          </div>
+        </div>
+      </div>
+
+      <div class="sig-party">
+        <div class="hd"><small>الطرف الثاني · صاحب المشروع</small>شركة تميم للتوصيل (TAMEM)</div>
+        <div class="bd">
+          <div class="sig-person">
+            <div class="role">الممثل الأول <span class="phone">01024804294</span></div>
+            <span class="lbl">الاسم</span><span class="line"></span>
+            <span class="lbl">التوقيع</span><span class="line tall"></span>
+            <span class="lbl">التاريخ</span><span class="line"></span>
+          </div>
+          <div class="sig-person">
+            <div class="role">الممثل الثاني <span class="phone"></span></div>
+            <span class="lbl">الاسم</span><span class="line"></span>
+            <span class="lbl">التوقيع</span><span class="line tall"></span>
+            <span class="lbl">التاريخ</span><span class="line"></span>
+          </div>
+        </div>
+      </div>
+
+      <div class="witnesses">
+        <div>
+          <div class="h">الشاهد الأول</div>
+          <div class="row"><span>الاسم</span><div class="line"></div></div>
+          <div class="row"><span>الرقم القومي</span><div class="line"></div></div>
+          <div class="row"><span>التوقيع</span><div class="line"></div></div>
+        </div>
+        <div>
+          <div class="h">الشاهد الثاني</div>
+          <div class="row"><span>الاسم</span><div class="line"></div></div>
+          <div class="row"><span>الرقم القومي</span><div class="line"></div></div>
+          <div class="row"><span>التوقيع</span><div class="line"></div></div>
+        </div>
+      </div>
+
+      <div class="notary">
+        <b>توثيق المحامي المختص</b>
+        اسم المحامي: <span class="line"></span> &nbsp;·&nbsp; رقم القيد بالنقابة: <span class="line"></span><br>
+        التوقيع: <span class="line"></span> &nbsp;·&nbsp; التاريخ: ____ / ____ / 2026 م
+      </div>
+    </section>
+  </div>
+  <div class="sheet-foot">
+    <div>ملخص العقد · 2026 م</div>
+    <div class="pg">صفحة 4 من 4</div>
+  </div>
+</section>
+
+</article>
