@@ -6,6 +6,7 @@ import { toast } from 'sonner';
 import { StatusBadge } from '../components/ui/Badge.js';
 import { Dialog } from '../components/ui/Dialog.js';
 import { Input } from '../components/ui/Input.js';
+import { PhoneInput } from '../components/ui/PhoneInput.js';
 import { EmptyState, TableSkeleton } from '../components/ui/Skeleton.js';
 import { api } from '../lib/api.js';
 
@@ -238,7 +239,7 @@ function CustomerInfoForm({ customer, customerId }: { customer: Row; customerId:
         <Input value={name} onChange={(e) => setName(e.target.value)} />
       </Field>
       <Field label="رقم الهاتف الرئيسي">
-        <Input value={phone} onChange={(e) => setPhone(e.target.value)} dir="ltr" />
+        <PhoneInput value={phone} onChange={setPhone} />
       </Field>
       <Field label="الإيميل">
         <Input value={email} onChange={(e) => setEmail(e.target.value)} type="email" />

@@ -21,6 +21,9 @@ export const api: TamemClient = new TamemClient({
   },
   onUnauthorized: () => {
     useAuth.getState().clear();
-    window.location.href = '/login';
+    // Respect Vite's base path. In production the dashboard lives at
+    // /super_admin/, so a naked `/login` would drop the base and 404.
+    const base = (import.meta as unknown as { env: { BASE_URL: string } }).env.BASE_URL || '/';
+    window.location.href = `${base.replace(/\/+$/, '')}/login`;
   },
 });

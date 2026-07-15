@@ -2,6 +2,7 @@ import { createBrowserRouter, Navigate, type RouteObject } from 'react-router-do
 
 import { useAuth } from './lib/auth.js';
 import { DashboardLayout } from './routes/_layout.js';
+import { AdminsPage } from './routes/admins.js';
 import { AlertsPage } from './routes/alerts.js';
 import { BroadcastPage } from './routes/broadcast.js';
 import { CustomersPage } from './routes/customers.js';
@@ -69,6 +70,7 @@ const routes: RouteObject[] = [
       { path: 'whatsapp', element: <WhatsAppPage /> },
       { path: 'broadcast', element: <BroadcastPage /> },
       { path: 'supervisors', element: <SupervisorsPage /> },
+      { path: 'admins', element: <AdminsPage /> },
       { path: 'coupons', element: <CouponsPage /> },
       { path: 'settings', element: <SettingsPage /> },
       { path: 'home-settings', element: <HomeSettingsPage /> },
@@ -78,7 +80,16 @@ const routes: RouteObject[] = [
   },
 ];
 
+// Dashboard is served from Vite's BASE_URL — locally that's `/`, in production
+// it's `/super_admin/`. Router needs the same base or clicks to `/login` will
+// fall off the base path onto the root domain (404).
+const routerBase = (import.meta as unknown as { env: { BASE_URL: string } }).env.BASE_URL.replace(
+  /\/$/,
+  '',
+);
+
 export const router: ReturnType<typeof createBrowserRouter> = createBrowserRouter(routes, {
+  basename: routerBase || undefined,
   // Opt into v7 behavior early so the deprecation warning goes away.
   // v7_startTransition wraps state updates in React.startTransition for smoother
   // navigations; safe to enable now since we're on React 18.

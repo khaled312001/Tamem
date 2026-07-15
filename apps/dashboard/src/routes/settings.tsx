@@ -5,6 +5,7 @@ import { toast } from 'sonner';
 
 import { Button } from '../components/ui/Button.js';
 import { Field, Input } from '../components/ui/Input.js';
+import { PhoneInput } from '../components/ui/PhoneInput.js';
 import { CardSkeleton } from '../components/ui/Skeleton.js';
 import { api } from '../lib/api.js';
 import { useAuth } from '../lib/auth.js';
@@ -198,14 +199,8 @@ function AccountSection() {
           />
         </Field>
 
-        <Field label="رقم الهاتف" hint="مع كود الدولة (مثلاً +201000000000)">
-          <Input
-            value={phone}
-            onChange={(e) => setPhone(e.target.value)}
-            placeholder="+20 1XX XXX XXXX"
-            dir="ltr"
-            type="tel"
-          />
+        <Field label="رقم الهاتف" hint="اكتب الرقم بدون كود الدولة — مثال: 01010254819">
+          <PhoneInput value={phone} onChange={setPhone} />
         </Field>
 
         <Field label="البريد الإلكتروني" hint="اختياري — يُستخدم لاستعادة كلمة السر">

@@ -108,14 +108,17 @@ export class TamemClient {
 
   // ===== Auth =====
   async login(
-    phone: string,
+    identifier: string,
     password: string,
     role?: UserRole,
   ): Promise<{ user: User; tokens: AuthTokens }> {
     return this.request({
       method: 'POST',
       url: '/auth/login',
-      data: { phone, password, ...(role ? { role } : {}) },
+      // Send BOTH keys — the server's schema accepts either. `identifier` is
+      // preferred for new clients (accepts email OR phone); `phone` is kept
+      // for older mobile builds still in the wild.
+      data: { identifier, phone: identifier, password, ...(role ? { role } : {}) },
     });
   }
 

@@ -40,10 +40,35 @@ export const registerSchema = z.object({
   role: signupRoleSchema.optional(),
 });
 
-export const loginSchema = z.object({
-  phone: phoneSchema,
-  password: z.string().min(1),
-});
+// Login accepts EITHER a phone (Egyptian format, normalized) OR an email.
+// Admin users typically log in with email; customers with phone. The controller
+// picks the correct lookup based on whether `identifier` contains `@`.
+export const loginIdentifierSchema = z
+  .string()
+  .trim()
+  .min(3, 'أدخل البريد أو رقم الهاتف')
+  .refine((v) => {
+    if (v.includes('@')) return z.string().email().safeParse(v).success;
+    return /^(?:\+?20|0)?(1[0125]\d{8})$/.test(v.replace(/[\s\-()]/g, ''));
+  }, 'بريد إلكتروني أو رقم هاتف مصري غير صحيح')
+  .transform((v) => {
+    if (v.includes('@')) return v.toLowerCase();
+    const cleaned = v.replace(/[\s\-()]/g, '');
+    const m = cleaned.match(/^(?:\+?20|0)?(1[0125]\d{8})$/);
+    return m ? `+20${m[1]}` : cleaned;
+  });
+
+export const loginSchema = z
+  .object({
+    identifier: loginIdentifierSchema.optional(),
+    phone: z.string().optional(),
+    password: z.string().min(1),
+  })
+  .transform((v) => {
+    // Backwards-compat: older clients still POST { phone, password }.
+    const id = v.identifier ?? v.phone ?? '';
+    return { identifier: loginIdentifierSchema.parse(id), password: v.password };
+  });
 
 export const googleLoginSchema = z.object({
   idToken: z.string().min(10),

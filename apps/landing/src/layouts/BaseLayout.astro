@@ -49,7 +49,7 @@ const {
             window.localStorage.getItem('tamem-api-base') ||
             (window.location.hostname === 'localhost'
               ? 'http://localhost:4000/api/v1'
-              : 'https://api.tamem-delivery.com/api/v1');
+              : 'https://api.deliverytamem.com/api/v1');
           const res = await fetch(`${apiBase}/site-config`, { credentials: 'omit' });
           if (!res.ok) return;
           const { data } = await res.json();

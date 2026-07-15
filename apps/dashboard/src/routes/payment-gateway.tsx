@@ -349,7 +349,7 @@ function SetupGuide() {
         <li>
           في خانة <strong>Callback URL</strong> في EasyKash، أدخل:
           <code className="font-mono text-xs ms-1 bg-blue-100 px-1 rounded" dir="ltr">
-            https://api.tamem-delivery.com/api/v1/payments/webhook/easykash
+            https://api.deliverytamem.com/api/v1/payments/webhook/easykash
           </code>
         </li>
         <li>اختر طرق الدفع المطلوبة (Visa / فودافون كاش / InstaPay / Meeza) واضغط حفظ.</li>

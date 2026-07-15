@@ -13,7 +13,8 @@ import { useEffect, useState } from 'react';
 import { toast } from 'sonner';
 
 import { Button } from '../components/ui/Button.js';
-import { Field, Input, Textarea } from '../components/ui/Input.js';
+import { Field, Textarea } from '../components/ui/Input.js';
+import { PhoneInput } from '../components/ui/PhoneInput.js';
 import { api } from '../lib/api.js';
 import { connectSocket } from '../lib/socket.js';
 
@@ -246,14 +247,8 @@ function SendTestCard() {
         </div>
         <div className="font-bold">إرسال رسالة تجريبية</div>
       </div>
-      <Field label="رقم المستلم" hint="مع كود الدولة (مثلاً +201010254819)">
-        <Input
-          value={phone}
-          onChange={(e) => setPhone(e.target.value)}
-          placeholder="+201XXXXXXXXX"
-          dir="ltr"
-          type="tel"
-        />
+      <Field label="رقم المستلم" hint="اكتب الرقم بدون كود الدولة — مثال: 01010254819">
+        <PhoneInput value={phone} onChange={setPhone} />
       </Field>
       <Field label="نص الرسالة">
         <Textarea value={msg} onChange={(e) => setMsg(e.target.value)} rows={3} />

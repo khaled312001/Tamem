@@ -7,7 +7,7 @@
 ## Swagger UI
 
 - **Dev:** http://localhost:4000/api/v1/docs
-- **Prod:** https://api.tamem-delivery.com/api/v1/docs
+- **Prod:** https://api.deliverytamem.com/api/v1/docs
 
 ## توليد الـ TS types
 
@@ -58,7 +58,7 @@ Authorization: Bearer <access_token>
 ### Connection
 
 ```javascript
-const socket = io('https://api.tamem-delivery.com', {
+const socket = io('https://api.deliverytamem.com', {
   auth: { token: accessToken },
 });
 ```

@@ -950,12 +950,12 @@
 4. أضف Google Analytics (gtag placeholder)
 5. شغّل: pnpm --filter @tamem/landing build
 6. ارفع dist/ إلى Hostinger Shared Hosting (FTP):
-   - tamem-delivery.com → public_html/
+   - deliverytamem.com → public_html/
 7. اضبط DNS لو لم يكن:
-   - tamem-delivery.com → IP shared
-   - admin.tamem-delivery.com → IP VPS
-   - api.tamem-delivery.com → IP VPS
-8. اختبر https://tamem-delivery.com يفتح + WhatsApp links تشتغل
+   - deliverytamem.com → IP shared
+   - admin.deliverytamem.com → IP VPS
+   - api.deliverytamem.com → IP VPS
+8. اختبر https://deliverytamem.com يفتح + WhatsApp links تشتغل
 9. commit: "feat(landing): production build + hostinger deploy"
 ```
 
@@ -984,20 +984,20 @@
    - pnpm --filter @tamem/dashboard build
    - rsync dist/ إلى VPS:/var/www/tamem/apps/dashboard/dist/
 3. **Nginx config (موجود في docs/DEPLOYMENT.md):**
-   - api.tamem-delivery.com → proxy 127.0.0.1:4000
-   - admin.tamem-delivery.com → static dashboard/dist
+   - api.deliverytamem.com → proxy 127.0.0.1:4000
+   - admin.deliverytamem.com → static dashboard/dist
    - /uploads/ → static
 4. **SSL مع Let's Encrypt:**
-   - certbot --nginx -d tamem-delivery.com -d admin.tamem-delivery.com -d api.tamem-delivery.com
+   - certbot --nginx -d deliverytamem.com -d admin.deliverytamem.com -d api.deliverytamem.com
 5. **Backup:**
    - أنشئ /etc/cron.daily/tamem-backup (mysqldump + gzip)
 6. **Monitoring:**
    - UptimeRobot على /health
    - PM2 monitor
 7. اختبر:
-   - https://tamem-delivery.com يفتح landing
-   - https://admin.tamem-delivery.com يفتح dashboard
-   - https://api.tamem-delivery.com/health يرجع 200
+   - https://deliverytamem.com يفتح landing
+   - https://admin.deliverytamem.com يفتح dashboard
+   - https://api.deliverytamem.com/health يرجع 200
    - login من dashboard إلى الـ admin يعمل
 8. commit: "ops(deploy): production deploy backend + dashboard + ssl"
 ```
@@ -1015,8 +1015,8 @@
 
 1. **Mobile - production build:**
    - حدّث apps/mobile/app.json:
-     • EXPO_PUBLIC_API_URL=https://api.tamem-delivery.com/api/v1
-     • EXPO_PUBLIC_WS_URL=https://api.tamem-delivery.com
+     • EXPO_PUBLIC_API_URL=https://api.deliverytamem.com/api/v1
+     • EXPO_PUBLIC_WS_URL=https://api.deliverytamem.com
    - eas build -p android --profile production
    - حمّل AAB
 2. **Google Play Console listing:**
@@ -1025,8 +1025,8 @@
    - 5+ screenshots phone
    - icon 512×512
    - graphic banner 1024×500
-   - Privacy URL: https://tamem-delivery.com/privacy
-   - Terms URL: https://tamem-delivery.com/terms
+   - Privacy URL: https://deliverytamem.com/privacy
+   - Terms URL: https://deliverytamem.com/terms
    - Category, content rating, target audience
    - Data safety form (location, phone, etc)
 3. ارفع AAB → Production track (أو Internal Track للبداية)
@@ -1142,7 +1142,7 @@
    - /health/ready يرجع 200
    - admin login يعمل
    - test order ينجح
-5. DNS verification: tamem-delivery.com + admin.* + api.* كلها live
+5. DNS verification: deliverytamem.com + admin.* + api.* كلها live
 6. Mobile: eas submit إلى production track (لو internal)
 7. monitor logs: pm2 logs --lines 100
 

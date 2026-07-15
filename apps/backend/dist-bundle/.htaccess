@@ -1,0 +1,19 @@
+# Route every /api/v1/* AND /socket.io/* request to the PHP auth shim.
+# When the CloudLinux Node.js app is later enabled from hPanel, Passenger
+# will override this and serve the real Node backend.
+RewriteEngine On
+RewriteBase /
+
+# CORS preflight — need to answer OPTIONS before any auth check
+RewriteCond %{REQUEST_METHOD} =OPTIONS
+RewriteRule ^(.*)$ api.php?path=/$1 [QSA,L]
+
+# /api/v1/* → api.php?path=* (strip prefix)
+RewriteCond %{REQUEST_URI} ^/api/v1/(.*)$
+RewriteRule ^ api.php?path=%1 [QSA,L]
+
+# /socket.io/ (any) → api.php with path=/socket.io/* so the shim can 501 it
+RewriteCond %{REQUEST_URI} ^/socket\.io/(.*)$
+RewriteRule ^ api.php?path=/socket.io/%1 [QSA,L]
+
+DirectoryIndex api.php

@@ -6,11 +6,11 @@
 
 ## استراتيجية الدومين
 
-| الدومين                    | المحتوى                    | المكان                              |
-| -------------------------- | -------------------------- | ----------------------------------- |
-| `tamem-delivery.com`       | اللاندنج بيج               | Shared Hosting `public_html/`       |
-| `admin.tamem-delivery.com` | الداشبورد (SPA)            | Shared Hosting `public_html/admin/` |
-| `api.tamem-delivery.com`   | الـ API (Node + WebSocket) | VPS Nginx → PM2                     |
+| الدومين                   | المحتوى                    | المكان                              |
+| ------------------------- | -------------------------- | ----------------------------------- |
+| `deliverytamem.com`       | اللاندنج بيج               | Shared Hosting `public_html/`       |
+| `admin.deliverytamem.com` | الداشبورد (SPA)            | Shared Hosting `public_html/admin/` |
+| `api.deliverytamem.com`   | الـ API (Node + WebSocket) | VPS Nginx → PM2                     |
 
 ---
 
@@ -98,7 +98,7 @@ pm2 save
 # API + WebSocket
 server {
   listen 80;
-  server_name api.tamem-delivery.com;
+  server_name api.deliverytamem.com;
 
   client_max_body_size 10M;
 
@@ -124,7 +124,7 @@ server {
 # Dashboard (SPA)
 server {
   listen 80;
-  server_name admin.tamem-delivery.com;
+  server_name admin.deliverytamem.com;
   root /var/www/tamem/apps/dashboard/dist;
   index index.html;
 
@@ -136,7 +136,7 @@ server {
 # Landing
 server {
   listen 80;
-  server_name tamem-delivery.com www.tamem-delivery.com;
+  server_name deliverytamem.com www.deliverytamem.com;
   root /var/www/tamem/apps/landing/dist;
   index index.html;
 }
@@ -150,8 +150,8 @@ nginx -t && systemctl reload nginx
 ### 6. SSL مع Let's Encrypt
 
 ```bash
-certbot --nginx -d tamem-delivery.com -d www.tamem-delivery.com \
-                -d admin.tamem-delivery.com -d api.tamem-delivery.com
+certbot --nginx -d deliverytamem.com -d www.deliverytamem.com \
+                -d admin.deliverytamem.com -d api.deliverytamem.com
 # اتبع التعليمات. سيُعدّل Nginx تلقائياً.
 ```
 

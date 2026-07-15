@@ -29,7 +29,7 @@ function fakeCallback() {
     PaymentMethod: 'Vodafone Cash',
     ProductType: 'Direct Pay',
     Amount: '125.00',
-    BuyerEmail: 'customer@tamem-delivery.com',
+    BuyerEmail: 'customer@deliverytamem.com',
     BuyerMobile: '01010101010',
     BuyerName: 'Test Customer',
     Timestamp: '1746166791',

@@ -28,6 +28,7 @@ import { Badge } from '../components/ui/Badge.js';
 import { Button } from '../components/ui/Button.js';
 import { Dialog } from '../components/ui/Dialog.js';
 import { Field, Input, Textarea } from '../components/ui/Input.js';
+import { PhoneInput } from '../components/ui/PhoneInput.js';
 import { CardSkeleton, EmptyState } from '../components/ui/Skeleton.js';
 import { api } from '../lib/api.js';
 import { cn } from '../lib/utils.js';
@@ -525,16 +526,12 @@ function SupervisorFormDialog({
         <Field
           label="رقم واتساب"
           required
-          hint="يبدأ بـ + ثم كود الدولة (مثل +201001234567)"
+          hint="اكتب الرقم بدون كود الدولة — مثال: 01010254819"
           error={phoneError}
         >
-          <Input
+          <PhoneInput
             value={form.whatsappPhone}
-            onChange={(e) => setForm({ ...form, whatsappPhone: e.target.value })}
-            dir="ltr"
-            className="font-mono"
-            placeholder="+201001234567"
-            maxLength={20}
+            onChange={(v) => setForm({ ...form, whatsappPhone: v })}
           />
         </Field>
         <Field label="ملاحظات">

@@ -36,8 +36,8 @@ import {
 } from '../theme/tokens';
 
 const TAMEM_PHONE = '+201010254819';
-const TAMEM_EMAIL = 'info@tamem-delivery.com';
-const TAMEM_SITE = 'https://tamem-delivery.com';
+const TAMEM_EMAIL = 'info@deliverytamem.com';
+const TAMEM_SITE = 'https://deliverytamem.com';
 const TAMEM_WHATSAPP = process.env.EXPO_PUBLIC_TAMEM_WHATSAPP ?? TAMEM_PHONE;
 
 interface Pillar {
