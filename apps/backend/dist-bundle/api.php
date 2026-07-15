@@ -657,7 +657,7 @@ $RES = [
     'categories'       => 'Category',
     'reviews'          => 'OrderReview',
     'payments'         => 'Payment',
-    'orders'           => 'Order',
+    // 'orders' handled by dedicated nested handlers below (customer/service/driver)
     'settings'         => 'Setting',
 ];
 
@@ -671,6 +671,93 @@ function jsonizeRow(?array $row): ?array {
         }
     }
     return $row;
+}
+
+// ─── Orders — dedicated handlers with nested customer/service/driver so the
+// list + detail pages render real names (not '—') and the manual-order form
+// actually persists.
+function orderNest(array $r): array {
+    $out = jsonizeRow($r);
+    $out['customer'] = ['id' => $r['customerId'] ?? null, 'name' => $r['cu_name'] ?? null, 'phone' => $r['cu_phone'] ?? null, 'city' => $r['cu_city'] ?? null];
+    $out['service'] = ['id' => $r['serviceId'] ?? null, 'nameAr' => $r['s_nameAr'] ?? null, 'name' => $r['s_name'] ?? null];
+    $out['assignedDriver'] = ($r['assignedDriverId'] ?? null) ? ['id' => $r['assignedDriverId'], 'name' => $r['dr_name'] ?? null, 'phone' => $r['dr_phone'] ?? null] : null;
+    foreach (['cu_name','cu_phone','cu_city','s_nameAr','s_name','dr_name','dr_phone'] as $k) unset($out[$k]);
+    return $out;
+}
+const ORDER_JOIN = "FROM `Order` o
+    LEFT JOIN `User` cu ON cu.id = o.customerId
+    LEFT JOIN `Service` s ON s.id = o.serviceId
+    LEFT JOIN `User` dr ON dr.id = o.assignedDriverId";
+const ORDER_COLS = "o.*, cu.name AS cu_name, cu.phone AS cu_phone, cu.city AS cu_city,
+    s.nameAr AS s_nameAr, s.name AS s_name, dr.name AS dr_name, dr.phone AS dr_phone";
+if ($method === 'GET' && $path === '/admin/orders') {
+    authUser();
+    $page = max(1, (int)($_GET['page'] ?? 1)); $size = min(100, max(1, (int)($_GET['pageSize'] ?? 20))); $off = ($page - 1) * $size;
+    $where = '1=1'; $args = [];
+    $status = (string)($_GET['status'] ?? '');
+    if ($status !== '' && $status !== 'all') { $where .= ' AND o.status = ?'; $args[] = $status; }
+    $search = trim((string)($_GET['search'] ?? ''));
+    if ($search !== '') { $where .= ' AND (o.orderNumber LIKE ? OR cu.name LIKE ? OR cu.phone LIKE ?)'; $like = "%$search%"; array_push($args, $like, $like, $like); }
+    $total = (int) (function() use ($where, $args) { $s = db()->prepare("SELECT COUNT(*) " . ORDER_JOIN . " WHERE $where"); $s->execute($args); return $s->fetchColumn(); })();
+    $st = db()->prepare("SELECT " . ORDER_COLS . " " . ORDER_JOIN . " WHERE $where ORDER BY o.createdAt DESC LIMIT $size OFFSET $off");
+    $st->execute($args);
+    $rows = array_map('orderNest', $st->fetchAll());
+    http_response_code(200);
+    echo json_encode(['data' => $rows, 'meta' => ['pagination' => ['page' => $page, 'pageSize' => $size, 'total' => $total, 'totalPages' => (int) ceil($total / max(1, $size))]]], JSON_UNESCAPED_UNICODE);
+    exit;
+}
+if ($method === 'GET' && preg_match('#^/admin/orders/([^/]+)$#', $path, $m)) {
+    authUser();
+    $st = db()->prepare("SELECT " . ORDER_COLS . " " . ORDER_JOIN . " WHERE o.id = ?"); $st->execute([$m[1]]);
+    $r = $st->fetch();
+    if (!$r) jsonErr('الطلب غير موجود', 404, 'NOT_FOUND');
+    $o = orderNest($r);
+    $o['items'] = [];
+    try { $it = db()->prepare('SELECT * FROM `OrderItem` WHERE orderId = ?'); $it->execute([$m[1]]); $o['items'] = array_map('jsonizeRow', $it->fetchAll()); } catch (Throwable $e) {}
+    $o['statusHistory'] = [];
+    try { $sh = db()->prepare('SELECT * FROM `OrderStatusHistory` WHERE orderId = ? ORDER BY createdAt ASC'); $sh->execute([$m[1]]); $o['statusHistory'] = array_map('jsonizeRow', $sh->fetchAll()); } catch (Throwable $e) {}
+    jsonOk($o);
+}
+if ($method === 'POST' && $path === '/admin/orders') {
+    $u = authUser();
+    if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
+    $b = readJsonBody();
+    $serviceId = (string)($b['serviceId'] ?? '');
+    if ($serviceId === '') jsonErr('اختر الخدمة', 422, 'MISSING');
+    $sv = db()->prepare('SELECT category FROM `Service` WHERE id = ?'); $sv->execute([$serviceId]); $svc = $sv->fetch();
+    if (!$svc) jsonErr('الخدمة غير موجودة', 422, 'BAD_SERVICE');
+    $customerId = (string)($b['customerId'] ?? '');
+    if ($customerId === '') {
+        $phone = trim((string)($b['customerPhone'] ?? ''));
+        if ($phone === '') jsonErr('اختر العميل أو اكتب رقم هاتفه', 422, 'MISSING');
+        $cl = preg_replace('/[\s\-()]/', '', $phone);
+        if (preg_match('/^(?:\+?20|0)?(1[0125]\d{8})$/', $cl, $mm)) $phone = '+20' . $mm[1];
+        $f = db()->prepare('SELECT id FROM `User` WHERE phone = ? LIMIT 1'); $f->execute([$phone]); $ex = $f->fetch();
+        if ($ex) $customerId = $ex['id'];
+        else {
+            $customerId = newId();
+            db()->prepare('INSERT INTO `User` (id, name, phone, role, isActive, isPhoneVerified, createdAt, updatedAt) VALUES (?,?,?,?,1,0,NOW(3),NOW(3))')
+                ->execute([$customerId, (string)($b['customerName'] ?? 'عميل'), $phone, 'CUSTOMER']);
+        }
+    }
+    $id = newId();
+    $orderNumber = 'TMM' . strtoupper(substr($id, 1, 9));
+    $cols = ['id', 'orderNumber', 'serviceId', 'customerId', 'category', 'status', 'createdByAdminId'];
+    $ph = ['?', '?', '?', '?', '?', '?', '?'];
+    $args = [$id, $orderNumber, $serviceId, $customerId, $svc['category'], 'NEW', $u['sub'] ?? null];
+    $opt = ['deliveryAddress' => $b['deliveryAddress'] ?? null, 'notes' => $b['notes'] ?? null,
+        'deliveryLat' => isset($b['deliveryLat']) && $b['deliveryLat'] !== '' ? (float)$b['deliveryLat'] : null,
+        'deliveryLng' => isset($b['deliveryLng']) && $b['deliveryLng'] !== '' ? (float)$b['deliveryLng'] : null,
+        'quotedPrice' => isset($b['quotedPrice']) && $b['quotedPrice'] !== '' ? (float)$b['quotedPrice'] : null,
+        'paymentMethod' => !empty($b['paymentMethod']) ? (string)$b['paymentMethod'] : null];
+    foreach ($opt as $k => $v) if ($v !== null) { $cols[] = $k; $ph[] = '?'; $args[] = $v; }
+    $cols[] = 'createdAt'; $ph[] = 'NOW(3)'; $cols[] = 'updatedAt'; $ph[] = 'NOW(3)';
+    $colStr = implode(',', array_map(fn($c) => "`$c`", $cols));
+    try {
+        db()->prepare("INSERT INTO `Order` ($colStr) VALUES (" . implode(',', $ph) . ")")->execute($args);
+    } catch (PDOException $e) { error_log('[api.php] manual order: ' . $e->getMessage()); jsonErr('تعذّر إنشاء الطلب، راجع البيانات', 422, 'CREATE_FAILED'); }
+    $sel = db()->prepare("SELECT " . ORDER_COLS . " " . ORDER_JOIN . " WHERE o.id = ?"); $sel->execute([$id]);
+    jsonOk(orderNest($sel->fetch()), 201);
 }
 
 // Magic sub-path /current — used e.g. by supervisors to fetch the one
@@ -886,9 +973,107 @@ if ($method === 'GET' && preg_match('#^/admin/merchants/([^/]+)/api-config/logs$
     try { $st->execute([$m[1]]); $rows = array_map('jsonizeRow', $st->fetchAll()); } catch (Throwable $e) { $rows = []; }
     jsonOk($rows);
 }
-if ($method === 'POST' && preg_match('#^/admin/merchants/([^/]+)/api-config/(test|sync)$#', $path, $m)) {
+// Fetch an external merchant API (PHP does this fine — no Node.js needed).
+function fetchMerchantApi(array $cfg): array {
+    $url = (string)($cfg['apiUrl'] ?? '');
+    if ($url === '') return ['ok' => false, 'reason' => 'رابط الـ API فارغ'];
+    $headers = ['Accept: application/json'];
+    $auth = (string)($cfg['authType'] ?? 'NONE');
+    $token = (string)($cfg['tokenSecret'] ?? '');
+    if ($auth === 'BEARER' && $token !== '') $headers[] = 'Authorization: Bearer ' . $token;
+    elseif ($auth === 'API_KEY' && $token !== '') $headers[] = ((string)($cfg['authHeaderName'] ?: 'X-API-Key')) . ': ' . $token;
+    elseif ($auth === 'BASIC' && $token !== '') $headers[] = 'Authorization: Basic ' . base64_encode($token);
+    if (!empty($cfg['extraHeaders'])) {
+        $extra = is_string($cfg['extraHeaders']) ? json_decode($cfg['extraHeaders'], true) : $cfg['extraHeaders'];
+        if (is_array($extra)) foreach ($extra as $k => $v) $headers[] = "$k: $v";
+    }
+    $method = strtoupper((string)($cfg['method'] ?? 'GET'));
+    $raw = null; $httpCode = 0;
+    if (function_exists('curl_init')) {
+        $ch = curl_init($url);
+        curl_setopt_array($ch, [CURLOPT_RETURNTRANSFER => true, CURLOPT_HTTPHEADER => $headers,
+            CURLOPT_TIMEOUT => 25, CURLOPT_FOLLOWLOCATION => true, CURLOPT_SSL_VERIFYPEER => false,
+            CURLOPT_CUSTOMREQUEST => $method]);
+        if ($method === 'POST' && !empty($cfg['requestBody'])) curl_setopt($ch, CURLOPT_POSTFIELDS, (string)$cfg['requestBody']);
+        $raw = curl_exec($ch); $httpCode = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $err = curl_error($ch); curl_close($ch);
+        if ($raw === false) return ['ok' => false, 'reason' => 'فشل الاتصال: ' . $err];
+    } else {
+        $ctx = stream_context_create(['http' => ['method' => $method, 'header' => implode("\r\n", $headers), 'timeout' => 25, 'ignore_errors' => true]]);
+        $raw = @file_get_contents($url, false, $ctx);
+        if ($raw === false) return ['ok' => false, 'reason' => 'فشل الاتصال بالـ API'];
+    }
+    $json = json_decode((string)$raw, true);
+    if (!is_array($json)) return ['ok' => false, 'reason' => 'الرد ليس JSON صالح', 'httpCode' => $httpCode];
+    // Drill into productsPath (e.g. "data" or "result.products"); empty = root list.
+    $items = $json; $pp = trim((string)($cfg['productsPath'] ?? ''));
+    if ($pp !== '') foreach (explode('.', $pp) as $seg) { $items = is_array($items) && isset($items[$seg]) ? $items[$seg] : []; }
+    if (!is_array($items)) $items = [];
+    // normalise a list (some APIs wrap each row)
+    $items = array_values(array_filter($items, 'is_array'));
+    return ['ok' => true, 'items' => $items, 'httpCode' => $httpCode];
+}
+function mapExternalProduct(array $row, array $mapping): array {
+    $get = function($key) use ($row) {
+        foreach (explode('.', (string)$key) as $seg) { $row = is_array($row) && isset($row[$seg]) ? $row[$seg] : null; if ($row === null) return null; }
+        return $row;
+    };
+    $name = $mapping['name'] ?? 'name';
+    $nameAr = $mapping['nameAr'] ?? $mapping['name'] ?? 'name';
+    $price = $mapping['price'] ?? 'price';
+    $img = $mapping['imageUrl'] ?? $mapping['image'] ?? 'image';
+    $desc = $mapping['description'] ?? 'description';
+    return [
+        'name' => (string)($get($name) ?? ''),
+        'nameAr' => (string)($get($nameAr) ?? $get($name) ?? ''),
+        'price' => (float)($get($price) ?? 0),
+        'imageUrl' => $get($img) ? (string)$get($img) : null,
+        'description' => $get($desc) ? (string)$get($desc) : null,
+    ];
+}
+if ($method === 'POST' && preg_match('#^/admin/merchants/([^/]+)/api-config/test$#', $path, $m)) {
     authUser();
-    jsonErr('مزامنة المنتجات عبر API تحتاج خدمة Node.js — الربط اليدوي والإدارة شغّالين', 400, 'NODE_REQUIRED');
+    $st = db()->prepare('SELECT * FROM `MerchantApiConfig` WHERE merchantId = ? LIMIT 1'); $st->execute([$m[1]]);
+    $cfg = $st->fetch();
+    if (!$cfg) jsonErr('احفظ إعدادات الـ API الأول', 400, 'NO_CONFIG');
+    $res = fetchMerchantApi($cfg);
+    if (!$res['ok']) jsonErr($res['reason'] ?? 'فشل الاختبار', 400, 'TEST_FAILED');
+    $mapping = is_string($cfg['fieldMapping'] ?? null) ? (json_decode($cfg['fieldMapping'], true) ?: []) : ($cfg['fieldMapping'] ?? []);
+    $preview = array_map(fn($r) => mapExternalProduct($r, $mapping), array_slice($res['items'], 0, 3));
+    db()->prepare('UPDATE `MerchantApiConfig` SET isConnected = 1, lastError = NULL, updatedAt = NOW(3) WHERE merchantId = ?')->execute([$m[1]]);
+    jsonOk(['ok' => true, 'count' => count($res['items']), 'preview' => $preview]);
+}
+if ($method === 'POST' && preg_match('#^/admin/merchants/([^/]+)/api-config/sync$#', $path, $m)) {
+    authUser();
+    $st = db()->prepare('SELECT * FROM `MerchantApiConfig` WHERE merchantId = ? LIMIT 1'); $st->execute([$m[1]]);
+    $cfg = $st->fetch();
+    if (!$cfg) jsonErr('احفظ إعدادات الـ API الأول', 400, 'NO_CONFIG');
+    $res = fetchMerchantApi($cfg);
+    if (!$res['ok']) {
+        db()->prepare('UPDATE `MerchantApiConfig` SET lastError = ?, updatedAt = NOW(3) WHERE merchantId = ?')->execute([$res['reason'] ?? 'sync failed', $m[1]]);
+        jsonErr($res['reason'] ?? 'فشلت المزامنة', 400, 'SYNC_FAILED');
+    }
+    $mapping = is_string($cfg['fieldMapping'] ?? null) ? (json_decode($cfg['fieldMapping'], true) ?: []) : ($cfg['fieldMapping'] ?? []);
+    $pdo = db(); $added = 0; $updated = 0;
+    $ins = $pdo->prepare('INSERT INTO `Product` (id, merchantId, name, nameAr, description, imageUrl, price, isAvailable, sortOrder, createdAt, updatedAt) VALUES (?,?,?,?,?,?,?,1,0,NOW(3),NOW(3))');
+    $upd = $pdo->prepare('UPDATE `Product` SET nameAr = ?, description = ?, imageUrl = ?, price = ?, updatedAt = NOW(3) WHERE id = ?');
+    foreach ($res['items'] as $row) {
+        $p = mapExternalProduct($row, $mapping);
+        if ($p['name'] === '' && $p['nameAr'] === '') continue;
+        $find = $pdo->prepare('SELECT id FROM `Product` WHERE merchantId = ? AND name = ? LIMIT 1');
+        $find->execute([$m[1], $p['name']]); $ex = $find->fetch();
+        try {
+            if ($ex) { $upd->execute([$p['nameAr'], $p['description'], $p['imageUrl'], $p['price'], $ex['id']]); $updated++; }
+            else { $ins->execute([newId(), $m[1], $p['name'] ?: $p['nameAr'], $p['nameAr'] ?: $p['name'], $p['description'], $p['imageUrl'], $p['price']]); $added++; }
+        } catch (PDOException $e) { error_log('[api.php] product upsert: ' . $e->getMessage()); }
+    }
+    $pdo->prepare('UPDATE `MerchantApiConfig` SET isConnected = 1, lastError = NULL, lastSyncedAt = NOW(3), updatedAt = NOW(3) WHERE merchantId = ?')->execute([$m[1]]);
+    // log the sync if the table exists
+    try {
+        $pdo->prepare('INSERT INTO `ProductSyncLog` (id, merchantId, status, added, updated, message, createdAt) VALUES (?,?,?,?,?,?,NOW(3))')
+            ->execute([newId(), $m[1], 'SUCCESS', $added, $updated, "أُضيف $added، حُدّث $updated"]);
+    } catch (Throwable $e) { /* table shape may differ; ignore */ }
+    jsonOk(['ok' => true, 'added' => $added, 'updated' => $updated, 'total' => count($res['items'])]);
 }
 if ($method === 'DELETE' && preg_match('#^/admin/merchants/([^/]+)/api-config$#', $path, $m)) {
     authUser();

@@ -182,6 +182,9 @@ function CreateRuleDialog({ services, onClose }: { services: Row[]; onClose: () 
     },
     onError: (err: Error) => toast.error(err.message),
   });
+  // Don't allow saving an empty/meaningless rule: a service must be picked and
+  // the base price must be a positive number.
+  const canSave = form.serviceId !== '' && Number(form.basePrice) > 0;
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()} title="قاعدة تسعير جديدة" size="lg">
       <div className="grid grid-cols-2 gap-3">
@@ -252,7 +255,7 @@ function CreateRuleDialog({ services, onClose }: { services: Row[]; onClose: () 
         <Button variant="outline" size="md" onClick={onClose}>
           إلغاء
         </Button>
-        <Button onClick={() => mut.mutate()} disabled={mut.isPending}>
+        <Button onClick={() => canSave && mut.mutate()} disabled={!canSave || mut.isPending}>
           حفظ
         </Button>
       </div>
@@ -302,6 +305,7 @@ type DialogMode =
   | { kind: 'create-city' }
   | { kind: 'create-village' }
   | { kind: 'create-area' }
+  | { kind: 'edit-area'; area: Row }
   | { kind: 'edit-village-base' };
 
 function toNumberOrNull(v: string | number | null | undefined): number | null {
@@ -712,7 +716,7 @@ function DeliveryZonesTab() {
                             variant="ghost"
                             onClick={(e) => {
                               e.stopPropagation();
-                              setAreaId(a.id);
+                              setDialog({ kind: 'edit-area', area: a });
                             }}
                             title="تعديل"
                           >
@@ -751,6 +755,13 @@ function DeliveryZonesTab() {
       )}
       {dialog.kind === 'create-area' && villageId && (
         <CreateAreaDialog villageId={villageId} onClose={() => setDialog({ kind: 'none' })} />
+      )}
+      {dialog.kind === 'edit-area' && (
+        <EditAreaDialog
+          area={dialog.area}
+          villageId={villageId}
+          onClose={() => setDialog({ kind: 'none' })}
+        />
       )}
       {dialog.kind === 'edit-village-base' && selectedVillage && (
         <EditVillageBasePriceDialog
@@ -939,6 +950,73 @@ function CreateAreaDialog({ villageId, onClose }: { villageId: string; onClose: 
           <Input value={nameEn} onChange={(e) => setNameEn(e.target.value)} placeholder="El Sooq" />
         </Field>
         <Field label="رسم التوصيل (اختياري)" hint="اتركه فارغاً لاستخدام سعر القرية">
+          <Input
+            type="number"
+            inputMode="decimal"
+            min={0}
+            step="0.01"
+            value={price}
+            onChange={(e) => setPrice(e.target.value)}
+            placeholder="0.00"
+          />
+        </Field>
+      </div>
+      <div className="flex justify-end gap-2 mt-4">
+        <Button variant="outline" size="md" onClick={onClose}>
+          إلغاء
+        </Button>
+        <Button onClick={() => mut.mutate()} disabled={!canSubmit || mut.isPending}>
+          {mut.isPending && <Loader2 className="w-4 h-4 animate-spin" />}
+          حفظ
+        </Button>
+      </div>
+    </Dialog>
+  );
+}
+
+function EditAreaDialog({
+  area,
+  villageId,
+  onClose,
+}: {
+  area: Row;
+  villageId: string;
+  onClose: () => void;
+}) {
+  const qc = useQueryClient();
+  const [nameAr, setNameAr] = useState<string>(area?.nameAr ?? '');
+  const [price, setPrice] = useState<string>(
+    area?.deliveryPrice != null ? String(Number(area.deliveryPrice)) : '',
+  );
+
+  const mut = useMutation({
+    mutationFn: async () => {
+      const body: Record<string, unknown> = { nameAr: nameAr.trim() };
+      if (price.trim() === '') body.deliveryPrice = null;
+      else {
+        const n = Number(price);
+        if (!Number.isFinite(n) || n < 0) throw new Error('السعر يجب أن يكون رقماً موجباً');
+        body.deliveryPrice = n;
+      }
+      await api.raw.patch(`/admin/zones/areas/${area.id}`, body);
+    },
+    onSuccess: () => {
+      toast.success('تم تعديل المنطقة');
+      qc.invalidateQueries({ queryKey: ['admin', 'zones', 'areas', villageId] });
+      onClose();
+    },
+    onError: (err: Error) => toast.error(err.message),
+  });
+
+  const canSubmit = nameAr.trim().length > 1;
+
+  return (
+    <Dialog open onOpenChange={(o) => !o && onClose()} title="تعديل المنطقة" size="sm">
+      <div className="space-y-3">
+        <Field label="اسم المنطقة" required>
+          <Input value={nameAr} onChange={(e) => setNameAr(e.target.value)} autoFocus />
+        </Field>
+        <Field label="رسم التوصيل" hint="اتركه فارغاً لاستخدام سعر القرية">
           <Input
             type="number"
             inputMode="decimal"

@@ -52,7 +52,29 @@ export function SiteSettingsPage() {
   });
 
   useEffect(() => {
-    if (cfg && !form) setForm(cfg);
+    if (cfg && !form) {
+      // The backend returns loose settings (and may send `contacts` as a JSON
+      // string or omit it). Normalise into a full SiteConfig so the render
+      // never hits `.map` on undefined.
+      const raw = cfg as unknown as Record<string, unknown>;
+      let contacts = raw.contacts as unknown;
+      if (typeof contacts === 'string') {
+        try {
+          contacts = JSON.parse(contacts);
+        } catch {
+          contacts = [];
+        }
+      }
+      setForm({
+        heroTitle: (raw.heroTitle as string) ?? '',
+        heroSubtitle: (raw.heroSubtitle as string) ?? '',
+        heroCtaText: (raw.heroCtaText as string) ?? '',
+        addressAr: (raw.addressAr as string) ?? '',
+        email: (raw.email as string) ?? '',
+        workingHoursAr: (raw.workingHoursAr as string) ?? '',
+        contacts: Array.isArray(contacts) ? (contacts as ContactLine[]) : [],
+      });
+    }
   }, [cfg, form]);
 
   const mutation = useMutation({

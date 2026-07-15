@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Loader2, Plus, Tag, Trash2 } from 'lucide-react';
+import { Loader2, Pencil, Plus, Tag, Trash2 } from 'lucide-react';
 import { useState } from 'react';
 import { toast } from 'sonner';
 
@@ -16,6 +16,7 @@ type CouponRow = any;
 export function CouponsPage() {
   const qc = useQueryClient();
   const [createOpen, setCreateOpen] = useState(false);
+  const [editTarget, setEditTarget] = useState<CouponRow | null>(null);
 
   const { data, isLoading } = useQuery({
     queryKey: ['admin', 'coupons'],
@@ -119,14 +120,26 @@ export function CouponsPage() {
                       </label>
                     </td>
                     <td className="px-3 py-3">
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        onClick={() => deleteMut.mutate(c.id)}
-                        title="تعطيل"
-                      >
-                        <Trash2 className="w-4 h-4 text-destructive" />
-                      </Button>
+                      <div className="flex items-center gap-1 justify-end">
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => setEditTarget(c)}
+                          title="تعديل"
+                        >
+                          <Pencil className="w-4 h-4" />
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => {
+                            if (confirm(`حذف الكوبون ${c.code}؟`)) deleteMut.mutate(c.id);
+                          }}
+                          title="حذف"
+                        >
+                          <Trash2 className="w-4 h-4 text-destructive" />
+                        </Button>
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -136,38 +149,42 @@ export function CouponsPage() {
         )}
       </div>
 
-      {createOpen && <CreateCouponDialog onClose={() => setCreateOpen(false)} />}
+      {createOpen && <CouponDialog onClose={() => setCreateOpen(false)} />}
+      {editTarget && <CouponDialog coupon={editTarget} onClose={() => setEditTarget(null)} />}
     </div>
   );
 }
 
-function CreateCouponDialog({ onClose }: { onClose: () => void }) {
+function CouponDialog({ coupon, onClose }: { coupon?: CouponRow; onClose: () => void }) {
   const qc = useQueryClient();
+  const isEdit = !!coupon;
   const [form, setForm] = useState({
-    code: '',
-    type: 'PERCENTAGE' as 'PERCENTAGE' | 'FLAT',
-    value: 10,
-    minOrderAmount: '',
-    maxDiscount: '',
-    usageLimit: '',
-    usagePerUser: 1,
-    description: '',
+    code: coupon?.code ?? '',
+    type: (coupon?.type ?? 'PERCENTAGE') as 'PERCENTAGE' | 'FLAT',
+    value: Number(coupon?.value ?? 10),
+    minOrderAmount: coupon?.minOrderAmount != null ? String(Number(coupon.minOrderAmount)) : '',
+    maxDiscount: coupon?.maxDiscount != null ? String(Number(coupon.maxDiscount)) : '',
+    usageLimit: coupon?.usageLimit != null ? String(coupon.usageLimit) : '',
+    usagePerUser: Number(coupon?.usagePerUser ?? 1),
+    description: coupon?.description ?? '',
+  });
+
+  const payload = () => ({
+    code: form.code.toUpperCase(),
+    type: form.type,
+    value: Number(form.value),
+    minOrderAmount: form.minOrderAmount ? Number(form.minOrderAmount) : null,
+    maxDiscount: form.maxDiscount ? Number(form.maxDiscount) : null,
+    usageLimit: form.usageLimit ? Number(form.usageLimit) : null,
+    usagePerUser: form.usagePerUser,
+    description: form.description || null,
   });
 
   const mut = useMutation({
     mutationFn: () =>
-      api.adminCreateCoupon({
-        code: form.code.toUpperCase(),
-        type: form.type,
-        value: Number(form.value),
-        minOrderAmount: form.minOrderAmount ? Number(form.minOrderAmount) : undefined,
-        maxDiscount: form.maxDiscount ? Number(form.maxDiscount) : undefined,
-        usageLimit: form.usageLimit ? Number(form.usageLimit) : undefined,
-        usagePerUser: form.usagePerUser,
-        description: form.description || undefined,
-      }),
+      isEdit ? api.adminUpdateCoupon(coupon!.id, payload()) : api.adminCreateCoupon(payload()),
     onSuccess: () => {
-      toast.success('تم إنشاء الكوبون');
+      toast.success(isEdit ? 'تم تحديث الكوبون' : 'تم إنشاء الكوبون');
       qc.invalidateQueries({ queryKey: ['admin', 'coupons'] });
       onClose();
     },
@@ -177,7 +194,11 @@ function CreateCouponDialog({ onClose }: { onClose: () => void }) {
   const canSave = form.code.length >= 3 && form.value > 0;
 
   return (
-    <Dialog open onOpenChange={(o) => !o && onClose()} title="كوبون جديد">
+    <Dialog
+      open
+      onOpenChange={(o) => !o && onClose()}
+      title={isEdit ? 'تعديل الكوبون' : 'كوبون جديد'}
+    >
       <div className="space-y-3">
         <Field label="الكود" required hint="حروف كبيرة وأرقام و _ و -">
           <Input
@@ -257,7 +278,7 @@ function CreateCouponDialog({ onClose }: { onClose: () => void }) {
         </Button>
         <Button onClick={() => canSave && mut.mutate()} disabled={!canSave || mut.isPending}>
           {mut.isPending && <Loader2 className="w-4 h-4 animate-spin" />}
-          إنشاء
+          {isEdit ? 'حفظ' : 'إنشاء'}
         </Button>
       </div>
     </Dialog>

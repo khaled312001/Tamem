@@ -263,6 +263,7 @@ function CreateMerchantDialog({ onClose }: { onClose: () => void }) {
             type="password"
             value={form.password}
             onChange={(e) => setForm({ ...form, password: e.target.value })}
+            autoComplete="new-password"
           />
         </Field>
         <Field label="التصنيف" required>

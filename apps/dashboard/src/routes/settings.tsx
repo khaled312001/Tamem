@@ -240,6 +240,7 @@ function AccountSection() {
               onChange={(e) => setCurrent(e.target.value)}
               placeholder="••••••••"
               dir="ltr"
+              className="pl-9"
             />
             <button
               type="button"
@@ -260,6 +261,7 @@ function AccountSection() {
               onChange={(e) => setNext(e.target.value)}
               placeholder="••••••••"
               dir="ltr"
+              className="pl-9"
             />
             <button
               type="button"
