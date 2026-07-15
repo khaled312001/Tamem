@@ -1,23 +1,25 @@
 import { QueryClient } from '@tanstack/react-query';
 
 /**
- * Defaults tuned for an always-open admin dashboard:
- *   - data is considered fresh for 15 s, so quick tab-switches don't re-fetch
- *   - polls every 30 s in the background so nothing rots if a socket event
- *     gets dropped or the connection blips
- *   - refetches on window focus so coming back to the tab grabs the latest
- *   - the NotificationsProvider invalidates the relevant keys on socket events,
- *     so the perceived update is near-instant — these defaults are the safety net
+ * Defaults tuned for an always-open admin dashboard on shared hosting.
+ *
+ * IMPORTANT: the shared MySQL user is capped at 500 DB connections/hour, and
+ * the PHP shim opens one connection per request. A global 30 s poll + refetch
+ * on every window focus can burn that entire budget while idling on a single
+ * page. So we deliberately keep background polling gentle and drop the
+ * focus-burst; data is still fresh within ~1–2 min and any page navigation or
+ * manual refresh pulls the latest immediately. Individual queries that truly
+ * need faster updates (e.g. the orders board) can override refetchInterval.
  */
 export const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
       retry: 1,
-      refetchOnWindowFocus: true,
+      refetchOnWindowFocus: false,
       refetchOnReconnect: true,
-      refetchInterval: 30_000,
+      refetchInterval: 120_000,
       refetchIntervalInBackground: false,
-      staleTime: 15_000,
+      staleTime: 60_000,
     },
   },
 });

@@ -131,8 +131,25 @@ export function MerchantHoursPage() {
     saveHours.mutate(cleaned);
   };
 
-  if (isLoading || !data) {
+  if (isLoading) {
     return <div className="p-6">جاري التحميل...</div>;
+  }
+  // Defensive: if the response shape is off (no merchant), show a friendly
+  // message instead of hard-crashing the whole app on `data.merchant.*`.
+  if (!data?.merchant) {
+    return (
+      <div className="p-6 space-y-3">
+        <button
+          onClick={() => navigate('/merchants')}
+          className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-brand-red"
+        >
+          <ArrowRight className="w-4 h-4" /> العودة لقائمة التجار
+        </button>
+        <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-amber-800 text-sm">
+          تعذّر تحميل بيانات هذا التاجر. قد يكون تم حذفه — ارجع لقائمة التجار.
+        </div>
+      </div>
+    );
   }
 
   return (
