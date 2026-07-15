@@ -46,6 +46,9 @@ type NavItem = {
   label: string;
   countKey?: 'orders' | 'alerts';
   urgent?: boolean;
+  // When true the link is only active on an exact path match. Needed for
+  // parent routes like /reports so they don't stay highlighted on /reports/revenue.
+  end?: boolean;
 };
 
 const NAV_ITEMS: NavItem[] = [
@@ -61,7 +64,7 @@ const NAV_ITEMS: NavItem[] = [
   { to: '/payments', icon: DollarSign, label: 'المدفوعات' },
   { to: '/payment-gateway', icon: CreditCard, label: 'بوابة الدفع' },
   { to: '/coupons', icon: Tag, label: 'الكوبونات' },
-  { to: '/reports', icon: BarChart3, label: 'التقارير' },
+  { to: '/reports', icon: BarChart3, label: 'التقارير', end: true },
   { to: '/reports/revenue', icon: BarChart3, label: 'تقرير الإيرادات' },
   { to: '/reviews', icon: Star, label: 'التقييمات' },
   { to: '/whatsapp', icon: MessageCircle, label: 'ربط واتساب' },
@@ -126,9 +129,12 @@ export function DashboardLayout() {
     alerts: alertsData?.alerts?.length ?? 0,
   };
 
+  // Longest-prefix match so /reports/revenue resolves to its own title rather
+  // than the shorter /reports prefix that also matches.
   const pageTitle =
-    Object.entries(ACTIVE_LABEL).find(([to]) => location.pathname.startsWith(to))?.[1] ??
-    'لوحة التحكم';
+    Object.entries(ACTIVE_LABEL)
+      .filter(([to]) => location.pathname.startsWith(to))
+      .sort((a, b) => b[0].length - a[0].length)[0]?.[1] ?? 'لوحة التحكم';
 
   return (
     <NotificationsProvider>
@@ -224,6 +230,7 @@ export function DashboardLayout() {
               <NavLink
                 key={item.to}
                 to={item.to}
+                end={item.end}
                 title={collapsed ? item.label : undefined}
                 className={({ isActive }) =>
                   cn(

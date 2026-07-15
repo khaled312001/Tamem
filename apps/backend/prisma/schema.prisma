@@ -23,6 +23,7 @@ enum UserRole {
   DRIVER
   MERCHANT
   ADMIN
+  SUPER_ADMIN
 }
 
 enum DriverStatus {

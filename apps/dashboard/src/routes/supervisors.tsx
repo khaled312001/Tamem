@@ -117,8 +117,12 @@ export function SupervisorsPage() {
     queryKey: ['admin', 'supervisors'],
     queryFn: async (): Promise<Supervisor[]> => {
       const res = await api.raw.get('/admin/supervisors');
-      const body = (res.data?.data ?? res.data) as ListResponse;
-      return body.supervisors ?? [];
+      // The PHP shim returns a bare paginated array ({ data: [...], meta });
+      // the Node backend returns { supervisors: [...] }. Handle both so the
+      // list actually renders the rows that were saved.
+      const body = res.data?.data ?? res.data;
+      if (Array.isArray(body)) return body as Supervisor[];
+      return ((body as ListResponse)?.supervisors as Supervisor[]) ?? [];
     },
   });
 

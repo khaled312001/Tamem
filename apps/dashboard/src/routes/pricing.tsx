@@ -457,10 +457,7 @@ function DeliveryZonesTab() {
           </p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
-          <Button variant="outline" size="md" onClick={() => setDialog({ kind: 'create-city' })}>
-            <Plus className="w-4 h-4" />
-            إضافة مدينة
-          </Button>
+          {/* City is fixed to قفط — no "add city" here on purpose. */}
           <Button
             variant="outline"
             size="md"
@@ -484,16 +481,18 @@ function DeliveryZonesTab() {
       {/* Cascade selects */}
       <section className="bg-white rounded-xl border border-border p-5 space-y-4">
         <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-          <Field label="المدينة" required>
+          <Field label="المدينة" required hint="المدينة ثابتة على قفط">
             {citiesQ.isLoading ? (
               <div className="h-10 rounded-lg bg-muted animate-pulse" />
             ) : (
+              // City is locked to قفط: the select is disabled so it can never be
+              // changed, and the load effect always re-selects the قفط city.
               <select
                 value={cityId}
-                onChange={(e) => setCityId(e.target.value)}
-                className="w-full px-3 py-2 rounded-lg border border-input bg-white text-sm focus:border-brand-red focus:ring-2 focus:ring-brand-red/20 outline-none transition"
+                disabled
+                aria-readonly
+                className="w-full px-3 py-2 rounded-lg border border-input bg-muted text-sm cursor-not-allowed outline-none"
               >
-                <option value="">— اختر —</option>
                 {(citiesQ.data ?? []).map((c) => (
                   <option key={c.id} value={c.id}>
                     {c.nameAr}

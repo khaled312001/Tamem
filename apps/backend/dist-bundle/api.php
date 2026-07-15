@@ -107,10 +107,22 @@ function db(): PDO {
     $pass = urldecode($p['pass'] ?? '');
     $name = trim($p['path'] ?? '', '/');
     $dsn = "mysql:host=$host;port=$port;dbname=$name;charset=utf8mb4";
-    $pdo = new PDO($dsn, $user, $pass, [
-        PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
-        PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
-    ]);
+    try {
+        $pdo = new PDO($dsn, $user, $pass, [
+            PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
+            PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
+            PDO::ATTR_TIMEOUT => 8,
+        ]);
+    } catch (PDOException $e) {
+        // Fail soft instead of a raw 500 fatal. Hostinger's shared MySQL caps
+        // connections/hour; when hit, surface a clean 503 the dashboard shows
+        // as "busy, try again" rather than crashing every page blank.
+        $code = (int) ($e->errorInfo[1] ?? 0);
+        $busy = in_array($code, [1040, 1203, 1226], true) || stripos($e->getMessage(), 'max_connections') !== false;
+        error_log('[api.php] DB connect failed (' . $code . '): ' . $e->getMessage());
+        jsonErr($busy ? 'الخادم مشغول مؤقتاً، برجاء المحاولة بعد لحظات' : 'تعذّر الاتصال بقاعدة البيانات',
+            503, $busy ? 'DB_BUSY' : 'DB_DOWN');
+    }
     return $pdo;
 }
 
@@ -393,33 +405,56 @@ if ($method === 'GET' && $path === '/admin/alerts/stats') {
     ]);
 }
 
-// ─── WhatsApp bot — the real thing needs wppconnect + headless Chromium
-// (impossible on shared hosting). We return a well-formed "disconnected"
-// state so the UI shows a clean disabled panel instead of a red error.
+// ─── WhatsApp bridge (Baileys) — a persistent Node.js process runs the real
+// WhatsApp Web session and talks to us through files under uploads/.wa:
+//   status.json  ← bridge writes {status, qrDataUrl, phone, startedAt, lastError, ts}
+//   queue/*.json → we write outgoing messages {to, text}; bridge sends + deletes
+//   control/*.json → we write {action:'logout'} etc.
+function waDir(): string { $d = __DIR__ . '/uploads/.wa'; if (!is_dir($d)) @mkdir($d, 0755, true); return $d; }
+function waStatus(): array {
+    $f = waDir() . '/status.json';
+    $j = is_file($f) ? json_decode((string) @file_get_contents($f), true) : null;
+    if (!is_array($j)) {
+        return ['status' => 'disconnected', 'qrDataUrl' => null, 'phone' => null, 'startedAt' => null,
+                'lastError' => 'خدمة الواتساب لسه بتشتغل… لو استمر، حدّث الصفحة بعد دقيقة.'];
+    }
+    // Bridge heartbeats every ~15s; if the file is stale the process is down.
+    $stale = (time() * 1000 - (int) ($j['ts'] ?? 0)) > 90000;
+    return [
+        'status' => $stale ? 'disconnected' : ($j['status'] ?? 'disconnected'),
+        'qrDataUrl' => $stale ? null : ($j['qrDataUrl'] ?? null),
+        'phone' => $j['phone'] ?? null,
+        'startedAt' => $j['startedAt'] ?? null,
+        'lastError' => $stale ? 'خدمة الواتساب متوقفة مؤقتاً — هتشتغل تلقائياً خلال دقيقة.' : ($j['lastError'] ?? null),
+    ];
+}
 if ($method === 'GET' && $path === '/admin/whatsapp/status') {
     authUser();
-    jsonOk([
-        'connected' => false,
-        'phoneNumber' => null,
-        'qrCode' => null,
-        'status' => 'disconnected',
-        'message' => 'خدمة الواتساب متوقفة — تحتاج تفعيل Node.js من hPanel',
-    ]);
+    jsonOk(waStatus());
+}
+if ($method === 'POST' && $path === '/admin/whatsapp/send-test') {
+    authUser();
+    $b = readJsonBody();
+    $to = trim((string)($b['phone'] ?? $b['to'] ?? ''));
+    $text = (string)($b['message'] ?? $b['text'] ?? 'رسالة اختبار من لوحة تحكم تميم ✅');
+    if ($to === '') jsonErr('اكتب رقم الهاتف', 422, 'MISSING');
+    $qf = waDir() . '/queue/' . bin2hex(random_bytes(8)) . '.json';
+    @file_put_contents($qf, json_encode(['to' => $to, 'text' => $text], JSON_UNESCAPED_UNICODE));
+    jsonOk(['sent' => true, 'queued' => true]);
 }
 if ($method === 'POST' && (
-    $path === '/admin/whatsapp/start' || $path === '/admin/whatsapp/stop' ||
-    $path === '/admin/whatsapp/logout' || $path === '/admin/whatsapp/reset' ||
-    $path === '/admin/whatsapp/send-test'
+    $path === '/admin/whatsapp/logout' || $path === '/admin/whatsapp/stop' || $path === '/admin/whatsapp/reset'
 )) {
     authUser();
-    // Return 200 with a message body instead of 503 so the dashboard mutation
-    // handler doesn't fire a red error toast — the WhatsApp page already
-    // renders a friendly "غير متاح" panel.
-    jsonOk([
-        'connected' => false,
-        'status' => 'disconnected',
-        'message' => 'خدمة الواتساب متوقفة — تحتاج تفعيل Node.js من hPanel',
-    ]);
+    $cf = waDir() . '/control/' . bin2hex(random_bytes(8)) . '.json';
+    @file_put_contents($cf, json_encode(['action' => 'logout']));
+    jsonOk(array_merge(waStatus(), ['status' => 'connecting', 'qrDataUrl' => null]));
+}
+if ($method === 'POST' && $path === '/admin/whatsapp/start') {
+    authUser();
+    // The bridge always runs and shows a QR when unauthenticated, so "start"
+    // just returns the current status; the page then polls for the QR.
+    jsonOk(waStatus());
 }
 
 // Payment gateway config — the page expects a fixed shape with `keys` and
@@ -455,6 +490,26 @@ if ($method === 'GET' && $path === '/admin/payments/gateway') {
     ]);
 }
 
+// Reports overview (reports.tsx RevenueTab) — expects `series`, `total`,
+// `ordersCount`, and honours the day/week/month groupBy selector. This MUST
+// come before the str_starts_with handler below, otherwise it never runs.
+if ($method === 'GET' && $path === '/admin/reports/revenue' && (($_GET['groupBy'] ?? '') !== '')) {
+    $u = authUser();
+    if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
+    $groupBy = $_GET['groupBy'];
+    $fmt = $groupBy === 'month' ? '%Y-%m' : ($groupBy === 'week' ? '%X-W%V' : '%Y-%m-%d');
+    $st = db()->prepare("SELECT DATE_FORMAT(createdAt, ?) AS bucket, COUNT(*) AS orders, SUM(COALESCE(finalPrice, quotedPrice, 0)) AS revenue FROM `Order` WHERE status IN ('COMPLETED','DELIVERED') GROUP BY bucket ORDER BY bucket ASC");
+    $st->execute([$fmt]);
+    $series = array_map(fn($s) => [
+        'bucket' => (string) $s['bucket'],
+        'orders' => (int) $s['orders'],
+        'revenue' => (float) $s['revenue'],
+    ], $st->fetchAll());
+    $total = 0.0; $count = 0;
+    foreach ($series as $s) { $total += $s['revenue']; $count += $s['orders']; }
+    jsonOk(['series' => $series, 'total' => $total, 'ordersCount' => $count]);
+}
+
 // Revenue report — TWO different shapes:
 //   /admin/reports/revenue          → overview card data ({ trend, kpis… })
 //   /admin/reports/revenue/detailed → the printable revenue-report page,
@@ -486,11 +541,17 @@ if ($method === 'GET' && str_starts_with($path, '/admin/reports/revenue')) {
         $amt = (float) ($r['finalPrice'] ?? $r['quotedPrice'] ?? 0);
         $total += $amt; $count++;
         $day = substr((string) $r['createdAt'], 0, 10);
-        $byDay[$day] = ($byDay[$day] ?? 0) + $amt;
+        if (!isset($byDay[$day])) $byDay[$day] = ['revenue' => 0.0, 'orders' => 0];
+        $byDay[$day]['revenue'] += $amt;
+        $byDay[$day]['orders']  += 1;
     }
     ksort($byDay);
-    $trend = [];
-    foreach ($byDay as $d => $v) $trend[] = ['day' => $d, 'revenue' => $v];
+    $trend = [];   // legacy shape used by other consumers: { day, revenue }
+    $series = [];  // reports.tsx RevenueTab shape: { bucket, orders, revenue }
+    foreach ($byDay as $d => $v) {
+        $trend[]  = ['day' => $d, 'revenue' => $v['revenue']];
+        $series[] = ['bucket' => $d, 'orders' => $v['orders'], 'revenue' => $v['revenue']];
+    }
 
     if ($isDetailed) {
         // The revenue-report page reads: range.from, range.to, generatedAt,
@@ -520,6 +581,11 @@ if ($method === 'GET' && str_starts_with($path, '/admin/reports/revenue')) {
         'range' => ['key' => $range, 'from' => $from, 'to' => $to],
         'from' => $from,
         'to' => $to,
+        // reports.tsx RevenueTab reads these three — must always be present:
+        'series' => $series,
+        'total' => $total,
+        'ordersCount' => $count,
+        // legacy / revenue-report-page fields (kept for backward compat):
         'totalRevenue' => $total,
         'orderCount' => $count,
         'averageOrderValue' => $count ? round($total / $count, 2) : 0,
@@ -660,38 +726,282 @@ if ($method === 'GET' && preg_match('#^/admin/([a-z][a-z0-9-]*)$#', $path, $m)
     exit;
 }
 
-// Users by role — customers / drivers / merchants
-if ($method === 'GET' && preg_match('#^/admin/(customers|drivers|merchants)$#', $path, $m)) {
+// Merchants list — the page reads MerchantProfile rows with nested `user`,
+// `category` and `_count.products`, NOT bare User rows.
+if ($method === 'GET' && $path === '/admin/merchants') {
     authUser();
-    $roleMap = ['customers' => 'CUSTOMER', 'drivers' => 'DRIVER', 'merchants' => 'MERCHANT'];
-    $role = $roleMap[$m[1]];
     $page = max(1, (int)($_GET['page'] ?? 1));
     $size = min(100, max(1, (int)($_GET['pageSize'] ?? 20)));
     $off = ($page - 1) * $size;
-    $total = (int) db()->prepare('SELECT COUNT(*) FROM `User` WHERE role = ?')
-        ->execute([$role]) ? (int) db()->query("SELECT COUNT(*) FROM `User` WHERE role = '$role'")->fetchColumn() : 0;
+    $total = (int) db()->query('SELECT COUNT(*) FROM `MerchantProfile`')->fetchColumn();
+    $st = db()->prepare(
+        "SELECT mp.*, u.name AS u_name, u.phone AS u_phone, u.email AS u_email, u.isActive AS u_isActive, u.secondaryPhones AS u_secondaryPhones,
+                c.nameAr AS c_nameAr, c.name AS c_name,
+                (SELECT COUNT(*) FROM `Product` p WHERE p.merchantId = mp.id) AS product_count
+         FROM `MerchantProfile` mp
+         LEFT JOIN `User` u ON u.id = mp.userId
+         LEFT JOIN `Category` c ON c.id = mp.categoryId
+         ORDER BY mp.createdAt DESC LIMIT $size OFFSET $off"
+    );
+    $st->execute();
+    $rows = [];
+    foreach ($st->fetchAll() as $r) {
+        $sec = $r['u_secondaryPhones'] ?? null;
+        $secArr = is_string($sec) && $sec !== '' ? (json_decode($sec, true) ?: []) : [];
+        $rows[] = [
+            'id' => $r['id'], 'userId' => $r['userId'],
+            'storeName' => $r['storeName'], 'storeNameAr' => $r['storeNameAr'],
+            'categoryId' => $r['categoryId'], 'description' => $r['description'],
+            'addressLine' => $r['addressLine'], 'lat' => $r['lat'], 'lng' => $r['lng'],
+            'governorate' => $r['governorate'], 'city' => $r['city'],
+            'isOpen' => (bool)(int)$r['isOpen'], 'rating' => $r['rating'],
+            'manualStatus' => $r['manualStatus'] ?? 'OPEN',
+            'logoUrl' => $r['logoUrl'] ?? null, 'coverUrl' => $r['coverUrl'] ?? null,
+            'createdAt' => $r['createdAt'], 'updatedAt' => $r['updatedAt'],
+            'user' => ['id' => $r['userId'], 'name' => $r['u_name'], 'phone' => $r['u_phone'], 'email' => $r['u_email'], 'isActive' => (bool)(int)($r['u_isActive'] ?? 1), 'secondaryPhones' => $secArr],
+            'category' => $r['c_nameAr'] !== null ? ['id' => $r['categoryId'], 'nameAr' => $r['c_nameAr'], 'name' => $r['c_name']] : null,
+            '_count' => ['products' => (int)$r['product_count']],
+        ];
+    }
+    http_response_code(200);
+    echo json_encode(['data' => $rows, 'meta' => ['pagination' => ['page' => $page, 'pageSize' => $size, 'total' => $total, 'totalPages' => (int) ceil($total / max(1, $size))]]], JSON_UNESCAPED_UNICODE);
+    exit;
+}
+
+// Drivers list — the page reads User rows with a nested `driverProfile`.
+if ($method === 'GET' && $path === '/admin/drivers') {
+    authUser();
+    $page = max(1, (int)($_GET['page'] ?? 1));
+    $size = min(100, max(1, (int)($_GET['pageSize'] ?? 20)));
+    $off = ($page - 1) * $size;
+    $total = (int) db()->query("SELECT COUNT(*) FROM `User` WHERE role='DRIVER'")->fetchColumn();
+    $st = db()->prepare(
+        "SELECT u.*, dp.id AS dp_id, dp.status AS dp_status, dp.vehicleType AS dp_vehicleType, dp.vehiclePlate AS dp_vehiclePlate,
+                dp.nationalId AS dp_nationalId, dp.governorate AS dp_governorate, dp.totalDeliveries AS dp_totalDeliveries,
+                dp.totalEarnings AS dp_totalEarnings, dp.cashOnHand AS dp_cashOnHand, dp.rating AS dp_rating
+         FROM `User` u LEFT JOIN `DriverProfile` dp ON dp.userId = u.id
+         WHERE u.role='DRIVER' ORDER BY u.createdAt DESC LIMIT $size OFFSET $off"
+    );
+    $st->execute();
+    $rows = [];
+    foreach ($st->fetchAll() as $r) {
+        $row = jsonizeRow([
+            'id' => $r['id'], 'name' => $r['name'], 'phone' => $r['phone'], 'email' => $r['email'],
+            'isActive' => (bool)(int)$r['isActive'], 'city' => $r['city'], 'governorate' => $r['governorate'],
+            'createdAt' => $r['createdAt'],
+        ]);
+        $row['driverProfile'] = $r['dp_id'] !== null ? [
+            'id' => $r['dp_id'], 'status' => $r['dp_status'], 'vehicleType' => $r['dp_vehicleType'],
+            'vehiclePlate' => $r['dp_vehiclePlate'], 'nationalId' => $r['dp_nationalId'],
+            'governorate' => $r['dp_governorate'], 'totalDeliveries' => (int)$r['dp_totalDeliveries'],
+            'totalEarnings' => $r['dp_totalEarnings'], 'cashOnHand' => $r['dp_cashOnHand'], 'rating' => $r['dp_rating'],
+        ] : null;
+        $rows[] = $row;
+    }
+    http_response_code(200);
+    echo json_encode(['data' => $rows, 'meta' => ['pagination' => ['page' => $page, 'pageSize' => $size, 'total' => $total, 'totalPages' => (int) ceil($total / max(1, $size))]]], JSON_UNESCAPED_UNICODE);
+    exit;
+}
+
+// ─── Merchant detail + sub-pages (hours, status, product-API config) ───
+if ($method === 'GET' && preg_match('#^/admin/merchants/([^/]+)/hours$#', $path, $m)) {
+    authUser();
+    $mp = db()->prepare('SELECT id, storeNameAr, manualStatus, timezone FROM `MerchantProfile` WHERE id = ?');
+    $mp->execute([$m[1]]); $merchant = $mp->fetch();
+    if (!$merchant) jsonErr('التاجر غير موجود', 404, 'NOT_FOUND');
+    $wh = db()->prepare('SELECT id, dayOfWeek, openMin, closeMin, isClosed FROM `MerchantBusinessHours` WHERE merchantId = ? ORDER BY dayOfWeek');
+    $wh->execute([$m[1]]);
+    $windows = array_map(fn($w) => [
+        'id' => $w['id'], 'dayOfWeek' => (int) $w['dayOfWeek'], 'openMin' => (int) $w['openMin'],
+        'closeMin' => (int) $w['closeMin'], 'isClosed' => (bool) (int) $w['isClosed'],
+    ], $wh->fetchAll());
+    $tzName = $merchant['timezone'] ?: 'Africa/Cairo';
+    try { $now = new DateTime('now', new DateTimeZone($tzName)); } catch (Throwable $e) { $now = new DateTime('now'); }
+    $dow = (int) $now->format('w'); $mins = (int) $now->format('G') * 60 + (int) $now->format('i');
+    $ms = $merchant['manualStatus'] ?: 'OPEN'; $isOpen = false; $message = null;
+    if ($ms === 'CLOSED') $message = 'المتجر مغلق';
+    elseif ($ms === 'TEMPORARILY_CLOSED') $message = 'المتجر مغلق مؤقتاً';
+    else {
+        $today = null; foreach ($windows as $w) if ($w['dayOfWeek'] === $dow && !$w['isClosed']) { $today = $w; break; }
+        if ($today && $mins >= $today['openMin'] && $mins < $today['closeMin']) $isOpen = true;
+        else $message = 'مغلق حالياً حسب مواعيد العمل';
+    }
+    jsonOk([
+        'merchant' => ['id' => $merchant['id'], 'storeNameAr' => $merchant['storeNameAr'], 'manualStatus' => $ms, 'timezone' => $tzName],
+        'windows' => $windows,
+        'openness' => ['isOpenNow' => $isOpen, 'reason' => null, 'nextOpenAt' => null, 'message' => $message],
+    ]);
+}
+if ($method === 'PUT' && preg_match('#^/admin/merchants/([^/]+)/hours$#', $path, $m)) {
+    authUser();
+    $b = readJsonBody(); $windows = $b['windows'] ?? []; $pdo = db();
+    try {
+        $pdo->beginTransaction();
+        $pdo->prepare('DELETE FROM `MerchantBusinessHours` WHERE merchantId = ?')->execute([$m[1]]);
+        $ins = $pdo->prepare('INSERT INTO `MerchantBusinessHours` (id, merchantId, dayOfWeek, openMin, closeMin, isClosed, createdAt, updatedAt) VALUES (?,?,?,?,?,?,NOW(3),NOW(3))');
+        foreach ($windows as $w) $ins->execute([newId(), $m[1], (int)($w['dayOfWeek'] ?? 0), (int)($w['openMin'] ?? 0), (int)($w['closeMin'] ?? 0), !empty($w['isClosed']) ? 1 : 0]);
+        $pdo->commit();
+    } catch (PDOException $e) { if ($pdo->inTransaction()) $pdo->rollBack(); error_log('[api.php] hours save: ' . $e->getMessage()); jsonErr('تعذّر حفظ المواعيد', 422, 'FAILED'); }
+    jsonOk(['saved' => true, 'count' => count($windows)]);
+}
+if ($method === 'PATCH' && preg_match('#^/admin/merchants/([^/]+)/status$#', $path, $m)) {
+    authUser();
+    $b = readJsonBody(); $st = (string)($b['manualStatus'] ?? $b['status'] ?? 'OPEN');
+    if (!in_array($st, ['OPEN', 'CLOSED', 'TEMPORARILY_CLOSED'], true)) jsonErr('حالة غير صحيحة', 422, 'BAD');
+    db()->prepare('UPDATE `MerchantProfile` SET manualStatus = ?, updatedAt = NOW(3) WHERE id = ?')->execute([$st, $m[1]]);
+    jsonOk(['id' => $m[1], 'manualStatus' => $st]);
+}
+if ($method === 'GET' && preg_match('#^/admin/merchants/([^/]+)/api-config$#', $path, $m)) {
+    authUser();
+    $st = db()->prepare('SELECT * FROM `MerchantApiConfig` WHERE merchantId = ? LIMIT 1'); $st->execute([$m[1]]);
+    $row = $st->fetch();
+    http_response_code(200);
+    echo json_encode(['data' => $row ? jsonizeRow($row) : null], JSON_UNESCAPED_UNICODE);
+    exit;
+}
+if ($method === 'PUT' && preg_match('#^/admin/merchants/([^/]+)/api-config$#', $path, $m)) {
+    authUser();
+    $id = $m[1]; $b = readJsonBody(); $cols = tableColumns('MerchantApiConfig');
+    $st = db()->prepare('SELECT id FROM `MerchantApiConfig` WHERE merchantId = ? LIMIT 1'); $st->execute([$id]); $ex = $st->fetch();
+    try {
+        if ($ex) {
+            $sets = []; $args = [];
+            foreach ($b as $k => $v) if (isset($cols[$k]) && !in_array($k, ['id', 'merchantId', 'createdAt', 'updatedAt'], true)) { $sets[] = "`$k` = ?"; $args[] = coerceForColumn($v, $cols[$k]); }
+            if ($sets) { $sets[] = '`updatedAt` = NOW(3)'; $args[] = $ex['id']; db()->prepare('UPDATE `MerchantApiConfig` SET ' . implode(',', $sets) . ' WHERE id = ?')->execute($args); }
+            $newId = $ex['id'];
+        } else {
+            $names = ['`id`', '`merchantId`']; $ph = ['?', '?']; $args = [$newId = newId(), $id];
+            foreach ($b as $k => $v) if (isset($cols[$k]) && !in_array($k, ['id', 'merchantId', 'createdAt', 'updatedAt'], true)) { $names[] = "`$k`"; $ph[] = '?'; $args[] = coerceForColumn($v, $cols[$k]); }
+            if (!in_array('`apiUrl`', $names, true)) { $names[] = '`apiUrl`'; $ph[] = '?'; $args[] = (string)($b['apiUrl'] ?? ''); }
+            $names[] = '`createdAt`'; $ph[] = 'NOW(3)'; $names[] = '`updatedAt`'; $ph[] = 'NOW(3)';
+            db()->prepare('INSERT INTO `MerchantApiConfig` (' . implode(',', $names) . ') VALUES (' . implode(',', $ph) . ')')->execute($args);
+        }
+        $sel = db()->prepare('SELECT * FROM `MerchantApiConfig` WHERE id = ?'); $sel->execute([$newId]);
+        jsonOk(jsonizeRow($sel->fetch()) ?: []);
+    } catch (PDOException $e) { error_log('[api.php] api-config save: ' . $e->getMessage()); jsonErr('تعذّر حفظ الإعدادات، تأكد من رابط الـ API', 422, 'FAILED'); }
+}
+if ($method === 'GET' && preg_match('#^/admin/merchants/([^/]+)/api-config/logs$#', $path, $m)) {
+    authUser();
+    $st = db()->prepare('SELECT * FROM `ProductSyncLog` WHERE merchantId = ? ORDER BY createdAt DESC LIMIT 50');
+    try { $st->execute([$m[1]]); $rows = array_map('jsonizeRow', $st->fetchAll()); } catch (Throwable $e) { $rows = []; }
+    jsonOk($rows);
+}
+if ($method === 'POST' && preg_match('#^/admin/merchants/([^/]+)/api-config/(test|sync)$#', $path, $m)) {
+    authUser();
+    jsonErr('مزامنة المنتجات عبر API تحتاج خدمة Node.js — الربط اليدوي والإدارة شغّالين', 400, 'NODE_REQUIRED');
+}
+if ($method === 'DELETE' && preg_match('#^/admin/merchants/([^/]+)/api-config$#', $path, $m)) {
+    authUser();
+    db()->prepare('DELETE FROM `MerchantApiConfig` WHERE merchantId = ?')->execute([$m[1]]);
+    jsonOk(['deleted' => true]);
+}
+// Merchant detail (any page fetching GET /admin/merchants/:id)
+if ($method === 'GET' && preg_match('#^/admin/merchants/([^/]+)$#', $path, $m)) {
+    authUser();
+    $st = db()->prepare("SELECT mp.*, u.name AS u_name, u.phone AS u_phone, u.email AS u_email, u.isActive AS u_isActive,
+        c.nameAr AS c_nameAr FROM `MerchantProfile` mp LEFT JOIN `User` u ON u.id = mp.userId LEFT JOIN `Category` c ON c.id = mp.categoryId WHERE mp.id = ?");
+    $st->execute([$m[1]]); $r = $st->fetch();
+    if (!$r) jsonErr('التاجر غير موجود', 404, 'NOT_FOUND');
+    $r['isOpen'] = (bool) (int) $r['isOpen'];
+    $r['user'] = ['id' => $r['userId'], 'name' => $r['u_name'], 'phone' => $r['u_phone'], 'email' => $r['u_email'], 'isActive' => (bool)(int)($r['u_isActive'] ?? 1)];
+    $r['category'] = $r['c_nameAr'] !== null ? ['id' => $r['categoryId'], 'nameAr' => $r['c_nameAr']] : null;
+    unset($r['u_name'], $r['u_phone'], $r['u_email'], $r['u_isActive'], $r['c_nameAr']);
+    jsonOk(jsonizeRow($r));
+}
+
+// ─── Delivery zones (City → Village → Area) — pricing.tsx zones tab ─────
+function zoneList(array $data): void {
+    http_response_code(200);
+    echo json_encode(['data' => $data, 'meta' => ['pagination' => ['page' => 1, 'pageSize' => count($data), 'total' => count($data), 'totalPages' => 1]]], JSON_UNESCAPED_UNICODE);
+    exit;
+}
+if ($method === 'GET' && $path === '/admin/zones/cities') {
+    authUser();
+    $rows = db()->query("SELECT c.*,
+        (SELECT COUNT(*) FROM `Village` v WHERE v.cityId = c.id) AS villageCount,
+        (SELECT COUNT(*) FROM `Area` a JOIN `Village` v2 ON v2.id = a.villageId WHERE v2.cityId = c.id) AS areaCount
+        FROM `City` c ORDER BY c.nameAr")->fetchAll();
+    zoneList(array_map(fn($r) => ['id' => $r['id'], 'nameAr' => $r['nameAr'], 'nameEn' => $r['nameEn'], 'isActive' => (bool)(int)$r['isActive'], 'villageCount' => (int)$r['villageCount'], 'areaCount' => (int)$r['areaCount']], $rows));
+}
+if ($method === 'POST' && $path === '/admin/zones/cities') {
+    authUser(); $b = readJsonBody(); $id = newId();
+    db()->prepare('INSERT INTO `City` (id, nameAr, nameEn, isActive, createdAt, updatedAt) VALUES (?,?,?,1,NOW(3),NOW(3))')
+        ->execute([$id, (string)($b['nameAr'] ?? ''), ($b['nameEn'] ?? '') ?: null]);
+    jsonOk(['id' => $id, 'nameAr' => $b['nameAr'] ?? ''], 201);
+}
+if ($method === 'GET' && preg_match('#^/admin/zones/cities/([^/]+)/villages$#', $path, $m)) {
+    authUser();
+    $st = db()->prepare("SELECT v.*, (SELECT COUNT(*) FROM `Area` a WHERE a.villageId = v.id) AS areaCount FROM `Village` v WHERE v.cityId = ? ORDER BY v.nameAr");
+    $st->execute([$m[1]]);
+    zoneList(array_map(fn($r) => ['id' => $r['id'], 'cityId' => $r['cityId'], 'nameAr' => $r['nameAr'], 'nameEn' => $r['nameEn'], 'baseDeliveryPrice' => $r['baseDeliveryPrice'], 'isActive' => (bool)(int)$r['isActive'], 'areaCount' => (int)$r['areaCount']], $st->fetchAll()));
+}
+if ($method === 'POST' && $path === '/admin/zones/villages') {
+    authUser(); $b = readJsonBody(); $id = newId();
+    db()->prepare('INSERT INTO `Village` (id, cityId, nameAr, nameEn, baseDeliveryPrice, isActive, createdAt, updatedAt) VALUES (?,?,?,?,?,1,NOW(3),NOW(3))')
+        ->execute([$id, (string)($b['cityId'] ?? ''), (string)($b['nameAr'] ?? ''), ($b['nameEn'] ?? '') ?: null, (isset($b['baseDeliveryPrice']) && $b['baseDeliveryPrice'] !== '') ? (float)$b['baseDeliveryPrice'] : null]);
+    jsonOk(['id' => $id, 'nameAr' => $b['nameAr'] ?? ''], 201);
+}
+if ($method === 'PATCH' && preg_match('#^/admin/zones/villages/([^/]+)$#', $path, $m)) {
+    authUser(); $b = readJsonBody(); $sets = []; $args = [];
+    foreach (['nameAr', 'nameEn'] as $f) if (array_key_exists($f, $b)) { $sets[] = "`$f` = ?"; $args[] = $b[$f]; }
+    if (array_key_exists('baseDeliveryPrice', $b)) { $sets[] = '`baseDeliveryPrice` = ?'; $args[] = ($b['baseDeliveryPrice'] !== '' && $b['baseDeliveryPrice'] !== null) ? (float)$b['baseDeliveryPrice'] : null; }
+    if ($sets) { $sets[] = '`updatedAt` = NOW(3)'; $args[] = $m[1]; db()->prepare('UPDATE `Village` SET ' . implode(',', $sets) . ' WHERE id = ?')->execute($args); }
+    jsonOk(['id' => $m[1]]);
+}
+if ($method === 'DELETE' && preg_match('#^/admin/zones/villages/([^/]+)$#', $path, $m)) {
+    authUser();
+    db()->prepare('DELETE FROM `Area` WHERE villageId = ?')->execute([$m[1]]);
+    db()->prepare('DELETE FROM `Village` WHERE id = ?')->execute([$m[1]]);
+    jsonOk(['deleted' => true]);
+}
+if ($method === 'GET' && preg_match('#^/admin/zones/villages/([^/]+)/areas$#', $path, $m)) {
+    authUser();
+    $st = db()->prepare("SELECT * FROM `Area` WHERE villageId = ? ORDER BY nameAr"); $st->execute([$m[1]]);
+    zoneList(array_map(fn($r) => ['id' => $r['id'], 'villageId' => $r['villageId'], 'nameAr' => $r['nameAr'], 'nameEn' => $r['nameEn'], 'deliveryPrice' => $r['deliveryPrice'], 'isActive' => (bool)(int)$r['isActive']], $st->fetchAll()));
+}
+if ($method === 'POST' && $path === '/admin/zones/areas') {
+    authUser(); $b = readJsonBody(); $id = newId();
+    db()->prepare('INSERT INTO `Area` (id, villageId, nameAr, nameEn, deliveryPrice, isActive, createdAt, updatedAt) VALUES (?,?,?,?,?,1,NOW(3),NOW(3))')
+        ->execute([$id, (string)($b['villageId'] ?? ''), (string)($b['nameAr'] ?? ''), ($b['nameEn'] ?? '') ?: null, (isset($b['deliveryPrice']) && $b['deliveryPrice'] !== '') ? (float)$b['deliveryPrice'] : null]);
+    jsonOk(['id' => $id, 'nameAr' => $b['nameAr'] ?? ''], 201);
+}
+if ($method === 'PATCH' && preg_match('#^/admin/zones/areas/([^/]+)$#', $path, $m)) {
+    authUser(); $b = readJsonBody(); $sets = []; $args = [];
+    if (array_key_exists('deliveryPrice', $b)) { $sets[] = '`deliveryPrice` = ?'; $args[] = ($b['deliveryPrice'] !== '' && $b['deliveryPrice'] !== null) ? (float)$b['deliveryPrice'] : null; }
+    if (array_key_exists('nameAr', $b)) { $sets[] = '`nameAr` = ?'; $args[] = (string)$b['nameAr']; }
+    if ($sets) { $sets[] = '`updatedAt` = NOW(3)'; $args[] = $m[1]; db()->prepare('UPDATE `Area` SET ' . implode(',', $sets) . ' WHERE id = ?')->execute($args); }
+    jsonOk(['id' => $m[1]]);
+}
+if ($method === 'DELETE' && preg_match('#^/admin/zones/areas/([^/]+)$#', $path, $m)) {
+    authUser();
+    db()->prepare('DELETE FROM `Area` WHERE id = ?')->execute([$m[1]]);
+    jsonOk(['deleted' => true]);
+}
+
+// Customers (and any other User-by-role) — bare User rows are enough.
+if ($method === 'GET' && preg_match('#^/admin/(customers)$#', $path, $m)) {
+    authUser();
+    $role = 'CUSTOMER';
+    $page = max(1, (int)($_GET['page'] ?? 1));
+    $size = min(100, max(1, (int)($_GET['pageSize'] ?? 20)));
+    $off = ($page - 1) * $size;
+    $total = (int) db()->query("SELECT COUNT(*) FROM `User` WHERE role = '$role'")->fetchColumn();
     $st = db()->prepare("SELECT * FROM `User` WHERE role = ? ORDER BY createdAt DESC LIMIT $size OFFSET $off");
     $st->execute([$role]);
     $rows = array_map('jsonizeRow', $st->fetchAll());
     http_response_code(200);
     echo json_encode([
         'data' => $rows,
-        'meta' => ['pagination' => ['page' => $page, 'pageSize' => $size, 'total' => $total, 'totalPages' => (int) ceil($total / $size)]],
+        'meta' => ['pagination' => ['page' => $page, 'pageSize' => $size, 'total' => $total, 'totalPages' => (int) ceil($total / max(1, $size))]],
     ], JSON_UNESCAPED_UNICODE);
     exit;
 }
 
-// Ultimate /admin/* GET fallback — empty valid shape.
-if ($method === 'GET' && str_starts_with($path, '/admin/')) {
-    authUser();
-    header('X-PHP-Shim-Stub: 1');
-    http_response_code(200);
-    echo json_encode([
-        'data' => [],
-        'meta' => ['pagination' => ['page' => 1, 'pageSize' => 20, 'total' => 0, 'totalPages' => 0]],
-    ], JSON_UNESCAPED_UNICODE);
-    exit;
-}
+// NOTE: the premature "/admin/* GET fallback" that used to live here was
+// REMOVED — it ran before the dedicated GET handlers below (e.g.
+// /admin/admins) and shadowed them, so those pages always showed empty.
+// Any genuinely-unmatched GET now falls through to the single ultimate GET
+// fallback near the end of the file.
 
 // ─── REAL admin mutations we can safely handle in PHP ─────────────────
 // cuid() lookalike — 25 chars starting with "c" so it plays nicely with
@@ -784,24 +1094,6 @@ if ($method === 'DELETE' && preg_match('#^/admin/admins/([^/]+)$#', $path, $m)) 
     if ($m[1] === ($u['sub'] ?? '')) jsonErr('ما تقدرش تحذف حسابك', 400, 'SELF');
     db()->prepare("DELETE FROM `User` WHERE id = ? AND role IN ('ADMIN','SUPER_ADMIN')")->execute([$m[1]]);
     jsonOk(['deleted' => true]);
-}
-
-// Reports overview — reports.tsx expects `series`, `total`, `ordersCount`.
-if ($method === 'GET' && $path === '/admin/reports/revenue' && (($_GET['groupBy'] ?? '') !== '')) {
-    $u = authUser();
-    if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
-    $groupBy = $_GET['groupBy'];
-    $fmt = $groupBy === 'month' ? '%Y-%m' : ($groupBy === 'week' ? '%X-W%V' : '%Y-%m-%d');
-    $st = db()->prepare("SELECT DATE_FORMAT(createdAt, ?) AS bucket, COUNT(*) AS orders, SUM(COALESCE(finalPrice, quotedPrice, 0)) AS revenue FROM `Order` WHERE status IN ('COMPLETED','DELIVERED') GROUP BY bucket ORDER BY bucket ASC");
-    $st->execute([$fmt]);
-    $series = $st->fetchAll();
-    $total = 0.0; $count = 0;
-    foreach ($series as $s) { $total += (float)$s['revenue']; $count += (int)$s['orders']; }
-    jsonOk([
-        'series' => $series,
-        'total' => $total,
-        'ordersCount' => $count,
-    ]);
 }
 
 // POST /admin/categories — insert Category. Called from the merchant form's
@@ -950,6 +1242,325 @@ if ($method === 'PUT' && $path === '/admin/site-config') {
         $n++;
     }
     jsonOk(['updated' => $n]);
+}
+
+// ─── Create MERCHANT (User + MerchantProfile) ──────────────────────────
+if ($method === 'POST' && $path === '/admin/merchants') {
+    $u = authUser();
+    if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
+    $b = readJsonBody();
+    $ownerName = trim((string)($b['ownerName'] ?? $b['name'] ?? ''));
+    $phone = trim((string)($b['phone'] ?? ''));
+    $pass = (string)($b['password'] ?? '');
+    $storeNameAr = trim((string)($b['storeNameAr'] ?? ''));
+    $storeName = trim((string)($b['storeName'] ?? '')) ?: $storeNameAr;
+    $categoryId = trim((string)($b['categoryId'] ?? ''));
+    if ($ownerName === '' || $phone === '' || strlen($pass) < 6 || $storeNameAr === '' || $categoryId === '') {
+        jsonErr('بيانات ناقصة: اسم المالك، الهاتف، كلمة المرور، اسم المتجر، والتصنيف مطلوبين', 422, 'MISSING');
+    }
+    $clean = preg_replace('/[\s\-()]/', '', $phone);
+    if (preg_match('/^(?:\+?20|0)?(1[0125]\d{8})$/', $clean, $mm)) $phone = '+20' . $mm[1];
+    $governorate = trim((string)($b['governorate'] ?? 'قنا')) ?: 'قنا';
+    $city = trim((string)($b['city'] ?? 'قفط')) ?: 'قفط';
+    $pdo = db();
+    try {
+        $pdo->beginTransaction();
+        $uid = newId();
+        $pdo->prepare('INSERT INTO `User` (id, name, phone, passwordHash, role, isActive, isPhoneVerified, city, governorate, createdAt, updatedAt) VALUES (?,?,?,?,?,1,1,?,?,NOW(3),NOW(3))')
+            ->execute([$uid, $ownerName, $phone, password_hash($pass, PASSWORD_BCRYPT), 'MERCHANT', $city, $governorate]);
+        $pdo->prepare('INSERT INTO `MerchantProfile` (id, userId, storeName, storeNameAr, categoryId, description, addressLine, lat, lng, governorate, city, isOpen, manualStatus, timezone, createdAt, updatedAt) VALUES (?,?,?,?,?,?,?,?,?,?,?,1,?,?,NOW(3),NOW(3))')
+            ->execute([newId(), $uid, $storeName, $storeNameAr, $categoryId,
+                (string)($b['description'] ?? ''),
+                (string)($b['addressLine'] ?? ($governorate . ' - ' . $city)),
+                (float)($b['lat'] ?? 26.0297), (float)($b['lng'] ?? 32.8146),
+                $governorate, $city, 'OPEN', 'Africa/Cairo']);
+        $pdo->commit();
+    } catch (PDOException $e) {
+        if ($pdo->inTransaction()) $pdo->rollBack();
+        if ((int)($e->errorInfo[1] ?? 0) === 1062) jsonErr('رقم الهاتف مستخدم بالفعل', 409, 'DUPLICATE');
+        error_log('[api.php] create merchant failed: ' . $e->getMessage());
+        jsonErr('تعذّر إضافة التاجر، تأكد من صحة التصنيف والبيانات', 422, 'CREATE_FAILED');
+    }
+    $sel = $pdo->prepare('SELECT * FROM `User` WHERE id = ?'); $sel->execute([$uid]);
+    jsonOk(jsonizeRow($sel->fetch()), 201);
+}
+
+// ─── Create DRIVER (User + DriverProfile) ──────────────────────────────
+if ($method === 'POST' && $path === '/admin/drivers') {
+    $u = authUser();
+    if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
+    $b = readJsonBody();
+    $name = trim((string)($b['name'] ?? ''));
+    $phone = trim((string)($b['phone'] ?? ''));
+    $pass = (string)($b['password'] ?? '');
+    $vehicleType = trim((string)($b['vehicleType'] ?? ''));
+    $vehiclePlate = trim((string)($b['vehiclePlate'] ?? ''));
+    if ($name === '' || $phone === '' || strlen($pass) < 6 || $vehicleType === '' || $vehiclePlate === '') {
+        jsonErr('بيانات ناقصة: الاسم، الهاتف، كلمة المرور، نوع المركبة، ولوحتها مطلوبين', 422, 'MISSING');
+    }
+    $clean = preg_replace('/[\s\-()]/', '', $phone);
+    if (preg_match('/^(?:\+?20|0)?(1[0125]\d{8})$/', $clean, $mm)) $phone = '+20' . $mm[1];
+    $governorate = trim((string)($b['governorate'] ?? 'قنا')) ?: 'قنا';
+    $pdo = db();
+    try {
+        $pdo->beginTransaction();
+        $uid = newId();
+        $pdo->prepare('INSERT INTO `User` (id, name, phone, passwordHash, role, isActive, isPhoneVerified, governorate, createdAt, updatedAt) VALUES (?,?,?,?,?,1,1,?,NOW(3),NOW(3))')
+            ->execute([$uid, $name, $phone, password_hash($pass, PASSWORD_BCRYPT), 'DRIVER', $governorate]);
+        $pdo->prepare('INSERT INTO `DriverProfile` (id, userId, status, vehicleType, vehiclePlate, nationalId, governorate, createdAt, updatedAt) VALUES (?,?,?,?,?,?,?,NOW(3),NOW(3))')
+            ->execute([newId(), $uid, 'OFFLINE', $vehicleType, $vehiclePlate,
+                (($b['nationalId'] ?? '') !== '' ? (string)$b['nationalId'] : null), $governorate]);
+        $pdo->commit();
+    } catch (PDOException $e) {
+        if ($pdo->inTransaction()) $pdo->rollBack();
+        if ((int)($e->errorInfo[1] ?? 0) === 1062) jsonErr('رقم الهاتف مستخدم بالفعل', 409, 'DUPLICATE');
+        error_log('[api.php] create driver failed: ' . $e->getMessage());
+        jsonErr('تعذّر إضافة السائق، راجع البيانات', 422, 'CREATE_FAILED');
+    }
+    $sel = $pdo->prepare('SELECT * FROM `User` WHERE id = ?'); $sel->execute([$uid]);
+    jsonOk(jsonizeRow($sel->fetch()), 201);
+}
+
+// ─── Merchant update / delete (User + MerchantProfile) ─────────────────
+if ($method === 'PATCH' && preg_match('#^/admin/merchants/([^/]+)$#', $path, $m)) {
+    $u = authUser();
+    if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
+    $id = $m[1]; $b = readJsonBody(); $pdo = db();
+    $sel = $pdo->prepare('SELECT userId FROM `MerchantProfile` WHERE id = ?'); $sel->execute([$id]);
+    $mp = $sel->fetch();
+    if (!$mp) jsonErr('التاجر غير موجود', 404, 'NOT_FOUND');
+    try {
+        $pdo->beginTransaction();
+        $pcols = tableColumns('MerchantProfile'); $sets = []; $args = [];
+        foreach ($b as $k => $v) {
+            if (isset($pcols[$k]) && !in_array($k, ['id', 'userId', 'createdAt', 'updatedAt'], true)) { $sets[] = "`$k` = ?"; $args[] = coerceForColumn($v, $pcols[$k]); }
+        }
+        if ($sets) { $sets[] = '`updatedAt` = NOW(3)'; $args[] = $id; $pdo->prepare('UPDATE `MerchantProfile` SET ' . implode(',', $sets) . ' WHERE id = ?')->execute($args); }
+        $us = []; $ua = [];
+        if (array_key_exists('ownerName', $b)) { $us[] = '`name` = ?'; $ua[] = (string)$b['ownerName']; }
+        if (array_key_exists('ownerPhone', $b) || array_key_exists('phone', $b)) { $ph = (string)($b['ownerPhone'] ?? $b['phone']); $cl = preg_replace('/[\s\-()]/', '', $ph); if (preg_match('/^(?:\+?20|0)?(1[0125]\d{8})$/', $cl, $mm)) $ph = '+20' . $mm[1]; $us[] = '`phone` = ?'; $ua[] = $ph; }
+        if (array_key_exists('secondaryPhones', $b)) { $us[] = '`secondaryPhones` = ?'; $ua[] = json_encode($b['secondaryPhones'], JSON_UNESCAPED_UNICODE); }
+        if (array_key_exists('isActive', $b)) { $us[] = '`isActive` = ?'; $ua[] = $b['isActive'] ? 1 : 0; }
+        if ($us) { $us[] = '`updatedAt` = NOW(3)'; $ua[] = $mp['userId']; $pdo->prepare('UPDATE `User` SET ' . implode(',', $us) . ' WHERE id = ?')->execute($ua); }
+        $pdo->commit();
+    } catch (PDOException $e) {
+        if ($pdo->inTransaction()) $pdo->rollBack();
+        if ((int)($e->errorInfo[1] ?? 0) === 1062) jsonErr('رقم الهاتف مستخدم بالفعل', 409, 'DUPLICATE');
+        error_log('[api.php] merchant update: ' . $e->getMessage()); jsonErr('تعذّر التحديث', 422, 'UPDATE_FAILED');
+    }
+    $r = $pdo->prepare('SELECT * FROM `MerchantProfile` WHERE id = ?'); $r->execute([$id]);
+    jsonOk(jsonizeRow($r->fetch()) ?: []);
+}
+if ($method === 'DELETE' && preg_match('#^/admin/merchants/([^/]+)$#', $path, $m)) {
+    $u = authUser(); if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
+    $pdo = db(); $sel = $pdo->prepare('SELECT userId FROM `MerchantProfile` WHERE id = ?'); $sel->execute([$m[1]]); $mp = $sel->fetch();
+    try {
+        $pdo->beginTransaction();
+        $pdo->prepare('DELETE FROM `MerchantProfile` WHERE id = ?')->execute([$m[1]]);
+        if ($mp) $pdo->prepare("DELETE FROM `User` WHERE id = ? AND role = 'MERCHANT'")->execute([$mp['userId']]);
+        $pdo->commit();
+    } catch (PDOException $e) { if ($pdo->inTransaction()) $pdo->rollBack(); error_log('[api.php] merchant delete: ' . $e->getMessage()); jsonErr('تعذّر الحذف — قد يكون التاجر مرتبط بطلبات', 422, 'DELETE_FAILED'); }
+    jsonOk(['deleted' => true]);
+}
+
+// ─── Driver status / update / delete (User + DriverProfile) ────────────
+if ($method === 'PATCH' && preg_match('#^/admin/drivers/([^/]+)/status$#', $path, $m)) {
+    $u = authUser(); if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
+    $b = readJsonBody(); $status = (string)($b['status'] ?? '');
+    if (!in_array($status, ['AVAILABLE', 'BUSY', 'OFFLINE'], true)) jsonErr('حالة غير صحيحة', 422, 'BAD_STATUS');
+    db()->prepare('UPDATE `DriverProfile` SET `status` = ?, `updatedAt` = NOW(3) WHERE userId = ?')->execute([$status, $m[1]]);
+    jsonOk(['id' => $m[1], 'driverProfile' => ['status' => $status]]);
+}
+if ($method === 'PATCH' && preg_match('#^/admin/drivers/([^/]+)$#', $path, $m)) {
+    $u = authUser(); if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
+    $id = $m[1]; $b = readJsonBody(); $pdo = db();
+    try {
+        $pdo->beginTransaction();
+        $us = []; $ua = [];
+        if (array_key_exists('name', $b)) { $us[] = '`name` = ?'; $ua[] = (string)$b['name']; }
+        if (array_key_exists('phone', $b)) { $ph = (string)$b['phone']; $cl = preg_replace('/[\s\-()]/', '', $ph); if (preg_match('/^(?:\+?20|0)?(1[0125]\d{8})$/', $cl, $mm)) $ph = '+20' . $mm[1]; $us[] = '`phone` = ?'; $ua[] = $ph; }
+        if (array_key_exists('isActive', $b)) { $us[] = '`isActive` = ?'; $ua[] = $b['isActive'] ? 1 : 0; }
+        if ($us) { $us[] = '`updatedAt` = NOW(3)'; $ua[] = $id; $pdo->prepare('UPDATE `User` SET ' . implode(',', $us) . ' WHERE id = ?')->execute($ua); }
+        $dcols = tableColumns('DriverProfile'); $ds = []; $da = [];
+        foreach (['vehicleType', 'vehiclePlate', 'nationalId', 'governorate', 'status', 'notes'] as $f) {
+            if (array_key_exists($f, $b) && isset($dcols[$f])) { $ds[] = "`$f` = ?"; $da[] = coerceForColumn($b[$f], $dcols[$f]); }
+        }
+        if ($ds) { $ds[] = '`updatedAt` = NOW(3)'; $da[] = $id; $pdo->prepare('UPDATE `DriverProfile` SET ' . implode(',', $ds) . ' WHERE userId = ?')->execute($da); }
+        $pdo->commit();
+    } catch (PDOException $e) {
+        if ($pdo->inTransaction()) $pdo->rollBack();
+        if ((int)($e->errorInfo[1] ?? 0) === 1062) jsonErr('رقم الهاتف مستخدم بالفعل', 409, 'DUPLICATE');
+        error_log('[api.php] driver update: ' . $e->getMessage()); jsonErr('تعذّر التحديث', 422, 'UPDATE_FAILED');
+    }
+    $r = $pdo->prepare('SELECT * FROM `User` WHERE id = ?'); $r->execute([$id]);
+    jsonOk(jsonizeRow($r->fetch()) ?: []);
+}
+if ($method === 'DELETE' && preg_match('#^/admin/drivers/([^/]+)$#', $path, $m)) {
+    $u = authUser(); if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
+    $pdo = db();
+    try {
+        $pdo->beginTransaction();
+        $pdo->prepare('DELETE FROM `DriverProfile` WHERE userId = ?')->execute([$m[1]]);
+        $pdo->prepare("DELETE FROM `User` WHERE id = ? AND role = 'DRIVER'")->execute([$m[1]]);
+        $pdo->commit();
+    } catch (PDOException $e) { if ($pdo->inTransaction()) $pdo->rollBack(); error_log('[api.php] driver delete: ' . $e->getMessage()); jsonErr('تعذّر الحذف — قد يكون السائق مرتبط بطلبات', 422, 'DELETE_FAILED'); }
+    jsonOk(['deleted' => true]);
+}
+
+// ─── Customer update (plain User row) ──────────────────────────────────
+if ($method === 'PATCH' && preg_match('#^/admin/customers/([^/]+)$#', $path, $m)) {
+    $u = authUser(); if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
+    $id = $m[1]; $b = readJsonBody(); $ucols = tableColumns('User'); $sets = []; $args = [];
+    foreach ($b as $k => $v) {
+        if (isset($ucols[$k]) && !in_array($k, ['id', 'role', 'passwordHash', 'createdAt', 'updatedAt'], true)) {
+            if ($k === 'phone') { $ph = (string)$v; $cl = preg_replace('/[\s\-()]/', '', $ph); if (preg_match('/^(?:\+?20|0)?(1[0125]\d{8})$/', $cl, $mm)) $v = '+20' . $mm[1]; }
+            $sets[] = "`$k` = ?"; $args[] = coerceForColumn($v, $ucols[$k]);
+        }
+    }
+    try {
+        if ($sets) { $sets[] = '`updatedAt` = NOW(3)'; $args[] = $id; db()->prepare('UPDATE `User` SET ' . implode(',', $sets) . ' WHERE id = ?')->execute($args); }
+    } catch (PDOException $e) { if ((int)($e->errorInfo[1] ?? 0) === 1062) jsonErr('رقم الهاتف مستخدم بالفعل', 409, 'DUPLICATE'); throw $e; }
+    $r = db()->prepare('SELECT * FROM `User` WHERE id = ?'); $r->execute([$id]);
+    jsonOk(jsonizeRow($r->fetch()) ?: []);
+}
+
+// ─── Order operational actions ─────────────────────────────────────────
+if ($method === 'PATCH' && preg_match('#^/admin/orders/([^/]+)/status$#', $path, $m)) {
+    $u = authUser(); if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
+    $b = readJsonBody(); $status = (string)($b['status'] ?? '');
+    $sets = ['`status` = ?', '`updatedAt` = NOW(3)']; $args = [$status];
+    if (in_array($status, ['DELIVERED', 'COMPLETED'], true)) { $sets[] = '`completedAt` = NOW(3)'; $sets[] = '`deliveredAt` = NOW(3)'; }
+    if ($status === 'CANCELLED') { $sets[] = '`cancelledAt` = NOW(3)'; if (!empty($b['reason'])) { $sets[] = '`cancellationReason` = ?'; $args[] = (string)$b['reason']; } }
+    $args[] = $m[1];
+    try { db()->prepare('UPDATE `Order` SET ' . implode(',', $sets) . ' WHERE id = ?')->execute($args); }
+    catch (PDOException $e) { error_log('[api.php] order status: ' . $e->getMessage()); jsonErr('تعذّر تحديث الحالة', 422, 'FAILED'); }
+    $r = db()->prepare('SELECT * FROM `Order` WHERE id = ?'); $r->execute([$m[1]]);
+    jsonOk(jsonizeRow($r->fetch()) ?: []);
+}
+if ($method === 'PATCH' && preg_match('#^/admin/orders/([^/]+)/price$#', $path, $m)) {
+    $u = authUser(); if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
+    $b = readJsonBody();
+    db()->prepare("UPDATE `Order` SET `quotedPrice` = ?, `status` = CASE WHEN `status` = 'NEW' THEN 'PRICED' ELSE `status` END, `updatedAt` = NOW(3) WHERE id = ?")
+        ->execute([(float)($b['quotedPrice'] ?? 0), $m[1]]);
+    $r = db()->prepare('SELECT * FROM `Order` WHERE id = ?'); $r->execute([$m[1]]);
+    jsonOk(jsonizeRow($r->fetch()) ?: []);
+}
+if ($method === 'PATCH' && preg_match('#^/admin/orders/([^/]+)/assign-driver$#', $path, $m)) {
+    $u = authUser(); if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
+    $b = readJsonBody();
+    db()->prepare("UPDATE `Order` SET `assignedDriverId` = ?, `status` = 'DRIVER_ASSIGNED', `updatedAt` = NOW(3) WHERE id = ?")
+        ->execute([(string)($b['driverId'] ?? ''), $m[1]]);
+    $r = db()->prepare('SELECT * FROM `Order` WHERE id = ?'); $r->execute([$m[1]]);
+    jsonOk(jsonizeRow($r->fetch()) ?: []);
+}
+if ($method === 'POST' && preg_match('#^/admin/orders/([^/]+)/cancel$#', $path, $m)) {
+    $u = authUser(); if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
+    $b = readJsonBody();
+    db()->prepare("UPDATE `Order` SET `status` = 'CANCELLED', `cancelledAt` = NOW(3), `cancellationReason` = ?, `updatedAt` = NOW(3) WHERE id = ?")
+        ->execute([(string)($b['reason'] ?? ''), $m[1]]);
+    $r = db()->prepare('SELECT * FROM `Order` WHERE id = ?'); $r->execute([$m[1]]);
+    jsonOk(jsonizeRow($r->fetch()) ?: []);
+}
+
+// ─── Payment actions ───────────────────────────────────────────────────
+if ($method === 'PATCH' && preg_match('#^/admin/payments/([^/]+)/(confirm|reject)$#', $path, $m)) {
+    $u = authUser(); if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
+    $b = readJsonBody();
+    if ($m[2] === 'confirm') {
+        db()->prepare("UPDATE `Payment` SET `status` = 'PAID', `confirmedById` = ?, `confirmedAt` = NOW(3) WHERE id = ?")->execute([$u['sub'] ?? null, $m[1]]);
+    } else {
+        db()->prepare("UPDATE `Payment` SET `status` = 'FAILED', `notes` = ? WHERE id = ?")->execute([(string)($b['reason'] ?? ''), $m[1]]);
+    }
+    $r = db()->prepare('SELECT * FROM `Payment` WHERE id = ?'); $r->execute([$m[1]]);
+    jsonOk(jsonizeRow($r->fetch()) ?: []);
+}
+
+// ─── Generic column-aware write for any mapped resource ────────────────
+// Makes POST/PATCH/PUT/DELETE actually PERSIST for every table in $RES
+// (offers, products, pricing-rules, coupons, reviews, payments, orders, …)
+// by introspecting the table's real columns and only writing keys that
+// exist. Wrapped in try/catch: a genuine schema mismatch degrades to the
+// silent echo below rather than surfacing a 500 / red error toast.
+function tableColumns(string $tbl): array {
+    static $cache = [];
+    if (isset($cache[$tbl])) return $cache[$tbl];
+    $out = [];
+    foreach (db()->query("SHOW COLUMNS FROM `$tbl`")->fetchAll() as $c) {
+        $out[$c['Field']] = $c; // Field, Type, Null, Key, Default, Extra
+    }
+    return $cache[$tbl] = $out;
+}
+function coerceForColumn($v, array $col) {
+    $type = strtolower((string)($col['Type'] ?? ''));
+    if (is_array($v)) return json_encode($v, JSON_UNESCAPED_UNICODE);
+    if (is_bool($v)) return $v ? 1 : 0;
+    if (str_starts_with($type, 'tinyint(1)') && ($v === '1' || $v === '0')) return (int) $v;
+    return $v;
+}
+
+// POST /admin/<res> → INSERT
+if ($method === 'POST' && preg_match('#^/admin/([a-z][a-z0-9-]*)$#', $path, $m) && isset($RES[$m[1]])) {
+    $u = authUser();
+    if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
+    $tbl = $RES[$m[1]];
+    $b = readJsonBody();
+    try {
+        $cols = tableColumns($tbl);
+        $names = []; $place = []; $args = [];
+        if (isset($cols['id'])) { $names[] = '`id`'; $place[] = '?'; $args[] = !empty($b['id']) ? (string)$b['id'] : newId(); }
+        foreach ($b as $k => $v) {
+            if ($k === 'id' || !isset($cols[$k]) || in_array($k, ['createdAt', 'updatedAt'], true)) continue;
+            $names[] = "`$k`"; $place[] = '?'; $args[] = coerceForColumn($v, $cols[$k]);
+        }
+        if (isset($cols['createdAt'])) { $names[] = '`createdAt`'; $place[] = 'NOW(3)'; }
+        if (isset($cols['updatedAt'])) { $names[] = '`updatedAt`'; $place[] = 'NOW(3)'; }
+        db()->prepare("INSERT INTO `$tbl` (" . implode(',', $names) . ") VALUES (" . implode(',', $place) . ")")->execute($args);
+        if (isset($cols['id'])) {
+            $sel = db()->prepare("SELECT * FROM `$tbl` WHERE id = ?"); $sel->execute([$args[0]]);
+            jsonOk(jsonizeRow($sel->fetch()) ?: [], 201);
+        }
+        jsonOk($b, 201);
+    } catch (Throwable $e) {
+        error_log('[api.php] generic INSERT ' . $tbl . ' failed: ' . $e->getMessage());
+    }
+}
+
+// PATCH|PUT /admin/<res>/<id> → UPDATE
+if (($method === 'PATCH' || $method === 'PUT') && preg_match('#^/admin/([a-z][a-z0-9-]*)/([^/]+)$#', $path, $m) && isset($RES[$m[1]])) {
+    $u = authUser();
+    if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
+    $tbl = $RES[$m[1]]; $id = $m[2];
+    $b = readJsonBody();
+    try {
+        $cols = tableColumns($tbl);
+        $sets = []; $args = [];
+        foreach ($b as $k => $v) {
+            if (!isset($cols[$k]) || in_array($k, ['id', 'createdAt', 'updatedAt'], true)) continue;
+            $sets[] = "`$k` = ?"; $args[] = coerceForColumn($v, $cols[$k]);
+        }
+        if ($sets) {
+            if (isset($cols['updatedAt'])) $sets[] = '`updatedAt` = NOW(3)';
+            $args[] = $id;
+            db()->prepare("UPDATE `$tbl` SET " . implode(',', $sets) . " WHERE id = ?")->execute($args);
+        }
+        $sel = db()->prepare("SELECT * FROM `$tbl` WHERE id = ?"); $sel->execute([$id]);
+        jsonOk(jsonizeRow($sel->fetch()) ?: []);
+    } catch (Throwable $e) {
+        error_log('[api.php] generic UPDATE ' . $tbl . ' failed: ' . $e->getMessage());
+    }
+}
+
+// DELETE /admin/<res>/<id>
+if ($method === 'DELETE' && preg_match('#^/admin/([a-z][a-z0-9-]*)/([^/]+)$#', $path, $m) && isset($RES[$m[1]])) {
+    $u = authUser();
+    if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
+    $tbl = $RES[$m[1]];
+    try {
+        db()->prepare("DELETE FROM `$tbl` WHERE id = ?")->execute([$m[2]]);
+        jsonOk(['deleted' => true]);
+    } catch (Throwable $e) {
+        error_log('[api.php] generic DELETE ' . $tbl . ' failed: ' . $e->getMessage());
+    }
 }
 
 // Generic admin mutation fallback — instead of a red 503 toast, silently

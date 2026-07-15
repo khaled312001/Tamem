@@ -70,7 +70,18 @@ export class TamemClient {
         const status = error.response?.status as number | undefined;
         const original = error.config as AxiosRequestConfig & { _retry?: boolean };
 
-        if (status === 401 && !original._retry && this.config.onRefreshNeeded) {
+        // The auth endpoints must NEVER trigger the refresh / force-logout
+        // path. A 401 from /auth/login means "wrong password" and a 401 from
+        // /auth/admin/otp means "wrong OTP" — both are shown inline by the
+        // login page. If we tried to refresh here it fails (no token yet) and
+        // then calls onUnauthorized(), which does window.location.href=/login
+        // → a full page reload that wipes the error and never reaches the OTP
+        // screen. Just surface the error instead.
+        const url = String(original?.url ?? '');
+        const isAuthEndpoint =
+          /\/auth\/(login|refresh|register|admin\/otp|forgot-password|reset-password)/.test(url);
+
+        if (status === 401 && !original._retry && !isAuthEndpoint && this.config.onRefreshNeeded) {
           original._retry = true;
           this.refreshPromise ??= this.config.onRefreshNeeded();
           const newTokens = await this.refreshPromise;

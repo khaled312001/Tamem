@@ -86,11 +86,25 @@ function RevenueTab() {
     queryFn: () => api.adminReportRevenue({ groupBy }) as Promise<Row>,
   });
 
+  // Defensive: the shim/back-end shape can drift, so never assume `series`
+  // exists. Fall back to `trend` (day/revenue) or an empty array.
+  const series: Row[] = Array.isArray(data?.series)
+    ? data.series
+    : Array.isArray(data?.trend)
+      ? data.trend.map((t: Row) => ({
+          bucket: t.day ?? t.bucket,
+          orders: t.orders ?? 0,
+          revenue: t.revenue ?? 0,
+        }))
+      : [];
+  const total = Number(data?.total ?? data?.totalRevenue ?? 0);
+  const ordersCount = Number(data?.ordersCount ?? data?.orderCount ?? 0);
+
   const exportCsv = () => {
-    if (!data?.series) return;
+    if (!series.length) return;
     const rows = [
       'bucket,orders,revenue',
-      ...data.series.map((s: Row) => `${s.bucket},${s.orders},${s.revenue}`),
+      ...series.map((s: Row) => `${s.bucket},${s.orders},${s.revenue}`),
     ];
     const blob = new Blob([rows.join('\n')], { type: 'text/csv' });
     const url = URL.createObjectURL(blob);
@@ -110,10 +124,8 @@ function RevenueTab() {
         <div className="flex items-center justify-between mb-4">
           <div>
             <div className="text-sm text-muted-foreground">إجمالي الإيرادات</div>
-            <div className="text-3xl font-black mt-1">
-              {Number(data.total).toLocaleString('ar-EG')} ج.م
-            </div>
-            <div className="text-xs text-muted-foreground mt-1">{data.ordersCount} طلب مكتمل</div>
+            <div className="text-3xl font-black mt-1">{total.toLocaleString('ar-EG')} ج.م</div>
+            <div className="text-xs text-muted-foreground mt-1">{ordersCount} طلب مكتمل</div>
           </div>
           <div className="flex gap-2">
             <select
@@ -132,11 +144,11 @@ function RevenueTab() {
           </div>
         </div>
         <div className="h-64">
-          {data.series.length === 0 ? (
+          {series.length === 0 ? (
             <EmptyState title="لا توجد بيانات في هذه الفترة" />
           ) : (
             <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={data.series}>
+              <LineChart data={series}>
                 <CartesianGrid strokeDasharray="3 3" />
                 <XAxis dataKey="bucket" />
                 <YAxis />
