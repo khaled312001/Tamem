@@ -328,9 +328,9 @@ export const adminTest: RequestHandler = async (_req, res) => {
         paymentOptions: cfg.paymentOptions,
         cashExpiry: 1,
         name: 'Tamem Test',
-        email: 'test@tamem-delivery.com',
+        email: 'test@deliverytamem.com',
         mobile: '01010101010',
-        redirectUrl: 'https://tamem-delivery.com',
+        redirectUrl: 'https://deliverytamem.com',
         customerReference: `test-${Date.now()}`,
       }),
     });

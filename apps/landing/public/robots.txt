@@ -1,0 +1,6 @@
+User-agent: *
+Allow: /
+Disallow: /super_admin/
+Disallow: /backendtamem/
+
+Sitemap: https://deliverytamem.com/sitemap.xml

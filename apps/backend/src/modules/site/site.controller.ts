@@ -42,7 +42,7 @@ const DEFAULTS: SiteConfig = {
     'منصة توصيل وشحن متكاملة تخدم قفط وقنا والصعيد. دليفري، شحن بين المناطق، وطلبات تجار B2B.',
   heroCtaText: 'حمّل التطبيق الآن',
   addressAr: 'المقر الرئيسي — مدينة قفط، محافظة قنا',
-  email: 'info@tamem-delivery.com',
+  email: 'info@deliverytamem.com',
   workingHoursAr: 'يومياً 10 صباحاً — 1 بعد منتصف الليل',
   contacts: [
     {

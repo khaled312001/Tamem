@@ -6,7 +6,7 @@ const WHATSAPP = import.meta.env.PUBLIC_TAMEM_WHATSAPP || TAMEM_PRIMARY_PHONE;
 const wa = (text: string) =>
   `https://wa.me/${WHATSAPP.replace(/[^\d]/g, '')}?text=${encodeURIComponent(text)}`;
 
-const partners: { badge: string; title: string; desc: string; bullets: string[]; cta: string; href: string; gradient: string; icon: IconName }[] = [
+const partners: { badge: string; title: string; desc: string; bullets: string[]; cta: string; href: string; gradient: string; icon: IconName; note?: string }[] = [
   {
     badge: 'للتجار',
     title: 'ضم محلك لتميم',
@@ -16,6 +16,7 @@ const partners: { badge: string; title: string; desc: string; bullets: string[];
     href: wa('أهلاً، أنا تاجر وعاوز أضم محلي لتميم'),
     gradient: 'linear-gradient(135deg, #E0301E, #C4280F 60%, #EC7A2C)',
     icon: 'store',
+    note: 'تطبيق التاجر ولوحة تحكمه قريباً',
   },
   {
     badge: 'للسائقين',
@@ -78,6 +79,13 @@ const partners: { badge: string; title: string; desc: string; bullets: string[];
               {p.cta}
               <Icon name="arrow-up-right" size={14} class="opacity-60 group-hover:translate-x-1 transition" />
             </span>
+
+            {p.note && (
+              <p class="mt-4 flex items-center gap-1.5 text-xs text-white/70 italic">
+                <Icon name="clock" size={12} />
+                <span>{p.note}</span>
+              </p>
+            )}
           </div>
         </a>
       ))}

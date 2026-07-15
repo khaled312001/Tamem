@@ -313,14 +313,14 @@ export function RegisterScreen() {
             بإنشاء الحساب أنت توافق على{' '}
             <Text
               style={styles.hintLink}
-              onPress={() => void Linking.openURL('https://tamem-delivery.com/terms')}
+              onPress={() => void Linking.openURL('https://deliverytamem.com/terms')}
             >
               الشروط والأحكام
             </Text>{' '}
             و{' '}
             <Text
               style={styles.hintLink}
-              onPress={() => void Linking.openURL('https://tamem-delivery.com/privacy')}
+              onPress={() => void Linking.openURL('https://deliverytamem.com/privacy')}
             >
               سياسة الخصوصية
             </Text>

@@ -4,14 +4,23 @@ import { connectSocket } from './socket.js';
 
 export type SocketStatus = 'connecting' | 'connected' | 'reconnecting' | 'disconnected';
 
+// Match the flag socket.ts reads so the status pill matches the actual
+// connection strategy — when sockets are disabled, we never even try, so
+// "connecting…" would sit forever.
+const socketDisabled = String(import.meta.env.VITE_DISABLE_SOCKET ?? '').toLowerCase() === 'true';
+
 /**
  * Subscribes to the live Socket.IO connection state so the header can show a
  * "online / reconnecting / offline" indicator without each page wiring its own.
  */
 export function useSocketStatus(): SocketStatus {
-  const [status, setStatus] = useState<SocketStatus>('connecting');
+  const [status, setStatus] = useState<SocketStatus>(
+    socketDisabled ? 'disconnected' : 'connecting',
+  );
 
   useEffect(() => {
+    if (socketDisabled) return;
+
     const s = connectSocket();
 
     if (s.connected) setStatus('connected');

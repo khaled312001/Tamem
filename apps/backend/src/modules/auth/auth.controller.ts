@@ -19,6 +19,7 @@ import { prisma } from '../../db/prisma.js';
 import { ConflictError, UnauthorizedError } from '../../utils/errors.js';
 import { created, ok } from '../../utils/response.js';
 
+import { startAdminOtp, verifyAdminOtp } from './admin-otp.js';
 import {
   generateRefreshToken,
   hashRefreshToken,
@@ -117,16 +118,46 @@ async function ensureMerchantProfile(userId: string, city?: string): Promise<voi
 export const login: RequestHandler = async (req, res, next) => {
   try {
     const input = loginSchema.parse(req.body);
-    const user = await prisma.user.findUnique({ where: { phone: input.phone } });
+    const isEmail = input.identifier.includes('@');
+    const user = await prisma.user.findUnique({
+      where: isEmail ? { email: input.identifier } : { phone: input.identifier },
+    });
     if (!user || !user.passwordHash) throw new UnauthorizedError('بيانات الدخول غير صحيحة');
 
     const ok2 = await bcrypt.compare(input.password, user.passwordHash);
     if (!ok2) throw new UnauthorizedError('بيانات الدخول غير صحيحة');
     if (!user.isActive) throw new UnauthorizedError('الحساب غير مفعّل');
 
+    // For admins we don't hand out tokens yet — a 2nd factor OTP is emailed
+    // to ADMIN_OTP_RECIPIENTS. Client must POST /auth/otp/verify with the
+    // returned pendingToken + code to get real tokens.
+    if (user.role === 'ADMIN' || user.role === 'SUPER_ADMIN') {
+      const otp = await startAdminOtp({
+        userId: user.id,
+        role: user.role,
+        identifier: input.identifier,
+      });
+      return ok(res, {
+        requiresOtp: true,
+        pendingToken: otp.pendingToken,
+        expiresInSec: otp.expiresInSec,
+        // Reveal only the count / masked recipients so the client can show
+        // "sent to 2 emails" without leaking the address list to anyone who
+        // brute-forces the login page.
+        otpRecipientsCount: otp.sentTo.length,
+      });
+    }
+
     const tokens = await issueTokens(user.id, user.role as UserRole, req);
     ok(res, {
-      user: { id: user.id, name: user.name, phone: user.phone, role: user.role },
+      requiresOtp: false,
+      user: {
+        id: user.id,
+        name: user.name,
+        phone: user.phone,
+        email: user.email,
+        role: user.role,
+      },
       tokens,
     });
   } catch (err) {
@@ -153,6 +184,50 @@ export const refresh: RequestHandler = async (req, res, next) => {
     });
     const tokens = await issueTokens(stored.userId, stored.user.role as UserRole, req);
     ok(res, tokens);
+  } catch (err) {
+    next(err);
+  }
+};
+
+/**
+ * POST /auth/admin/otp/verify — second step of admin login. Takes the
+ * pendingToken issued by /auth/login (for admins) plus the 6-digit code that
+ * was emailed, returns the real tokens.
+ */
+export const adminOtpVerify: RequestHandler = async (req, res, next) => {
+  try {
+    const input = z
+      .object({
+        pendingToken: z.string().min(10),
+        code: z.string().regex(/^\d{4,8}$/, 'كود التحقق يجب أن يكون أرقام فقط'),
+      })
+      .parse(req.body);
+
+    let verified;
+    try {
+      verified = verifyAdminOtp(input.pendingToken, input.code);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'BAD_CODE';
+      if (msg === 'EXPIRED_OR_UNKNOWN')
+        throw new UnauthorizedError('انتهت صلاحية الرمز، اطلب رمز جديد');
+      if (msg === 'TOO_MANY_ATTEMPTS') throw new UnauthorizedError('محاولات كثيرة، اطلب رمز جديد');
+      throw new UnauthorizedError('كود التحقق غير صحيح');
+    }
+
+    const user = await prisma.user.findUnique({ where: { id: verified.userId } });
+    if (!user || !user.isActive) throw new UnauthorizedError('الحساب غير مفعّل');
+
+    const tokens = await issueTokens(user.id, user.role as UserRole, req);
+    ok(res, {
+      user: {
+        id: user.id,
+        name: user.name,
+        phone: user.phone,
+        email: user.email,
+        role: user.role,
+      },
+      tokens,
+    });
   } catch (err) {
     next(err);
   }
@@ -452,7 +527,7 @@ async function issueTokens(
           ? (req.headers['user-agent'] as string).slice(0, 500)
           : null,
       ip: req.ip,
-      expiresAt: refreshTokenExpiry(),
+      expiresAt: refreshTokenExpiry(role),
     },
   });
   return { accessToken, refreshToken: raw };

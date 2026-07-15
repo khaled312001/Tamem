@@ -58,6 +58,21 @@ const envSchema = z.object({
    *  Defaults to API_BASE_URL/redirects/payment which renders a simple
    *  closing-tab page. */
   EASYKASH_REDIRECT_URL: z.string().url().optional(),
+
+  // ─── SMTP (Hostinger) ────────────────────────────────────────────────
+  SMTP_HOST: z.string().default('smtp.hostinger.com'),
+  SMTP_PORT: z.coerce.number().int().positive().default(465),
+  SMTP_SECURE: z.coerce.boolean().default(true),
+  SMTP_USER: z.string().optional(),
+  SMTP_PASSWORD: z.string().optional(),
+  SMTP_FROM: z.string().default('info@deliverytamem.com'),
+  SMTP_REPLY_TO: z.string().optional(),
+
+  // ─── Admin OTP ───────────────────────────────────────────────────────
+  // Comma-separated list of emails that receive the admin login OTP.
+  ADMIN_OTP_RECIPIENTS: z.string().default('info@deliverytamem.com,DeliveryTamemQift@gmail.com'),
+  ADMIN_OTP_TTL_MINUTES: z.coerce.number().int().positive().default(5),
+  ADMIN_SESSION_TTL_HOURS: z.coerce.number().int().positive().default(6),
 });
 
 const parsed = envSchema.safeParse(process.env);
@@ -71,6 +86,10 @@ if (!parsed.success) {
 export const env = parsed.data;
 
 export const corsOrigins = env.CORS_ORIGINS.split(',')
+  .map((s) => s.trim())
+  .filter(Boolean);
+
+export const adminOtpRecipients = env.ADMIN_OTP_RECIPIENTS.split(',')
   .map((s) => s.trim())
   .filter(Boolean);
 

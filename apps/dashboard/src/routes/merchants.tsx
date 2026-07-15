@@ -8,6 +8,7 @@ import { Badge } from '../components/ui/Badge.js';
 import { Button } from '../components/ui/Button.js';
 import { Dialog } from '../components/ui/Dialog.js';
 import { Field, Input, Textarea } from '../components/ui/Input.js';
+import { PhoneInput } from '../components/ui/PhoneInput.js';
 import { EmptyState, TableSkeleton } from '../components/ui/Skeleton.js';
 import { api } from '../lib/api.js';
 
@@ -255,11 +256,7 @@ function CreateMerchantDialog({ onClose }: { onClose: () => void }) {
           />
         </Field>
         <Field label="هاتف المالك" required>
-          <Input
-            value={form.phone}
-            onChange={(e) => setForm({ ...form, phone: e.target.value })}
-            dir="ltr"
-          />
+          <PhoneInput value={form.phone} onChange={(v) => setForm({ ...form, phone: v })} />
         </Field>
         <Field label="كلمة المرور" required>
           <Input

@@ -175,7 +175,7 @@ const PLATFORMS = [
 
 async function buildCombined({
   file = 'tamem-all-links-qr.png',
-  url = 'https://tamem-delivery.com/links',
+  url = 'https://deliverytamem.com/links',
 } = {}) {
   // The combined card is taller because of the bottom platform-icon row.
   const C_SIZE_W = 1500;
@@ -289,7 +289,7 @@ async function buildCombined({
         .url { font: 600 30px 'Segoe UI',sans-serif; fill: #E0301E; letter-spacing: 1.5px; }
         .sub { font: 400 24px 'Segoe UI',sans-serif; fill: #58595B; }
       </style>
-      <text x="${C_SIZE_W / 2}" y="44" text-anchor="middle" class="url">tamem-delivery.com/links</text>
+      <text x="${C_SIZE_W / 2}" y="44" text-anchor="middle" class="url">deliverytamem.com/links</text>
       <text x="${C_SIZE_W / 2}" y="80" text-anchor="middle" class="sub">امسح الكود · صفحة واحدة · كل القنوات</text>
     </svg>
   `);

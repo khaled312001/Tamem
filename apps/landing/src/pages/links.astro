@@ -1,162 +1,232 @@
 ---
 /**
- * Linktree-style landing for the unified QR code (qr-output/tamem-all-links-qr.png).
+ * Linktree-style hub — every Tamem channel in one tap.
  *
- * One short URL → every social channel + WhatsApp + the app's download
- * page in one tap. Mobile-first, vertical buttons, dark brand theme.
+ * Website first (main destination), then socials, contact, WhatsApp.
+ * Delivery-themed background: subtle motion lines + a floating bike badge.
+ * Reveal + shine + float animations from BaseLayout, sequenced by index.
  */
 import BaseLayout from '../layouts/BaseLayout.astro';
 
+const BRAND = {
+  red: '#E0301E',
+  redDark: '#B0240F',
+  gold: '#F2A93B',
+  goldSoft: '#FFC76A',
+  dark: '#241310',
+  darkSoft: '#3a1a14',
+};
+
 const CHANNELS = [
   {
-    label: 'فيسبوك',
-    sub: 'Tamem Delivery · Facebook',
-    href: 'https://www.facebook.com/profile.php?id=100064713581319',
-    bg: 'linear-gradient(135deg,#1877F2,#0a4fb3)',
-    iconBg: '#1877F2',
-    icon: 'facebook',
-  },
-  {
-    label: 'تيك توك',
-    sub: '@deliverytamem0',
-    href: 'https://www.tiktok.com/@deliverytamem0?_r=1&_t=ZS-977CxobNlY2',
-    bg: 'linear-gradient(135deg,#FE2C55,#25F4EE)',
-    iconBg: '#000000',
-    icon: 'tiktok',
+    label: 'الموقع الرسمي',
+    sub: 'deliverytamem.com',
+    href: 'https://deliverytamem.com/',
+    bg: `linear-gradient(135deg, ${BRAND.red}, ${BRAND.gold})`,
+    iconBg: '#fff',
+    iconColor: BRAND.red,
+    icon: 'globe',
   },
   {
     label: 'واتساب',
-    sub: '01070750167',
+    sub: '+20 107 075 0167',
     href: 'https://wa.me/201070750167',
-    bg: 'linear-gradient(135deg,#25D366,#128C7E)',
-    iconBg: '#25D366',
+    bg: 'linear-gradient(135deg, #25D366, #128C7E)',
+    iconBg: '#fff',
+    iconColor: '#25D366',
     icon: 'whatsapp',
   },
   {
     label: 'اتصل بنا',
     sub: '01070750167',
     href: 'tel:+201070750167',
-    bg: 'linear-gradient(135deg,#E0301E,#F2A93B)',
-    iconBg: '#E0301E',
+    bg: `linear-gradient(135deg, ${BRAND.dark}, ${BRAND.redDark})`,
+    iconBg: BRAND.gold,
+    iconColor: BRAND.dark,
     icon: 'phone',
   },
   {
-    label: 'موقعنا',
-    sub: 'tamem-delivery.com',
-    href: '/',
-    bg: 'linear-gradient(135deg,#241310,#58595B)',
-    iconBg: '#F2A93B',
-    icon: 'globe',
+    label: 'فيسبوك',
+    sub: 'Tamem Delivery',
+    href: 'https://www.facebook.com/profile.php?id=100064713581319',
+    bg: 'linear-gradient(135deg, #1877F2, #0a4fb3)',
+    iconBg: '#fff',
+    iconColor: '#1877F2',
+    icon: 'facebook',
+  },
+  {
+    label: 'تيك توك',
+    sub: '@deliverytamem0',
+    href: 'https://www.tiktok.com/@deliverytamem0',
+    bg: 'linear-gradient(135deg, #000, #25F4EE 130%)',
+    iconBg: '#fff',
+    iconColor: '#000',
+    icon: 'tiktok',
+  },
+  {
+    label: 'راسلنا',
+    sub: 'info@deliverytamem.com',
+    href: 'mailto:info@deliverytamem.com',
+    bg: `linear-gradient(135deg, ${BRAND.gold}, ${BRAND.red})`,
+    iconBg: '#fff',
+    iconColor: BRAND.red,
+    icon: 'mail',
   },
 ];
 ---
 
 <BaseLayout
   title="روابط تميم للتوصيل · كل القنوات"
-  description="كل قنوات تواصل تميم للتوصيل في صفحة واحدة — فيسبوك، تيك توك، واتساب، والموقع."
+  description="كل قنوات تواصل تميم للتوصيل — الموقع، واتساب، فيسبوك، تيك توك — في صفحة واحدة."
 >
-  <main class="relative min-h-screen flex items-center justify-center px-5 py-12 overflow-hidden">
-    <!-- Soft blob backdrop -->
+  <main
+    class="tamem-links relative min-h-screen flex items-center justify-center px-5 py-14 overflow-hidden"
+    style={`background: radial-gradient(ellipse at top, ${BRAND.darkSoft} 0%, ${BRAND.dark} 55%, #0f0806 100%);`}
+  >
+    <!-- ─── Decorative brand background ─── -->
+    <!-- Soft blob glows -->
     <div
       aria-hidden="true"
-      class="absolute -top-32 -right-32 w-[420px] h-[420px] rounded-full blob-anim"
-      style="background:radial-gradient(circle, rgba(224,48,30,0.18), transparent 70%);"
-    >
-    </div>
+      class="pointer-events-none absolute -top-40 -right-40 w-[520px] h-[520px] rounded-full blob-anim"
+      style={`background: radial-gradient(circle, ${BRAND.red}44, transparent 65%); filter: blur(40px);`}
+    ></div>
     <div
       aria-hidden="true"
-      class="absolute -bottom-32 -left-32 w-[420px] h-[420px] rounded-full blob-anim"
-      style="background:radial-gradient(circle, rgba(242,169,59,0.16), transparent 70%); animation-delay:-7s;"
+      class="pointer-events-none absolute -bottom-40 -left-40 w-[520px] h-[520px] rounded-full blob-anim"
+      style={`background: radial-gradient(circle, ${BRAND.gold}33, transparent 65%); filter: blur(40px); animation-delay:-6s;`}
+    ></div>
+
+    <!-- Faint diagonal motion lines — "delivery speed" -->
+    <svg
+      aria-hidden="true"
+      class="pointer-events-none absolute inset-0 w-full h-full opacity-[0.05]"
+      preserveAspectRatio="none"
+      viewBox="0 0 100 100"
     >
+      <defs>
+        <pattern id="lines" width="12" height="12" patternUnits="userSpaceOnUse" patternTransform="rotate(30)">
+          <line x1="0" y1="0" x2="0" y2="12" stroke="#F2A93B" stroke-width="0.8"></line>
+        </pattern>
+      </defs>
+      <rect width="100" height="100" fill="url(#lines)"></rect>
+    </svg>
+
+    <!-- Floating scooter/bike accent badge -->
+    <div
+      aria-hidden="true"
+      class="pointer-events-none absolute top-8 left-8 md:top-12 md:left-16 w-16 h-16 rounded-full float-anim grid place-items-center shadow-2xl"
+      style={`background: linear-gradient(135deg, ${BRAND.gold}, ${BRAND.goldSoft}); color: ${BRAND.dark}; animation-delay: -2s;`}
+    >
+      <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="5.5" cy="17.5" r="3.5"/>
+        <circle cx="18.5" cy="17.5" r="3.5"/>
+        <path d="M15 6a1 1 0 1 0 0-2h-1v6l4 4"/>
+        <path d="M9 15h5"/>
+      </svg>
     </div>
 
     <article class="relative z-10 w-full max-w-md">
-      <header class="text-center mb-9 reveal">
+      <!-- ─── Header: logo + brand + tagline ─── -->
+      <header class="text-center mb-8 reveal">
         <div class="inline-block relative">
           <div
             aria-hidden="true"
-            class="absolute inset-0 rounded-full"
-            style="background:radial-gradient(circle, rgba(242,169,59,0.4), transparent 60%); transform:scale(1.4); filter:blur(20px);"
-          >
-          </div>
+            class="absolute inset-0 rounded-full logo-glow"
+            style={`background: radial-gradient(circle, ${BRAND.gold}66, transparent 60%); transform: scale(1.6); filter: blur(24px);`}
+          ></div>
           <img
             src="/logo.png"
             alt="تميم للتوصيل"
-            width="120"
-            height="120"
-            class="relative rounded-3xl shadow-2xl border-2 border-white/10"
-            style="background:#fff;"
+            width="130"
+            height="130"
+            class="relative rounded-3xl shadow-2xl ring-2 ring-white/10 float-anim"
+            style="background:#fff; padding:8px;"
           />
         </div>
-        <h1 class="mt-5 text-3xl font-black text-white">تميم للتوصيل</h1>
+        <h1 class="mt-6 text-4xl font-black text-white tracking-tight shine-text">
+          تميم للتوصيل
+        </h1>
         <p class="mt-2 text-white/70 text-sm">
-          توصيلك في أمان معانا — قفط · قنا · الصعيد
+          توصيلك في أمان معانا · قفط · قنا · الصعيد
         </p>
-        <p class="mt-4 inline-block px-4 py-1.5 rounded-full text-xs font-bold"
-          style="background:rgba(242,169,59,0.15); color:#F2A93B; border:1px solid rgba(242,169,59,0.3);">
-          اختر طريقة التواصل
-        </p>
+        <span
+          class="mt-5 inline-flex items-center gap-1.5 px-4 py-1.5 rounded-full text-xs font-bold border reveal-pulse"
+          style={`background: rgba(242,169,59,0.12); color: ${BRAND.gold}; border-color: rgba(242,169,59,0.35);`}
+        >
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="20 6 9 17 4 12"/>
+          </svg>
+          اختر قناة التواصل
+        </span>
       </header>
 
+      <!-- ─── Channel cards ─── -->
       <ul class="space-y-3.5">
         {CHANNELS.map((c, i) => (
-          <li
-            class={`reveal reveal-delay-${Math.min(i + 1, 4)}`}
-          >
+          <li class="link-item" style={`--i:${i};`}>
             <a
               href={c.href}
               target={c.href.startsWith('http') ? '_blank' : undefined}
               rel={c.href.startsWith('http') ? 'noopener noreferrer' : undefined}
-              class="group flex items-center gap-4 rounded-2xl px-4 py-3.5 border border-white/10 transition-all duration-300 hover:scale-[1.02] hover:border-white/30 hover:shadow-2xl"
+              class="link-card group relative flex items-center gap-4 rounded-2xl px-4 py-4 border border-white/10 overflow-hidden transition-transform duration-300 hover:-translate-y-1 hover:shadow-2xl"
               style={`background:${c.bg};`}
             >
+              <!-- Sheen sweep on hover -->
+              <span aria-hidden="true" class="sheen"></span>
+
               <span
-                class="flex items-center justify-center w-12 h-12 rounded-xl shrink-0 shadow-lg"
-                style={`background:${c.iconBg};`}
+                class="relative flex items-center justify-center w-13 h-13 rounded-xl shrink-0 shadow-lg icon-wrap"
+                style={`background:${c.iconBg}; color:${c.iconColor}; width: 52px; height: 52px;`}
               >
-                {c.icon === 'facebook' && (
-                  <svg width="26" height="26" viewBox="0 0 24 24" fill="#fff" aria-hidden="true">
-                    <path d="M22 12c0-5.523-4.477-10-10-10S2 6.477 2 12c0 4.991 3.657 9.128 8.438 9.879V14.89h-2.54V12h2.54V9.797c0-2.506 1.492-3.89 3.777-3.89 1.094 0 2.238.195 2.238.195v2.46h-1.26c-1.243 0-1.63.771-1.63 1.562V12h2.773l-.443 2.89h-2.33v6.989C18.343 21.128 22 16.991 22 12z"/>
-                  </svg>
-                )}
-                {c.icon === 'tiktok' && (
-                  <svg width="26" height="26" viewBox="0 0 24 24" fill="#fff" aria-hidden="true">
-                    <path d="M16.6 5.82s.51.5 0 0A4.278 4.278 0 0 1 15.54 3h-3.09v12.4a2.592 2.592 0 0 1-2.59 2.5c-1.42 0-2.6-1.16-2.6-2.6c0-1.72 1.66-3.01 3.37-2.48V9.66c-3.45-.46-6.47 2.22-6.47 5.64c0 3.33 2.76 5.7 5.69 5.7c3.14 0 5.69-2.55 5.69-5.7V9.01a7.35 7.35 0 0 0 4.3 1.38V7.3s-1.88.09-3.24-1.48"/>
+                {c.icon === 'globe' && (
+                  <svg width="26" height="26" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                    <path d="M11.99 2C6.47 2 2 6.48 2 12s4.47 10 9.99 10C17.52 22 22 17.52 22 12S17.52 2 11.99 2m6.93 6h-2.95a15.65 15.65 0 0 0-1.38-3.56A8.03 8.03 0 0 1 18.92 8M12 4.04c.83 1.2 1.48 2.53 1.91 3.96h-3.82c.43-1.43 1.08-2.76 1.91-3.96M4.26 14C4.1 13.36 4 12.69 4 12s.1-1.36.26-2h3.38c-.08.66-.14 1.32-.14 2s.06 1.34.14 2zm.82 2h2.95c.32 1.25.78 2.45 1.38 3.56A7.987 7.987 0 0 1 5.08 16m2.95-8H5.08a7.987 7.987 0 0 1 4.33-3.56A15.65 15.65 0 0 0 8.03 8M12 19.96c-.83-1.2-1.48-2.53-1.91-3.96h3.82c-.43 1.43-1.08 2.76-1.91 3.96M14.34 14H9.66c-.09-.66-.16-1.32-.16-2s.07-1.35.16-2h4.68c.09.65.16 1.32.16 2s-.07 1.34-.16 2m.25 5.56c.6-1.11 1.06-2.31 1.38-3.56h2.95a8.03 8.03 0 0 1-4.33 3.56M16.36 14c.08-.66.14-1.32.14-2s-.06-1.34-.14-2h3.38c.16.64.26 1.31.26 2s-.1 1.36-.26 2z"/>
                   </svg>
                 )}
                 {c.icon === 'whatsapp' && (
-                  <svg width="26" height="26" viewBox="0 0 24 24" fill="#fff" aria-hidden="true">
+                  <svg width="26" height="26" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
                     <path d="M17.498 14.382c-.301-.15-1.767-.867-2.04-.966c-.273-.101-.473-.15-.673.15c-.197.295-.771.964-.944 1.162c-.175.195-.349.21-.646.075c-.3-.15-1.263-.465-2.403-1.485c-.888-.795-1.484-1.77-1.66-2.07c-.174-.3-.019-.465.13-.615c.136-.135.301-.345.451-.523c.146-.181.194-.301.297-.496c.1-.21.049-.375-.025-.524c-.075-.15-.672-1.62-.922-2.206c-.24-.584-.487-.51-.672-.51c-.172-.015-.371-.015-.571-.015c-.2 0-.523.074-.797.359c-.273.3-1.045 1.02-1.045 2.475c0 1.455 1.07 2.865 1.219 3.075c.149.195 2.105 3.195 5.1 4.485c.714.3 1.27.48 1.704.629c.715.227 1.365.195 1.88.121c.574-.091 1.767-.721 2.016-1.426c.255-.705.255-1.29.18-1.425c-.074-.135-.27-.21-.57-.345m-5.446 7.443h-.016a9.87 9.87 0 0 1-5.031-1.378l-.361-.214l-3.741.982l.998-3.648l-.235-.374a9.86 9.86 0 0 1-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884c2.64 0 5.122 1.03 6.988 2.898a9.83 9.83 0 0 1 2.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.81 11.81 0 0 0 12.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.88 11.88 0 0 0 5.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.82 11.82 0 0 0-3.48-8.413"/>
                   </svg>
                 )}
                 {c.icon === 'phone' && (
-                  <svg width="26" height="26" viewBox="0 0 24 24" fill="#fff" aria-hidden="true">
+                  <svg width="26" height="26" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
                     <path d="M20 15.5c-1.25 0-2.45-.2-3.57-.57c-.35-.11-.74-.03-1.02.24l-2.2 2.2a15.045 15.045 0 0 1-6.59-6.58l2.2-2.21c.28-.27.36-.66.25-1.01A11.36 11.36 0 0 1 8.5 4c0-.55-.45-1-1-1H4c-.55 0-1 .45-1 1c0 9.39 7.61 17 17 17c.55 0 1-.45 1-1v-3.5c0-.55-.45-1-1-1"/>
                   </svg>
                 )}
-                {c.icon === 'globe' && (
-                  <svg width="26" height="26" viewBox="0 0 24 24" fill="#fff" aria-hidden="true">
-                    <path d="M11.99 2C6.47 2 2 6.48 2 12s4.47 10 9.99 10C17.52 22 22 17.52 22 12S17.52 2 11.99 2m6.93 6h-2.95a15.65 15.65 0 0 0-1.38-3.56A8.03 8.03 0 0 1 18.92 8M12 4.04c.83 1.2 1.48 2.53 1.91 3.96h-3.82c.43-1.43 1.08-2.76 1.91-3.96M4.26 14C4.1 13.36 4 12.69 4 12s.1-1.36.26-2h3.38c-.08.66-.14 1.32-.14 2s.06 1.34.14 2zm.82 2h2.95c.32 1.25.78 2.45 1.38 3.56A7.987 7.987 0 0 1 5.08 16m2.95-8H5.08a7.987 7.987 0 0 1 4.33-3.56A15.65 15.65 0 0 0 8.03 8M12 19.96c-.83-1.2-1.48-2.53-1.91-3.96h3.82c-.43 1.43-1.08 2.76-1.91 3.96M14.34 14H9.66c-.09-.66-.16-1.32-.16-2s.07-1.35.16-2h4.68c.09.65.16 1.32.16 2s-.07 1.34-.16 2m.25 5.56c.6-1.11 1.06-2.31 1.38-3.56h2.95a8.03 8.03 0 0 1-4.33 3.56M16.36 14c.08-.66.14-1.32.14-2s-.06-1.34-.14-2h3.38c.16.64.26 1.31.26 2s-.1 1.36-.26 2z"/>
+                {c.icon === 'facebook' && (
+                  <svg width="26" height="26" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                    <path d="M22 12c0-5.523-4.477-10-10-10S2 6.477 2 12c0 4.991 3.657 9.128 8.438 9.879V14.89h-2.54V12h2.54V9.797c0-2.506 1.492-3.89 3.777-3.89 1.094 0 2.238.195 2.238.195v2.46h-1.26c-1.243 0-1.63.771-1.63 1.562V12h2.773l-.443 2.89h-2.33v6.989C18.343 21.128 22 16.991 22 12z"/>
+                  </svg>
+                )}
+                {c.icon === 'tiktok' && (
+                  <svg width="26" height="26" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                    <path d="M16.6 5.82s.51.5 0 0A4.278 4.278 0 0 1 15.54 3h-3.09v12.4a2.592 2.592 0 0 1-2.59 2.5c-1.42 0-2.6-1.16-2.6-2.6c0-1.72 1.66-3.01 3.37-2.48V9.66c-3.45-.46-6.47 2.22-6.47 5.64c0 3.33 2.76 5.7 5.69 5.7c3.14 0 5.69-2.55 5.69-5.7V9.01a7.35 7.35 0 0 0 4.3 1.38V7.3s-1.88.09-3.24-1.48"/>
+                  </svg>
+                )}
+                {c.icon === 'mail' && (
+                  <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <rect x="2" y="4" width="20" height="16" rx="3"/>
+                    <path d="M22 7 12 13 2 7"/>
                   </svg>
                 )}
               </span>
-              <span class="flex-1">
+              <span class="flex-1 relative">
                 <span class="block font-black text-white text-lg leading-tight">{c.label}</span>
-                <span class="block text-white/80 text-xs mt-0.5" dir="ltr">{c.sub}</span>
+                <span class="block text-white/85 text-xs mt-0.5" dir="ltr">{c.sub}</span>
               </span>
               <svg
                 aria-hidden="true"
-                width="20"
-                height="20"
+                width="22"
+                height="22"
                 viewBox="0 0 24 24"
                 fill="none"
                 stroke="currentColor"
                 stroke-width="2.5"
                 stroke-linecap="round"
                 stroke-linejoin="round"
-                class="text-white/80 group-hover:translate-x-[-4px] transition-transform"
+                class="relative text-white/90 group-hover:-translate-x-1 transition-transform"
               >
-                <path d="M15 18l-6-6 6-6" />
+                <path d="M15 18l-6-6 6-6"/>
               </svg>
             </a>
           </li>
@@ -164,10 +234,85 @@ const CHANNELS = [
       </ul>
 
       <footer class="text-center mt-10 reveal">
-        <p class="text-xs text-white/40">
-          © {new Date().getFullYear()} Tamem Delivery · جميع الحقوق محفوظة
-        </p>
+        <div class="inline-flex items-center gap-2 text-white/50 text-xs">
+          <span class="w-8 h-px" style={`background: linear-gradient(to left, transparent, ${BRAND.gold}88);`}></span>
+          <span>© {new Date().getFullYear()} Tamem Delivery</span>
+          <span class="w-8 h-px" style={`background: linear-gradient(to right, transparent, ${BRAND.gold}88);`}></span>
+        </div>
+        <p class="mt-2 text-white/30 text-[10px] tracking-wide">جميع الحقوق محفوظة</p>
       </footer>
     </article>
   </main>
+
+  <!-- Page-scoped animation styles -->
+  <style is:global>
+    /* Stagger the link cards in with a shift-and-fade. `--i` drives delay. */
+    .tamem-links .link-item {
+      opacity: 0;
+      transform: translateY(14px);
+      animation: link-in 0.7s cubic-bezier(0.2, 0.9, 0.25, 1) forwards;
+      animation-delay: calc(0.2s + var(--i, 0) * 90ms);
+    }
+
+    @keyframes link-in {
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    /* Diagonal sheen sweep on hover — the delivery "swoosh". */
+    .tamem-links .link-card { isolation: isolate; }
+    .tamem-links .link-card .sheen {
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(115deg, transparent 30%, rgba(255,255,255,0.28) 50%, transparent 70%);
+      transform: translateX(120%);
+      transition: transform 0.7s ease;
+      pointer-events: none;
+      z-index: 0;
+    }
+    .tamem-links .link-card:hover .sheen {
+      transform: translateX(-120%);
+    }
+    .tamem-links .link-card > *:not(.sheen) { position: relative; z-index: 1; }
+
+    /* Subtle icon-wrap wobble on card hover so the icon feels alive. */
+    .tamem-links .link-card:hover .icon-wrap {
+      animation: icon-pop 0.55s cubic-bezier(0.34, 1.56, 0.64, 1);
+    }
+    @keyframes icon-pop {
+      0%   { transform: scale(1) rotate(0deg); }
+      45%  { transform: scale(1.14) rotate(-6deg); }
+      100% { transform: scale(1) rotate(0deg); }
+    }
+
+    /* Gentle pulse behind the logo. */
+    .tamem-links .logo-glow {
+      animation: logo-pulse 3.6s ease-in-out infinite;
+    }
+    @keyframes logo-pulse {
+      0%, 100% { opacity: 0.65; transform: scale(1.55); }
+      50%      { opacity: 1;    transform: scale(1.75); }
+    }
+
+    /* Pill "اختر قناة التواصل" attention pulse. */
+    .tamem-links .reveal-pulse {
+      animation: pill-pulse 2.4s ease-in-out infinite;
+    }
+    @keyframes pill-pulse {
+      0%, 100% { box-shadow: 0 0 0 0 rgba(242,169,59,0.45); }
+      50%      { box-shadow: 0 0 0 8px rgba(242,169,59,0);   }
+    }
+
+    /* Respect users who prefer reduced motion. */
+    @media (prefers-reduced-motion: reduce) {
+      .tamem-links .link-item,
+      .tamem-links .link-card .sheen,
+      .tamem-links .link-card:hover .icon-wrap,
+      .tamem-links .logo-glow,
+      .tamem-links .reveal-pulse {
+        animation: none !important;
+        transition: none !important;
+      }
+      .tamem-links .link-item { opacity: 1; transform: none; }
+    }
+  </style>
 </BaseLayout>

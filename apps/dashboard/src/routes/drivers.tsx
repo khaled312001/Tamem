@@ -7,6 +7,7 @@ import { DriverStatusBadge } from '../components/ui/Badge.js';
 import { Button } from '../components/ui/Button.js';
 import { Dialog } from '../components/ui/Dialog.js';
 import { Field, Input } from '../components/ui/Input.js';
+import { PhoneInput } from '../components/ui/PhoneInput.js';
 import { EmptyState, TableSkeleton } from '../components/ui/Skeleton.js';
 import { api } from '../lib/api.js';
 
@@ -169,7 +170,7 @@ function EditDriverDialog({ driver, onClose }: { driver: Row; onClose: () => voi
           <Input value={name} onChange={(e) => setName(e.target.value)} />
         </Field>
         <Field label="رقم الهاتف الرئيسي (للدخول)">
-          <Input dir="ltr" value={phone} onChange={(e) => setPhone(e.target.value)} />
+          <PhoneInput value={phone} onChange={setPhone} />
         </Field>
         <Field label="الرقم القومي">
           <Input value={nationalId} onChange={(e) => setNationalId(e.target.value)} />
@@ -385,11 +386,7 @@ function CreateDriverDialog({ onClose }: { onClose: () => void }) {
           <Input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
         </Field>
         <Field label="الهاتف" required>
-          <Input
-            value={form.phone}
-            onChange={(e) => setForm({ ...form, phone: e.target.value })}
-            dir="ltr"
-          />
+          <PhoneInput value={form.phone} onChange={(v) => setForm({ ...form, phone: v })} />
         </Field>
         <Field label="كلمة المرور" required>
           <Input

@@ -5,6 +5,9 @@ import { defineConfig } from 'vite';
 
 export default defineConfig({
   plugins: [react()],
+  // Dashboard is served from /super_admin/ on deliverytamem.com (production).
+  // Local dev still runs at root — override with BASE=/ if needed.
+  base: process.env.BASE ?? (process.env.NODE_ENV === 'production' ? '/super_admin/' : '/'),
   resolve: {
     alias: {
       '@': path.resolve(__dirname, './src'),

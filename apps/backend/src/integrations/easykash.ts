@@ -100,7 +100,7 @@ export async function startCheckout(input: CheckoutInput): Promise<CheckoutResul
       // wallets / cards but EasyKash requires it for cash methods.
       cashExpiry: 3,
       name: input.customer.name || 'Tamem Customer',
-      email: input.customer.email ?? `${mobile}@tamem-delivery.com`,
+      email: input.customer.email ?? `${mobile}@deliverytamem.com`,
       mobile,
       redirectUrl: input.redirectUrl,
       // Our Order.id round-trips as customerReference — we read it back
