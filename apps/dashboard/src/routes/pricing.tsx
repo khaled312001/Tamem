@@ -70,6 +70,7 @@ function TabPill({
 function PricingRulesTab() {
   const qc = useQueryClient();
   const [createOpen, setCreateOpen] = useState(false);
+  const [editRule, setEditRule] = useState<Row | null>(null);
 
   const { data: services } = useQuery({
     queryKey: ['admin', 'services'],
@@ -142,9 +143,26 @@ function PricingRulesTab() {
                     <td className="px-3 py-3">{Number(r.minPrice)}</td>
                     <td className="px-3 py-3">+{Number(r.expressSurcharge)}</td>
                     <td className="px-3 py-3">
-                      <Button size="sm" variant="ghost" onClick={() => deleteMut.mutate(r.id)}>
-                        <Trash2 className="w-4 h-4 text-destructive" />
-                      </Button>
+                      <div className="flex items-center gap-1 justify-end">
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => setEditRule(r)}
+                          title="تعديل"
+                        >
+                          <Pencil className="w-4 h-4" />
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => {
+                            if (confirm('حذف قاعدة التسعير؟')) deleteMut.mutate(r.id);
+                          }}
+                          title="حذف"
+                        >
+                          <Trash2 className="w-4 h-4 text-destructive" />
+                        </Button>
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -157,26 +175,43 @@ function PricingRulesTab() {
       {createOpen && (
         <CreateRuleDialog services={services ?? []} onClose={() => setCreateOpen(false)} />
       )}
+      {editRule && (
+        <CreateRuleDialog
+          services={services ?? []}
+          rule={editRule}
+          onClose={() => setEditRule(null)}
+        />
+      )}
     </div>
   );
 }
 
-function CreateRuleDialog({ services, onClose }: { services: Row[]; onClose: () => void }) {
+function CreateRuleDialog({
+  services,
+  rule,
+  onClose,
+}: {
+  services: Row[];
+  rule?: Row;
+  onClose: () => void;
+}) {
   const qc = useQueryClient();
+  const isEdit = !!rule;
   const [form, setForm] = useState({
-    serviceId: services[0]?.id ?? '',
-    governorate: '',
-    basePrice: 0,
-    pricePerKm: 0,
-    pricePerKg: 0,
-    minPrice: 0,
-    fragileSurcharge: 0,
-    expressSurcharge: 0,
+    serviceId: rule?.serviceId ?? services[0]?.id ?? '',
+    governorate: rule?.governorate ?? '',
+    basePrice: Number(rule?.basePrice ?? 0),
+    pricePerKm: Number(rule?.pricePerKm ?? 0),
+    pricePerKg: Number(rule?.pricePerKg ?? 0),
+    minPrice: Number(rule?.minPrice ?? 0),
+    fragileSurcharge: Number(rule?.fragileSurcharge ?? 0),
+    expressSurcharge: Number(rule?.expressSurcharge ?? 0),
   });
   const mut = useMutation({
-    mutationFn: () => api.adminCreatePricingRule(form),
+    mutationFn: () =>
+      isEdit ? api.adminUpdatePricingRule(rule!.id, form) : api.adminCreatePricingRule(form),
     onSuccess: () => {
-      toast.success('تم إنشاء القاعدة');
+      toast.success(isEdit ? 'تم تحديث القاعدة' : 'تم إنشاء القاعدة');
       qc.invalidateQueries({ queryKey: ['admin', 'pricing-rules'] });
       onClose();
     },
@@ -186,7 +221,12 @@ function CreateRuleDialog({ services, onClose }: { services: Row[]; onClose: () 
   // the base price must be a positive number.
   const canSave = form.serviceId !== '' && Number(form.basePrice) > 0;
   return (
-    <Dialog open onOpenChange={(o) => !o && onClose()} title="قاعدة تسعير جديدة" size="lg">
+    <Dialog
+      open
+      onOpenChange={(o) => !o && onClose()}
+      title={isEdit ? 'تعديل قاعدة التسعير' : 'قاعدة تسعير جديدة'}
+      size="lg"
+    >
       <div className="grid grid-cols-2 gap-3">
         <Field label="الخدمة" required>
           <select
@@ -419,6 +459,19 @@ function DeliveryZonesTab() {
     onError: (err: Error) => toast.error(err.message),
   });
 
+  const deleteVillageMut = useMutation({
+    mutationFn: async (id: string) => {
+      await api.raw.delete(`/admin/zones/villages/${id}`);
+    },
+    onSuccess: () => {
+      toast.success('تم حذف القرية');
+      setVillageId('');
+      qc.invalidateQueries({ queryKey: ['admin', 'zones', 'villages', cityId] });
+      qc.invalidateQueries({ queryKey: ['admin', 'zones', 'cities'] });
+    },
+    onError: (err: Error) => toast.error(err.message),
+  });
+
   // ── Submit handler for the price form ──────────────────────────────────
   const handleSavePrice = () => {
     if (!cityId) {
@@ -578,14 +631,27 @@ function DeliveryZonesTab() {
                 {selectedVillage.nameAr} · يُستخدم تلقائياً للمناطق بدون سعر مخصص
               </p>
             </div>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => setDialog({ kind: 'edit-village-base' })}
-            >
-              <Pencil className="w-3.5 h-3.5" />
-              تعديل
-            </Button>
+            <div className="flex items-center gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setDialog({ kind: 'edit-village-base' })}
+              >
+                <Pencil className="w-3.5 h-3.5" />
+                تعديل القرية
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  if (confirm(`حذف قرية "${selectedVillage.nameAr}" وكل مناطقها؟`)) {
+                    deleteVillageMut.mutate(selectedVillage.id);
+                  }
+                }}
+              >
+                <Trash2 className="w-3.5 h-3.5 text-destructive" />
+              </Button>
+            </div>
           </div>
         </section>
       )}
@@ -1051,11 +1117,12 @@ function EditVillageBasePriceDialog({
   const qc = useQueryClient();
   const initial = toNumberOrNull(village.baseDeliveryPrice ?? null);
   const [price, setPrice] = useState(initial === null ? '' : String(initial));
+  const [nameAr, setNameAr] = useState<string>(village.nameAr ?? '');
 
   const mut = useMutation({
     mutationFn: async () => {
       const trimmed = price.trim();
-      const body: Record<string, unknown> = {};
+      const body: Record<string, unknown> = { nameAr: nameAr.trim() };
       if (trimmed === '') {
         body.baseDeliveryPrice = null;
       } else {
@@ -1068,7 +1135,7 @@ function EditVillageBasePriceDialog({
       await api.raw.patch(`/admin/zones/villages/${village.id}`, body);
     },
     onSuccess: () => {
-      toast.success('تم تحديث سعر القرية');
+      toast.success('تم تحديث القرية');
       qc.invalidateQueries({ queryKey: ['admin', 'zones', 'villages', village.cityId] });
       onClose();
     },
@@ -1076,13 +1143,11 @@ function EditVillageBasePriceDialog({
   });
 
   return (
-    <Dialog
-      open
-      onOpenChange={(o) => !o && onClose()}
-      title={`السعر الأساسي — ${village.nameAr}`}
-      size="sm"
-    >
+    <Dialog open onOpenChange={(o) => !o && onClose()} title="تعديل القرية" size="sm">
       <div className="space-y-3">
+        <Field label="اسم القرية" required>
+          <Input value={nameAr} onChange={(e) => setNameAr(e.target.value)} autoFocus />
+        </Field>
         <Field label="السعر الأساسي (ج.م)" hint="اتركه فارغاً لإلغاء السعر الافتراضي">
           <Input
             type="number"

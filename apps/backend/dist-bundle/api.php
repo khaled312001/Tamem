@@ -404,6 +404,59 @@ if ($method === 'GET' && $path === '/admin/alerts/stats') {
         'escalated' => $byStatus['ESCALATED'] ?? 0,
     ]);
 }
+// Alert detail
+if ($method === 'GET' && preg_match('#^/admin/alerts/([^/]+)$#', $path, $m) && $m[1] !== 'stats') {
+    authUser();
+    $st = db()->prepare('SELECT * FROM `Alert` WHERE id = ?'); $st->execute([$m[1]]);
+    $r = $st->fetch();
+    if (!$r) jsonErr('التنبيه غير موجود', 404, 'NOT_FOUND');
+    jsonOk(jsonizeRow($r));
+}
+// Alert actions
+if ($method === 'POST' && preg_match('#^/admin/alerts/([^/]+)/(resolve|ack|dismiss|escalate)$#', $path, $m)) {
+    $u = authUser(); if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
+    $b = readJsonBody(); $uid = $u['sub'] ?? null; $id = $m[1];
+    if ($m[2] === 'resolve') {
+        db()->prepare("UPDATE `Alert` SET status='RESOLVED', isResolved=1, resolvedAt=NOW(3), resolvedById=?, resolutionNotes=?, updatedAt=NOW(3) WHERE id=?")
+            ->execute([$uid, (string)($b['note'] ?? ''), $id]);
+    } elseif ($m[2] === 'ack') {
+        db()->prepare("UPDATE `Alert` SET status='ACKNOWLEDGED', ackedAt=NOW(3), ackedById=?, updatedAt=NOW(3) WHERE id=?")->execute([$uid, $id]);
+    } elseif ($m[2] === 'dismiss') {
+        db()->prepare("UPDATE `Alert` SET status='DISMISSED', isResolved=1, dismissedAt=NOW(3), dismissedById=?, resolutionNotes=?, updatedAt=NOW(3) WHERE id=?")
+            ->execute([$uid, (string)($b['note'] ?? ''), $id]);
+    } else { // escalate
+        db()->prepare("UPDATE `Alert` SET status='ESCALATED', severity='CRITICAL', escalatedAt=NOW(3), escalatedById=?, updatedAt=NOW(3) WHERE id=?")->execute([$uid, $id]);
+    }
+    $st = db()->prepare('SELECT * FROM `Alert` WHERE id = ?'); $st->execute([$id]);
+    jsonOk(jsonizeRow($st->fetch()) ?: []);
+}
+if ($method === 'POST' && preg_match('#^/admin/alerts/([^/]+)/note$#', $path, $m)) {
+    authUser(); $b = readJsonBody();
+    db()->prepare("UPDATE `Alert` SET resolutionNotes=?, updatedAt=NOW(3) WHERE id=?")->execute([(string)($b['note'] ?? ''), $m[1]]);
+    jsonOk(['ok' => true]);
+}
+// Alert sweep — generate alerts for orders stuck in NEW/UNDER_REVIEW too long.
+if ($method === 'POST' && $path === '/admin/alerts/run-sweep') {
+    $u = authUser(); if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
+    $created = 0;
+    try {
+        $cutoff = gmdate('Y-m-d H:i:s', time() - 15 * 60);
+        $stuck = db()->prepare("SELECT id, orderNumber FROM `Order` WHERE status IN ('NEW','UNDER_REVIEW') AND createdAt < ?");
+        $stuck->execute([$cutoff]);
+        $ins = db()->prepare("INSERT INTO `Alert` (id, type, severity, title, titleAr, description, descriptionAr, relatedOrderId, category, status, triggerKey, createdAt, updatedAt)
+            VALUES (?,?,?,?,?,?,?,?,?, 'OPEN', ?, NOW(3), NOW(3))");
+        foreach ($stuck->fetchAll() as $o) {
+            $key = 'stuck_order_' . $o['id'];
+            $ex = db()->prepare("SELECT id FROM `Alert` WHERE triggerKey = ? AND status = 'OPEN' LIMIT 1"); $ex->execute([$key]);
+            if ($ex->fetch()) continue;
+            $ins->execute([newId(), 'PENDING_ORDER', 'HIGH', 'Order pending too long', 'طلب متأخر بدون معالجة',
+                "Order {$o['orderNumber']} stuck > 15 min", "الطلب رقم {$o['orderNumber']} لسه محتاج معالجة من أكتر من ١٥ دقيقة",
+                $o['id'], 'ORDER', $key]);
+            $created++;
+        }
+    } catch (Throwable $e) { error_log('[api.php] alert sweep: ' . $e->getMessage()); }
+    jsonOk(['created' => $created, 'ranAt' => gmdate('Y-m-d\TH:i:s.000\Z')]);
+}
 
 // ─── WhatsApp bridge (Baileys) — a persistent Node.js process runs the real
 // WhatsApp Web session and talks to us through files under uploads/.wa:
@@ -411,6 +464,22 @@ if ($method === 'GET' && $path === '/admin/alerts/stats') {
 //   queue/*.json → we write outgoing messages {to, text}; bridge sends + deletes
 //   control/*.json → we write {action:'logout'} etc.
 function waDir(): string { $d = __DIR__ . '/uploads/.wa'; if (!is_dir($d)) @mkdir($d, 0755, true); return $d; }
+// Queue an outgoing WhatsApp message for the Baileys bridge to send.
+function waEnqueue(?string $to, string $text): void {
+    $to = trim((string)$to);
+    if ($to === '' || $text === '') return;
+    @mkdir(waDir() . '/queue', 0755, true);
+    @file_put_contents(waDir() . '/queue/' . bin2hex(random_bytes(8)) . '.json',
+        json_encode(['to' => $to, 'text' => $text], JSON_UNESCAPED_UNICODE));
+}
+function orderStatusLabelAr(string $s): string {
+    return [
+        'NEW' => 'جديد', 'UNDER_REVIEW' => 'قيد المراجعة', 'PRICED' => 'تم التسعير',
+        'ACCEPTED' => 'مقبول', 'DRIVER_ASSIGNED' => 'تم تعيين سائق', 'PICKED_UP' => 'تم الاستلام',
+        'IN_ROUTE' => 'في الطريق', 'DELIVERED' => 'تم التوصيل', 'COMPLETED' => 'مكتمل',
+        'CANCELLED' => 'ملغي',
+    ][$s] ?? $s;
+}
 function waStatus(): array {
     $f = waDir() . '/status.json';
     $j = is_file($f) ? json_decode((string) @file_get_contents($f), true) : null;
@@ -648,7 +717,7 @@ if ($method === 'GET' && $path === '/admin/site-config') {
 //
 // Resource → table map. `null` = use a synthesized query below.
 $RES = [
-    'supervisors'      => 'Supervisor',
+    // 'supervisors' handled by dedicated handlers below (nested shifts + on-shift)
     'pricing-rules'    => 'PricingRule',
     'coupons'          => 'Coupon',
     'offers'           => 'Offer',
@@ -756,8 +825,121 @@ if ($method === 'POST' && $path === '/admin/orders') {
     try {
         db()->prepare("INSERT INTO `Order` ($colStr) VALUES (" . implode(',', $ph) . ")")->execute($args);
     } catch (PDOException $e) { error_log('[api.php] manual order: ' . $e->getMessage()); jsonErr('تعذّر إنشاء الطلب، راجع البيانات', 422, 'CREATE_FAILED'); }
+    // WhatsApp the on-shift supervisor about the new order (+ record dispatch).
+    try {
+        [$dow, $mins] = nowCairo();
+        foreach (db()->query("SELECT * FROM `Supervisor` WHERE isActive = 1")->fetchAll() as $sup) {
+            $hit = false;
+            foreach (shiftsForSupervisor($sup['id']) as $sh) if (shiftCoversNow($sh, $dow, $mins)) { $hit = true; break; }
+            if ($hit) {
+                $addr = (string)($b['deliveryAddress'] ?? '');
+                waEnqueue($sup['whatsappPhone'], "🆕 طلب جديد *#{$orderNumber}*\nالعميل: " . (string)($b['customerName'] ?? '') . ($addr ? "\nالعنوان: $addr" : ''));
+                try { db()->prepare('INSERT INTO `SupervisorOrderDispatch` (id, supervisorId, orderId, status, sentAt, createdAt) VALUES (?,?,?,?,NOW(3),NOW(3))')->execute([newId(), $sup['id'], $id, 'SENT']); } catch (Throwable $e) {}
+                break;
+            }
+        }
+    } catch (Throwable $e) { /* best-effort */ }
     $sel = db()->prepare("SELECT " . ORDER_COLS . " " . ORDER_JOIN . " WHERE o.id = ?"); $sel->execute([$id]);
     jsonOk(orderNest($sel->fetch()), 201);
+}
+
+// ─── Supervisors — nested shifts + on-shift computation + shift CRUD ────
+function shiftsForSupervisor(string $supId): array {
+    $st = db()->prepare('SELECT * FROM `SupervisorShift` WHERE supervisorId = ? ORDER BY startTime');
+    $st->execute([$supId]);
+    return array_map(function ($s) {
+        $days = json_decode((string)($s['daysOfWeek'] ?? '[]'), true);
+        return ['id' => $s['id'], 'supervisorId' => $s['supervisorId'], 'kind' => $s['kind'],
+            'startTime' => $s['startTime'], 'endTime' => $s['endTime'],
+            'daysOfWeek' => is_array($days) ? array_map('intval', $days) : [],
+            'isActive' => (bool)(int)$s['isActive']];
+    }, $st->fetchAll());
+}
+function shiftCoversNow(array $sh, int $dow, int $mins): bool {
+    if (!$sh['isActive']) return false;
+    $days = $sh['daysOfWeek'] ?? [];
+    if (!empty($days) && !in_array($dow, $days, true)) return false;
+    $s = (int)substr($sh['startTime'], 0, 2) * 60 + (int)substr($sh['startTime'], 3, 2);
+    $e = (int)substr($sh['endTime'], 0, 2) * 60 + (int)substr($sh['endTime'], 3, 2);
+    if ($e <= $s) return $mins >= $s || $mins < $e; // crosses midnight
+    return $mins >= $s && $mins < $e;
+}
+function nowCairo(): array {
+    try { $n = new DateTime('now', new DateTimeZone('Africa/Cairo')); } catch (Throwable $e) { $n = new DateTime('now'); }
+    return [(int)$n->format('w'), (int)$n->format('G') * 60 + (int)$n->format('i')];
+}
+if ($method === 'GET' && $path === '/admin/supervisors') {
+    authUser();
+    [$dow, $mins] = nowCairo();
+    $rows = db()->query('SELECT * FROM `Supervisor` ORDER BY createdAt DESC')->fetchAll();
+    $out = array_map(function ($r) use ($dow, $mins) {
+        $shifts = shiftsForSupervisor($r['id']);
+        $onShift = false;
+        foreach ($shifts as $sh) if (shiftCoversNow($sh, $dow, $mins)) { $onShift = true; break; }
+        return ['id' => $r['id'], 'name' => $r['name'], 'whatsappPhone' => $r['whatsappPhone'],
+            'isActive' => (bool)(int)$r['isActive'], 'notes' => $r['notes'],
+            'createdAt' => $r['createdAt'], 'updatedAt' => $r['updatedAt'],
+            'shifts' => $shifts, 'isOnShiftNow' => $onShift && (bool)(int)$r['isActive']];
+    }, $rows);
+    http_response_code(200);
+    echo json_encode(['data' => ['supervisors' => $out], 'supervisors' => $out], JSON_UNESCAPED_UNICODE);
+    exit;
+}
+if ($method === 'GET' && $path === '/admin/supervisors/current') {
+    authUser();
+    [$dow, $mins] = nowCairo();
+    $rows = db()->query("SELECT * FROM `Supervisor` WHERE isActive = 1")->fetchAll();
+    $cur = null;
+    foreach ($rows as $r) {
+        foreach (shiftsForSupervisor($r['id']) as $sh) {
+            if (shiftCoversNow($sh, $dow, $mins)) {
+                $cur = ['id' => $r['id'], 'name' => $r['name'], 'whatsappPhone' => $r['whatsappPhone'], 'isActive' => true,
+                    'shift' => ['kind' => $sh['kind'], 'startTime' => $sh['startTime'], 'endTime' => $sh['endTime']]];
+                break 2;
+            }
+        }
+    }
+    http_response_code(200);
+    echo json_encode(['data' => ['supervisor' => $cur], 'supervisor' => $cur], JSON_UNESCAPED_UNICODE);
+    exit;
+}
+if ($method === 'GET' && preg_match('#^/admin/supervisors/([^/]+)/reports$#', $path, $m)) {
+    authUser();
+    $period = (string)($_GET['period'] ?? 'daily');
+    $from = $period === 'monthly' ? '-30 days' : ($period === 'weekly' ? '-7 days' : '-1 day');
+    $fromSql = gmdate('Y-m-d H:i:s', strtotime($from));
+    $rows = [];
+    try {
+        $st = db()->prepare("SELECT DATE(sentAt) d, COUNT(*) c, SUM(status='SENT') ok FROM `SupervisorOrderDispatch` WHERE supervisorId = ? AND sentAt >= ? GROUP BY DATE(sentAt) ORDER BY d");
+        $st->execute([$m[1], $fromSql]); $rows = $st->fetchAll();
+    } catch (Throwable $e) { $rows = []; }
+    $total = 0; $ok = 0; $breakdown = [];
+    foreach ($rows as $r) { $total += (int)$r['c']; $ok += (int)$r['ok']; $breakdown[] = ['date' => $r['d'], 'count' => (int)$r['c']]; }
+    jsonOk(['supervisorId' => $m[1], 'period' => $period, 'totalDispatches' => $total,
+        'successCount' => $ok, 'failureCount' => $total - $ok, 'breakdown' => $breakdown]);
+}
+if ($method === 'POST' && preg_match('#^/admin/supervisors/([^/]+)/shifts$#', $path, $m)) {
+    authUser();
+    $b = readJsonBody();
+    db()->prepare('INSERT INTO `SupervisorShift` (id, supervisorId, kind, startTime, endTime, daysOfWeek, isActive, createdAt, updatedAt) VALUES (?,?,?,?,?,?,?,NOW(3),NOW(3))')
+        ->execute([newId(), $m[1], (string)($b['kind'] ?? 'CUSTOM'), (string)($b['startTime'] ?? '08:00'),
+            (string)($b['endTime'] ?? '16:00'), json_encode(array_map('intval', $b['daysOfWeek'] ?? [])),
+            !empty($b['isActive'] ?? true) ? 1 : 0]);
+    jsonOk(['ok' => true], 201);
+}
+if ($method === 'PATCH' && preg_match('#^/admin/supervisors/shifts/([^/]+)$#', $path, $m)) {
+    authUser();
+    $b = readJsonBody(); $sets = []; $args = [];
+    foreach (['kind', 'startTime', 'endTime'] as $f) if (array_key_exists($f, $b)) { $sets[] = "`$f` = ?"; $args[] = (string)$b[$f]; }
+    if (array_key_exists('daysOfWeek', $b)) { $sets[] = '`daysOfWeek` = ?'; $args[] = json_encode(array_map('intval', $b['daysOfWeek'] ?? [])); }
+    if (array_key_exists('isActive', $b)) { $sets[] = '`isActive` = ?'; $args[] = $b['isActive'] ? 1 : 0; }
+    if ($sets) { $sets[] = '`updatedAt` = NOW(3)'; $args[] = $m[1]; db()->prepare('UPDATE `SupervisorShift` SET ' . implode(',', $sets) . ' WHERE id = ?')->execute($args); }
+    jsonOk(['ok' => true]);
+}
+if ($method === 'DELETE' && preg_match('#^/admin/supervisors/shifts/([^/]+)$#', $path, $m)) {
+    authUser();
+    db()->prepare('DELETE FROM `SupervisorShift` WHERE id = ?')->execute([$m[1]]);
+    jsonOk(['deleted' => true]);
 }
 
 // Magic sub-path /current — used e.g. by supervisors to fetch the one
@@ -1038,10 +1220,14 @@ if ($method === 'POST' && preg_match('#^/admin/merchants/([^/]+)/api-config/test
     if (!$cfg) jsonErr('احفظ إعدادات الـ API الأول', 400, 'NO_CONFIG');
     $res = fetchMerchantApi($cfg);
     if (!$res['ok']) jsonErr($res['reason'] ?? 'فشل الاختبار', 400, 'TEST_FAILED');
-    $mapping = is_string($cfg['fieldMapping'] ?? null) ? (json_decode($cfg['fieldMapping'], true) ?: []) : ($cfg['fieldMapping'] ?? []);
-    $preview = array_map(fn($r) => mapExternalProduct($r, $mapping), array_slice($res['items'], 0, 3));
     db()->prepare('UPDATE `MerchantApiConfig` SET isConnected = 1, lastError = NULL, updatedAt = NOW(3) WHERE merchantId = ?')->execute([$m[1]]);
-    jsonOk(['ok' => true, 'count' => count($res['items']), 'preview' => $preview]);
+    // Shape MUST match the dashboard TestResult: { ok, fetchedCount, sampleItems, sampleFields }.
+    jsonOk([
+        'ok' => true,
+        'fetchedCount' => count($res['items']),
+        'sampleItems' => array_slice($res['items'], 0, 3),
+        'sampleFields' => (!empty($res['items']) && is_array($res['items'][0])) ? array_keys($res['items'][0]) : [],
+    ]);
 }
 if ($method === 'POST' && preg_match('#^/admin/merchants/([^/]+)/api-config/sync$#', $path, $m)) {
     authUser();
@@ -1073,7 +1259,8 @@ if ($method === 'POST' && preg_match('#^/admin/merchants/([^/]+)/api-config/sync
         $pdo->prepare('INSERT INTO `ProductSyncLog` (id, merchantId, status, added, updated, message, createdAt) VALUES (?,?,?,?,?,?,NOW(3))')
             ->execute([newId(), $m[1], 'SUCCESS', $added, $updated, "أُضيف $added، حُدّث $updated"]);
     } catch (Throwable $e) { /* table shape may differ; ignore */ }
-    jsonOk(['ok' => true, 'added' => $added, 'updated' => $updated, 'total' => count($res['items'])]);
+    jsonOk(['ok' => true, 'fetchedCount' => count($res['items']), 'createdCount' => $added, 'updatedCount' => $updated,
+        'failedCount' => 0, 'hiddenCount' => 0, 'added' => $added, 'updated' => $updated, 'total' => count($res['items'])]);
 }
 if ($method === 'DELETE' && preg_match('#^/admin/merchants/([^/]+)/api-config$#', $path, $m)) {
     authUser();
@@ -1608,6 +1795,32 @@ if ($method === 'PATCH' && preg_match('#^/admin/customers/([^/]+)$#', $path, $m)
     $r = db()->prepare('SELECT * FROM `User` WHERE id = ?'); $r->execute([$id]);
     jsonOk(jsonizeRow($r->fetch()) ?: []);
 }
+if ($method === 'DELETE' && preg_match('#^/admin/customers/([^/]+)$#', $path, $m)) {
+    $u = authUser(); if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
+    try {
+        db()->prepare("DELETE FROM `User` WHERE id = ? AND role = 'CUSTOMER'")->execute([$m[1]]);
+        jsonOk(['deleted' => true]);
+    } catch (PDOException $e) { error_log('[api.php] customer delete: ' . $e->getMessage()); jsonErr('تعذّر الحذف — قد يكون العميل مرتبط بطلبات', 422, 'DELETE_FAILED'); }
+}
+
+// ─── Broadcast — persist an in-app Notification for every targeted user ─
+if ($method === 'POST' && $path === '/admin/broadcast') {
+    $u = authUser(); if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
+    $b = readJsonBody();
+    $titleAr = trim((string)($b['titleAr'] ?? ''));
+    $bodyAr = trim((string)($b['bodyAr'] ?? ''));
+    if ($titleAr === '' || $bodyAr === '') jsonErr('اكتب العنوان والرسالة', 422, 'MISSING');
+    $type = ['PROMO' => 'PROMO', 'ALERT' => 'ALERT', 'ANNOUNCEMENT' => 'SYSTEM'][(string)($b['kind'] ?? '')] ?? 'SYSTEM';
+    $target = (string)($b['target'] ?? 'ALL');
+    $roleFilter = in_array($target, ['CUSTOMER', 'MERCHANT', 'DRIVER', 'ADMIN'], true) ? $target : null;
+    $st = db()->prepare('SELECT id FROM `User`' . ($roleFilter ? ' WHERE role = ?' : ''));
+    $st->execute($roleFilter ? [$roleFilter] : []);
+    $ids = array_column($st->fetchAll(), 'id');
+    $ins = db()->prepare('INSERT INTO `Notification` (id, userId, type, title, titleAr, body, bodyAr, channel, isRead, sentAt) VALUES (?,?,?,?,?,?,?,?,0,NOW(3))');
+    $n = 0;
+    foreach ($ids as $uid) { try { $ins->execute([newId(), $uid, $type, $titleAr, $titleAr, $bodyAr, $bodyAr, 'IN_APP']); $n++; } catch (Throwable $e) {} }
+    jsonOk(['recipients' => $n, 'pushSent' => 0, 'pushFailed' => 0]);
+}
 
 // ─── Order operational actions ─────────────────────────────────────────
 if ($method === 'PATCH' && preg_match('#^/admin/orders/([^/]+)/status$#', $path, $m)) {
@@ -1619,6 +1832,15 @@ if ($method === 'PATCH' && preg_match('#^/admin/orders/([^/]+)/status$#', $path,
     $args[] = $m[1];
     try { db()->prepare('UPDATE `Order` SET ' . implode(',', $sets) . ' WHERE id = ?')->execute($args); }
     catch (PDOException $e) { error_log('[api.php] order status: ' . $e->getMessage()); jsonErr('تعذّر تحديث الحالة', 422, 'FAILED'); }
+    // Notify the customer on WhatsApp about the new status.
+    try {
+        $q = db()->prepare('SELECT o.orderNumber, u.phone FROM `Order` o LEFT JOIN `User` u ON u.id = o.customerId WHERE o.id = ?');
+        $q->execute([$m[1]]); $ord = $q->fetch();
+        if ($ord && !empty($ord['phone'])) {
+            waEnqueue($ord['phone'], "تميم للتوصيل 🚚\nحالة طلبك رقم *{$ord['orderNumber']}* أصبحت: *" . orderStatusLabelAr($status) . "*"
+                . ($status === 'CANCELLED' && !empty($b['reason']) ? "\nالسبب: " . $b['reason'] : ''));
+        }
+    } catch (Throwable $e) { /* notification is best-effort */ }
     $r = db()->prepare('SELECT * FROM `Order` WHERE id = ?'); $r->execute([$m[1]]);
     jsonOk(jsonizeRow($r->fetch()) ?: []);
 }

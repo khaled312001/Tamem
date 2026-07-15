@@ -862,11 +862,16 @@ function ReportsDialog({ supervisor, onClose }: { supervisor: Supervisor; onClos
     },
   });
 
-  const totals = reportQ.data ?? {
-    totalDispatches: 0,
-    successCount: 0,
-    failureCount: 0,
-    breakdown: [],
+  // Defensive: never assume the report shape — a drifted/empty response must
+  // not crash the `breakdown.map` in the useMemo below.
+  const d = reportQ.data as Partial<ReportResponse> | undefined;
+  const totals: ReportResponse = {
+    supervisorId: supervisor.id,
+    period,
+    totalDispatches: d?.totalDispatches ?? 0,
+    successCount: d?.successCount ?? 0,
+    failureCount: d?.failureCount ?? 0,
+    breakdown: Array.isArray(d?.breakdown) ? d!.breakdown! : [],
   };
 
   const successRate =
