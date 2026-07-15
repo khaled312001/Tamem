@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { MapPin, Phone, Plus, Save, Search, Trash2, Users, X } from 'lucide-react';
+import { MapPin, Pencil, Phone, Plus, Save, Search, Trash2, Users, X } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { toast } from 'sonner';
 
@@ -24,6 +24,7 @@ interface SavedAddress {
 }
 
 export function CustomersPage() {
+  const qc = useQueryClient();
   const [search, setSearch] = useState('');
   const [debounced, setDebounced] = useState('');
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -36,6 +37,15 @@ export function CustomersPage() {
   const { data, isLoading } = useQuery({
     queryKey: ['admin', 'customers', debounced],
     queryFn: () => api.adminListCustomers({ search: debounced || undefined, pageSize: 50 }),
+  });
+
+  const deleteMut = useMutation({
+    mutationFn: (id: string) => api.raw.delete(`/admin/customers/${id}`),
+    onSuccess: () => {
+      toast.success('تم حذف العميل');
+      qc.invalidateQueries({ queryKey: ['admin', 'customers'] });
+    },
+    onError: (err: Error) => toast.error(err.message),
   });
 
   return (
@@ -79,6 +89,7 @@ export function CustomersPage() {
                   <th className="px-4 py-3 font-bold">المدينة</th>
                   <th className="px-4 py-3 font-bold">عدد الطلبات</th>
                   <th className="px-4 py-3 font-bold">تاريخ التسجيل</th>
+                  <th className="px-4 py-3 w-24" />
                 </tr>
               </thead>
               <tbody>
@@ -96,6 +107,30 @@ export function CustomersPage() {
                     <td className="px-4 py-3">{c._count?.customerOrders ?? 0}</td>
                     <td className="px-4 py-3 text-xs text-muted-foreground">
                       {new Date(c.createdAt).toLocaleDateString('ar-EG')}
+                    </td>
+                    <td className="px-4 py-3">
+                      <div className="flex items-center gap-1 justify-end">
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setSelectedId(c.id);
+                          }}
+                          title="تعديل"
+                          className="p-1.5 rounded hover:bg-muted text-brand-red"
+                        >
+                          <Pencil className="w-4 h-4" />
+                        </button>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            if (confirm(`حذف العميل "${c.name}"؟`)) deleteMut.mutate(c.id);
+                          }}
+                          title="حذف"
+                          className="p-1.5 rounded hover:bg-muted text-destructive"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))}

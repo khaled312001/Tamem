@@ -1,5 +1,16 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Loader2, MessageSquare, Pencil, Phone, Plus, Save, Star, Truck, X } from 'lucide-react';
+import {
+  Loader2,
+  MessageSquare,
+  Pencil,
+  Phone,
+  Plus,
+  Save,
+  Star,
+  Trash2,
+  Truck,
+  X,
+} from 'lucide-react';
 import { useState } from 'react';
 import { toast } from 'sonner';
 
@@ -32,6 +43,15 @@ export function DriversPage() {
       api.adminUpdateDriverStatus(id, status),
     onSuccess: () => {
       toast.success('تم تحديث الحالة');
+      qc.invalidateQueries({ queryKey: ['admin', 'drivers'] });
+    },
+    onError: (err: Error) => toast.error(err.message),
+  });
+
+  const deleteMut = useMutation({
+    mutationFn: (id: string) => api.adminDeleteDriver(id),
+    onSuccess: () => {
+      toast.success('تم حذف السائق');
       qc.invalidateQueries({ queryKey: ['admin', 'drivers'] });
     },
     onError: (err: Error) => toast.error(err.message),
@@ -122,6 +142,14 @@ export function DriversPage() {
                   className="inline-flex items-center gap-1 text-xs text-brand-orange hover:underline"
                 >
                   <Star className="w-3 h-3" /> التقييمات
+                </button>
+                <button
+                  onClick={() => {
+                    if (confirm(`حذف السائق "${d.name}"؟`)) deleteMut.mutate(d.id);
+                  }}
+                  className="inline-flex items-center gap-1 text-xs text-destructive hover:underline"
+                >
+                  <Trash2 className="w-3 h-3" /> حذف
                 </button>
               </div>
             </div>
