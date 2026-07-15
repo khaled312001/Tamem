@@ -393,6 +393,7 @@ function CreateDriverDialog({ onClose }: { onClose: () => void }) {
             type="password"
             value={form.password}
             onChange={(e) => setForm({ ...form, password: e.target.value })}
+            autoComplete="new-password"
           />
         </Field>
         <Field label="نوع المركبة" required>

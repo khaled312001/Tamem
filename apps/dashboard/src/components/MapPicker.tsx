@@ -78,7 +78,7 @@ export function MapPicker({ lat, lng, onChange, height = 320, initialQuery }: Ma
       zoom: lat && lng ? 16 : 13,
       scrollWheelZoom: true,
     });
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{y}/{x}.png', {
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
       attribution: '&copy; OpenStreetMap',
       maxZoom: 19,
     }).addTo(map);

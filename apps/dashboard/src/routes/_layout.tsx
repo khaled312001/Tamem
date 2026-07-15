@@ -6,7 +6,6 @@ import {
   ChevronLeft,
   ChevronsLeft,
   ChevronsRight,
-  CreditCard,
   DollarSign,
   Globe,
   Home,
@@ -61,8 +60,7 @@ const NAV_ITEMS: NavItem[] = [
   { to: '/services', icon: Sparkles, label: 'الخدمات' },
   { to: '/products', icon: Box, label: 'المنتجات' },
   { to: '/pricing', icon: DollarSign, label: 'التسعير' },
-  { to: '/payments', icon: DollarSign, label: 'المدفوعات' },
-  { to: '/payment-gateway', icon: CreditCard, label: 'بوابة الدفع' },
+  // المدفوعات + بوابة الدفع مخفيين من القائمة (كاش فقط حالياً)
   { to: '/coupons', icon: Tag, label: 'الكوبونات' },
   { to: '/reports', icon: BarChart3, label: 'التقارير', end: true },
   { to: '/reports/revenue', icon: BarChart3, label: 'تقرير الإيرادات' },
