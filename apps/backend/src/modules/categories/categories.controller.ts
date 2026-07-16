@@ -28,7 +28,12 @@ const updateSchema = createSchema.partial().omit({ id: true });
 
 export const list: RequestHandler = async (_req, res, next) => {
   try {
-    const cats = await prisma.category.findMany({ orderBy: { sortOrder: 'asc' } });
+    const cats = await prisma.category.findMany({
+      orderBy: { sortOrder: 'asc' },
+      // The admin screen needs the merchant count to say whether a category
+      // can actually be deleted before offering the button.
+      include: { _count: { select: { merchants: true } } },
+    });
     ok(res, cats);
   } catch (err) {
     next(err);
@@ -58,14 +63,22 @@ export const update: RequestHandler = async (req, res, next) => {
   }
 };
 
+/**
+ * Really delete an unused category; fall back to deactivating one that
+ * merchants still point at (categoryId is a required FK — a hard delete would
+ * either fail or orphan stores).
+ */
 export const remove: RequestHandler = async (req, res, next) => {
+  const id = param(req.params.id);
   try {
-    await prisma.category.update({
-      where: { id: param(req.params.id) },
-      data: { isActive: false },
-    });
+    await prisma.category.delete({ where: { id } });
     noContent(res);
   } catch (err) {
+    if ((err as { code?: string }).code === 'P2003') {
+      await prisma.category.update({ where: { id }, data: { isActive: false } });
+      noContent(res);
+      return;
+    }
     next(err);
   }
 };
