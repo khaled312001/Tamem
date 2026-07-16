@@ -1036,6 +1036,11 @@ function ProductThumb({ src, onClick }: { src: string | null; onClick?: () => vo
   );
 }
 
+/**
+ * Availability switch. The knob is placed with the logical `start` offset, not
+ * translate-x: transforms are physical, so under the dashboard's dir="rtl" a
+ * translated knob slides straight out of its track.
+ */
 function StatusToggle({ on, onChange }: { on: boolean; onChange: () => void }) {
   return (
     <button
@@ -1044,10 +1049,14 @@ function StatusToggle({ on, onChange }: { on: boolean; onChange: () => void }) {
       aria-checked={on}
       onClick={onChange}
       title={on ? 'متاح — اضغط للتعطيل' : 'معطّل — اضغط للتفعيل'}
-      className={`relative inline-flex h-6 w-11 items-center rounded-full transition ${on ? 'bg-green-500' : 'bg-zinc-300'}`}
+      className={`relative inline-flex h-6 w-11 shrink-0 rounded-full transition-colors outline-none focus-visible:ring-2 focus-visible:ring-brand-red/40 focus-visible:ring-offset-2 ${
+        on ? 'bg-green-500 hover:bg-green-600' : 'bg-zinc-300 hover:bg-zinc-400'
+      }`}
     >
       <span
-        className={`inline-block h-4 w-4 transform rounded-full bg-white shadow transition ${on ? 'translate-x-1' : 'translate-x-6'}`}
+        className={`absolute top-1/2 -translate-y-1/2 h-5 w-5 rounded-full bg-white shadow-sm ring-1 ring-black/5 transition-[inset-inline-start] duration-200 ${
+          on ? 'start-[22px]' : 'start-0.5'
+        }`}
       />
     </button>
   );
