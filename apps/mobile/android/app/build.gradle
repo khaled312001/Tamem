@@ -102,12 +102,17 @@ android {
             keyPassword 'android'
         }
         release {
-            if (project.hasProperty('MYAPP_UPLOAD_STORE_FILE')) {
-                storeFile file(MYAPP_UPLOAD_STORE_FILE)
-                storePassword MYAPP_UPLOAD_STORE_PASSWORD
-                keyAlias MYAPP_UPLOAD_KEY_ALIAS
-                keyPassword MYAPP_UPLOAD_KEY_PASSWORD
+            // No silent fallback: if the upload key isn't configured we FAIL the
+            // build rather than sign a "release" with the public Android debug key
+            // (which Play rejects and which would silently happen the moment the
+            // MYAPP_UPLOAD_* props move out of the tracked gradle.properties).
+            if (!project.hasProperty('MYAPP_UPLOAD_STORE_FILE')) {
+                throw new GradleException('Release signing not configured: set MYAPP_UPLOAD_* (keystore path/passwords/alias) in ~/.gradle/gradle.properties or via -P. Refusing to build a debug-signed release.')
             }
+            storeFile file(MYAPP_UPLOAD_STORE_FILE)
+            storePassword MYAPP_UPLOAD_STORE_PASSWORD
+            keyAlias MYAPP_UPLOAD_KEY_ALIAS
+            keyPassword MYAPP_UPLOAD_KEY_PASSWORD
         }
     }
     buildTypes {
@@ -115,7 +120,7 @@ android {
             signingConfig signingConfigs.debug
         }
         release {
-            signingConfig project.hasProperty('MYAPP_UPLOAD_STORE_FILE') ? signingConfigs.release : signingConfigs.debug
+            signingConfig signingConfigs.release
             shrinkResources (findProperty('android.enableShrinkResourcesInReleaseBuilds')?.toBoolean() ?: false)
             minifyEnabled enableProguardInReleaseBuilds
             proguardFiles getDefaultProguardFile("proguard-android.txt"), "proguard-rules.pro"

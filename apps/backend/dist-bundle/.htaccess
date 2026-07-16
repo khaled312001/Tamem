@@ -1,7 +1,26 @@
+# SECURITY — never serve dotfiles (.env, .htaccess, .git*, …) as static content.
+# Without this, Apache/LiteSpeed happily returns dist-bundle/.env at /.env, which
+# leaks DATABASE_URL, JWT secrets, ADMIN_PASSWORD and the EasyKash HMAC. Keep this
+# FIRST so it wins before any rewrite. .well-known tokens don't start with a dot,
+# so ACME/SSL is unaffected.
+<FilesMatch "^\.">
+  Require all denied
+</FilesMatch>
+# Source/backup/config files must never be served as static text. A stray
+# api.php.bak leaks the entire shim source (auth logic, table names); package.json
+# leaks the dependency surface. api.php itself is fine — it EXECUTES, it isn't
+# served as text.
+<FilesMatch "(?i)\.(bak|old|orig|save|swp|swo|dist|log|sql|sh|inc|ini|lock|map)$|~$|^(package(-lock)?\.json|composer\.(json|lock)|tsconfig.*\.json|yarn\.lock|pnpm-lock\.yaml)$">
+  Require all denied
+</FilesMatch>
+# Belt-and-suspenders for servers where <FilesMatch> is bypassed by the rewrite:
+# refuse any request whose path contains a /dot-segment.
+RewriteEngine On
+RewriteRule (^|/)\.(?!well-known/) - [F]
+
 # Route every /api/v1/* AND /socket.io/* request to the PHP auth shim.
 # When the CloudLinux Node.js app is later enabled from hPanel, Passenger
 # will override this and serve the real Node backend.
-RewriteEngine On
 RewriteBase /
 
 # CORS preflight — need to answer OPTIONS before any auth check
