@@ -32,11 +32,25 @@ const stats: { value: string; suffix?: string; label: string; icon: IconName; co
           >
             <Icon name={s.icon} size={22} />
           </div>
+          {/* data-site goes on leaf spans only — the wrapper holds the suffix
+              element, so tagging it would let an edit delete the suffix. */}
           <div class="text-3xl md:text-4xl font-black mb-1 text-white">
-            {s.value}
-            {s.suffix && <span class="text-sm md:text-base align-top opacity-60 ms-1">{s.suffix}</span>}
+            <span data-site={`stat${i + 1}Value`}>{s.value}</span>
+            {s.suffix && (
+              <span
+                class="text-sm md:text-base align-top opacity-60 ms-1"
+                data-site={`stat${i + 1}Suffix`}
+              >
+                {s.suffix}
+              </span>
+            )}
           </div>
-          <div class="text-xs md:text-sm text-white/60 font-medium leading-tight">{s.label}</div>
+          <div
+            class="text-xs md:text-sm text-white/60 font-medium leading-tight"
+            data-site={`stat${i + 1}Label`}
+          >
+            {s.label}
+          </div>
         </div>
       ))}
     </div>

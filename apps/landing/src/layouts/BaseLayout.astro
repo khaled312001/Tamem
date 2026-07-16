@@ -94,14 +94,26 @@ const ogImageUrl = new URL(ogImage, SITE).href;
           const set = (selector, value) => {
             if (typeof value !== 'string' || !value) return;
             document.querySelectorAll(selector).forEach((el) => {
-              if (el.tagName === 'A') el.setAttribute('href', value);
-              else el.textContent = value;
+              if (el.tagName === 'A') {
+                el.setAttribute('href', value);
+                return;
+              }
+              // Assigning textContent destroys child elements. Every data-site
+              // target is meant to be a leaf; refuse anything else so a bad key
+              // can never silently strip a gradient span or a line break.
+              if (el.children.length > 0) return;
+              el.textContent = value;
             });
           };
+          // Apply any key the dashboard saved, by convention: the Setting key IS
+          // the data-site name. New editable text needs only a data-site attr on
+          // a leaf node — no change here.
+          for (const el of document.querySelectorAll('[data-site]')) {
+            const key = el.getAttribute('data-site');
+            if (key && typeof data[key] === 'string') set(`[data-site="${key}"]`, data[key]);
+          }
 
-          set('[data-site="heroTitle"]', data.heroTitle);
-          set('[data-site="heroSubtitle"]', data.heroSubtitle);
-          set('[data-site="heroCtaText"]', data.heroCtaText);
+          // Explicit mappings where the Setting key differs from the attribute.
           set('[data-site="address"]', data.addressAr);
           set('[data-site="email"]', data.email);
           set('[data-site="emailHref"]', data.email ? `mailto:${data.email}` : '');

@@ -35,6 +35,7 @@ import { Logo } from '../components/Logo.js';
 import { NotificationBell } from '../components/NotificationBell.js';
 import { UserMenu } from '../components/UserMenu.js';
 import { api } from '../lib/api.js';
+import { useAuth } from '../lib/auth.js';
 import { isSoundEnabled, playNewOrderSound, setSoundEnabled } from '../lib/sound.js';
 import { useSocketStatus } from '../lib/useSocketStatus.js';
 import { cn } from '../lib/utils.js';
@@ -49,6 +50,11 @@ type NavItem = {
   // When true the link is only active on an exact path match. Needed for
   // parent routes like /reports so they don't stay highlighted on /reports/revenue.
   end?: boolean;
+  // Permission key gating this item. Must match a key in the shim's
+  // $ADMIN_PERM_MAP and admins.tsx ALL_PERMS. A scoped ADMIN only sees items
+  // whose perm is in their list. `undefined` = always visible (no perm concept,
+  // e.g. categories). `'__super'` = SUPER_ADMIN only.
+  perm?: string;
 };
 
 type NavSection = { title: string; items: NavItem[] };
@@ -60,60 +66,86 @@ const NAV_SECTIONS: NavSection[] = [
   {
     title: 'العمليات',
     items: [
-      { to: '/overview', icon: Home, label: 'نظرة عامة' },
-      { to: '/orders', icon: Package, label: 'الطلبات', countKey: 'orders' },
-      { to: '/alerts', icon: AlertTriangle, label: 'التنبيهات', countKey: 'alerts', urgent: true },
+      { to: '/overview', icon: Home, label: 'نظرة عامة', perm: 'overview' },
+      { to: '/orders', icon: Package, label: 'الطلبات', countKey: 'orders', perm: 'orders' },
+      {
+        to: '/alerts',
+        icon: AlertTriangle,
+        label: 'التنبيهات',
+        countKey: 'alerts',
+        urgent: true,
+        perm: 'alerts',
+      },
     ],
   },
   {
     title: 'الأشخاص',
     items: [
-      { to: '/customers', icon: Users, label: 'العملاء' },
-      { to: '/drivers', icon: Truck, label: 'السائقون' },
-      { to: '/merchants', icon: Store, label: 'التجار' },
-      { to: '/supervisors', icon: UserCheck, label: 'المشرفون' },
+      { to: '/customers', icon: Users, label: 'العملاء', perm: 'customers' },
+      { to: '/drivers', icon: Truck, label: 'السائقون', perm: 'drivers' },
+      { to: '/merchants', icon: Store, label: 'التجار', perm: 'merchants' },
+      { to: '/supervisors', icon: UserCheck, label: 'المشرفون', perm: 'supervisors' },
     ],
   },
   {
     title: 'الكتالوج',
     items: [
-      { to: '/services', icon: Sparkles, label: 'الخدمات' },
-      { to: '/products', icon: Box, label: 'المنتجات' },
+      { to: '/services', icon: Sparkles, label: 'الخدمات', perm: 'services' },
+      { to: '/products', icon: Box, label: 'المنتجات', perm: 'products' },
       { to: '/categories', icon: Tag, label: 'التصنيفات' },
-      { to: '/pricing', icon: DollarSign, label: 'التسعير' },
-      { to: '/coupons', icon: Tag, label: 'الكوبونات' },
+      { to: '/pricing', icon: DollarSign, label: 'التسعير', perm: 'pricing' },
+      { to: '/coupons', icon: Tag, label: 'الكوبونات', perm: 'coupons' },
     ],
   },
   {
     title: 'المالية والتقارير',
     items: [
-      { to: '/reports', icon: BarChart3, label: 'التقارير', end: true },
-      { to: '/reports/revenue', icon: TrendingUp, label: 'تقرير الإيرادات' },
+      { to: '/reports', icon: BarChart3, label: 'التقارير', end: true, perm: 'reports' },
+      { to: '/reports/revenue', icon: TrendingUp, label: 'تقرير الإيرادات', perm: 'reports' },
     ],
   },
   {
     title: 'التسويق والتواصل',
     items: [
-      { to: '/broadcast', icon: Megaphone, label: 'إشعار جماعي' },
-      { to: '/whatsapp', icon: MessageCircle, label: 'ربط واتساب' },
-      { to: '/reviews', icon: Star, label: 'التقييمات' },
+      { to: '/broadcast', icon: Megaphone, label: 'إشعار جماعي', perm: 'broadcast' },
+      { to: '/whatsapp', icon: MessageCircle, label: 'ربط واتساب', perm: 'whatsapp' },
+      { to: '/reviews', icon: Star, label: 'التقييمات', perm: 'reviews' },
     ],
   },
   {
     title: 'المحتوى',
     items: [
-      { to: '/home-settings', icon: Smartphone, label: 'صفحة التطبيق' },
-      { to: '/site-settings', icon: Globe, label: 'صفحة الموقع' },
+      { to: '/home-settings', icon: Smartphone, label: 'صفحة التطبيق', perm: 'home-settings' },
+      { to: '/site-settings', icon: Globe, label: 'صفحة الموقع', perm: 'site-settings' },
     ],
   },
   {
     title: 'الإدارة',
     items: [
-      { to: '/admins', icon: ShieldCheck, label: 'المدراء' },
-      { to: '/settings', icon: Settings, label: 'الإعدادات' },
+      { to: '/admins', icon: ShieldCheck, label: 'المدراء', perm: '__super' },
+      { to: '/settings', icon: Settings, label: 'الإعدادات', perm: 'settings' },
     ],
   },
 ];
+
+// Filter the nav to what this admin may see. SUPER_ADMIN and admins with no
+// permissions array configured (null) see everything; a scoped ADMIN sees only
+// items whose perm is in their list. Items with no perm are always shown.
+function visibleSections(
+  role: string | undefined,
+  permissions: string[] | null | undefined,
+): NavSection[] {
+  const unrestricted = role === 'SUPER_ADMIN' || permissions == null;
+  const allow = (item: NavItem): boolean => {
+    if (item.perm === '__super') return role === 'SUPER_ADMIN';
+    if (unrestricted) return true;
+    if (!item.perm) return true;
+    return permissions!.includes(item.perm);
+  };
+  return NAV_SECTIONS.map((s) => ({ ...s, items: s.items.filter(allow) })).filter(
+    (s) => s.items.length > 0,
+  );
+}
 
 const ALL_NAV_ITEMS: NavItem[] = NAV_SECTIONS.flatMap((s) => s.items);
 
@@ -139,6 +171,18 @@ export function DashboardLayout() {
   }, [collapsed]);
   const [searchValue, setSearchValue] = useState('');
 
+  // The signed-in admin. permissions isn't on the shared User type, so read it
+  // defensively — the shim's OTP-verify now includes it (null = unrestricted).
+  const authUser = useAuth((s) => s.user) as {
+    role?: string;
+    permissions?: string[] | null;
+  } | null;
+  const sections = visibleSections(authUser?.role, authUser?.permissions);
+  const canSee = (perm: string): boolean =>
+    authUser?.role === 'SUPER_ADMIN' ||
+    authUser?.permissions == null ||
+    authUser.permissions.includes(perm);
+
   const submitSearch = (e: React.FormEvent) => {
     e.preventDefault();
     const q = searchValue.trim();
@@ -156,14 +200,17 @@ export function DashboardLayout() {
     };
   }, [mobileOpen]);
 
-  // Live counts for sidebar badges
+  // Live counts for sidebar badges. Gated by permission so a scoped admin
+  // without overview/alerts access doesn't fire requests the API will 403.
   const { data: overview } = useQuery({
     queryKey: ['admin', 'overview-counts'],
     queryFn: () => api.adminOverview() as Promise<{ openOrders?: number }>,
+    enabled: canSee('overview'),
   });
   const { data: alertsData } = useQuery({
     queryKey: ['admin', 'alerts-count'],
     queryFn: () => api.adminListAlerts({ resolved: 'false' }),
+    enabled: canSee('alerts'),
   });
   const counts = {
     orders: overview?.openOrders ?? 0,
@@ -267,7 +314,7 @@ export function DashboardLayout() {
               collapsed && 'md:px-2',
             )}
           >
-            {NAV_SECTIONS.map((section) => (
+            {sections.map((section) => (
               <div key={section.title} className="space-y-0.5">
                 <div
                   className={cn(

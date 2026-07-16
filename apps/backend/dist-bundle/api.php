@@ -52,7 +52,7 @@ if ($origin && in_array($origin, $allowed, true)) {
     header('Vary: Origin');
     header('Access-Control-Allow-Credentials: true');
     header('Access-Control-Allow-Methods: GET, POST, PUT, PATCH, DELETE, OPTIONS');
-    header('Access-Control-Allow-Headers: Content-Type, Authorization, X-Requested-With');
+    header('Access-Control-Allow-Headers: Content-Type, Authorization, X-Requested-With, X-Import-Job, X-Import-File');
     header('Access-Control-Max-Age: 86400');
 }
 if (($_SERVER['REQUEST_METHOD'] ?? '') === 'OPTIONS') {
@@ -115,7 +115,22 @@ function db(): PDO {
             PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
             PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
             PDO::ATTR_TIMEOUT => 8,
+            // Hostinger's shared MySQL caps connections at 500/HOUR. The static
+            // above only dedupes WITHIN one request — PHP tears the connection
+            // down at the end of every request, so each HTTP call was opening a
+            // brand-new one. That is ~8 requests/minute before the whole API
+            // starts 503ing, which a single import dialog (paged fetch + 5s
+            // polling) can burn through on its own.
+            // Persistent handles live in the PHP worker and are reused across
+            // requests, so connection count tracks WORKERS, not traffic.
+            PDO::ATTR_PERSISTENT => true,
         ]);
+        // A pooled handle can come back still inside a transaction if an earlier
+        // request died between BEGIN and COMMIT — that would silently poison this
+        // one. Always hand out a clean connection.
+        if ($pdo->inTransaction()) {
+            try { $pdo->rollBack(); } catch (Throwable $e) { /* already clean */ }
+        }
     } catch (PDOException $e) {
         // Fail soft instead of a raw 500 fatal. Hostinger's shared MySQL caps
         // connections/hour; when hit, surface a clean 503 the dashboard shows
@@ -253,6 +268,9 @@ function authUser(): array {
     if (!hash_equals($expected, $sig)) jsonErr('توكن غير صالح', 401, 'BAD_TOKEN');
     $payload = json_decode((string) base64_decode(strtr($p, '-_', '+/')), true) ?: [];
     if (($payload['exp'] ?? 0) < time()) jsonErr('انتهت صلاحية الجلسة', 401, 'EXPIRED');
+    // Remembered for the audit trail: every admin route calls authUser(), so
+    // this is the single point that reliably knows who is acting.
+    $GLOBALS['__auth_user'] = $payload;
     return $payload;
 }
 
@@ -278,10 +296,51 @@ if ($path === '/socket.io/' || str_starts_with($path, '/socket.io/')) {
 // mints a CUSTOMER token for any anonymous caller, so an ungated /admin/*
 // handler would hand the whole User table (passwordHash included) to anyone.
 // Gate the namespace once, here, before any admin handler runs.
+// Maps the first path segment after /admin/ to the permission key the dashboard
+// stores in User.permissions. A scoped ADMIN may only touch sections whose key
+// is in their list. Unmapped segments (e.g. categories) stay role-gated only —
+// there is no permission concept for them, so denying would just lock everyone
+// out with no way to grant access.
+$ADMIN_PERM_MAP = [
+    'overview' => 'overview', 'alerts' => 'alerts', 'orders' => 'orders',
+    'customers' => 'customers', 'drivers' => 'drivers', 'merchants' => 'merchants',
+    'services' => 'services', 'products' => 'products',
+    'pricing' => 'pricing', 'pricing-rules' => 'pricing', 'zones' => 'pricing',
+    'payments' => 'payments', 'payment-gateway' => 'payment-gateway',
+    'coupons' => 'coupons', 'reports' => 'reports', 'reviews' => 'reviews',
+    'whatsapp' => 'whatsapp', 'broadcast' => 'broadcast', 'supervisors' => 'supervisors',
+    'home-config' => 'home-settings', 'offers' => 'home-settings',
+    'site-config' => 'site-settings', 'settings' => 'settings',
+];
 if (str_starts_with($path, '/admin/')) {
     $__admin = authUser();
-    if (!in_array($__admin['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) {
+    $__role = $__admin['role'] ?? '';
+    if (!in_array($__role, ['ADMIN', 'SUPER_ADMIN'], true)) {
         jsonErr('غير مسموح', 403, 'FORBIDDEN');
+    }
+    // SUPER_ADMIN bypasses granular checks. A scoped ADMIN is held to their
+    // permission list — WITHOUT this, "admin access to one section" silently
+    // meant full access to every section and every /admin/* endpoint.
+    if ($__role === 'ADMIN') {
+        $__seg = explode('/', substr($path, strlen('/admin/')))[0];
+        // Admin management is SUPER_ADMIN-only; a scoped admin has no key for it.
+        if ($__seg === 'admins') jsonErr('هذه الصفحة لمدير النظام فقط', 403, 'FORBIDDEN');
+        $__need = $ADMIN_PERM_MAP[$__seg] ?? null;
+        if ($__need !== null) {
+            // permissions live in the DB (the JWT carries only sub/role/exp).
+            $__ps = db()->prepare('SELECT permissions FROM `User` WHERE id = ? LIMIT 1');
+            $__ps->execute([$__admin['sub'] ?? '']);
+            $__praw = $__ps->fetchColumn();
+            // NULL = never configured → unrestricted (legacy admins, back-compat).
+            // Any JSON value (incl. "[]") = explicitly scoped → enforce membership.
+            if ($__praw !== null && $__praw !== false) {
+                $__perms = json_decode((string) $__praw, true);
+                if (!is_array($__perms)) $__perms = [];
+                if (!in_array($__need, $__perms, true)) {
+                    jsonErr('ليس لديك صلاحية للوصول لهذا القسم', 403, 'FORBIDDEN');
+                }
+            }
+        }
     }
 }
 
@@ -369,6 +428,8 @@ if ($method === 'GET' && $path === '/admin/overview') {
 if ($method === 'GET' && $path === '/admin/alerts') {
     $u = authUser();
     if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
+    // Refresh before answering, so the page never shows a stale picture.
+    maybeAutoSweep();
     $where = [];
     $args = [];
     $resolved = $_GET['resolved'] ?? null;
@@ -384,10 +445,20 @@ if ($method === 'GET' && $path === '/admin/alerts') {
     $items = $st->fetchAll();
     // Stats by severity — that's what the api-client's `adminListAlerts`
     // pulls out of `meta.stats`.
-    $sevCounts = db()->query("SELECT severity, COUNT(*) c FROM `Alert` WHERE isResolved = 0 GROUP BY severity")->fetchAll();
+    // "Active" = OPEN | ACKNOWLEDGED | ESCALATED, matching the Node backend.
+    // isResolved is the legacy flag and misses ACKNOWLEDGED work still open.
+    $ACTIVE = "status IN ('OPEN','ACKNOWLEDGED','ESCALATED')";
+    $sevCounts = db()->query("SELECT severity, COUNT(*) c FROM `Alert` WHERE $ACTIVE GROUP BY severity")->fetchAll();
     $bySeverity = [];
     foreach ($sevCounts as $c) $bySeverity[$c['severity']] = (int) $c['c'];
-    $resolvedToday = (int) db()->query("SELECT COUNT(*) FROM `Alert` WHERE isResolved = 1 AND resolvedAt >= '" . gmdate('Y-m-d 00:00:00') . "'")->fetchColumn();
+    $totalActive = (int) db()->query("SELECT COUNT(*) FROM `Alert` WHERE $ACTIVE")->fetchColumn();
+    // The page renders a count on every category chip; without this each one
+    // read as blank.
+    $byCategory = [];
+    foreach (db()->query("SELECT category, COUNT(*) c FROM `Alert` WHERE $ACTIVE GROUP BY category")->fetchAll() as $c) {
+        $byCategory[$c['category'] ?? 'SYSTEM'] = (int) $c['c'];
+    }
+    $resolvedToday = (int) db()->query("SELECT COUNT(*) FROM `Alert` WHERE status = 'RESOLVED' AND resolvedAt >= '" . gmdate('Y-m-d 00:00:00') . "'")->fetchColumn();
     // The api-client reads res.data.data (list) + res.data.meta.stats.
     // Bypass jsonOk() so we can put the list at the top-level `data` key
     // instead of nesting it inside another object.
@@ -401,6 +472,10 @@ if ($method === 'GET' && $path === '/admin/alerts') {
                 'medium' => $bySeverity['MEDIUM'] ?? 0,
                 'low' => $bySeverity['LOW'] ?? 0,
                 'resolvedToday' => $resolvedToday,
+                'totalActive' => $totalActive,
+                // Force an object: an empty PHP array encodes as [] and the
+                // page indexes into it.
+                'byCategory' => (object) $byCategory,
             ],
         ],
     ], JSON_UNESCAPED_UNICODE);
@@ -408,6 +483,7 @@ if ($method === 'GET' && $path === '/admin/alerts') {
 }
 
 if ($method === 'GET' && $path === '/admin/alerts/stats') {
+    maybeAutoSweep();
     authUser();
     $counts = db()->query("SELECT status, COUNT(*) c FROM `Alert` GROUP BY status")->fetchAll();
     $byStatus = [];
@@ -452,27 +528,258 @@ if ($method === 'POST' && preg_match('#^/admin/alerts/([^/]+)/note$#', $path, $m
     db()->prepare("UPDATE `Alert` SET resolutionNotes=?, updatedAt=NOW(3) WHERE id=?")->execute([(string)($b['note'] ?? ''), $m[1]]);
     jsonOk(['ok' => true]);
 }
-// Alert sweep — generate alerts for orders stuck in NEW/UNDER_REVIEW too long.
-if ($method === 'POST' && $path === '/admin/alerts/run-sweep') {
-    $u = authUser(); if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
-    $created = 0;
+// ─── Alert sweep ─────────────────────────────────────────────────────────────
+// Mirrors apps/backend/src/jobs/alerts.ts. That job runs on node-cron inside the
+// Node backend, which does not run on this host — so without this, live has no
+// alerts at all. Same rules, same triggerKey scheme, same dedup, so whichever
+// backend runs the sweep the result is identical.
+//
+// CASH_LIMIT_EXCEEDED is intentionally absent: DriverProfile.cashOnHand is never
+// written anywhere, so the rule can never fire. Implementing it here would only
+// suggest a check that isn't happening.
+
+/// Thresholds are tunable from Settings; values are JSON-encoded there.
+function alertSetting(string $key, float $fallback): float {
+    static $cache = [];
+    if (array_key_exists($key, $cache)) return $cache[$key];
     try {
-        $cutoff = gmdate('Y-m-d H:i:s', time() - 15 * 60);
-        $stuck = db()->prepare("SELECT id, orderNumber FROM `Order` WHERE status IN ('NEW','UNDER_REVIEW') AND createdAt < ?");
-        $stuck->execute([$cutoff]);
-        $ins = db()->prepare("INSERT INTO `Alert` (id, type, severity, title, titleAr, description, descriptionAr, relatedOrderId, category, status, triggerKey, createdAt, updatedAt)
-            VALUES (?,?,?,?,?,?,?,?,?, 'OPEN', ?, NOW(3), NOW(3))");
-        foreach ($stuck->fetchAll() as $o) {
-            $key = 'stuck_order_' . $o['id'];
-            $ex = db()->prepare("SELECT id FROM `Alert` WHERE triggerKey = ? AND status = 'OPEN' LIMIT 1"); $ex->execute([$key]);
-            if ($ex->fetch()) continue;
-            $ins->execute([newId(), 'PENDING_ORDER', 'HIGH', 'Order pending too long', 'طلب متأخر بدون معالجة',
-                "Order {$o['orderNumber']} stuck > 15 min", "الطلب رقم {$o['orderNumber']} لسه محتاج معالجة من أكتر من ١٥ دقيقة",
-                $o['id'], 'ORDER', $key]);
-            $created++;
+        $st = db()->prepare('SELECT value FROM `Setting` WHERE `key` = ? LIMIT 1');
+        $st->execute([$key]);
+        $v = $st->fetchColumn();
+        if ($v === false) return $cache[$key] = $fallback;
+        $d = json_decode((string) $v, true);
+        if (is_numeric($d)) return $cache[$key] = (float) $d;
+        if (is_numeric($v)) return $cache[$key] = (float) $v;
+        return $cache[$key] = $fallback;
+    } catch (Throwable $e) {
+        return $cache[$key] = $fallback;
+    }
+}
+
+/// Insert unless an alert with this key is already live. Matches the Node job:
+/// only OPEN/ACKNOWLEDGED/ESCALATED block a re-raise, so an alert that was
+/// resolved while its cause persists deliberately comes back.
+function upsertAlert(array $a): bool {
+    try {
+        $ex = db()->prepare("SELECT id FROM `Alert` WHERE triggerKey = ? AND status IN ('OPEN','ACKNOWLEDGED','ESCALATED') LIMIT 1");
+        $ex->execute([$a['triggerKey']]);
+        if ($ex->fetch()) return false;
+        $ins = db()->prepare("INSERT INTO `Alert`
+            (id, type, category, severity, status, title, titleAr, description, descriptionAr,
+             relatedOrderId, relatedUserId, triggerKey, triggerReason, isResolved, createdAt, updatedAt)
+            VALUES (?,?,?,?,'OPEN',?,?,?,?,?,?,?,?,0,NOW(3),NOW(3))");
+        $ins->execute([
+            newId(), $a['type'], $a['category'], $a['severity'],
+            $a['title'], $a['titleAr'], $a['description'], $a['descriptionAr'],
+            $a['relatedOrderId'] ?? null, $a['relatedUserId'] ?? null,
+            $a['triggerKey'], $a['triggerReason'] ?? null,
+        ]);
+        return true;
+    } catch (Throwable $e) {
+        error_log('[api.php] upsertAlert failed: ' . $e->getMessage());
+        return false;
+    }
+}
+
+function runAlertSweep(): array {
+    $created = 0;
+    $now = time();
+    $ago = function (float $min) use ($now) { return gmdate('Y-m-d H:i:s', $now - (int) round($min * 60)); };
+    $pdo = db();
+
+    // ── orders stuck in NEW ──
+    $m = alertSetting('order_new_alert_minutes', 15);
+    $st = $pdo->prepare("SELECT id, orderNumber FROM `Order` WHERE status = 'NEW' AND createdAt < ?");
+    $st->execute([$ago($m)]);
+    foreach ($st->fetchAll() as $o) {
+        $created += upsertAlert([
+            'type' => 'PENDING_ORDER', 'category' => 'ORDER', 'severity' => 'HIGH',
+            'title' => 'New order not handled', 'titleAr' => 'طلب جديد بدون معالجة',
+            'description' => "Order {$o['orderNumber']} has been NEW for over {$m} min",
+            'descriptionAr' => "الطلب {$o['orderNumber']} لسه جديد من أكتر من " . (int) $m . " دقيقة",
+            'relatedOrderId' => $o['id'],
+            'triggerKey' => 'PENDING_ORDER:' . $o['id'] . ':NEW',
+            'triggerReason' => 'NEW > ' . (int) $m . 'm',
+        ]) ? 1 : 0;
+    }
+
+    // ── priced but not accepted ──
+    $m = alertSetting('order_pending_alert_minutes', 60);
+    $st = $pdo->prepare("SELECT id, orderNumber FROM `Order` WHERE status = 'PRICED' AND updatedAt < ?");
+    $st->execute([$ago($m)]);
+    foreach ($st->fetchAll() as $o) {
+        $created += upsertAlert([
+            'type' => 'PENDING_ORDER', 'category' => 'ORDER', 'severity' => 'MEDIUM',
+            'title' => 'Priced order awaiting customer', 'titleAr' => 'طلب مُسعّر بانتظار العميل',
+            'description' => "Order {$o['orderNumber']} priced over {$m} min ago",
+            'descriptionAr' => "الطلب {$o['orderNumber']} اتسعّر من أكتر من " . (int) $m . " دقيقة ولسه مش مقبول",
+            'relatedOrderId' => $o['id'],
+            'triggerKey' => 'PENDING_ORDER:' . $o['id'] . ':PRICED',
+            'triggerReason' => 'PRICED > ' . (int) $m . 'm',
+        ]) ? 1 : 0;
+    }
+
+    // ── merchant not accepting ──
+    $m = alertSetting('order_review_alert_minutes', 30);
+    $st = $pdo->prepare("SELECT id, orderNumber FROM `Order` WHERE status = 'UNDER_REVIEW' AND updatedAt < ?");
+    $st->execute([$ago($m)]);
+    foreach ($st->fetchAll() as $o) {
+        $created += upsertAlert([
+            'type' => 'MERCHANT_NOT_ACCEPTING', 'category' => 'MERCHANT', 'severity' => 'HIGH',
+            'title' => 'Merchant not responding', 'titleAr' => 'التاجر مش بيرد على الطلب',
+            'description' => "Order {$o['orderNumber']} under review over {$m} min",
+            'descriptionAr' => "الطلب {$o['orderNumber']} تحت المراجعة من أكتر من " . (int) $m . " دقيقة",
+            'relatedOrderId' => $o['id'],
+            'triggerKey' => 'MERCHANT_NOT_ACCEPTING:' . $o['id'],
+            'triggerReason' => 'UNDER_REVIEW > ' . (int) $m . 'm',
+        ]) ? 1 : 0;
+    }
+
+    // ── accepted with no driver ──
+    $m = alertSetting('order_no_driver_alert_minutes', 15);
+    $st = $pdo->prepare("SELECT id, orderNumber FROM `Order` WHERE status = 'ACCEPTED' AND assignedDriverId IS NULL AND updatedAt < ?");
+    $st->execute([$ago($m)]);
+    foreach ($st->fetchAll() as $o) {
+        $created += upsertAlert([
+            'type' => 'DRIVER_NOT_ASSIGNED', 'category' => 'DELAY', 'severity' => 'HIGH',
+            'title' => 'No driver assigned', 'titleAr' => 'مفيش سائق متعيّن',
+            'description' => "Order {$o['orderNumber']} accepted over {$m} min ago with no driver",
+            'descriptionAr' => "الطلب {$o['orderNumber']} مقبول من أكتر من " . (int) $m . " دقيقة ولسه من غير سائق",
+            'relatedOrderId' => $o['id'],
+            'triggerKey' => 'DRIVER_NOT_ASSIGNED:' . $o['id'],
+            'triggerReason' => 'ACCEPTED no driver > ' . (int) $m . 'm',
+        ]) ? 1 : 0;
+    }
+
+    // ── pickup late ──
+    $m = alertSetting('order_pickup_late_minutes', 30);
+    $st = $pdo->prepare("SELECT id, orderNumber FROM `Order` WHERE status = 'DRIVER_ASSIGNED' AND updatedAt < ?");
+    $st->execute([$ago($m)]);
+    foreach ($st->fetchAll() as $o) {
+        $created += upsertAlert([
+            'type' => 'DRIVER_PICKUP_LATE', 'category' => 'DELAY', 'severity' => 'MEDIUM',
+            'title' => 'Pickup late', 'titleAr' => 'تأخر في الاستلام',
+            'description' => "Order {$o['orderNumber']} assigned over {$m} min ago, not picked up",
+            'descriptionAr' => "الطلب {$o['orderNumber']} متعيّنله سائق من أكتر من " . (int) $m . " دقيقة ولسه مااستلمش",
+            'relatedOrderId' => $o['id'],
+            'triggerKey' => 'DRIVER_PICKUP_LATE:' . $o['id'],
+            'triggerReason' => 'DRIVER_ASSIGNED > ' . (int) $m . 'm',
+        ]) ? 1 : 0;
+    }
+
+    // ── delivery late ──
+    $m = alertSetting('order_delivery_late_minutes', 60);
+    $st = $pdo->prepare("SELECT id, orderNumber FROM `Order` WHERE status = 'IN_ROUTE' AND updatedAt < ?");
+    $st->execute([$ago($m)]);
+    foreach ($st->fetchAll() as $o) {
+        $created += upsertAlert([
+            'type' => 'DRIVER_DELIVERY_LATE', 'category' => 'DELAY', 'severity' => 'HIGH',
+            'title' => 'Delivery late', 'titleAr' => 'تأخر في التوصيل',
+            'description' => "Order {$o['orderNumber']} in route over {$m} min",
+            'descriptionAr' => "الطلب {$o['orderNumber']} في الطريق من أكتر من " . (int) $m . " دقيقة",
+            'relatedOrderId' => $o['id'],
+            'triggerKey' => 'DRIVER_DELIVERY_LATE:' . $o['id'],
+            'triggerReason' => 'IN_ROUTE > ' . (int) $m . 'm',
+        ]) ? 1 : 0;
+    }
+
+    // ── driver gone quiet ──
+    $m = alertSetting('driver_idle_alert_minutes', 25);
+    $st = $pdo->prepare("SELECT dp.userId, u.name FROM `DriverProfile` dp LEFT JOIN `User` u ON u.id = dp.userId
+        WHERE dp.status = 'BUSY' AND (dp.lastLocationAt IS NULL OR dp.lastLocationAt < ?)");
+    $st->execute([$ago($m)]);
+    foreach ($st->fetchAll() as $d) {
+        $name = $d['name'] ?? 'سائق';
+        $created += upsertAlert([
+            'type' => 'DRIVER_NOT_RESPONDING', 'category' => 'DRIVER', 'severity' => 'HIGH',
+            'title' => 'Driver not responding', 'titleAr' => 'سائق مش بيرد',
+            'description' => "Driver {$name} is BUSY but sent no location for over {$m} min",
+            'descriptionAr' => "السائق {$name} حالته مشغول لكن مبعتش موقعه من أكتر من " . (int) $m . " دقيقة",
+            'relatedUserId' => $d['userId'],
+            'triggerKey' => 'DRIVER_NOT_RESPONDING:' . $d['userId'],
+            'triggerReason' => 'BUSY, no location > ' . (int) $m . 'm',
+        ]) ? 1 : 0;
+    }
+
+    // ── payments stuck pending ──
+    $m = alertSetting('payment_pending_alert_minutes', 30);
+    $st = $pdo->prepare("SELECT id, orderId, amount FROM `Payment` WHERE status = 'PENDING' AND createdAt < ?");
+    $st->execute([$ago($m)]);
+    foreach ($st->fetchAll() as $pay) {
+        $created += upsertAlert([
+            'type' => 'PAYMENT_PENDING', 'category' => 'PAYMENT', 'severity' => 'MEDIUM',
+            'title' => 'Payment pending', 'titleAr' => 'دفعة معلّقة',
+            'description' => "Payment of {$pay['amount']} pending over {$m} min",
+            'descriptionAr' => "دفعة بقيمة {$pay['amount']} ج.م معلّقة من أكتر من " . (int) $m . " دقيقة",
+            'relatedOrderId' => $pay['orderId'] ?? null,
+            'triggerKey' => 'PAYMENT_PENDING:' . $pay['id'],
+            'triggerReason' => 'PENDING > ' . (int) $m . 'm',
+        ]) ? 1 : 0;
+    }
+
+    // ── failed payments (last 48h) ──
+    $st = $pdo->prepare("SELECT id, orderId, amount FROM `Payment` WHERE status = 'FAILED' AND createdAt > ?");
+    $st->execute([gmdate('Y-m-d H:i:s', $now - 48 * 3600)]);
+    foreach ($st->fetchAll() as $pay) {
+        $created += upsertAlert([
+            'type' => 'PAYMENT_FAILED', 'category' => 'PAYMENT', 'severity' => 'HIGH',
+            'title' => 'Payment failed', 'titleAr' => 'فشلت عملية دفع',
+            'description' => "Payment of {$pay['amount']} failed",
+            'descriptionAr' => "فشلت دفعة بقيمة {$pay['amount']} ج.م",
+            'relatedOrderId' => $pay['orderId'] ?? null,
+            'triggerKey' => 'PAYMENT_FAILED:' . $pay['id'],
+            'triggerReason' => 'payment FAILED',
+        ]) ? 1 : 0;
+    }
+
+    return ['created' => $created, 'ranAt' => gmdate('Y-m-d\TH:i:s.000\Z')];
+}
+
+/**
+ * Run the sweep at most once every SWEEP_EVERY seconds, riding on a request
+ * that is already open. Costs no extra DB connection — the alternative (an
+ * external cron pinging the API) would spend one per run out of a 500/hour cap.
+ *
+ * Never allowed to affect the response: any failure is logged and swallowed,
+ * and the throttle file is stamped BEFORE the work so a sweep that dies cannot
+ * make every subsequent request retry it.
+ */
+function maybeAutoSweep(): void {
+    $SWEEP_EVERY = 300; // 5 min — matches the node-cron cadence
+    try {
+        $dir = __DIR__ . '/uploads/.alerts';
+        if (!is_dir($dir)) @mkdir($dir, 0755, true);
+        $stamp = $dir . '/last-sweep';
+        $last = is_file($stamp) ? (int) @file_get_contents($stamp) : 0;
+        if (time() - $last < $SWEEP_EVERY) return;
+
+        // Claim the slot first: two requests arriving together must not both
+        // sweep, and a crash must not leave every later request retrying.
+        if (@file_put_contents($stamp, (string) time(), LOCK_EX) === false) return;
+
+        $res = runAlertSweep();
+        if (($res['created'] ?? 0) > 0) {
+            error_log('[api.php] auto-sweep created ' . $res['created'] . ' alert(s)');
         }
-    } catch (Throwable $e) { error_log('[api.php] alert sweep: ' . $e->getMessage()); }
-    jsonOk(['created' => $created, 'ranAt' => gmdate('Y-m-d\TH:i:s.000\Z')]);
+    } catch (Throwable $e) {
+        error_log('[api.php] auto-sweep failed: ' . $e->getMessage());
+    }
+}
+
+if ($method === 'POST' && $path === '/admin/alerts/run-sweep') {
+    $u = authUser();
+    if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
+    jsonOk(runAlertSweep());
+}
+
+// Cron entry point: no JWT (a cron has no session), so it is gated by a shared
+// secret in the env instead. Without this the sweep only ever runs when an
+// admin happens to click the button — which is why live had zero alerts.
+if ($method === 'POST' && $path === '/internal/alerts/sweep') {
+    $secret = env('CRON_SECRET') ?: '';
+    $given = $_SERVER['HTTP_X_CRON_KEY'] ?? ($_GET['key'] ?? '');
+    if ($secret === '' || !hash_equals($secret, (string) $given)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
+    jsonOk(runAlertSweep());
 }
 
 // ─── WhatsApp bridge (Baileys) — a persistent Node.js process runs the real
@@ -496,6 +803,211 @@ function orderStatusLabelAr(string $s): string {
         'IN_ROUTE' => 'في الطريق', 'DELIVERED' => 'تم التوصيل', 'COMPLETED' => 'مكتمل',
         'CANCELLED' => 'ملغي',
     ][$s] ?? $s;
+}
+// The business/admin WhatsApp number that receives oversight notifications.
+// Setting `whatsapp_business_number` (JSON-encoded) wins; env is the fallback.
+function waAdminNumber(): ?string {
+    try {
+        $st = db()->prepare("SELECT `value` FROM `Setting` WHERE `key` = 'whatsapp_business_number' LIMIT 1");
+        $st->execute();
+        $v = $st->fetchColumn();
+        if (is_string($v) && $v !== '') {
+            $dec = json_decode($v, true);
+            $num = trim(is_string($dec) ? $dec : $v);
+            if ($num !== '') return $num;
+        }
+    } catch (Throwable $e) { /* fall through to env */ }
+    $env = trim((string) env('WHATSAPP_BUSINESS_NUMBER', ''));
+    return $env !== '' ? $env : null;
+}
+
+// Order-update WhatsApp fan-out. Three tailored variants per transition:
+//   • CUSTOMER — friendly journey updates about their own order
+//   • DRIVER   — only actionable stages, with pickup/delivery operational detail
+//   • ADMIN    — milestones only, on the business number, with an internal summary
+// The driver deliberately does NOT get every status; text + fields differ per
+// role. Messages are queued via waEnqueue (the Baileys bridge delivers them).
+// Arabic labels for the machine enums that appear in messages.
+function waCategoryAr(?string $c): string {
+    return ['DELIVERY' => 'دليفري', 'SHIPPING' => 'شحن', 'MERCHANT' => 'من متجر', 'B2B' => 'تجاري'][$c ?? ''] ?? (string) $c;
+}
+function waPayMethodAr(?string $m): string {
+    return ['CASH' => 'كاش عند الاستلام', 'WALLET' => 'محفظة', 'CARD' => 'بطاقة', 'INSTAPAY' => 'إنستاباي', 'VODAFONE_CASH' => 'فودافون كاش', 'EASYKASH' => 'إيزي كاش'][$m ?? ''] ?? (string) $m;
+}
+function waPayStatusAr(?string $s): string {
+    return ['PENDING' => 'غير مدفوع', 'PAID' => 'مدفوع', 'REFUNDED' => 'مسترجع', 'FAILED' => 'فشل الدفع'][$s ?? ''] ?? (string) $s;
+}
+function waMoney($v): ?string {
+    if ($v === null || $v === '') return null;
+    return number_format((float) $v, 2) . ' ج.م';
+}
+// Builds the reusable detail blocks shared across the three message variants, so
+// customer/driver/admin all read from ONE authoritative view of the order.
+function orderDetailBlocks(array $o): array {
+    $b = [];
+    // Items — the app writes a ready human-readable bullet list into Order.notes
+    // for product orders; fall back to structured OrderItem rows if present.
+    $items = trim((string) ($o['notes'] ?? ''));
+    if ($items === '') {
+        try {
+            $st = db()->prepare('SELECT quantity, productNameSnapshot, unitPriceSnapshot FROM `OrderItem` WHERE orderId = ? ORDER BY id');
+            $st->execute([$o['id']]);
+            $lines = [];
+            foreach ($st->fetchAll() as $it) {
+                $pl = waMoney($it['unitPriceSnapshot']);
+                $lines[] = '• ' . (int) $it['quantity'] . '× ' . trim((string) $it['productNameSnapshot']) . ($pl ? " ({$pl})" : '');
+            }
+            $items = implode("\n", $lines);
+        } catch (Throwable $e) { $items = ''; }
+    }
+    $b['items'] = $items;
+
+    // Locations — attach a Google-Maps pin from lat/lng where we have one.
+    $pin = static fn ($lat, $lng) => ($lat !== null && $lng !== null && $lat !== '' && $lng !== '')
+        ? "\n   📍 خريطة: https://maps.google.com/?q={$lat},{$lng}" : '';
+    $loc = '';
+    if (!empty($o['pickupAddress']) || (!empty($o['pickupLat']) && !empty($o['pickupLng']))) {
+        $loc .= '📍 الاستلام: ' . (trim((string) ($o['pickupAddress'] ?? '')) ?: 'على الخريطة') . $pin($o['pickupLat'] ?? null, $o['pickupLng'] ?? null) . "\n";
+    }
+    if (!empty($o['deliveryAddress']) || (!empty($o['deliveryLat']) && !empty($o['deliveryLng']))) {
+        $loc .= '🏁 التوصيل: ' . (trim((string) ($o['deliveryAddress'] ?? '')) ?: 'على الخريطة') . $pin($o['deliveryLat'] ?? null, $o['deliveryLng'] ?? null) . "\n";
+    }
+    $b['locations'] = rtrim($loc, "\n");
+
+    // Shipping specifics — only meaningful for the شحن category.
+    $ship = [];
+    if (!empty($o['weightKg'])) $ship[] = 'الوزن: ' . rtrim(rtrim((string) $o['weightKg'], '0'), '.') . ' كجم';
+    if (!empty($o['sizeCategory'])) $ship[] = 'الحجم: ' . $o['sizeCategory'];
+    if (!empty($o['estimatedDistanceKm'])) $ship[] = 'المسافة: ~' . round((float) $o['estimatedDistanceKm'], 1) . ' كم';
+    if (!empty($o['isFragile'])) $ship[] = '⚠️ قابل للكسر';
+    if (($o['speedTier'] ?? '') === 'EXPRESS') $ship[] = '⚡ شحن سريع';
+    $b['shipping'] = implode(' · ', $ship);
+
+    // Money — full breakdown when the parts exist, else just the total.
+    $total = $o['finalPrice'] ?? $o['quotedPrice'];
+    $pr = [];
+    if ($o['merchantSubtotal'] !== null && $o['merchantSubtotal'] !== '') $pr[] = 'قيمة الطلب: ' . waMoney($o['merchantSubtotal']);
+    if ($o['deliveryFee'] !== null && $o['deliveryFee'] !== '')       $pr[] = 'التوصيل: ' . waMoney($o['deliveryFee']);
+    if (!empty($o['discountAmount']) && (float) $o['discountAmount'] > 0) $pr[] = 'الخصم: -' . waMoney($o['discountAmount']) . (!empty($o['couponCode']) ? ' (كوبون ' . $o['couponCode'] . ')' : '');
+    if (!empty($o['walletUsed']) && (float) $o['walletUsed'] > 0)     $pr[] = 'من المحفظة: -' . waMoney($o['walletUsed']);
+    $pr[] = '*الإجمالي: ' . (waMoney($total) ?? 'غير محدد') . '*';
+    $b['price'] = implode("\n", $pr);
+    $b['total'] = waMoney($total) ?? 'غير محدد';
+    $b['pay'] = trim(waPayMethodAr($o['paymentMethod'] ?? null) . (!empty($o['paymentStatus']) ? ' — ' . waPayStatusAr($o['paymentStatus']) : ''));
+    return $b;
+}
+function notifyOrderParties(string $orderId, string $status, ?string $reason = null): void {
+    try {
+        $q = db()->prepare(
+            "SELECT o.*,
+                    cu.name AS cust_name, cu.phone AS cust_phone,
+                    dr.name AS drv_name, dr.phone AS drv_phone,
+                    s.nameAr AS svc_name
+             FROM `Order` o
+             LEFT JOIN `User` cu ON cu.id = o.customerId
+             LEFT JOIN `User` dr ON dr.id = o.assignedDriverId
+             LEFT JOIN `Service` s ON s.id = o.serviceId
+             WHERE o.id = ? LIMIT 1"
+        );
+        $q->execute([$orderId]);
+        $o = $q->fetch();
+        if (!$o) return;
+        $no = (string) $o['orderNumber'];
+        $d = orderDetailBlocks($o);
+        $custName = trim((string) ($o['cust_name'] ?? '')) ?: 'العميل';
+        $svc = trim((string) ($o['svc_name'] ?? '')) ?: waCategoryAr($o['category'] ?? null);
+        $drvName = trim((string) ($o['drv_name'] ?? ''));
+        $sent = false;
+
+        // Header + the customer's own order summary, reused across their messages.
+        $custSummary = "🧾 الطلب رقم *#{$no}*\nالخدمة: {$svc}"
+            . ($d['items'] ? "\n\n🛒 التفاصيل:\n{$d['items']}" : '')
+            . ($d['shipping'] ? "\n\n📦 {$d['shipping']}" : '')
+            . ($d['locations'] ? "\n\n{$d['locations']}" : '')
+            . "\n\n💳 الدفع: {$d['pay']}\n{$d['price']}";
+
+        // ── CUSTOMER ── friendly line + full order summary
+        $custMsg = null;
+        switch ($status) {
+            case 'PRICED':
+                $custMsg = "تميم للتوصيل 🚚\nتم تسعير طلبك — راجع التفاصيل ووافق من التطبيق:\n\n{$custSummary}";
+                break;
+            case 'ACCEPTED':
+                $custMsg = "تميم للتوصيل ✅\nتم قبول طلبك وجارٍ تجهيزه:\n\n{$custSummary}";
+                break;
+            case 'DRIVER_ASSIGNED':
+                $custMsg = "تميم للتوصيل 🚚\nالكابتن *" . ($drvName ?: 'المندوب') . "* في الطريق لطلبك"
+                    . (!empty($o['drv_phone']) ? " — للتواصل: {$o['drv_phone']}" : '') . "\n\n{$custSummary}";
+                break;
+            case 'PICKED_UP':
+                $custMsg = "تميم للتوصيل 🚚\nتم استلام طلبك *#{$no}* وهو في الطريق إليك."
+                    . ($d['total'] ? "\nالمطلوب دفعه: *{$d['total']}* ({$d['pay']})" : '');
+                break;
+            case 'IN_ROUTE':
+                $custMsg = "تميم للتوصيل 🚚\nمندوبك على وشك الوصول بطلب *#{$no}*. جهّز استلامك 😊"
+                    . ($d['total'] ? "\nالمطلوب: *{$d['total']}*" : '');
+                break;
+            case 'DELIVERED':
+            case 'COMPLETED':
+                $custMsg = "تميم للتوصيل ✅\nتم توصيل طلبك *#{$no}* بنجاح — شكراً لاختيارك تميم 🌟\nقيّم تجربتك من التطبيق.\n\n{$custSummary}";
+                break;
+            case 'CANCELLED':
+                $custMsg = "تميم للتوصيل\nنأسف، تم إلغاء طلبك *#{$no}*." . ($reason ? "\nالسبب: {$reason}" : '') . "\n\n{$custSummary}";
+                break;
+        }
+        if ($custMsg && !empty($o['cust_phone'])) { waEnqueue($o['cust_phone'], $custMsg); $sent = true; }
+
+        // ── DRIVER ── full operational packet (only the stages they act on)
+        $drvMsg = null;
+        if (in_array($status, ['DRIVER_ASSIGNED', 'CANCELLED'], true)) {
+            if ($status === 'DRIVER_ASSIGNED') {
+                $collect = ($o['paymentStatus'] ?? '') === 'PAID'
+                    ? 'مدفوع — لا تُحصّل شيئاً'
+                    : 'حصّل *' . ($d['total']) . '* (' . waPayMethodAr($o['paymentMethod'] ?? null) . ')';
+                $drvMsg = "🚚 *طلب جديد مُسند إليك* #{$no}\n"
+                    . "الخدمة: {$svc}\n"
+                    . "👤 العميل: {$custName}" . (!empty($o['cust_phone']) ? " — {$o['cust_phone']}" : '') . "\n"
+                    . ($d['locations'] ? "\n{$d['locations']}\n" : '')
+                    . ($d['items'] ? "\n🛒 المطلوب:\n{$d['items']}\n" : '')
+                    . ($d['shipping'] ? "\n📦 {$d['shipping']}\n" : '')
+                    . "\n💰 {$collect}"
+                    . (!empty($o['scheduledFor']) ? "\n🕒 موعد: {$o['scheduledFor']}" : '');
+            } else {
+                $drvMsg = "⛔ *أُلغي الطلب #{$no}* — لا حاجة للتوصيل." . ($reason ? "\nالسبب: {$reason}" : '');
+            }
+        }
+        if ($drvMsg && !empty($o['drv_phone'])) { waEnqueue($o['drv_phone'], $drvMsg); $sent = true; }
+
+        // ── ADMIN ── full internal summary incl. financials
+        $admMsg = null;
+        $adminHead = [
+            'NEW' => '🆕 طلب جديد', 'PRICED' => '💲 تم تسعير طلب', 'DRIVER_ASSIGNED' => '🚚 تعيين سائق لطلب',
+            'DELIVERED' => '✅ اكتمل طلب', 'COMPLETED' => '✅ اكتمل طلب', 'CANCELLED' => '⛔ أُلغي طلب',
+        ][$status] ?? null;
+        if ($adminHead !== null) {
+            $fin = [];
+            if ($o['merchantPayout'] !== null && $o['merchantPayout'] !== '')     $fin[] = 'مستحق التاجر: ' . waMoney($o['merchantPayout']);
+            if ($o['platformCommission'] !== null && $o['platformCommission'] !== '') $fin[] = 'عمولة تميم: ' . waMoney($o['platformCommission']);
+            $catAr = waCategoryAr($o['category'] ?? null);
+            $admMsg = "{$adminHead} *#{$no}*\n"
+                . 'الخدمة: ' . $svc . ($catAr && $catAr !== $svc ? " · {$catAr}" : '') . "\n"
+                . "👤 {$custName}" . (!empty($o['cust_phone']) ? " — {$o['cust_phone']}" : '') . "\n"
+                . ($drvName ? "🛵 السائق: {$drvName}" . (!empty($o['drv_phone']) ? " — {$o['drv_phone']}" : '') . "\n" : '')
+                . ($d['items'] ? "\n🛒 {$d['items']}\n" : '')
+                . ($d['locations'] ? "\n{$d['locations']}\n" : '')
+                . "\n💳 {$d['pay']}\n{$d['price']}"
+                . ($fin ? "\n" . implode("\n", $fin) : '')
+                . ($status === 'CANCELLED' && $reason ? "\nسبب الإلغاء: {$reason}" : '');
+        }
+        $adminNo = waAdminNumber();
+        if ($admMsg && $adminNo) { waEnqueue($adminNo, $admMsg); $sent = true; }
+
+        if ($sent) {
+            try { db()->prepare("UPDATE `Order` SET `whatsappSentAt` = NOW(3) WHERE id = ?")->execute([$orderId]); } catch (Throwable $e) {}
+        }
+    } catch (Throwable $e) {
+        error_log('[api.php] notifyOrderParties: ' . $e->getMessage());
+    }
 }
 function waStatus(): array {
     $f = waDir() . '/status.json';
@@ -717,11 +1229,20 @@ if ($method === 'GET' && $path === '/admin/home-config') {
     }
 }
 
+// Setting.value is a JSON column, so a text setting is stored as "…" (quoted).
+// Handing that back raw made the editor show literal quotes and the landing
+// render them too. Decode; fall back to the raw text for any legacy row that
+// predates the JSON column.
+function settingValue($raw) {
+    if (!is_string($raw) || $raw === '') return $raw;
+    $d = json_decode($raw, true);
+    return json_last_error() === JSON_ERROR_NONE ? $d : $raw;
+}
 if ($method === 'GET' && $path === '/admin/site-config') {
     authUser();
     $rows = db()->query('SELECT `key`, `value` FROM `Setting`')->fetchAll();
     $out = [];
-    foreach ($rows as $r) $out[(string) $r['key']] = $r['value'];
+    foreach ($rows as $r) $out[(string) $r['key']] = settingValue($r['value']);
     http_response_code(200);
     echo json_encode(['data' => (object) $out], JSON_UNESCAPED_UNICODE);
     exit;
@@ -733,6 +1254,95 @@ if ($method === 'GET' && $path === '/admin/site-config') {
 // envelope is returned so the dashboard renders without a crash.
 //
 // Resource → table map. `null` = use a synthesized query below.
+// ─── Product audit trail ─────────────────────────────────────────────────────
+// Written server-side on every product write so the record cannot be forged or
+// skipped. An audit insert must never break the write it is recording, so all
+// of this is wrapped in try/catch and failures only reach the error log.
+
+/// Fields worth showing on a product timeline. Anything else (sortOrder churn,
+/// sync bookkeeping) would just be noise.
+$HISTORY_FIELDS = ['nameAr', 'name', 'price', 'salePrice', 'discount', 'stock', 'sku', 'barcode',
+    'categoryName', 'merchantId', 'description', 'imageUrl', 'unit', 'isAvailable', 'isHidden'];
+
+/// Denormalised into the row: an admin can be deleted, and "changed by
+/// cmr9b…" is useless six months later.
+function actorNameOf(?string $id): ?string {
+    static $cache = [];
+    if (!$id) return null;
+    if (array_key_exists($id, $cache)) return $cache[$id];
+    try {
+        $st = db()->prepare('SELECT name FROM `User` WHERE id = ? LIMIT 1');
+        $st->execute([$id]);
+        $n = $st->fetchColumn();
+        return $cache[$id] = ($n === false ? null : (string) $n);
+    } catch (Throwable $e) {
+        return $cache[$id] = null;
+    }
+}
+
+/// Import attribution comes from request headers set by the dashboard.
+function importCtx(): array {
+    $h = function_exists('getallheaders') ? (getallheaders() ?: []) : [];
+    $low = [];
+    foreach ($h as $k => $v) $low[strtolower($k)] = $v;
+    // Fall back to $_SERVER: some SAPIs don't expose getallheaders().
+    if (!isset($low['x-import-job']) && isset($_SERVER['HTTP_X_IMPORT_JOB'])) $low['x-import-job'] = $_SERVER['HTTP_X_IMPORT_JOB'];
+    if (!isset($low['x-import-file']) && isset($_SERVER['HTTP_X_IMPORT_FILE'])) $low['x-import-file'] = $_SERVER['HTTP_X_IMPORT_FILE'];
+    $job = trim((string) ($low['x-import-job'] ?? ''));
+    $file = trim((string) ($low['x-import-file'] ?? ''));
+    return ['jobId' => $job !== '' ? $job : null, 'file' => $file !== '' ? rawurldecode($file) : null];
+}
+
+function logProductHistory(string $productId, ?string $productName, string $action, ?array $changes): void {
+    try {
+        $u = $GLOBALS['__auth_user'] ?? [];
+        $ctx = importCtx();
+        $actorId = $u['sub'] ?? null;
+        $st = db()->prepare('INSERT INTO `ProductHistory`
+            (id, productId, productName, action, source, actorId, actorName, importJobId, importFileName, changes, createdAt)
+            VALUES (?,?,?,?,?,?,?,?,?,?,NOW(3))');
+        $st->execute([
+            newId(), $productId, $productName, $action,
+            $ctx['jobId'] ? 'IMPORT' : 'MANUAL',
+            $actorId, actorNameOf($actorId),
+            $ctx['jobId'], $ctx['file'],
+            $changes ? json_encode($changes, JSON_UNESCAPED_UNICODE) : null,
+        ]);
+    } catch (Throwable $e) {
+        error_log('[api.php] ProductHistory insert failed: ' . $e->getMessage());
+    }
+}
+
+/// Old vs new for the fields that actually changed. Numeric compare is loose on
+/// purpose: MySQL hands back "120.00" where the client sent 120, and reporting
+/// that as an edit would fill the timeline with changes nobody made.
+function diffProduct(array $before, array $after): array {
+    global $HISTORY_FIELDS;
+    $out = [];
+    foreach ($HISTORY_FIELDS as $f) {
+        if (!array_key_exists($f, $after)) continue;
+        $o = $before[$f] ?? null;
+        $n = $after[$f] ?? null;
+        if ($o === null && $n === null) continue;
+        if (is_numeric($o) && is_numeric($n)) {
+            if (abs((float) $o - (float) $n) < 0.00001) continue;
+        } elseif ((string) $o === (string) $n) {
+            continue;
+        }
+        $out[] = ['field' => $f, 'old' => $o, 'new' => $n];
+    }
+    return $out;
+}
+
+/// A pure availability flip reads better as ACTIVATE/DEACTIVATE than as a
+/// generic UPDATE with one boolean in it.
+function productActionFor(array $changes): string {
+    if (count($changes) === 1 && $changes[0]['field'] === 'isAvailable') {
+        return !empty($changes[0]['new']) ? 'ACTIVATE' : 'DEACTIVATE';
+    }
+    return 'UPDATE';
+}
+
 $RES = [
     // 'supervisors' handled by dedicated handlers below (nested shifts + on-shift)
     'pricing-rules'    => 'PricingRule',
@@ -970,6 +1580,283 @@ if ($method === 'GET' && preg_match('#^/admin/([a-z][a-z0-9-]*)/current$#', $pat
     exit;
 }
 
+// GET /admin/categories — the generic list below returns bare rows, but the
+// admin categories screen needs each category's merchant count to know whether
+// a delete can really remove it or must fall back to hiding it.
+if ($method === 'GET' && $path === '/admin/categories') {
+    authUser();
+    $sql = 'SELECT c.*, (SELECT COUNT(*) FROM `MerchantProfile` mp WHERE mp.categoryId = c.id) AS merchant_count'
+         . ' FROM `Category` c ORDER BY c.sortOrder ASC, c.nameAr ASC';
+    $rows = db()->query($sql)->fetchAll();
+    $out = [];
+    foreach ($rows as $r) {
+        $n = (int) $r['merchant_count'];
+        unset($r['merchant_count']);
+        $r = jsonizeRow($r);
+        $r['isActive'] = !empty($r['isActive']);
+        $r['sortOrder'] = (int) ($r['sortOrder'] ?? 0);
+        $r['_count'] = ['merchants' => $n];
+        $out[] = $r;
+    }
+    jsonOk($out);
+}
+
+// GET /admin/products — the generic $RES list below returns bare Product rows,
+// so the admin table rendered "—" for every merchant and ignored ?search.
+// Dedicated handler: joins the store and applies the filters the screen sends.
+if ($method === 'GET' && $path === '/admin/products') {
+    authUser();
+    $page = max(1, (int) ($_GET['page'] ?? 1));
+    $pageSize = min(200, max(1, (int) ($_GET['pageSize'] ?? 50)));
+    $where = '1=1';
+    $args = [];
+    if (!empty($_GET['merchantId'])) { $where .= ' AND p.merchantId = ?'; $args[] = $_GET['merchantId']; }
+    $q = trim((string) ($_GET['search'] ?? ''));
+    if ($q !== '') {
+        $where .= ' AND (p.name LIKE ? OR p.nameAr LIKE ? OR p.sku LIKE ?)';
+        $like = '%' . $q . '%';
+        $args[] = $like; $args[] = $like; $args[] = $like;
+    }
+    if (isset($_GET['isAvailable']) && $_GET['isAvailable'] !== '') {
+        $where .= ' AND p.isAvailable = ?';
+        $args[] = filter_var($_GET['isAvailable'], FILTER_VALIDATE_BOOLEAN) ? 1 : 0;
+    }
+    $cnt = db()->prepare('SELECT COUNT(*) FROM `Product` p WHERE ' . $where);
+    $cnt->execute($args);
+    $total = (int) $cnt->fetchColumn();
+    $sql = 'SELECT p.*, m.storeNameAr AS m_storeNameAr, m.storeName AS m_storeName'
+         . ' FROM `Product` p LEFT JOIN `MerchantProfile` m ON m.id = p.merchantId'
+         . ' WHERE ' . $where
+         . ' ORDER BY p.merchantId ASC, p.sortOrder ASC, p.nameAr ASC'
+         . ' LIMIT ' . $pageSize . ' OFFSET ' . (($page - 1) * $pageSize);
+    $st = db()->prepare($sql);
+    $st->execute($args);
+    $rows = [];
+    foreach ($st->fetchAll() as $r) {
+        $p = productShape($r);
+        $p['merchant'] = !empty($r['merchantId'])
+            ? ['id' => $r['merchantId'], 'storeNameAr' => $r['m_storeNameAr'] ?? null, 'storeName' => $r['m_storeName'] ?? null]
+            : null;
+        unset($p['m_storeNameAr'], $p['m_storeName']);
+        $rows[] = $p;
+    }
+    jsonList($rows, $page, $pageSize, $total);
+}
+
+// POST /admin/products/bulk-availability — the products screen's bulk
+// activate/deactivate bar. Two path segments, so the generic single-segment
+// POST never matches it.
+if ($method === 'POST' && $path === '/admin/products/bulk-availability') {
+    $u = authUser();
+    if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
+    $b = readJsonBody();
+    $ids = $b['ids'] ?? [];
+    if (!is_array($ids) || !$ids) jsonErr('لا توجد منتجات محددة', 400, 'BAD_REQUEST');
+    $ids = array_values(array_filter(array_map('strval', $ids)));
+    if (!$ids) jsonErr('لا توجد منتجات محددة', 400, 'BAD_REQUEST');
+    $val = !empty($b['isAvailable']) ? 1 : 0;
+    $in = implode(',', array_fill(0, count($ids), '?'));
+    // Read the rows first: after the UPDATE there is no way to tell which ones
+    // actually flipped, and logging unchanged products would be a lie.
+    $pre = db()->prepare("SELECT id, nameAr, isAvailable FROM `Product` WHERE id IN ($in)");
+    $pre->execute($ids);
+    $rowsBefore = $pre->fetchAll();
+    $st = db()->prepare("UPDATE `Product` SET isAvailable = ?, updatedAt = NOW(3) WHERE id IN ($in)");
+    $st->execute(array_merge([$val], $ids));
+    foreach ($rowsBefore as $r) {
+        if ((int) $r['isAvailable'] === $val) continue;
+        logProductHistory((string) $r['id'], $r['nameAr'] ?? null, $val ? 'ACTIVATE' : 'DEACTIVATE',
+            [['field' => 'isAvailable', 'old' => (bool) $r['isAvailable'], 'new' => (bool) $val]]);
+    }
+    jsonOk(['updated' => $st->rowCount()]);
+}
+
+// ─── Audit trail: read endpoints ─────────────────────────────────────────────
+
+/// Rows are stored naive; the dashboard normalises to UTC and renders Cairo
+/// time, so they are returned exactly as stored, like the rest of the API.
+function historyShape(array $r): array {
+    $r['changes'] = $r['changes'] ? json_decode($r['changes'], true) : null;
+    return $r;
+}
+
+// GET /admin/products/{id}/history — one product's timeline.
+// Three path segments, so the generic two-segment GET never sees it.
+if ($method === 'GET' && preg_match('#^/admin/products/([^/]+)/history$#', $path, $m)) {
+    authUser();
+    $id = $m[1];
+    $where = 'productId = ?';
+    $args = [$id];
+    if (!empty($_GET['action']))  { $where .= ' AND action = ?'; $args[] = $_GET['action']; }
+    if (!empty($_GET['source']))  { $where .= ' AND source = ?'; $args[] = $_GET['source']; }
+    if (!empty($_GET['actorId'])) { $where .= ' AND actorId = ?'; $args[] = $_GET['actorId']; }
+    if (!empty($_GET['from']))    { $where .= ' AND createdAt >= ?'; $args[] = str_replace('T', ' ', substr($_GET['from'], 0, 19)); }
+    if (!empty($_GET['to']))      { $where .= ' AND createdAt <= ?'; $args[] = str_replace('T', ' ', substr($_GET['to'], 0, 19)); }
+    $page = max(1, (int) ($_GET['page'] ?? 1));
+    $size = min(200, max(1, (int) ($_GET['pageSize'] ?? 50)));
+    $cnt = db()->prepare('SELECT COUNT(*) FROM `ProductHistory` WHERE ' . $where);
+    $cnt->execute($args);
+    $total = (int) $cnt->fetchColumn();
+    $st = db()->prepare('SELECT * FROM `ProductHistory` WHERE ' . $where . ' ORDER BY createdAt DESC, id DESC LIMIT ' . $size . ' OFFSET ' . (($page - 1) * $size));
+    $st->execute($args);
+    jsonList(array_map('historyShape', $st->fetchAll()), $page, $size, $total);
+}
+
+// ─── Import jobs ─────────────────────────────────────────────────────────────
+
+function importJobShape(array $r): array {
+    foreach (['totalRows', 'createdCount', 'updatedCount', 'skippedCount', 'errorCount'] as $k) $r[$k] = (int) ($r[$k] ?? 0);
+    return $r;
+}
+
+// POST /admin/import-jobs — open a job before any row is written, so a run that
+// dies halfway still leaves a record instead of vanishing.
+if ($method === 'POST' && $path === '/admin/import-jobs') {
+    $u = authUser();
+    if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
+    $b = readJsonBody();
+    $id = newId();
+    $st = db()->prepare('INSERT INTO `ImportJob`
+        (id, fileName, fileUrl, actorId, actorName, status, kind, totalRows, startedAt)
+        VALUES (?,?,?,?,?,?,?,?,NOW(3))');
+    $st->execute([
+        $id,
+        (string) ($b['fileName'] ?? 'ملف'),
+        isset($b['fileUrl']) ? (string) $b['fileUrl'] : null,
+        $u['sub'] ?? null,
+        actorNameOf($u['sub'] ?? null),
+        (string) ($b['status'] ?? 'PROCESSING'),
+        (string) ($b['kind'] ?? 'MIXED'),
+        (int) ($b['totalRows'] ?? 0),
+    ]);
+    $sel = db()->prepare('SELECT * FROM `ImportJob` WHERE id = ?');
+    $sel->execute([$id]);
+    jsonOk(importJobShape($sel->fetch() ?: []), 201);
+}
+
+// PATCH /admin/import-jobs/{id} — progress + final counts.
+if ($method === 'PATCH' && preg_match('#^/admin/import-jobs/([^/]+)$#', $path, $m)) {
+    $u = authUser();
+    if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
+    $id = $m[1];
+    $b = readJsonBody();
+    $sets = []; $args = [];
+    foreach (['status', 'kind', 'fileUrl', 'errorMessage'] as $f) {
+        if (array_key_exists($f, $b)) { $sets[] = "`$f` = ?"; $args[] = $b[$f]; }
+    }
+    foreach (['totalRows', 'createdCount', 'updatedCount', 'skippedCount', 'errorCount'] as $f) {
+        if (array_key_exists($f, $b)) { $sets[] = "`$f` = ?"; $args[] = (int) $b[$f]; }
+    }
+    // A terminal status stamps the finish time — the duration shown in the UI
+    // must come from the server, not from whatever clock the browser has.
+    if (in_array($b['status'] ?? '', ['COMPLETED', 'PARTIAL', 'FAILED', 'CANCELLED'], true)) {
+        $sets[] = '`finishedAt` = NOW(3)';
+    }
+    if ($sets) { $args[] = $id; db()->prepare('UPDATE `ImportJob` SET ' . implode(',', $sets) . ' WHERE id = ?')->execute($args); }
+    $sel = db()->prepare('SELECT * FROM `ImportJob` WHERE id = ?');
+    $sel->execute([$id]);
+    jsonOk(importJobShape($sel->fetch() ?: []));
+}
+
+// POST /admin/import-jobs/{id}/rows — per-row outcomes, sent in one batch.
+if ($method === 'POST' && preg_match('#^/admin/import-jobs/([^/]+)/rows$#', $path, $m)) {
+    $u = authUser();
+    if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
+    $jobId = $m[1];
+    $b = readJsonBody();
+    $rows = $b['rows'] ?? [];
+    if (!is_array($rows)) jsonErr('rows مطلوبة', 400, 'BAD_REQUEST');
+    $st = db()->prepare('INSERT INTO `ImportRowLog`
+        (id, jobId, line, productId, productName, sku, action, status, errorColumn, errorMessage, badValue, createdAt)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,NOW(3))');
+    $n = 0;
+    foreach ($rows as $r) {
+        try {
+            $st->execute([
+                newId(), $jobId, (int) ($r['line'] ?? 0),
+                isset($r['productId']) ? (string) $r['productId'] : null,
+                isset($r['productName']) ? mb_substr((string) $r['productName'], 0, 255) : null,
+                isset($r['sku']) ? mb_substr((string) $r['sku'], 0, 80) : null,
+                mb_substr((string) ($r['action'] ?? 'skip'), 0, 10),
+                mb_substr((string) ($r['status'] ?? 'ok'), 0, 10),
+                isset($r['errorColumn']) ? mb_substr((string) $r['errorColumn'], 0, 120) : null,
+                isset($r['errorMessage']) ? mb_substr((string) $r['errorMessage'], 0, 500) : null,
+                isset($r['badValue']) ? mb_substr((string) $r['badValue'], 0, 255) : null,
+            ]);
+            $n++;
+        } catch (Throwable $e) {
+            error_log('[api.php] ImportRowLog insert failed: ' . $e->getMessage());
+        }
+    }
+    jsonOk(['inserted' => $n]);
+}
+
+// GET /admin/import-jobs/{id}/products — what this file actually touched.
+if ($method === 'GET' && preg_match('#^/admin/import-jobs/([^/]+)/products$#', $path, $m)) {
+    authUser();
+    $st = db()->prepare('SELECT h.productId, h.productName, h.action, h.createdAt, h.changes,
+            p.id AS live_id, p.price, p.stock, p.isAvailable
+        FROM `ProductHistory` h
+        LEFT JOIN `Product` p ON p.id = h.productId
+        WHERE h.importJobId = ? ORDER BY h.createdAt ASC');
+    $st->execute([$m[1]]);
+    $out = [];
+    foreach ($st->fetchAll() as $r) {
+        $r['changes'] = $r['changes'] ? json_decode($r['changes'], true) : null;
+        // Null when the product has since been deleted — the UI must not offer
+        // a dead link.
+        $r['exists'] = !empty($r['live_id']);
+        unset($r['live_id']);
+        $out[] = $r;
+    }
+    jsonOk($out);
+}
+
+// GET /admin/import-jobs/{id} — detail + every row outcome.
+if ($method === 'GET' && preg_match('#^/admin/import-jobs/([^/]+)$#', $path, $m)) {
+    authUser();
+    $sel = db()->prepare('SELECT * FROM `ImportJob` WHERE id = ?');
+    $sel->execute([$m[1]]);
+    $job = $sel->fetch();
+    if (!$job) jsonErr('العملية غير موجودة', 404, 'NOT_FOUND');
+    $job = importJobShape($job);
+    $rs = db()->prepare('SELECT * FROM `ImportRowLog` WHERE jobId = ? ORDER BY line ASC');
+    $rs->execute([$m[1]]);
+    $job['rows'] = $rs->fetchAll();
+    jsonOk($job);
+}
+
+// GET /admin/import-jobs — history list with the filters the screen offers.
+if ($method === 'GET' && $path === '/admin/import-jobs') {
+    authUser();
+    $where = '1=1'; $args = [];
+    if (!empty($_GET['status']))  { $where .= ' AND status = ?'; $args[] = $_GET['status']; }
+    if (!empty($_GET['kind']))    { $where .= ' AND kind = ?'; $args[] = $_GET['kind']; }
+    if (!empty($_GET['actorId'])) { $where .= ' AND actorId = ?'; $args[] = $_GET['actorId']; }
+    $q = trim((string) ($_GET['search'] ?? ''));
+    if ($q !== '') { $where .= ' AND (fileName LIKE ? OR actorName LIKE ?)'; $args[] = "%$q%"; $args[] = "%$q%"; }
+    if (!empty($_GET['from'])) { $where .= ' AND startedAt >= ?'; $args[] = str_replace('T', ' ', substr($_GET['from'], 0, 19)); }
+    if (!empty($_GET['to']))   { $where .= ' AND startedAt <= ?'; $args[] = str_replace('T', ' ', substr($_GET['to'], 0, 19)); }
+    $page = max(1, (int) ($_GET['page'] ?? 1));
+    $size = min(100, max(1, (int) ($_GET['pageSize'] ?? 25)));
+    $cnt = db()->prepare('SELECT COUNT(*) FROM `ImportJob` WHERE ' . $where);
+    $cnt->execute($args);
+    $total = (int) $cnt->fetchColumn();
+    $st = db()->prepare('SELECT * FROM `ImportJob` WHERE ' . $where . ' ORDER BY startedAt DESC LIMIT ' . $size . ' OFFSET ' . (($page - 1) * $size));
+    $st->execute($args);
+    jsonList(array_map('importJobShape', $st->fetchAll()), $page, $size, $total);
+}
+
+// DELETE /admin/import-jobs/{id} — removes the log entry only. Products created
+// or updated by the file stay, and so does their history: deleting a receipt
+// must never delete the goods.
+if ($method === 'DELETE' && preg_match('#^/admin/import-jobs/([^/]+)$#', $path, $m)) {
+    $u = authUser();
+    if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
+    db()->prepare('DELETE FROM `ImportJob` WHERE id = ?')->execute([$m[1]]);
+    jsonOk(['deleted' => true]);
+}
+
 if ($method === 'GET' && preg_match('#^/admin/([a-z][a-z0-9-]*)/([^/]+)$#', $path, $m)
         && isset($RES[$m[1]])) {
     authUser();
@@ -1014,22 +1901,89 @@ if ($method === 'GET' && preg_match('#^/admin/([a-z][a-z0-9-]*)$#', $path, $m)
 
 // Merchants list — the page reads MerchantProfile rows with nested `user`,
 // `category` and `_count.products`, NOT bare User rows.
+// GET /admin/merchants/stats — totals for the cards. Two path segments, and
+// 'merchants' is not in $RES, so nothing upstream claims this route.
+if ($method === 'GET' && $path === '/admin/merchants/stats') {
+    authUser();
+    $row = db()->query('SELECT
+        COUNT(*) AS total,
+        SUM(CASE WHEN u.isActive = 1 THEN 1 ELSE 0 END) AS active,
+        SUM(CASE WHEN u.isActive = 1 THEN 0 ELSE 1 END) AS inactive,
+        SUM(CASE WHEN (SELECT COUNT(*) FROM `Product` p WHERE p.merchantId = mp.id) > 0 THEN 1 ELSE 0 END) AS with_products,
+        SUM(CASE WHEN (SELECT COUNT(*) FROM `Product` p WHERE p.merchantId = mp.id) > 0 THEN 0 ELSE 1 END) AS without_products,
+        SUM(CASE WHEN ac.id IS NULL THEN 1 ELSE 0 END) AS no_api
+      FROM `MerchantProfile` mp
+      LEFT JOIN `User` u ON u.id = mp.userId
+      LEFT JOIN `MerchantApiConfig` ac ON ac.merchantId = mp.id')->fetch();
+    jsonOk([
+        'total' => (int) ($row['total'] ?? 0),
+        'active' => (int) ($row['active'] ?? 0),
+        'inactive' => (int) ($row['inactive'] ?? 0),
+        'withProducts' => (int) ($row['with_products'] ?? 0),
+        'withoutProducts' => (int) ($row['without_products'] ?? 0),
+        'noApi' => (int) ($row['no_api'] ?? 0),
+    ]);
+}
+
 if ($method === 'GET' && $path === '/admin/merchants') {
     authUser();
     $page = max(1, (int)($_GET['page'] ?? 1));
     $size = min(100, max(1, (int)($_GET['pageSize'] ?? 20)));
     $off = ($page - 1) * $size;
-    $total = (int) db()->query('SELECT COUNT(*) FROM `MerchantProfile`')->fetchColumn();
+
+    // Filters run in SQL: the screen pages server-side, so anything done in the
+    // browser could only ever filter the rows that page already holds.
+    $where = '1=1';
+    $args = [];
+    $q = trim((string)($_GET['search'] ?? ''));
+    if ($q !== '') {
+        $where .= ' AND (mp.storeNameAr LIKE ? OR mp.storeName LIKE ? OR mp.addressLine LIKE ?
+                    OR u.name LIKE ? OR u.phone LIKE ? OR u.email LIKE ? OR mp.phone LIKE ? OR mp.id = ?)';
+        $like = '%' . $q . '%';
+        for ($i = 0; $i < 7; $i++) $args[] = $like;
+        $args[] = $q;
+    }
+    if (!empty($_GET['categoryId'])) { $where .= ' AND mp.categoryId = ?'; $args[] = $_GET['categoryId']; }
+    if (!empty($_GET['governorate'])) { $where .= ' AND mp.governorate = ?'; $args[] = $_GET['governorate']; }
+    $status = (string)($_GET['status'] ?? '');
+    if ($status === 'active') $where .= ' AND u.isActive = 1';
+    elseif ($status === 'inactive') $where .= ' AND (u.isActive = 0 OR u.isActive IS NULL)';
+    $hasProducts = (string)($_GET['hasProducts'] ?? '');
+    if ($hasProducts === 'yes') $where .= ' AND (SELECT COUNT(*) FROM `Product` p2 WHERE p2.merchantId = mp.id) > 0';
+    elseif ($hasProducts === 'no') $where .= ' AND (SELECT COUNT(*) FROM `Product` p2 WHERE p2.merchantId = mp.id) = 0';
+    $hasApi = (string)($_GET['hasApi'] ?? '');
+    if ($hasApi === 'yes') $where .= ' AND ac.id IS NOT NULL';
+    elseif ($hasApi === 'no') $where .= ' AND ac.id IS NULL';
+    if (!empty($_GET['from'])) { $where .= ' AND mp.createdAt >= ?'; $args[] = str_replace('T', ' ', substr($_GET['from'], 0, 19)); }
+    if (!empty($_GET['to']))   { $where .= ' AND mp.createdAt <= ?'; $args[] = str_replace('T', ' ', substr($_GET['to'], 0, 19)); }
+
+    $sort = (string)($_GET['sort'] ?? 'createdAt');
+    $dir = strtolower((string)($_GET['dir'] ?? 'desc')) === 'asc' ? 'ASC' : 'DESC';
+    // Whitelisted: the column name is interpolated, so it can never come
+    // straight from the query string.
+    $sortCol = [
+        'createdAt' => 'mp.createdAt', 'updatedAt' => 'mp.updatedAt',
+        'name' => 'mp.storeNameAr', 'products' => 'product_count',
+    ][$sort] ?? 'mp.createdAt';
+
+    $JOINS = 'FROM `MerchantProfile` mp
+         LEFT JOIN `User` u ON u.id = mp.userId
+         LEFT JOIN `Category` c ON c.id = mp.categoryId
+         LEFT JOIN `MerchantApiConfig` ac ON ac.merchantId = mp.id';
+
+    $cnt = db()->prepare('SELECT COUNT(*) ' . $JOINS . ' WHERE ' . $where);
+    $cnt->execute($args);
+    $total = (int) $cnt->fetchColumn();
+
     $st = db()->prepare(
         "SELECT mp.*, u.name AS u_name, u.phone AS u_phone, u.email AS u_email, u.isActive AS u_isActive, u.secondaryPhones AS u_secondaryPhones,
                 c.nameAr AS c_nameAr, c.name AS c_name,
+                ac.id AS api_id, ac.apiUrl AS api_url, ac.isConnected AS api_connected, ac.isActive AS api_active, ac.lastSyncedAt AS api_last_sync,
                 (SELECT COUNT(*) FROM `Product` p WHERE p.merchantId = mp.id) AS product_count
-         FROM `MerchantProfile` mp
-         LEFT JOIN `User` u ON u.id = mp.userId
-         LEFT JOIN `Category` c ON c.id = mp.categoryId
-         ORDER BY mp.createdAt DESC LIMIT $size OFFSET $off"
+         " . $JOINS . " WHERE " . $where . "
+         ORDER BY $sortCol $dir LIMIT $size OFFSET $off"
     );
-    $st->execute();
+    $st->execute($args);
     $rows = [];
     foreach ($st->fetchAll() as $r) {
         $sec = $r['u_secondaryPhones'] ?? null;
@@ -1057,6 +2011,17 @@ if ($method === 'GET' && $path === '/admin/merchants') {
             'user' => ['id' => $r['userId'], 'name' => $r['u_name'], 'phone' => $r['u_phone'], 'email' => $r['u_email'], 'isActive' => (bool)(int)($r['u_isActive'] ?? 1), 'secondaryPhones' => $secArr],
             'category' => $r['c_nameAr'] !== null ? ['id' => $r['categoryId'], 'nameAr' => $r['c_nameAr'], 'name' => $r['c_name']] : null,
             '_count' => ['products' => (int)$r['product_count']],
+            // Null when the merchant has no API config — the screen shows
+            // "غير مرتبط" rather than pretending an integration exists.
+            'apiConfig' => !empty($r['api_id']) ? [
+                'id' => $r['api_id'],
+                'apiUrl' => $r['api_url'] ?? null,
+                // isConnected = the last test/sync succeeded; isActive = the
+                // integration is switched on. There is no `isEnabled` column.
+                'isConnected' => (bool)(int)($r['api_connected'] ?? 0),
+                'isActive' => (bool)(int)($r['api_active'] ?? 0),
+                'lastSyncedAt' => $r['api_last_sync'] ?? null,
+            ] : null,
         ];
     }
     http_response_code(200);
@@ -1377,6 +2342,32 @@ if ($method === 'DELETE' && preg_match('#^/admin/zones/areas/([^/]+)$#', $path, 
     jsonOk(['deleted' => true]);
 }
 
+// Customer DETAIL — the modal reads data.customerOrders and data.savedAddresses.
+// There was no handler for this path, so the request fell to a generic fallback
+// that returned the row WITHOUT those arrays; the "آخر الطلبات" tab then did
+// `data.customerOrders.map(...)` on undefined and crashed the whole dashboard.
+if ($method === 'GET' && preg_match('#^/admin/customers/([^/]+)$#', $path, $m)) {
+    authUser();
+    $cid = $m[1];
+    // Explicit columns — never leak passwordHash / resetHash / googleId / fcmToken.
+    $us = db()->prepare("SELECT id, name, phone, email, avatarUrl, role, isActive, isPhoneVerified, city, governorate, defaultAddress, secondaryPhones, createdAt, updatedAt FROM `User` WHERE id = ? AND role = 'CUSTOMER' LIMIT 1");
+    $us->execute([$cid]);
+    $cust = $us->fetch();
+    if (!$cust) jsonErr('العميل غير موجود', 404, 'NOT_FOUND');
+    $cust = jsonizeRow($cust);
+
+    $os = db()->prepare("SELECT id, orderNumber, status, category, finalPrice, quotedPrice, paymentStatus, createdAt FROM `Order` WHERE customerId = ? ORDER BY createdAt DESC LIMIT 30");
+    $os->execute([$cid]);
+    $cust['customerOrders'] = array_map('jsonizeRow', $os->fetchAll());
+
+    $as = db()->prepare("SELECT id, label, address, lat, lng, notes, isDefault, createdAt FROM `CustomerAddress` WHERE userId = ? ORDER BY isDefault DESC, createdAt DESC");
+    $as->execute([$cid]);
+    $cust['savedAddresses'] = array_map(static fn ($a) => boolCast(jsonizeRow($a), ['isDefault']), $as->fetchAll());
+
+    $cust['_count'] = ['customerOrders' => count($cust['customerOrders'])];
+    jsonOk($cust);
+}
+
 // Customers (and any other User-by-role) — bare User rows are enough.
 if ($method === 'GET' && preg_match('#^/admin/(customers)$#', $path, $m)) {
     authUser();
@@ -1536,7 +2527,17 @@ if ($method === 'PATCH' && preg_match('#^/admin/categories/([^/]+)$#', $path, $m
 }
 if ($method === 'DELETE' && preg_match('#^/admin/categories/([^/]+)$#', $path, $m)) {
     authUser();
-    db()->prepare('DELETE FROM `Category` WHERE id = ?')->execute([$m[1]]);
+    $id = $m[1];
+    // MerchantProfile.categoryId is a required FK: deleting a category that is
+    // still in use would either throw or orphan stores. Hide it instead.
+    $st = db()->prepare('SELECT COUNT(*) FROM `MerchantProfile` WHERE categoryId = ?');
+    $st->execute([$id]);
+    $used = (int) $st->fetchColumn();
+    if ($used > 0) {
+        db()->prepare('UPDATE `Category` SET isActive = 0 WHERE id = ?')->execute([$id]);
+        jsonOk(['deleted' => false, 'deactivated' => true, 'merchants' => $used]);
+    }
+    db()->prepare('DELETE FROM `Category` WHERE id = ?')->execute([$id]);
     jsonOk(['deleted' => true]);
 }
 
@@ -1637,11 +2638,23 @@ if ($method === 'PUT' && $path === '/admin/site-config') {
     $b = readJsonBody();
     $stmt = db()->prepare('INSERT INTO `Setting` (`key`,`value`,`description`,`updatedAt`,`updatedById`) VALUES (?,?,NULL,NOW(3),?) ON DUPLICATE KEY UPDATE `value`=VALUES(`value`), `updatedAt`=VALUES(`updatedAt`), `updatedById`=VALUES(`updatedById`)');
     $n = 0;
-    foreach ($b as $k => $v) {
-        $val = is_string($v) ? $v : json_encode($v);
-        $stmt->execute([(string)$k, $val, $u['sub'] ?? null]);
-        $n++;
+    try {
+        foreach ($b as $k => $v) {
+            // Setting.value is a JSON column (MariaDB enforces it with a
+            // `json_valid` CHECK). The old `is_string($v) ? $v : json_encode($v)`
+            // stored bare text for every string field, which violated that
+            // constraint — so EVERY text save (hero title, address, email…)
+            // died with an empty 500 and the site editor never worked. Always
+            // encode; a string becomes "…", matching the rows already stored.
+            $stmt->execute([(string) $k, json_encode($v, JSON_UNESCAPED_UNICODE), $u['sub'] ?? null]);
+            $n++;
+        }
+    } catch (PDOException $e) {
+        error_log('[api.php] site-config PUT: ' . $e->getMessage());
+        jsonErr('تعذّر حفظ الإعدادات', 422, 'SAVE_FAILED');
     }
+    // Bust the public /site-config cache so a save is live immediately.
+    @unlink(sys_get_temp_dir() . '/tamem_site_config.json');
     jsonOk(['updated' => $n]);
 }
 
@@ -1885,15 +2898,8 @@ if ($method === 'PATCH' && preg_match('#^/admin/orders/([^/]+)/status$#', $path,
     $args[] = $m[1];
     try { db()->prepare('UPDATE `Order` SET ' . implode(',', $sets) . ' WHERE id = ?')->execute($args); }
     catch (PDOException $e) { error_log('[api.php] order status: ' . $e->getMessage()); jsonErr('تعذّر تحديث الحالة', 422, 'FAILED'); }
-    // Notify the customer on WhatsApp about the new status.
-    try {
-        $q = db()->prepare('SELECT o.orderNumber, u.phone FROM `Order` o LEFT JOIN `User` u ON u.id = o.customerId WHERE o.id = ?');
-        $q->execute([$m[1]]); $ord = $q->fetch();
-        if ($ord && !empty($ord['phone'])) {
-            waEnqueue($ord['phone'], "تميم للتوصيل 🚚\nحالة طلبك رقم *{$ord['orderNumber']}* أصبحت: *" . orderStatusLabelAr($status) . "*"
-                . ($status === 'CANCELLED' && !empty($b['reason']) ? "\nالسبب: " . $b['reason'] : ''));
-        }
-    } catch (Throwable $e) { /* notification is best-effort */ }
+    // Fan out role-specific WhatsApp updates (customer / driver / admin).
+    notifyOrderParties($m[1], $status, !empty($b['reason']) ? (string) $b['reason'] : null);
     $r = db()->prepare('SELECT * FROM `Order` WHERE id = ?'); $r->execute([$m[1]]);
     jsonOk(jsonizeRow($r->fetch()) ?: []);
 }
@@ -1910,6 +2916,8 @@ if ($method === 'PATCH' && preg_match('#^/admin/orders/([^/]+)/assign-driver$#',
     $b = readJsonBody();
     db()->prepare("UPDATE `Order` SET `assignedDriverId` = ?, `status` = 'DRIVER_ASSIGNED', `updatedAt` = NOW(3) WHERE id = ?")
         ->execute([(string)($b['driverId'] ?? ''), $m[1]]);
+    // Notifies the driver (new assignment + pickup/delivery) AND the customer.
+    notifyOrderParties($m[1], 'DRIVER_ASSIGNED');
     $r = db()->prepare('SELECT * FROM `Order` WHERE id = ?'); $r->execute([$m[1]]);
     jsonOk(jsonizeRow($r->fetch()) ?: []);
 }
@@ -1918,6 +2926,8 @@ if ($method === 'POST' && preg_match('#^/admin/orders/([^/]+)/cancel$#', $path, 
     $b = readJsonBody();
     db()->prepare("UPDATE `Order` SET `status` = 'CANCELLED', `cancelledAt` = NOW(3), `cancellationReason` = ?, `updatedAt` = NOW(3) WHERE id = ?")
         ->execute([(string)($b['reason'] ?? ''), $m[1]]);
+    // Customer (apology) + driver (stand down) + admin (log).
+    notifyOrderParties($m[1], 'CANCELLED', !empty($b['reason']) ? (string) $b['reason'] : null);
     $r = db()->prepare('SELECT * FROM `Order` WHERE id = ?'); $r->execute([$m[1]]);
     jsonOk(jsonizeRow($r->fetch()) ?: []);
 }
@@ -1977,7 +2987,11 @@ if ($method === 'POST' && preg_match('#^/admin/([a-z][a-z0-9-]*)$#', $path, $m) 
         db()->prepare("INSERT INTO `$tbl` (" . implode(',', $names) . ") VALUES (" . implode(',', $place) . ")")->execute($args);
         if (isset($cols['id'])) {
             $sel = db()->prepare("SELECT * FROM `$tbl` WHERE id = ?"); $sel->execute([$args[0]]);
-            jsonOk(jsonizeRow($sel->fetch()) ?: [], 201);
+            $row = $sel->fetch() ?: [];
+            if ($tbl === 'Product' && !empty($row['id'])) {
+                logProductHistory((string) $row['id'], $row['nameAr'] ?? null, 'CREATE', null);
+            }
+            jsonOk(jsonizeRow($row) ?: [], 201);
         }
         jsonOk($b, 201);
     } catch (Throwable $e) {
@@ -1993,6 +3007,13 @@ if (($method === 'PATCH' || $method === 'PUT') && preg_match('#^/admin/([a-z][a-
     $b = readJsonBody();
     try {
         $cols = tableColumns($tbl);
+        // Snapshot before writing — the trail needs the old value, and after the
+        // UPDATE it is gone.
+        $__before = null;
+        if ($tbl === 'Product') {
+            $bs = db()->prepare("SELECT * FROM `$tbl` WHERE id = ?"); $bs->execute([$id]);
+            $__before = $bs->fetch() ?: null;
+        }
         $sets = []; $args = [];
         foreach ($b as $k => $v) {
             if (!isset($cols[$k]) || in_array($k, ['id', 'createdAt', 'updatedAt'], true)) continue;
@@ -2004,7 +3025,14 @@ if (($method === 'PATCH' || $method === 'PUT') && preg_match('#^/admin/([a-z][a-
             db()->prepare("UPDATE `$tbl` SET " . implode(',', $sets) . " WHERE id = ?")->execute($args);
         }
         $sel = db()->prepare("SELECT * FROM `$tbl` WHERE id = ?"); $sel->execute([$id]);
-        jsonOk(jsonizeRow($sel->fetch()) ?: []);
+        $__after = $sel->fetch() ?: [];
+        if ($tbl === 'Product' && $__before) {
+            $changes = diffProduct($__before, $__after);
+            if ($changes) {
+                logProductHistory((string) $id, $__after['nameAr'] ?? null, productActionFor($changes), $changes);
+            }
+        }
+        jsonOk(jsonizeRow($__after) ?: []);
     } catch (Throwable $e) {
         error_log('[api.php] generic UPDATE ' . $tbl . ' failed: ' . $e->getMessage());
     }
@@ -2016,7 +3044,13 @@ if ($method === 'DELETE' && preg_match('#^/admin/([a-z][a-z0-9-]*)/([^/]+)$#', $
     if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
     $tbl = $RES[$m[1]];
     try {
+        $__name = null;
+        if ($tbl === 'Product') {
+            $ns = db()->prepare("SELECT nameAr FROM `$tbl` WHERE id = ?"); $ns->execute([$m[2]]);
+            $__name = $ns->fetchColumn() ?: null;
+        }
         db()->prepare("DELETE FROM `$tbl` WHERE id = ?")->execute([$m[2]]);
+        if ($tbl === 'Product') logProductHistory((string) $m[2], $__name, 'DELETE', null);
         jsonOk(['deleted' => true]);
     } catch (Throwable $e) {
         $errno = ($e instanceof PDOException) ? (int)($e->errorInfo[1] ?? 0) : 0;
@@ -2151,7 +3185,7 @@ function merchantOpenness(array $m, array $hours): array {
 // menuImages mirrors catalog.controller's merchantSelect: a merchant with no
 // structured products can instead publish photos of their paper menu, and the
 // app's MerchantDetailScreen renders them in place of the product list.
-const MERCHANT_SEL = 'm.id, m.storeName, m.storeNameAr, m.description, m.logoUrl, m.coverUrl, m.menuImages, m.addressLine, m.lat, m.lng, m.governorate, m.city, m.rating, m.isOpen, m.manualStatus, m.timezone, m.categoryId, c.name AS c_name, c.nameAr AS c_nameAr, c.iconUrl AS c_iconUrl';
+const MERCHANT_SEL = 'm.id, m.storeName, m.storeNameAr, m.phone, m.description, m.logoUrl, m.coverUrl, m.menuImages, m.addressLine, m.lat, m.lng, m.governorate, m.city, m.rating, m.isOpen, m.manualStatus, m.timezone, m.categoryId, c.name AS c_name, c.nameAr AS c_nameAr, c.iconUrl AS c_iconUrl';
 function hoursFor(array $ids): array {
     if (!$ids) return [];
     $in = implode(',', array_fill(0, count($ids), '?'));
@@ -3336,21 +4370,54 @@ if ($method === 'GET' && $path === '/home-config') {
 }
 
 if ($method === 'GET' && $path === '/site-config') {
+    // CACHED: this is public and the landing page calls it on EVERY visit, so
+    // uncached it turned each anonymous visitor into a MySQL connection — the
+    // single biggest consumer of the 500 connections/hour the shared plan
+    // allows. Settings change a few times a day at most, so serve from a small
+    // file and only touch the DB when it goes stale. PUT /admin/site-config
+    // deletes this file, so a save is still reflected immediately.
+    $ccFile = sys_get_temp_dir() . '/tamem_site_config.json';
+    $ccTtl = 300; // 5 min
+    if (is_file($ccFile) && (time() - (int) @filemtime($ccFile)) < $ccTtl) {
+        $cached = @file_get_contents($ccFile);
+        if ($cached !== false && $cached !== '') {
+            header('Content-Type: application/json; charset=utf-8');
+            header('X-Cache: HIT');
+            http_response_code(200);
+            echo $cached;
+            exit;
+        }
+    }
     // Reduce Setting table into a keyed dict — that's how the landing page
     // and admin site-settings both expect it. Use an associative array so
     // json_encode outputs {...} and any key characters are safe.
     try {
         $rows = db()->query('SELECT `key`, `value` FROM `Setting`')->fetchAll();
     } catch (Throwable $e) {
+        // DB unavailable (e.g. the hourly connection cap). Serve a stale cache
+        // rather than breaking the public site — old copy beats no site.
+        if (is_file($ccFile)) {
+            $stale = @file_get_contents($ccFile);
+            if ($stale !== false && $stale !== '') {
+                header('Content-Type: application/json; charset=utf-8');
+                header('X-Cache: STALE');
+                http_response_code(200);
+                echo $stale;
+                exit;
+            }
+        }
         jsonErr('لم يتم تحميل الإعدادات: ' . $e->getMessage(), 500, 'SETTINGS_ERROR');
     }
     $out = [];
-    foreach ($rows as $r) $out[(string) $r['key']] = $r['value'];
+    foreach ($rows as $r) $out[(string) $r['key']] = settingValue($r['value']);
     // Force object encoding even when empty so the client's `.foo` lookups
     // don't crash.
+    $payload = json_encode(['data' => (object) $out], JSON_UNESCAPED_UNICODE);
+    @file_put_contents($ccFile, $payload);
     header('Content-Type: application/json; charset=utf-8');
+    header('X-Cache: MISS');
     http_response_code(200);
-    echo json_encode(['data' => (object) $out], JSON_UNESCAPED_UNICODE);
+    echo $payload;
     exit;
 }
 
@@ -3485,7 +4552,7 @@ if ($method === 'POST' && $path === '/auth/admin/otp/verify') {
     otpDelete($token);
 
     // Load user again fresh in case they got disabled mid-OTP.
-    $stmt = db()->prepare('SELECT id, name, phone, email, role, isActive FROM `User` WHERE id = ? LIMIT 1');
+    $stmt = db()->prepare('SELECT id, name, phone, email, role, isActive, permissions FROM `User` WHERE id = ? LIMIT 1');
     $stmt->execute([$pending['userId']]);
     $user = $stmt->fetch();
     if (!$user || !(int) $user['isActive']) jsonErr('الحساب غير مفعّل', 403, 'INACTIVE');
@@ -3501,6 +4568,9 @@ if ($method === 'POST' && $path === '/auth/admin/otp/verify') {
         'user' => [
             'id' => $user['id'], 'name' => $user['name'],
             'phone' => $user['phone'], 'email' => $user['email'], 'role' => $user['role'],
+            // null = unrestricted (super/legacy); an array = a scoped admin.
+            'permissions' => is_string($user['permissions'] ?? null) && $user['permissions'] !== ''
+                ? (json_decode($user['permissions'], true) ?: []) : null,
         ],
         'tokens' => ['accessToken' => $access, 'refreshToken' => $refresh],
     ]);

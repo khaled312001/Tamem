@@ -1590,6 +1590,15 @@ function ImportDialog({
       }
       return ids;
     },
+    // This walks EVERY page of the catalogue, so it must never join the global
+    // 120s poll — that re-ran the whole multi-page sweep every two minutes for
+    // as long as the import dialog stayed open, and the shared MySQL user is
+    // capped at 500 connections/hour. The id set only has to be correct at the
+    // moment the file is matched; the dialog is short-lived.
+    refetchInterval: false,
+    refetchOnMount: false,
+    staleTime: Infinity,
+    gcTime: 10 * 60_000,
   });
 
   const template = async (mode: 'blank' | 'example' | 'data') => {
