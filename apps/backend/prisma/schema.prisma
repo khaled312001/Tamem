@@ -292,6 +292,12 @@ model MerchantProfile {
   /// Public store contact number, shown to customers. Optional — falls back
   /// to the owner's login phone (User.phone) when null.
   phone        String?  @db.VarChar(20)
+  /// Menu-image mode: a merchant that doesn't list individual products can
+  /// instead have one or more photos of their paper menu. When non-empty the
+  /// customer app shows these images (zoomable) + a free-text order CTA.
+  /// JSON array of image URLs. Empty/null = the merchant uses structured
+  /// products instead.
+  menuImages   Json?
   addressLine  String   @db.VarChar(500)
   lat          Decimal  @db.Decimal(10, 7)
   lng          Decimal  @db.Decimal(10, 7)

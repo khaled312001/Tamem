@@ -38,6 +38,7 @@ const merchantSelect = {
   description: true,
   logoUrl: true,
   coverUrl: true,
+  menuImages: true,
   addressLine: true,
   lat: true,
   lng: true,

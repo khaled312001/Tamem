@@ -38,6 +38,9 @@ interface MerchantDetail {
   deliveryRadiusKm?: number | null;
   openHours?: Array<{ day: number; open: string; close: string }> | null;
   category?: { nameAr: string };
+  /// Menu-image mode: photos of the merchant's paper menu. When present the
+  /// customer views these and orders via the free-text "اطلب الآن" flow.
+  menuImages?: string[] | null;
   products?: Array<{ id: string; nameAr: string; price: number; imageUrl?: string }>;
   /// Server-computed openness verdict. Includes the next opening so we can
   /// render "يفتح غداً 10ص" instead of just "مغلق".
@@ -193,6 +196,27 @@ export function MerchantDetailScreen() {
           {data.description && <Text style={styles.description}>{data.description}</Text>}
         </View>
 
+        {/* ─────── Menu images (menu-image mode) ─────── */}
+        {data.menuImages && data.menuImages.length > 0 && (
+          <View style={styles.section}>
+            <View style={styles.productsHeaderRow}>
+              <Text style={styles.sectionTitle}>المنيو</Text>
+              <Text style={styles.productsCount}>{data.menuImages.length} صورة</Text>
+            </View>
+            <Text style={styles.productsHint}>
+              اضغط "اطلب الآن" بالأسفل واكتب طلبك من المنيو — هنوصّله لك من المتجر.
+            </Text>
+            {data.menuImages.map((uri, i) => (
+              <Image
+                key={`${uri}-${i}`}
+                source={{ uri }}
+                style={styles.menuImage}
+                resizeMode="contain"
+              />
+            ))}
+          </View>
+        )}
+
         {/* ─────── Products ─────── */}
         {data.products && data.products.length > 0 && (
           <View style={styles.section}>
@@ -236,15 +260,16 @@ export function MerchantDetailScreen() {
           </View>
         )}
 
-        {(!data.products || data.products.length === 0) && (
-          <View style={styles.emptyProductsCard}>
-            <Phone size={20} color={colors.brand.red} />
-            <Text style={styles.emptyProductsTitle}>اطلب أي حاجة من المتجر</Text>
-            <Text style={styles.emptyProductsSub}>
-              مفيش قائمة محددة هنا — كل اللي تطلبه هنوصّله من المتجر مباشرة.
-            </Text>
-          </View>
-        )}
+        {(!data.products || data.products.length === 0) &&
+          (!data.menuImages || data.menuImages.length === 0) && (
+            <View style={styles.emptyProductsCard}>
+              <Phone size={20} color={colors.brand.red} />
+              <Text style={styles.emptyProductsTitle}>اطلب أي حاجة من المتجر</Text>
+              <Text style={styles.emptyProductsSub}>
+                مفيش قائمة محددة هنا — كل اللي تطلبه هنوصّله من المتجر مباشرة.
+              </Text>
+            </View>
+          )}
       </ScrollView>
 
       {/* ─────── Sticky Order CTA ─────── */}
@@ -423,6 +448,13 @@ const styles = StyleSheet.create({
     fontFamily: fontFamilies.body,
     marginBottom: spacing.md,
     lineHeight: 18,
+  },
+  menuImage: {
+    width: '100%',
+    height: 460,
+    borderRadius: radii.lg,
+    backgroundColor: colors.surfaceAlt ?? '#f5f5f4',
+    marginBottom: spacing.md,
   },
   productRow: {
     flexDirection: 'row',

@@ -41,6 +41,9 @@ const createMerchantSchema = z.object({
     .optional(),
   // Commission Tamem takes from this merchant's orders, as a percentage.
   commissionPct: z.number().min(0).max(100).optional(),
+  // Menu-image mode: photos of the merchant's paper menu (0..10). Empty array
+  // means the merchant uses structured products instead.
+  menuImages: z.array(z.string().url()).max(10).optional(),
   addressLine: z.string().trim().min(2).max(500),
   lat: z.number(),
   lng: z.number(),
@@ -160,6 +163,7 @@ export const create: RequestHandler = async (req, res, next) => {
             coverUrl: input.coverUrl,
             phone: input.storePhone,
             commissionPct: input.commissionPct,
+            menuImages: input.menuImages ?? undefined,
             addressLine: input.addressLine,
             lat: input.lat,
             lng: input.lng,
@@ -194,6 +198,7 @@ export const update: RequestHandler = async (req, res, next) => {
       'logoUrl',
       'coverUrl',
       'commissionPct',
+      'menuImages',
       'addressLine',
       'lat',
       'lng',
