@@ -1,51 +1,73 @@
+import { HelpCircle } from 'lucide-react';
+
 import type { OrderStatus } from '@tamem/types';
 
 import { cn } from '../../lib/utils.js';
+import {
+  DRIVER_STATUS,
+  ORDER_STATUS,
+  PAYMENT_STATUS,
+  TONE,
+  type StatusMeta,
+} from '../../lib/statusRegistry.js';
 
-// Status colors from docs/BRAND.md
-const STATUS_STYLES: Record<string, { bg: string; text: string; label: string }> = {
-  NEW: { bg: 'bg-blue-100', text: 'text-blue-700', label: 'جديد' },
-  UNDER_REVIEW: { bg: 'bg-purple-100', text: 'text-purple-700', label: 'قيد المراجعة' },
-  PRICED: { bg: 'bg-sky-100', text: 'text-sky-700', label: 'تم التسعير' },
-  AWAITING_CUSTOMER_APPROVAL: {
-    bg: 'bg-yellow-100',
-    text: 'text-yellow-700',
-    label: 'بانتظار العميل',
-  },
-  ACCEPTED: { bg: 'bg-emerald-100', text: 'text-emerald-700', label: 'مقبول' },
-  DRIVER_ASSIGNED: { bg: 'bg-cyan-100', text: 'text-cyan-700', label: 'تم تعيين سائق' },
-  PICKED_UP: { bg: 'bg-teal-100', text: 'text-teal-700', label: 'تم الاستلام' },
-  IN_ROUTE: { bg: 'bg-amber-100', text: 'text-amber-700', label: 'في الطريق' },
-  DELIVERED: { bg: 'bg-green-100', text: 'text-green-700', label: 'تم التسليم' },
-  COMPLETED: { bg: 'bg-green-200', text: 'text-green-800', label: 'مكتمل' },
-  CANCELLED: { bg: 'bg-zinc-200', text: 'text-zinc-700', label: 'ملغي' },
-  REJECTED: { bg: 'bg-red-100', text: 'text-red-700', label: 'مرفوض' },
-};
+const UNKNOWN = (label: string): StatusMeta => ({ label, tone: 'zinc', icon: HelpCircle });
+
+/** Shared soft pill built from a registry entry (label + tone + icon). */
+function StatusPill({
+  meta,
+  size = 'sm',
+  withIcon = true,
+}: {
+  meta: StatusMeta;
+  size?: 'sm' | 'md';
+  withIcon?: boolean;
+}) {
+  const Icon = meta.icon;
+  return (
+    <span
+      className={cn(
+        'inline-flex items-center gap-1 rounded-full font-bold whitespace-nowrap',
+        size === 'sm' ? 'px-2 py-0.5 text-xs' : 'px-3 py-1 text-sm',
+        TONE[meta.tone].badge,
+      )}
+    >
+      {withIcon && <Icon className={size === 'sm' ? 'w-3 h-3' : 'w-3.5 h-3.5'} />}
+      {meta.label}
+    </span>
+  );
+}
 
 export function StatusBadge({
   status,
   size = 'sm',
+  withIcon = true,
 }: {
   status: OrderStatus | string;
   size?: 'sm' | 'md';
+  withIcon?: boolean;
 }) {
-  const style = STATUS_STYLES[status] ?? {
-    bg: 'bg-zinc-100',
-    text: 'text-zinc-700',
-    label: status,
-  };
   return (
-    <span
-      className={cn(
-        'inline-flex items-center rounded-full font-bold',
-        size === 'sm' ? 'px-2 py-0.5 text-xs' : 'px-3 py-1 text-sm',
-        style.bg,
-        style.text,
-      )}
-    >
-      {style.label}
-    </span>
+    <StatusPill
+      meta={ORDER_STATUS[status] ?? UNKNOWN(String(status))}
+      size={size}
+      withIcon={withIcon}
+    />
   );
+}
+
+export function PaymentStatusBadge({
+  status,
+  size = 'sm',
+}: {
+  status: string;
+  size?: 'sm' | 'md';
+}) {
+  return <StatusPill meta={PAYMENT_STATUS[status] ?? UNKNOWN(String(status))} size={size} />;
+}
+
+export function DriverStatusBadge({ status, size = 'sm' }: { status: string; size?: 'sm' | 'md' }) {
+  return <StatusPill meta={DRIVER_STATUS[status] ?? UNKNOWN(String(status))} size={size} />;
 }
 
 export function Badge({
@@ -69,26 +91,6 @@ export function Badge({
       )}
     >
       {children}
-    </span>
-  );
-}
-
-export function DriverStatusBadge({ status }: { status: string }) {
-  const styles = {
-    AVAILABLE: { bg: 'bg-green-100', text: 'text-green-700', label: 'متاح' },
-    BUSY: { bg: 'bg-amber-100', text: 'text-amber-700', label: 'مشغول' },
-    OFFLINE: { bg: 'bg-zinc-100', text: 'text-zinc-600', label: 'غير متصل' },
-  } as const;
-  const s = styles[status as keyof typeof styles] ?? styles.OFFLINE;
-  return (
-    <span
-      className={cn(
-        'inline-flex items-center px-2 py-0.5 rounded-full text-xs font-bold',
-        s.bg,
-        s.text,
-      )}
-    >
-      {s.label}
     </span>
   );
 }

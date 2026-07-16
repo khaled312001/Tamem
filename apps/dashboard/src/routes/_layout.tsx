@@ -20,6 +20,7 @@ import {
   Star,
   Store,
   Tag,
+  TrendingUp,
   Truck,
   UserCheck,
   Users,
@@ -50,32 +51,73 @@ type NavItem = {
   end?: boolean;
 };
 
-const NAV_ITEMS: NavItem[] = [
-  { to: '/overview', icon: Home, label: 'نظرة عامة' },
-  { to: '/orders', icon: Package, label: 'الطلبات', countKey: 'orders' },
-  { to: '/alerts', icon: AlertTriangle, label: 'التنبيهات', countKey: 'alerts', urgent: true },
-  { to: '/customers', icon: Users, label: 'العملاء' },
-  { to: '/drivers', icon: Truck, label: 'السائقون' },
-  { to: '/merchants', icon: Store, label: 'التجار' },
-  { to: '/services', icon: Sparkles, label: 'الخدمات' },
-  { to: '/products', icon: Box, label: 'المنتجات' },
-  { to: '/pricing', icon: DollarSign, label: 'التسعير' },
-  // المدفوعات + بوابة الدفع مخفيين من القائمة (كاش فقط حالياً)
-  { to: '/coupons', icon: Tag, label: 'الكوبونات' },
-  { to: '/reports', icon: BarChart3, label: 'التقارير', end: true },
-  { to: '/reports/revenue', icon: BarChart3, label: 'تقرير الإيرادات' },
-  { to: '/reviews', icon: Star, label: 'التقييمات' },
-  { to: '/whatsapp', icon: MessageCircle, label: 'ربط واتساب' },
-  { to: '/broadcast', icon: Megaphone, label: 'إشعار جماعي' },
-  { to: '/supervisors', icon: UserCheck, label: 'المشرفون' },
-  { to: '/admins', icon: ShieldCheck, label: 'المدراء' },
-  { to: '/home-settings', icon: Smartphone, label: 'صفحة التطبيق' },
-  { to: '/site-settings', icon: Globe, label: 'صفحة الموقع' },
-  { to: '/settings', icon: Settings, label: 'الإعدادات' },
+type NavSection = { title: string; items: NavItem[] };
+
+// Grouped navigation — daily-ops sections first, rare config last. Replaces
+// the flat 20-item list that put "نظرة عامة" next to "صفحة الموقع".
+// (المدفوعات + بوابة الدفع ما زالتا مخفيتين — كاش فقط حالياً.)
+const NAV_SECTIONS: NavSection[] = [
+  {
+    title: 'العمليات',
+    items: [
+      { to: '/overview', icon: Home, label: 'نظرة عامة' },
+      { to: '/orders', icon: Package, label: 'الطلبات', countKey: 'orders' },
+      { to: '/alerts', icon: AlertTriangle, label: 'التنبيهات', countKey: 'alerts', urgent: true },
+    ],
+  },
+  {
+    title: 'الأشخاص',
+    items: [
+      { to: '/customers', icon: Users, label: 'العملاء' },
+      { to: '/drivers', icon: Truck, label: 'السائقون' },
+      { to: '/merchants', icon: Store, label: 'التجار' },
+      { to: '/supervisors', icon: UserCheck, label: 'المشرفون' },
+    ],
+  },
+  {
+    title: 'الكتالوج',
+    items: [
+      { to: '/services', icon: Sparkles, label: 'الخدمات' },
+      { to: '/products', icon: Box, label: 'المنتجات' },
+      { to: '/pricing', icon: DollarSign, label: 'التسعير' },
+      { to: '/coupons', icon: Tag, label: 'الكوبونات' },
+    ],
+  },
+  {
+    title: 'المالية والتقارير',
+    items: [
+      { to: '/reports', icon: BarChart3, label: 'التقارير', end: true },
+      { to: '/reports/revenue', icon: TrendingUp, label: 'تقرير الإيرادات' },
+    ],
+  },
+  {
+    title: 'التسويق والتواصل',
+    items: [
+      { to: '/broadcast', icon: Megaphone, label: 'إشعار جماعي' },
+      { to: '/whatsapp', icon: MessageCircle, label: 'ربط واتساب' },
+      { to: '/reviews', icon: Star, label: 'التقييمات' },
+    ],
+  },
+  {
+    title: 'المحتوى',
+    items: [
+      { to: '/home-settings', icon: Smartphone, label: 'صفحة التطبيق' },
+      { to: '/site-settings', icon: Globe, label: 'صفحة الموقع' },
+    ],
+  },
+  {
+    title: 'الإدارة',
+    items: [
+      { to: '/admins', icon: ShieldCheck, label: 'المدراء' },
+      { to: '/settings', icon: Settings, label: 'الإعدادات' },
+    ],
+  },
 ];
 
+const ALL_NAV_ITEMS: NavItem[] = NAV_SECTIONS.flatMap((s) => s.items);
+
 const ACTIVE_LABEL: Record<string, string> = Object.fromEntries(
-  NAV_ITEMS.map((n) => [n.to, n.label]),
+  ALL_NAV_ITEMS.map((n) => [n.to, n.label]),
 );
 
 export function DashboardLayout() {
@@ -220,69 +262,27 @@ export function DashboardLayout() {
 
           <nav
             className={cn(
-              'flex-1 p-3 space-y-0.5 overflow-y-auto custom-scrollbar',
+              'flex-1 p-3 space-y-4 overflow-y-auto custom-scrollbar',
               collapsed && 'md:px-2',
             )}
           >
-            {NAV_ITEMS.map((item) => (
-              <NavLink
-                key={item.to}
-                to={item.to}
-                end={item.end}
-                title={collapsed ? item.label : undefined}
-                className={({ isActive }) =>
-                  cn(
-                    'group relative flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm overflow-hidden',
-                    'transition-all duration-200',
-                    collapsed ? 'md:justify-center md:px-2' : 'justify-between',
-                    isActive
-                      ? 'text-white font-bold shadow-lg shadow-brand-red/30'
-                      : 'text-foreground/80 hover:text-foreground hover:bg-brand-red/5',
-                  )
-                }
-              >
-                {({ isActive }) => (
-                  <>
-                    {isActive && (
-                      <span className="absolute inset-0 bg-gradient-to-l from-brand-red via-[#d12818] to-brand-orange" />
-                    )}
-                    {isActive && (
-                      <span className="absolute right-0 top-1/2 -translate-y-1/2 w-1 h-6 rounded-l-full bg-white/80" />
-                    )}
-                    <span
-                      className={cn(
-                        'relative flex items-center gap-3',
-                        collapsed && 'md:justify-center',
-                      )}
-                    >
-                      <item.icon
-                        className={cn(
-                          'w-4 h-4 transition-transform duration-200',
-                          isActive ? 'scale-110' : 'group-hover:scale-110',
-                          collapsed && 'md:w-5 md:h-5',
-                        )}
-                      />
-                      <span className={cn(collapsed && 'md:hidden')}>{item.label}</span>
-                    </span>
-                    {item.countKey && counts[item.countKey] > 0 && (
-                      <span
-                        className={cn(
-                          'relative min-w-[1.4rem] h-[1.4rem] px-1.5 inline-flex items-center justify-center rounded-full text-[10px] font-black',
-                          collapsed &&
-                            'md:absolute md:-top-1 md:-right-1 md:min-w-[1.1rem] md:h-[1.1rem] md:px-1 md:text-[9px]',
-                          isActive
-                            ? 'bg-white/25 text-white'
-                            : item.urgent
-                              ? 'bg-destructive text-white animate-pulse shadow-md shadow-destructive/40'
-                              : 'bg-foreground/10 text-foreground',
-                        )}
-                      >
-                        {counts[item.countKey]}
-                      </span>
-                    )}
-                  </>
+            {NAV_SECTIONS.map((section) => (
+              <div key={section.title} className="space-y-0.5">
+                <div
+                  className={cn(
+                    'px-3 pb-1 text-[10px] font-black uppercase tracking-wider text-muted-foreground/60',
+                    collapsed && 'md:hidden',
+                  )}
+                >
+                  {section.title}
+                </div>
+                {collapsed && (
+                  <div className="hidden md:block mx-3 mb-1 border-t border-border/50" />
                 )}
-              </NavLink>
+                {section.items.map((item) => (
+                  <NavItemLink key={item.to} item={item} collapsed={collapsed} counts={counts} />
+                ))}
+              </div>
             ))}
           </nav>
         </aside>
@@ -361,6 +361,77 @@ export function DashboardLayout() {
         </main>
       </div>
     </NotificationsProvider>
+  );
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Sidebar item
+// ────────────────────────────────────────────────────────────────────────────
+
+function NavItemLink({
+  item,
+  collapsed,
+  counts,
+}: {
+  item: NavItem;
+  collapsed: boolean;
+  counts: { orders: number; alerts: number };
+}) {
+  return (
+    <NavLink
+      to={item.to}
+      end={item.end}
+      title={collapsed ? item.label : undefined}
+      className={({ isActive }) =>
+        cn(
+          'group relative flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm overflow-hidden',
+          'transition-all duration-200',
+          collapsed ? 'md:justify-center md:px-2' : 'justify-between',
+          isActive
+            ? 'text-white font-bold shadow-lg shadow-brand-red/30'
+            : 'text-foreground/80 hover:text-foreground hover:bg-brand-red/5',
+        )
+      }
+    >
+      {({ isActive }) => (
+        <>
+          {isActive && (
+            <span className="absolute inset-0 bg-gradient-to-l from-brand-red via-[#d12818] to-brand-orange" />
+          )}
+          {isActive && (
+            <span className="absolute right-0 top-1/2 -translate-y-1/2 w-1 h-6 rounded-l-full bg-white/80" />
+          )}
+          <span
+            className={cn('relative flex items-center gap-3', collapsed && 'md:justify-center')}
+          >
+            <item.icon
+              className={cn(
+                'w-4 h-4 transition-transform duration-200',
+                isActive ? 'scale-110' : 'group-hover:scale-110',
+                collapsed && 'md:w-5 md:h-5',
+              )}
+            />
+            <span className={cn(collapsed && 'md:hidden')}>{item.label}</span>
+          </span>
+          {item.countKey && counts[item.countKey] > 0 && (
+            <span
+              className={cn(
+                'relative min-w-[1.4rem] h-[1.4rem] px-1.5 inline-flex items-center justify-center rounded-full text-[10px] font-black',
+                collapsed &&
+                  'md:absolute md:-top-1 md:-right-1 md:min-w-[1.1rem] md:h-[1.1rem] md:px-1 md:text-[9px]',
+                isActive
+                  ? 'bg-white/25 text-white'
+                  : item.urgent
+                    ? 'bg-destructive text-white animate-pulse shadow-md shadow-destructive/40'
+                    : 'bg-foreground/10 text-foreground',
+              )}
+            >
+              {counts[item.countKey]}
+            </span>
+          )}
+        </>
+      )}
+    </NavLink>
   );
 }
 
