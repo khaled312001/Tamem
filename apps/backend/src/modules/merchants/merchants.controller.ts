@@ -81,9 +81,40 @@ const listQuerySchema = z.object({
   city: z.string().optional(),
   search: z.string().optional(),
   isOpen: z.coerce.boolean().optional(),
+  /// Account status — MerchantProfile has no flag of its own; it lives on User.
+  status: z.enum(['active', 'inactive']).optional(),
+  hasProducts: z.enum(['yes', 'no']).optional(),
+  hasApi: z.enum(['yes', 'no']).optional(),
+  sort: z.enum(['createdAt', 'updatedAt', 'name', 'products']).default('createdAt'),
+  dir: z.enum(['asc', 'desc']).default('desc'),
   page: z.coerce.number().int().positive().default(1),
   pageSize: z.coerce.number().int().positive().max(100).default(50),
 });
+
+/**
+ * Catalogue-wide totals for the merchants cards. Counted server-side because
+ * the list is paged — totting up the page in hand would just report the page.
+ */
+export const stats: RequestHandler = async (_req, res, next) => {
+  try {
+    const [total, active, withProducts, withApi] = await Promise.all([
+      prisma.merchantProfile.count(),
+      prisma.merchantProfile.count({ where: { user: { isActive: true } } }),
+      prisma.merchantProfile.count({ where: { products: { some: {} } } }),
+      prisma.merchantProfile.count({ where: { apiConfig: { isNot: null } } }),
+    ]);
+    ok(res, {
+      total,
+      active,
+      inactive: total - active,
+      withProducts,
+      withoutProducts: total - withProducts,
+      noApi: total - withApi,
+    });
+  } catch (err) {
+    next(err);
+  }
+};
 
 export const list: RequestHandler = async (req, res, next) => {
   try {
@@ -94,20 +125,62 @@ export const list: RequestHandler = async (req, res, next) => {
     if (q.city) where.city = q.city;
     if (q.isOpen !== undefined) where.isOpen = q.isOpen;
     if (q.search) {
-      where.OR = [{ storeName: { contains: q.search } }, { storeNameAr: { contains: q.search } }];
+      // The admin screen searches by whatever the operator has to hand — store
+      // name, the owner's contact details, or a pasted merchant id.
+      where.OR = [
+        { storeName: { contains: q.search } },
+        { storeNameAr: { contains: q.search } },
+        { addressLine: { contains: q.search } },
+        { phone: { contains: q.search } },
+        { id: q.search },
+        { user: { name: { contains: q.search } } },
+        { user: { phone: { contains: q.search } } },
+        { user: { email: { contains: q.search } } },
+      ];
     }
+    if (q.status) where.user = { ...(where.user as object), isActive: q.status === 'active' };
+    if (q.hasProducts) where.products = q.hasProducts === 'yes' ? { some: {} } : { none: {} };
+    if (q.hasApi) where.apiConfig = q.hasApi === 'yes' ? { isNot: null } : { is: null };
+
+    const orderBy =
+      q.sort === 'name'
+        ? { storeNameAr: q.dir }
+        : q.sort === 'products'
+          ? { products: { _count: q.dir } }
+          : { [q.sort]: q.dir };
 
     const [items, total] = await Promise.all([
       prisma.merchantProfile.findMany({
         where,
         skip: (q.page - 1) * q.pageSize,
         take: q.pageSize,
-        orderBy: { createdAt: 'desc' },
+        orderBy: orderBy as never,
         include: {
-          // secondaryPhones is needed so the edit dialog can pre-fill them.
-          user: { select: { id: true, name: true, phone: true, secondaryPhones: true } },
+          // secondaryPhones is needed so the edit dialog can pre-fill them;
+          // isActive drives the status switch — without it every merchant
+          // rendered as inactive.
+          user: {
+            select: {
+              id: true,
+              name: true,
+              phone: true,
+              email: true,
+              isActive: true,
+              secondaryPhones: true,
+            },
+          },
           category: { select: { id: true, name: true, nameAr: true } },
           _count: { select: { products: true } },
+          // Presence = "linked to an API"; the key itself is never exposed.
+          apiConfig: {
+            select: {
+              id: true,
+              apiUrl: true,
+              isConnected: true,
+              isActive: true,
+              lastSyncedAt: true,
+            },
+          },
         },
       }),
       prisma.merchantProfile.count({ where }),

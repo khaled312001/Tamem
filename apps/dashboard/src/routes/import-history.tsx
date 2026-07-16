@@ -97,11 +97,15 @@ export function ImportHistoryPage() {
       }),
     // A run in another tab moves through PROCESSING → COMPLETED; without this
     // the row would sit on a stale status until a manual refresh.
+    //
+    // 20s, not something snappier: the PHP shim opens a DB connection per
+    // request against a 500/hour cap, so a 5s poll would spend the whole
+    // hourly budget on this one screen. Only polls while a job is live.
     refetchInterval: (q) =>
       ((q.state.data?.items as Row[] | undefined) ?? []).some((j) =>
         ['PROCESSING', 'PENDING', 'VALIDATING'].includes(j.status),
       )
-        ? 5000
+        ? 20_000
         : false,
   });
 

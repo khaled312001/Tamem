@@ -1626,6 +1626,10 @@ function ImportDialog({
       }
       return ids;
     },
+    // Read once per dialog session: this walks pages, and each page is a DB
+    // connection out of the shared 500/hour cap.
+    staleTime: 300_000,
+    refetchInterval: false,
   });
 
   const template = async (mode: 'blank' | 'example' | 'data') => {

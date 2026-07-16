@@ -490,6 +490,18 @@ export class TamemClient {
   async adminListMerchants(params?: Record<string, unknown>): Promise<Paginated<unknown>> {
     return this.requestPaginated({ method: 'GET', url: '/admin/merchants', params });
   }
+  /** Catalogue-wide totals for the merchants cards. Server-side because the
+   *  list is paged — counting the current page would be wrong. */
+  async adminMerchantStats(): Promise<{
+    total: number;
+    active: number;
+    inactive: number;
+    withProducts: number;
+    withoutProducts: number;
+    noApi: number;
+  }> {
+    return this.request({ method: 'GET', url: '/admin/merchants/stats' });
+  }
   async adminCreateMerchant(data: unknown): Promise<unknown> {
     return this.request({ method: 'POST', url: '/admin/merchants', data });
   }
