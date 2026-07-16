@@ -11,6 +11,8 @@ import {
   Image as ImageIcon,
   ImageOff,
   ImagePlus,
+  LayoutGrid,
+  List,
   Loader2,
   MoreVertical,
   Package,
@@ -19,6 +21,7 @@ import {
   Plus,
   Search,
   Trash2,
+  Upload,
   X,
   XCircle,
 } from 'lucide-react';
@@ -28,7 +31,7 @@ import { toast } from 'sonner';
 import { Badge } from '../components/ui/Badge.js';
 import { Button } from '../components/ui/Button.js';
 import { ConfirmDialog } from '../components/ui/ConfirmDialog.js';
-import { Dialog } from '../components/ui/Dialog.js';
+import { Dialog, Drawer } from '../components/ui/Dialog.js';
 import { Field, Input, Textarea } from '../components/ui/Input.js';
 import { PageHeader } from '../components/ui/PageHeader.js';
 import { EmptyState, TableSkeleton } from '../components/ui/Skeleton.js';
@@ -98,6 +101,18 @@ type StatusFilter = 'all' | 'available' | 'disabled';
 type StockFilter = 'all' | 'in' | 'low' | 'out';
 type ImageFilter = 'all' | 'with' | 'without';
 type SortKey = 'name' | 'price' | 'stock' | null;
+type ViewMode = 'table' | 'grid';
+
+const VIEW_KEY = 'tamem-products-view';
+
+/** Table vs grid is a per-admin habit — remember it across sessions. */
+function readView(): ViewMode {
+  try {
+    return localStorage.getItem(VIEW_KEY) === 'grid' ? 'grid' : 'table';
+  } catch {
+    return 'table';
+  }
+}
 
 export function ProductsPage() {
   const qc = useQueryClient();
@@ -113,13 +128,25 @@ export function ProductsPage() {
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(50);
   const [dense, setDense] = useState(false);
+  const [view, setView] = useState<ViewMode>(readView);
   // ── selection + dialogs ──
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [createOpen, setCreateOpen] = useState(false);
   const [editing, setEditing] = useState<Row | null>(null);
+  const [quickEdit, setQuickEdit] = useState<Row | null>(null);
+  const [importOpen, setImportOpen] = useState(false);
   const [confirmDel, setConfirmDel] = useState<Row | null>(null);
   const [confirmBulkDel, setConfirmBulkDel] = useState(false);
   const [preview, setPreview] = useState<string | null>(null);
+
+  const changeView = (v: ViewMode) => {
+    setView(v);
+    try {
+      localStorage.setItem(VIEW_KEY, v);
+    } catch {
+      /* private mode — keep the in-memory choice */
+    }
+  };
 
   const { data: merchants } = useQuery({
     queryKey: ['admin', 'merchants', 'all'],
@@ -315,6 +342,10 @@ export function ProductsPage() {
         icon={Package}
         actions={
           <>
+            <Button variant="outline" size="md" onClick={() => setImportOpen(true)}>
+              <Upload className="w-4 h-4" />
+              استيراد
+            </Button>
             <Button
               variant="outline"
               size="md"
@@ -458,6 +489,26 @@ export function ProductsPage() {
             )}
             تحديث
           </Button>
+          <div className="inline-flex rounded-lg border border-border overflow-hidden">
+            <button
+              type="button"
+              onClick={() => changeView('table')}
+              title="عرض جدول"
+              aria-pressed={view === 'table'}
+              className={`p-2 transition ${view === 'table' ? 'bg-brand-red text-white' : 'bg-card text-muted-foreground hover:bg-muted'}`}
+            >
+              <List className="w-4 h-4" />
+            </button>
+            <button
+              type="button"
+              onClick={() => changeView('grid')}
+              title="عرض بطاقات"
+              aria-pressed={view === 'grid'}
+              className={`p-2 transition ${view === 'grid' ? 'bg-brand-red text-white' : 'bg-card text-muted-foreground hover:bg-muted'}`}
+            >
+              <LayoutGrid className="w-4 h-4" />
+            </button>
+          </div>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <FilterGroup
@@ -594,175 +645,192 @@ export function ProductsPage() {
         </div>
       ) : (
         <>
-          {/* Desktop table */}
-          <div className="hidden md:block bg-card rounded-xl border border-border overflow-hidden">
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead className="bg-muted/50 border-b border-border text-muted-foreground">
-                  <tr className="text-right">
-                    <th className={cellPad + ' w-8'}>
-                      <input
-                        type="checkbox"
-                        className="accent-brand-red w-4 h-4"
-                        checked={allPageSelected}
-                        onChange={toggleAllPage}
-                        aria-label="تحديد الكل"
-                      />
-                    </th>
-                    <th className={cellPad + ' w-14'} />
-                    <SortableTh
-                      label="المنتج"
-                      active={sortBy === 'name'}
-                      dir={sortDir}
-                      onClick={() => setSort('name')}
-                      className={cellPad}
-                    />
-                    <th className={cellPad + ' font-bold'}>التاجر</th>
-                    <SortableTh
-                      label="السعر"
-                      active={sortBy === 'price'}
-                      dir={sortDir}
-                      onClick={() => setSort('price')}
-                      className={cellPad}
-                    />
-                    <SortableTh
-                      label="المخزون"
-                      active={sortBy === 'stock'}
-                      dir={sortDir}
-                      onClick={() => setSort('stock')}
-                      className={cellPad}
-                    />
-                    <th className={cellPad + ' font-bold'}>الحالة</th>
-                    <th className={cellPad + ' w-24'} />
-                  </tr>
-                </thead>
-                <tbody>
-                  {pageItems.map((p) => {
-                    const img = firstImage(p);
-                    const ss = stockState(p);
-                    return (
-                      <tr
-                        key={p.id}
-                        className={`border-b border-border/50 hover:bg-muted/30 ${selected.has(p.id) ? 'bg-brand-red/5' : ''}`}
-                      >
-                        <td className={cellPad}>
+          {view === 'grid' ? (
+            <ProductGrid
+              items={pageItems}
+              selected={selected}
+              onToggleSel={toggleSel}
+              onPreview={setPreview}
+              onQuickEdit={setQuickEdit}
+              onToggleAvail={toggleAvail}
+              onDelete={setConfirmDel}
+            />
+          ) : (
+            <>
+              {/* Desktop table */}
+              <div className="hidden md:block bg-card rounded-xl border border-border overflow-hidden">
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead className="bg-muted/50 border-b border-border text-muted-foreground">
+                      <tr className="text-right">
+                        <th className={cellPad + ' w-8'}>
                           <input
                             type="checkbox"
                             className="accent-brand-red w-4 h-4"
-                            checked={selected.has(p.id)}
-                            onChange={() => toggleSel(p.id)}
+                            checked={allPageSelected}
+                            onChange={toggleAllPage}
+                            aria-label="تحديد الكل"
                           />
-                        </td>
-                        <td className={cellPad}>
-                          <ProductThumb src={img} onClick={() => img && setPreview(img)} />
-                        </td>
-                        <td className={cellPad}>
-                          <div className="font-bold text-foreground">{p.nameAr}</div>
-                          <div className="text-xs text-muted-foreground" dir="ltr">
-                            {p.name}
-                          </div>
-                          {p.sku && (
-                            <div className="text-[10px] text-muted-foreground/70 font-mono">
-                              SKU: {p.sku}
-                            </div>
-                          )}
-                        </td>
-                        <td className={cellPad + ' text-xs'}>{p.merchant?.storeNameAr ?? '—'}</td>
-                        <td className={cellPad}>
-                          <PriceEdit
-                            value={Number(p.price) || 0}
-                            onSave={(v) => updateMut.mutate({ id: p.id, data: { price: v } })}
-                          />
-                        </td>
-                        <td className={cellPad}>
-                          <StockEdit
-                            value={p.stock}
-                            state={ss}
-                            onSave={(v) => updateMut.mutate({ id: p.id, data: { stock: v } })}
-                          />
-                        </td>
-                        <td className={cellPad}>
-                          <StatusToggle on={!!p.isAvailable} onChange={() => toggleAvail(p)} />
-                        </td>
-                        <td className={cellPad}>
-                          <div className="flex items-center gap-1 justify-end">
-                            <button
-                              type="button"
-                              onClick={() => setEditing(p)}
-                              className="p-1.5 rounded-md hover:bg-muted text-muted-foreground hover:text-foreground"
-                              aria-label="تعديل"
-                              title="تعديل"
-                            >
-                              <Pencil className="w-4 h-4" />
-                            </button>
-                            <RowMenu
-                              onDuplicate={() => duplicateMut.mutate(p)}
-                              onDelete={() => setConfirmDel(p)}
-                            />
-                          </div>
-                        </td>
+                        </th>
+                        <th className={cellPad + ' w-14'} />
+                        <SortableTh
+                          label="المنتج"
+                          active={sortBy === 'name'}
+                          dir={sortDir}
+                          onClick={() => setSort('name')}
+                          className={cellPad}
+                        />
+                        <th className={cellPad + ' font-bold'}>التاجر</th>
+                        <SortableTh
+                          label="السعر"
+                          active={sortBy === 'price'}
+                          dir={sortDir}
+                          onClick={() => setSort('price')}
+                          className={cellPad}
+                        />
+                        <SortableTh
+                          label="المخزون"
+                          active={sortBy === 'stock'}
+                          dir={sortDir}
+                          onClick={() => setSort('stock')}
+                          className={cellPad}
+                        />
+                        <th className={cellPad + ' font-bold'}>الحالة</th>
+                        <th className={cellPad + ' w-24'} />
                       </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          </div>
-
-          {/* Mobile cards */}
-          <div className="md:hidden space-y-2">
-            {pageItems.map((p) => {
-              const img = firstImage(p);
-              return (
-                <div
-                  key={p.id}
-                  className={`bg-card rounded-xl border p-3 flex gap-3 ${selected.has(p.id) ? 'border-brand-red/40 bg-brand-red/5' : 'border-border'}`}
-                >
-                  <input
-                    type="checkbox"
-                    className="accent-brand-red w-4 h-4 mt-1"
-                    checked={selected.has(p.id)}
-                    onChange={() => toggleSel(p.id)}
-                  />
-                  <ProductThumb src={img} onClick={() => img && setPreview(img)} />
-                  <div className="flex-1 min-w-0">
-                    <div className="font-bold text-sm truncate">{p.nameAr}</div>
-                    <div className="text-xs text-muted-foreground truncate" dir="ltr">
-                      {p.name}
-                    </div>
-                    <div className="mt-1 flex flex-wrap items-center gap-1.5">
-                      <span className="font-black text-sm">{formatMoney(p.price)}</span>
-                      <TonePill tone={STOCK_META[stockState(p)].tone}>
-                        {stockState(p) === 'unknown'
-                          ? '—'
-                          : `${STOCK_META[stockState(p)].label}${p.stock != null ? ` (${formatCount(p.stock)})` : ''}`}
-                      </TonePill>
-                    </div>
-                    <div className="text-[11px] text-muted-foreground mt-0.5">
-                      {p.merchant?.storeNameAr ?? '—'}
-                    </div>
-                  </div>
-                  <div className="flex flex-col items-end gap-2">
-                    <StatusToggle on={!!p.isAvailable} onChange={() => toggleAvail(p)} />
-                    <div className="flex gap-1">
-                      <button
-                        onClick={() => setEditing(p)}
-                        className="p-1.5 rounded-md hover:bg-muted text-muted-foreground"
-                      >
-                        <Pencil className="w-4 h-4" />
-                      </button>
-                      <button
-                        onClick={() => setConfirmDel(p)}
-                        className="p-1.5 rounded-md hover:bg-destructive/10 text-destructive"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
-                    </div>
-                  </div>
+                    </thead>
+                    <tbody>
+                      {pageItems.map((p) => {
+                        const img = firstImage(p);
+                        const ss = stockState(p);
+                        return (
+                          <tr
+                            key={p.id}
+                            className={`border-b border-border/50 hover:bg-muted/30 ${selected.has(p.id) ? 'bg-brand-red/5' : ''}`}
+                          >
+                            <td className={cellPad}>
+                              <input
+                                type="checkbox"
+                                className="accent-brand-red w-4 h-4"
+                                checked={selected.has(p.id)}
+                                onChange={() => toggleSel(p.id)}
+                              />
+                            </td>
+                            <td className={cellPad}>
+                              <ProductThumb src={img} onClick={() => img && setPreview(img)} />
+                            </td>
+                            <td className={cellPad}>
+                              <div className="font-bold text-foreground">{p.nameAr}</div>
+                              <div className="text-xs text-muted-foreground" dir="ltr">
+                                {p.name}
+                              </div>
+                              {p.sku && (
+                                <div className="text-[10px] text-muted-foreground/70 font-mono">
+                                  SKU: {p.sku}
+                                </div>
+                              )}
+                            </td>
+                            <td className={cellPad + ' text-xs'}>
+                              {p.merchant?.storeNameAr ?? '—'}
+                            </td>
+                            <td className={cellPad}>
+                              <PriceEdit
+                                value={Number(p.price) || 0}
+                                onSave={(v) => updateMut.mutate({ id: p.id, data: { price: v } })}
+                              />
+                            </td>
+                            <td className={cellPad}>
+                              <StockEdit
+                                value={p.stock}
+                                state={ss}
+                                onSave={(v) => updateMut.mutate({ id: p.id, data: { stock: v } })}
+                              />
+                            </td>
+                            <td className={cellPad}>
+                              <StatusToggle on={!!p.isAvailable} onChange={() => toggleAvail(p)} />
+                            </td>
+                            <td className={cellPad}>
+                              <div className="flex items-center gap-1 justify-end">
+                                <button
+                                  type="button"
+                                  onClick={() => setQuickEdit(p)}
+                                  className="p-1.5 rounded-md hover:bg-muted text-muted-foreground hover:text-foreground"
+                                  aria-label="تعديل سريع"
+                                  title="تعديل سريع"
+                                >
+                                  <Pencil className="w-4 h-4" />
+                                </button>
+                                <RowMenu
+                                  onDuplicate={() => duplicateMut.mutate(p)}
+                                  onDelete={() => setConfirmDel(p)}
+                                />
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
                 </div>
-              );
-            })}
-          </div>
+              </div>
+
+              {/* Mobile cards */}
+              <div className="md:hidden space-y-2">
+                {pageItems.map((p) => {
+                  const img = firstImage(p);
+                  return (
+                    <div
+                      key={p.id}
+                      className={`bg-card rounded-xl border p-3 flex gap-3 ${selected.has(p.id) ? 'border-brand-red/40 bg-brand-red/5' : 'border-border'}`}
+                    >
+                      <input
+                        type="checkbox"
+                        className="accent-brand-red w-4 h-4 mt-1"
+                        checked={selected.has(p.id)}
+                        onChange={() => toggleSel(p.id)}
+                      />
+                      <ProductThumb src={img} onClick={() => img && setPreview(img)} />
+                      <div className="flex-1 min-w-0">
+                        <div className="font-bold text-sm truncate">{p.nameAr}</div>
+                        <div className="text-xs text-muted-foreground truncate" dir="ltr">
+                          {p.name}
+                        </div>
+                        <div className="mt-1 flex flex-wrap items-center gap-1.5">
+                          <span className="font-black text-sm">{formatMoney(p.price)}</span>
+                          <TonePill tone={STOCK_META[stockState(p)].tone}>
+                            {stockState(p) === 'unknown'
+                              ? '—'
+                              : `${STOCK_META[stockState(p)].label}${p.stock != null ? ` (${formatCount(p.stock)})` : ''}`}
+                          </TonePill>
+                        </div>
+                        <div className="text-[11px] text-muted-foreground mt-0.5">
+                          {p.merchant?.storeNameAr ?? '—'}
+                        </div>
+                      </div>
+                      <div className="flex flex-col items-end gap-2">
+                        <StatusToggle on={!!p.isAvailable} onChange={() => toggleAvail(p)} />
+                        <div className="flex gap-1">
+                          <button
+                            onClick={() => setQuickEdit(p)}
+                            aria-label="تعديل سريع"
+                            className="p-1.5 rounded-md hover:bg-muted text-muted-foreground"
+                          >
+                            <Pencil className="w-4 h-4" />
+                          </button>
+                          <button
+                            onClick={() => setConfirmDel(p)}
+                            className="p-1.5 rounded-md hover:bg-destructive/10 text-destructive"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </>
+          )}
 
           {/* ── Pagination + density ── */}
           <div className="flex flex-wrap items-center justify-between gap-3 text-sm">
@@ -784,12 +852,14 @@ export function ProductsPage() {
                   </option>
                 ))}
               </select>
-              <button
-                onClick={() => setDense((d) => !d)}
-                className="text-xs px-2 py-1 rounded border border-input hover:bg-muted"
-              >
-                {dense ? 'كثافة مريحة' : 'كثافة مضغوطة'}
-              </button>
+              {view === 'table' && (
+                <button
+                  onClick={() => setDense((d) => !d)}
+                  className="text-xs px-2 py-1 rounded border border-input hover:bg-muted"
+                >
+                  {dense ? 'كثافة مريحة' : 'كثافة مضغوطة'}
+                </button>
+              )}
             </div>
             {totalPages > 1 && (
               <div className="flex items-center gap-1">
@@ -830,6 +900,26 @@ export function ProductsPage() {
           product={editing}
           merchants={(merchants?.items as Row[]) ?? []}
           onClose={() => setEditing(null)}
+        />
+      )}
+      {quickEdit && (
+        <QuickEditDrawer
+          key={quickEdit.id}
+          product={quickEdit}
+          onClose={() => setQuickEdit(null)}
+          onFullEdit={() => {
+            const p = quickEdit;
+            setQuickEdit(null);
+            setEditing(p);
+          }}
+          onPreview={setPreview}
+        />
+      )}
+      {importOpen && (
+        <ImportDialog
+          merchants={(merchants?.items as Row[]) ?? []}
+          defaultMerchantId={merchantFilter}
+          onClose={() => setImportOpen(false)}
         />
       )}
       <ConfirmDialog
@@ -1047,6 +1137,517 @@ function RowMenu({ onDuplicate, onDelete }: { onDuplicate: () => void; onDelete:
         </>
       )}
     </div>
+  );
+}
+
+/** Card view — image-first, for scanning a catalogue visually. */
+function ProductGrid({
+  items,
+  selected,
+  onToggleSel,
+  onPreview,
+  onQuickEdit,
+  onToggleAvail,
+  onDelete,
+}: {
+  items: Row[];
+  selected: Set<string>;
+  onToggleSel: (id: string) => void;
+  onPreview: (url: string) => void;
+  onQuickEdit: (p: Row) => void;
+  onToggleAvail: (p: Row) => void;
+  onDelete: (p: Row) => void;
+}) {
+  return (
+    <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3">
+      {items.map((p) => {
+        const img = firstImage(p);
+        const ss = stockState(p);
+        const isSel = selected.has(p.id);
+        return (
+          <div
+            key={p.id}
+            className={`bg-card rounded-xl border overflow-hidden transition hover:shadow-md ${
+              isSel ? 'border-brand-red ring-1 ring-brand-red/30' : 'border-border'
+            } ${p.isAvailable ? '' : 'opacity-70'}`}
+          >
+            <div className="relative aspect-square bg-muted">
+              {img ? (
+                <button
+                  type="button"
+                  onClick={() => onPreview(img)}
+                  className="w-full h-full"
+                  aria-label="معاينة الصورة"
+                >
+                  <img src={img} alt="" className="w-full h-full object-cover" />
+                </button>
+              ) : (
+                <div className="w-full h-full grid place-items-center text-muted-foreground/40">
+                  <ImageOff className="w-8 h-8" />
+                </div>
+              )}
+              <input
+                type="checkbox"
+                checked={isSel}
+                onChange={() => onToggleSel(p.id)}
+                aria-label={`تحديد ${p.nameAr ?? ''}`}
+                className="absolute top-2 start-2 accent-brand-red w-4 h-4"
+              />
+              {!p.isAvailable && (
+                <span className="absolute top-2 end-2 px-2 py-0.5 rounded-full bg-zinc-900/75 text-white text-[10px] font-bold">
+                  معطّل
+                </span>
+              )}
+            </div>
+            <div className="p-2.5 space-y-1.5">
+              <div className="font-bold text-sm truncate" title={p.nameAr}>
+                {p.nameAr}
+              </div>
+              <div className="text-[11px] text-muted-foreground truncate">
+                {p.merchant?.storeNameAr ?? '—'}
+              </div>
+              <div className="flex items-center justify-between gap-1">
+                <span className="font-black text-sm">{formatMoney(p.price)}</span>
+                <TonePill tone={STOCK_META[ss].tone}>
+                  {ss === 'unknown'
+                    ? '—'
+                    : `${STOCK_META[ss].label}${p.stock != null ? ` (${formatCount(p.stock)})` : ''}`}
+                </TonePill>
+              </div>
+              <div className="flex items-center justify-between pt-1.5 border-t border-border/60">
+                <StatusToggle on={!!p.isAvailable} onChange={() => onToggleAvail(p)} />
+                <div className="flex gap-0.5">
+                  <button
+                    type="button"
+                    onClick={() => onQuickEdit(p)}
+                    aria-label="تعديل سريع"
+                    title="تعديل سريع"
+                    className="p-1.5 rounded-md hover:bg-muted text-muted-foreground"
+                  >
+                    <Pencil className="w-3.5 h-3.5" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onDelete(p)}
+                    aria-label="حذف"
+                    title="حذف"
+                    className="p-1.5 rounded-md hover:bg-destructive/10 text-destructive"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/**
+ * Side panel for the edits that happen all day (price, stock, name, status).
+ * Only changed fields are sent, so a no-op save doesn't touch the row. Moving
+ * a merchant / editing images stays in the full form.
+ */
+function QuickEditDrawer({
+  product,
+  onClose,
+  onFullEdit,
+  onPreview,
+}: {
+  product: Row;
+  onClose: () => void;
+  onFullEdit: () => void;
+  onPreview: (url: string) => void;
+}) {
+  const qc = useQueryClient();
+  const [nameAr, setNameAr] = useState(String(product.nameAr ?? ''));
+  const [name, setName] = useState(String(product.name ?? ''));
+  const [price, setPrice] = useState(String(Number(product.price) || 0));
+  const [stock, setStock] = useState(product.stock == null ? '' : String(product.stock));
+  const [isAvailable, setIsAvailable] = useState(!!product.isAvailable);
+  const img = firstImage(product);
+
+  const save = useMutation({
+    mutationFn: () => {
+      const data: Record<string, unknown> = {};
+      if (nameAr.trim() !== String(product.nameAr ?? '')) data.nameAr = nameAr.trim();
+      if (name.trim() !== String(product.name ?? '')) data.name = name.trim();
+      const pNum = Number(price);
+      if (Number.isFinite(pNum) && pNum !== (Number(product.price) || 0)) data.price = pNum;
+      const sRaw = stock.trim();
+      const sWas = product.stock == null ? '' : String(product.stock);
+      if (sRaw !== sWas && sRaw !== '' && Number.isFinite(Number(sRaw))) data.stock = Number(sRaw);
+      if (isAvailable !== !!product.isAvailable) data.isAvailable = isAvailable;
+      if (Object.keys(data).length === 0) return Promise.resolve(null);
+      return api.adminUpdateProduct(product.id, data);
+    },
+    onSuccess: (r) => {
+      toast.success(r ? 'تم حفظ التعديلات' : 'لا يوجد تغيير');
+      qc.invalidateQueries({ queryKey: ['admin', 'products'] });
+      onClose();
+    },
+    onError: (err: Error) => toast.error(err.message),
+  });
+
+  const invalid = !nameAr.trim() || !Number.isFinite(Number(price)) || Number(price) < 0;
+
+  return (
+    <Drawer
+      open
+      onOpenChange={(o) => !o && onClose()}
+      title="تعديل سريع"
+      description={product.merchant?.storeNameAr ?? undefined}
+    >
+      <div className="space-y-4">
+        <div className="flex items-center gap-3">
+          <ProductThumb src={img} onClick={() => img && onPreview(img)} />
+          <p className="text-xs text-muted-foreground leading-5">
+            {img
+              ? 'اضغط الصورة للمعاينة. لتغيير الصور استخدم «تعديل كامل».'
+              : 'لا توجد صورة — أضفها من «تعديل كامل».'}
+          </p>
+        </div>
+
+        <Field label="الاسم بالعربية" required>
+          <Input value={nameAr} onChange={(e) => setNameAr(e.target.value)} />
+        </Field>
+        <Field label="الاسم بالإنجليزية">
+          <Input value={name} onChange={(e) => setName(e.target.value)} dir="ltr" />
+        </Field>
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="السعر (ج.م)" required>
+            <Input
+              type="number"
+              min="0"
+              value={price}
+              onChange={(e) => setPrice(e.target.value)}
+              dir="ltr"
+            />
+          </Field>
+          <Field label="المخزون" hint="اتركه فارغاً لو غير محدد">
+            <Input
+              type="number"
+              min="0"
+              value={stock}
+              onChange={(e) => setStock(e.target.value)}
+              placeholder="—"
+              dir="ltr"
+            />
+          </Field>
+        </div>
+
+        <div className="flex items-center justify-between rounded-lg border border-border p-3">
+          <div>
+            <div className="font-bold text-sm">الحالة</div>
+            <div className="text-xs text-muted-foreground">
+              {isAvailable ? 'متاح للعملاء' : 'مخفي عن العملاء'}
+            </div>
+          </div>
+          <StatusToggle on={isAvailable} onChange={() => setIsAvailable((v) => !v)} />
+        </div>
+
+        <p className="rounded-lg bg-muted/40 p-3 text-xs text-muted-foreground leading-5">
+          التاجر:{' '}
+          <span className="font-bold text-foreground">{product.merchant?.storeNameAr ?? '—'}</span>{' '}
+          — لنقل المنتج لتاجر آخر أو تعديل الوصف والصور استخدم «تعديل كامل».
+        </p>
+
+        <div className="flex items-center gap-2 pt-1">
+          <Button onClick={() => save.mutate()} disabled={save.isPending || invalid}>
+            {save.isPending && <Loader2 className="w-4 h-4 animate-spin" />}
+            حفظ
+          </Button>
+          <Button variant="outline" onClick={onFullEdit}>
+            <Pencil className="w-4 h-4" />
+            تعديل كامل
+          </Button>
+          <Button variant="ghost" onClick={onClose} className="ms-auto">
+            إلغاء
+          </Button>
+        </div>
+      </div>
+    </Drawer>
+  );
+}
+
+// ── CSV import ──
+
+const IMPORT_HEADERS = ['الاسم', 'English', 'السعر', 'المخزون', 'SKU'];
+
+type ImportRow = { nameAr: string; name: string; price: number; stock?: number; sku?: string };
+
+/**
+ * Minimal RFC-4180 reader: handles quoted fields, escaped quotes and CRLF.
+ * The delimiter is sniffed from the header line because Excel writes `;` under
+ * an Arabic locale and `,` under an English one.
+ */
+function parseCsv(text: string): string[][] {
+  const s = text.replace(/^﻿/, '');
+  const head = s.slice(0, s.indexOf('\n') + 1 || s.length);
+  const delim = head.split(';').length - 1 > head.split(',').length - 1 ? ';' : ',';
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let field = '';
+  let quoted = false;
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if (quoted) {
+      if (c === '"') {
+        if (s[i + 1] === '"') {
+          field += '"';
+          i++;
+        } else quoted = false;
+      } else field += c;
+    } else if (c === '"') quoted = true;
+    else if (c === delim) {
+      row.push(field);
+      field = '';
+    } else if (c === '\n') {
+      row.push(field);
+      rows.push(row);
+      row = [];
+      field = '';
+    } else if (c !== '\r') field += c;
+  }
+  if (field !== '' || row.length) {
+    row.push(field);
+    rows.push(row);
+  }
+  return rows.filter((r) => r.some((c) => c.trim() !== ''));
+}
+
+/** Excel writes prices as "1,200" and Arabic keyboards produce ٠-٩ — take both. */
+function toNum(raw: string): number {
+  const s = raw
+    .replace(/[٠-٩]/g, (d) => String('٠١٢٣٤٥٦٧٨٩'.indexOf(d)))
+    .replace(/[۰-۹]/g, (d) => String('۰۱۲۳۴۵۶۷۸۹'.indexOf(d)))
+    .replace(/[,٬\s]/g, '');
+  return s === '' ? NaN : Number(s);
+}
+
+function downloadCsv(csv: string, filename: string) {
+  const url = URL.createObjectURL(new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8' }));
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+/**
+ * Bulk-create from a spreadsheet. Columns are matched by header name, so the
+ * template (or an edited export) both work. There is no bulk-create endpoint,
+ * so rows go one at a time and each failure is reported against its row rather
+ * than aborting the whole run.
+ */
+function ImportDialog({
+  merchants,
+  defaultMerchantId,
+  onClose,
+}: {
+  merchants: Row[];
+  defaultMerchantId: string;
+  onClose: () => void;
+}) {
+  const qc = useQueryClient();
+  const [merchantId, setMerchantId] = useState(defaultMerchantId);
+  const [rows, setRows] = useState<ImportRow[] | null>(null);
+  const [fileName, setFileName] = useState('');
+  const [skipped, setSkipped] = useState<string[]>([]);
+  const [result, setResult] = useState<{ ok: number; fail: string[] } | null>(null);
+  const fileRef = useRef<HTMLInputElement | null>(null);
+
+  const readFile = async (f: File | undefined) => {
+    if (!f) return;
+    setFileName(f.name);
+    setResult(null);
+    setSkipped([]);
+    setRows(null);
+    let table: string[][];
+    try {
+      table = parseCsv(await f.text());
+    } catch {
+      setSkipped(['تعذّرت قراءة الملف. تأكد أنه CSV بترميز UTF-8.']);
+      return;
+    }
+    const [headRow, ...body] = table;
+    if (!headRow || body.length === 0) {
+      setSkipped(['الملف فاضي أو فيه صف العناوين فقط.']);
+      return;
+    }
+    const head = headRow.map((h) => h.trim().toLowerCase());
+    const col = (...names: string[]) =>
+      head.findIndex((h) => names.some((n) => h === n.toLowerCase()));
+    const iNameAr = col('الاسم', 'الاسم بالعربية', 'namear');
+    const iName = col('english', 'الاسم بالإنجليزية', 'name');
+    const iPrice = col('السعر', 'price');
+    const iStock = col('المخزون', 'stock');
+    const iSku = col('sku', 'الكود');
+    if (iNameAr < 0 || iPrice < 0) {
+      setSkipped(['الملف لازم يحتوي على عمودَي «الاسم» و«السعر». نزّل القالب واستخدمه.']);
+      return;
+    }
+    const skips: string[] = [];
+    const parsed: ImportRow[] = [];
+    body.forEach((r, i) => {
+      const line = i + 2;
+      const nameAr = (r[iNameAr] ?? '').trim();
+      const priceRaw = (r[iPrice] ?? '').trim();
+      const price = toNum(priceRaw);
+      if (!nameAr) {
+        skips.push(`صف ${line}: الاسم فاضي`);
+        return;
+      }
+      if (!Number.isFinite(price) || price < 0) {
+        skips.push(`صف ${line}: سعر غير صالح «${priceRaw}»`);
+        return;
+      }
+      const stockRaw = iStock >= 0 ? (r[iStock] ?? '').trim() : '';
+      const stockNum = toNum(stockRaw);
+      parsed.push({
+        nameAr,
+        name: iName >= 0 ? (r[iName] ?? '').trim() : '',
+        price,
+        ...(stockRaw !== '' && Number.isFinite(stockNum) && stockNum >= 0
+          ? { stock: Math.trunc(stockNum) }
+          : {}),
+        ...(iSku >= 0 && (r[iSku] ?? '').trim() ? { sku: (r[iSku] ?? '').trim() } : {}),
+      });
+    });
+    setSkipped(skips);
+    setRows(parsed);
+  };
+
+  const run = useMutation({
+    mutationFn: async () => {
+      const fail: string[] = [];
+      let ok = 0;
+      for (const r of rows ?? []) {
+        try {
+          await api.adminCreateProduct({
+            merchantId,
+            nameAr: r.nameAr,
+            name: r.name || r.nameAr,
+            price: r.price,
+            isAvailable: true,
+            ...(r.stock !== undefined ? { stock: r.stock } : {}),
+            ...(r.sku ? { sku: r.sku } : {}),
+          });
+          ok++;
+        } catch (e) {
+          fail.push(`${r.nameAr}: ${e instanceof Error ? e.message : 'فشل الإنشاء'}`);
+        }
+      }
+      return { ok, fail };
+    },
+    onSuccess: (r) => {
+      setResult(r);
+      qc.invalidateQueries({ queryKey: ['admin', 'products'] });
+      if (r.ok) toast.success(`تم استيراد ${formatCount(r.ok)} منتج`);
+      if (r.fail.length) toast.error(`فشل ${formatCount(r.fail.length)} صف`);
+    },
+    onError: (e: Error) => toast.error(e.message),
+  });
+
+  const merchantName = merchants.find((m) => m.id === merchantId)?.storeNameAr;
+  const canRun = !!merchantId && !!rows?.length && !run.isPending;
+
+  return (
+    <Dialog open onOpenChange={(o) => !o && onClose()} title="استيراد منتجات من ملف" size="lg">
+      <div className="space-y-4">
+        <Field label="التاجر" required hint="كل المنتجات في الملف هتتضاف للتاجر ده.">
+          <select
+            value={merchantId}
+            onChange={(e) => setMerchantId(e.target.value)}
+            className="w-full px-3 py-2 rounded-lg border border-input bg-popover text-sm"
+          >
+            <option value="">— اختر تاجراً —</option>
+            {merchants.map((m) => (
+              <option key={m.id} value={m.id}>
+                {m.storeNameAr}
+              </option>
+            ))}
+          </select>
+        </Field>
+
+        <div className="rounded-lg border border-dashed border-border p-4 text-center space-y-2">
+          <input
+            ref={fileRef}
+            type="file"
+            accept=".csv,text/csv"
+            className="hidden"
+            onChange={(e) => void readFile(e.target.files?.[0])}
+          />
+          <Button variant="outline" onClick={() => fileRef.current?.click()}>
+            <Upload className="w-4 h-4" />
+            اختر ملف CSV
+          </Button>
+          <p className="text-xs text-muted-foreground">
+            {fileName || 'الأعمدة المطلوبة: الاسم، السعر. الاختيارية: English، المخزون، SKU.'}
+          </p>
+          <button
+            type="button"
+            onClick={() =>
+              downloadCsv(
+                [
+                  IMPORT_HEADERS.join(','),
+                  ['شاي ليبتون', 'Lipton Tea', '25', '100', 'TEA-01'].join(','),
+                ].join('\n'),
+                'tamem-products-template.csv',
+              )
+            }
+            className="text-xs font-bold text-brand-red hover:underline"
+          >
+            تحميل قالب جاهز
+          </button>
+        </div>
+
+        {rows && !result && (
+          <div className="rounded-lg bg-muted/40 p-3 text-sm">
+            <span className="font-bold">{formatCount(rows.length)}</span> منتج جاهز للاستيراد
+            {merchantName ? ` إلى «${merchantName}»` : ''}.
+          </div>
+        )}
+
+        {skipped.length > 0 && !result && (
+          <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-xs text-amber-900 space-y-0.5 max-h-32 overflow-y-auto">
+            <div className="font-bold">تم تخطي {formatCount(skipped.length)} صف:</div>
+            {skipped.slice(0, 20).map((s) => (
+              <div key={s}>• {s}</div>
+            ))}
+            {skipped.length > 20 && <div>… و{formatCount(skipped.length - 20)} غيرها</div>}
+          </div>
+        )}
+
+        {result && (
+          <div className="rounded-lg border border-border p-3 text-sm space-y-1">
+            <div className="font-bold text-green-700">✓ تم إنشاء {formatCount(result.ok)} منتج</div>
+            {result.fail.length > 0 && (
+              <div className="text-xs text-destructive space-y-0.5 max-h-32 overflow-y-auto">
+                <div className="font-bold">فشل {formatCount(result.fail.length)}:</div>
+                {result.fail.slice(0, 20).map((f) => (
+                  <div key={f}>• {f}</div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        <div className="flex items-center gap-2 pt-1">
+          {!result && (
+            <Button onClick={() => run.mutate()} disabled={!canRun}>
+              {run.isPending && <Loader2 className="w-4 h-4 animate-spin" />}
+              {run.isPending ? 'جارٍ الاستيراد…' : 'استيراد'}
+            </Button>
+          )}
+          <Button variant={result ? 'primary' : 'ghost'} onClick={onClose} className="ms-auto">
+            {result ? 'تم' : 'إلغاء'}
+          </Button>
+        </div>
+      </div>
+    </Dialog>
   );
 }
 
