@@ -145,6 +145,7 @@ interface StoreFields {
   coverUrl: string;
   storePhone: string;
   commissionPct: string; // kept as text for the input; coerced on submit
+  menuImages: string[]; // menu-image mode: photos of the paper menu
   addressLine: string;
   lat: number;
   lng: number;
@@ -234,6 +235,101 @@ function SingleImageField({
   );
 }
 
+/**
+ * Menu-image mode uploader — a merchant that doesn't list individual products
+ * can instead upload photo(s) of their paper menu. The customer app shows these
+ * (zoomable) with a free-text order button.
+ */
+function MenuImagesField({
+  values,
+  onChange,
+  max = 8,
+}: {
+  values: string[];
+  onChange: (next: string[]) => void;
+  max?: number;
+}) {
+  const fileRef = useRef<HTMLInputElement | null>(null);
+  const [uploading, setUploading] = useState(false);
+
+  const pick = async (files: FileList | null) => {
+    if (!files || files.length === 0) return;
+    const remaining = max - values.length;
+    if (remaining <= 0) {
+      toast.error(`الحد الأقصى ${max} صور`);
+      return;
+    }
+    const picked = Array.from(files).slice(0, remaining);
+    setUploading(true);
+    try {
+      const results = await Promise.all(picked.map((f) => uploadFile(f)));
+      onChange([...values, ...results.map((r) => r.url)]);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'فشل رفع الصورة');
+    } finally {
+      setUploading(false);
+      if (fileRef.current) fileRef.current.value = '';
+    }
+  };
+
+  return (
+    <div className="col-span-2 rounded-xl border border-dashed border-border bg-muted/20 p-4">
+      <div className="flex items-center justify-between mb-1">
+        <span className="text-sm font-bold text-brand-dark">صور المنيو</span>
+        {values.length > 0 && (
+          <span className="text-xs text-muted-foreground">
+            {values.length}/{max}
+          </span>
+        )}
+      </div>
+      <p className="text-xs text-muted-foreground mb-3">
+        للتجار اللي بيبعتوا صورة منيو بدل إدخال منتج-منتج. لو رفعت صور هنا، هتظهر للعميل ويقدر يطلب
+        منها مباشرة.
+      </p>
+      <div className="flex flex-wrap gap-3">
+        {values.map((url, idx) => (
+          <div
+            key={`${url}-${idx}`}
+            className="relative w-24 h-24 rounded-lg overflow-hidden border border-border group"
+          >
+            <img src={url} alt="" className="w-full h-full object-cover" />
+            <button
+              type="button"
+              onClick={() => onChange(values.filter((_, i) => i !== idx))}
+              className="absolute top-1 end-1 p-1 rounded-md bg-white/90 text-destructive opacity-0 group-hover:opacity-100 transition shadow"
+              aria-label="حذف"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        ))}
+        {values.length < max && (
+          <button
+            type="button"
+            onClick={() => fileRef.current?.click()}
+            disabled={uploading}
+            className="w-24 h-24 rounded-lg border-2 border-dashed border-border grid place-items-center text-muted-foreground hover:border-brand-red hover:text-brand-red transition disabled:opacity-60"
+          >
+            {uploading ? (
+              <Loader2 className="w-5 h-5 animate-spin" />
+            ) : (
+              <ImagePlus className="w-5 h-5" />
+            )}
+          </button>
+        )}
+      </div>
+      <input
+        ref={fileRef}
+        type="file"
+        accept="image/*"
+        multiple
+        className="hidden"
+        onChange={(e) => void pick(e.target.files)}
+      />
+    </div>
+  );
+}
+
 /** Store-profile inputs common to both dialogs. */
 function StoreProfileFields({
   form,
@@ -301,6 +397,7 @@ function StoreProfileFields({
           />
         </Field>
       </div>
+      <MenuImagesField values={form.menuImages} onChange={(menuImages) => patch({ menuImages })} />
       <Field label="نسبة العمولة %" hint="تُترك فارغة لاستخدام النسبة الافتراضية">
         <Input
           type="number"
@@ -363,6 +460,7 @@ function storePayload(form: StoreFields): Record<string, unknown> {
     coverUrl: form.coverUrl,
     storePhone: form.storePhone.trim() || undefined,
     commissionPct: form.commissionPct.trim() ? Number(form.commissionPct) : undefined,
+    menuImages: form.menuImages,
     addressLine: form.addressLine.trim(),
     lat: form.lat,
     lng: form.lng,
@@ -381,6 +479,11 @@ function toStoreFields(m: Row): StoreFields {
     coverUrl: m.coverUrl ?? '',
     storePhone: m.phone ?? '',
     commissionPct: m.commissionPct != null ? String(m.commissionPct) : '',
+    menuImages: Array.isArray(m.menuImages)
+      ? (m.menuImages.filter(
+          (u: unknown): u is string => typeof u === 'string' && u.length > 0,
+        ) as string[])
+      : [],
     addressLine: m.addressLine ?? '',
     lat: m.lat != null ? Number(m.lat) : 26.0297,
     lng: m.lng != null ? Number(m.lng) : 32.8146,
@@ -511,6 +614,7 @@ const BLANK_STORE: StoreFields = {
   coverUrl: '',
   storePhone: '',
   commissionPct: '',
+  menuImages: [],
   addressLine: '',
   lat: 26.0297,
   lng: 32.8146,
