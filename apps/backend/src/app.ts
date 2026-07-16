@@ -19,6 +19,7 @@ import {
   offersRouter,
   productsRouter,
 } from './modules/catalog/catalog.routes.js';
+import { adminImportJobsRouter } from './modules/audit/audit.routes.js';
 import { adminCategoriesRouter } from './modules/categories/categories.routes.js';
 import { adminCustomersRouter } from './modules/customers/customers.routes.js';
 import { adminDriversRouter } from './modules/drivers/drivers.routes.js';
@@ -177,6 +178,7 @@ export function createApp(): Express {
   adminRouter.use('/reports', adminReportsRouter);
   adminRouter.use('/settings', adminSettingsRouter);
   adminRouter.use('/categories', adminCategoriesRouter);
+  adminRouter.use('/import-jobs', adminImportJobsRouter);
   adminRouter.use('/offers', adminOffersRouter);
   adminRouter.use('/home-config', adminHomeConfigRouter);
   adminRouter.use('/site-config', adminSiteRouter);

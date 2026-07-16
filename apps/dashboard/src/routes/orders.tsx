@@ -262,6 +262,18 @@ export function OrdersPage() {
   const { data, isLoading } = useQuery({
     queryKey: ['admin', 'orders', params],
     queryFn: () => api.adminListOrders(params),
+    // Live-ish without a socket. Socket.IO needs a long-lived Node process;
+    // production is served by the PHP shim, which cannot hold a connection
+    // (VITE_DISABLE_SOCKET=true), so this board would otherwise sit on the
+    // global 2-minute default and look frozen to a dispatcher.
+    //
+    // 25s = ~144 requests/hour ≈ 29% of the shared 500 DB-connections/hour cap.
+    // Faster starts crowding out the rest of the app; this is the busiest screen
+    // so it gets the budget.
+    refetchInterval: 25_000,
+    // Default, but load-bearing here: a backgrounded tab must stop polling or
+    // one forgotten window would burn the hourly cap on its own.
+    refetchIntervalInBackground: false,
   });
 
   // Socket: auto refresh + sound + toast action on new orders
