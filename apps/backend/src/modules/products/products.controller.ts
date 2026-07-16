@@ -24,6 +24,8 @@ const createSchema = z.object({
   /// Up to 5 extra image URLs. Persisted as a JSON array on the Product row.
   imageUrls: z.array(z.string().url()).max(5).optional(),
   price: z.number().nonnegative(),
+  /// Absolute discounted price — mobile strikes through `price` when set.
+  salePrice: z.number().nonnegative().optional(),
   /// Percentage off the base price. Capped at 90 to keep the UI sane and
   /// stop accidental near-free pricing.
   discount: z.number().min(0).max(90).optional(),
@@ -33,12 +35,17 @@ const createSchema = z.object({
   availableTo: hhmmSchema.optional().or(z.literal('')),
   unit: z.string().max(50).optional(),
   sku: z.string().trim().max(80).optional(),
+  barcode: z.string().trim().max(80).optional(),
+  /// Free text, not a Category relation — merchants name their own aisles.
+  categoryName: z.string().trim().max(120).optional(),
   isAvailable: z.boolean().default(true),
   stock: z.number().int().nonnegative().optional(),
   sortOrder: z.number().int().default(0),
 });
 
-const updateSchema = createSchema.partial().omit({ merchantId: true });
+/// merchantId stays updatable: the spreadsheet import carries a merchant
+/// column, so re-assigning a product has to be expressible as an update.
+const updateSchema = createSchema.partial();
 
 const listQuerySchema = z.object({
   merchantId: z.string().optional(),
@@ -87,7 +94,7 @@ export const list: RequestHandler = async (req, res, next) => {
  */
 function toPrismaProductData<T extends Record<string, unknown>>(input: T): T {
   const out: Record<string, unknown> = { ...input };
-  for (const k of ['sku', 'availableFrom', 'availableTo'] as const) {
+  for (const k of ['sku', 'availableFrom', 'availableTo', 'barcode', 'categoryName'] as const) {
     if (out[k] === '') out[k] = null;
   }
   return out as T;
