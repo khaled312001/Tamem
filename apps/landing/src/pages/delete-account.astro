@@ -1,0 +1,56 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+import NavBar from '../components/NavBar.astro';
+import Footer from '../components/Footer.astro';
+---
+
+<BaseLayout
+  title="حذف الحساب · تميم للتوصيل"
+  description="اطلب حذف حسابك وبياناتك من تطبيق تميم للتوصيل — من داخل التطبيق أو عبر التواصل معنا."
+>
+  <NavBar />
+  <main class="max-w-3xl mx-auto px-6 pt-32 pb-16">
+    <div
+      class="rounded-3xl p-8 md:p-12 border"
+      style="background: linear-gradient(180deg, rgba(255,255,255,0.04), rgba(255,255,255,0.01)); border-color: rgba(255,255,255,0.08);"
+    >
+      <h1 class="text-3xl md:text-4xl font-black mb-2 text-white">حذف الحساب</h1>
+      <p class="text-sm text-white/55 mb-8">تطبيق تميم للتوصيل — <span dir="ltr">com.tamem.delivery</span></p>
+
+      <div class="space-y-6">
+        <section>
+          <h2 class="text-xl font-black mb-2" style="color:#F2A93B;">الطريقة الأسهل — من داخل التطبيق</h2>
+          <ol class="list-decimal pr-6 space-y-1.5 text-white/80">
+            <li>افتح تطبيق تميم وسجّل الدخول</li>
+            <li>روح على <strong class="text-white">الملف الشخصي</strong></li>
+            <li>اضغط <strong class="text-white">حذف الحساب</strong> وأكّد</li>
+          </ol>
+          <p class="text-white/70 leading-relaxed mt-3">
+            هيتم حذف حسابك فوراً وبشكل نهائي.
+          </p>
+        </section>
+
+        <section>
+          <h2 class="text-xl font-black mb-2" style="color:#F2A93B;">لو مش قادر تفتح التطبيق</h2>
+          <p class="text-white/80 leading-relaxed">
+            ابعتلنا من بريدك المسجّل على
+            <a href="mailto:info@deliverytamem.com?subject=طلب%20حذف%20حساب" class="hover:underline" style="color:#F2A93B;">info@deliverytamem.com</a>
+            وعنوان الرسالة «طلب حذف حساب»، واكتب رقم الهاتف المسجّل بالحساب. هننفّذ الطلب خلال ٧ أيام عمل.
+          </p>
+        </section>
+
+        <section>
+          <h2 class="text-xl font-black mb-2" style="color:#F2A93B;">إيه اللي بيتحذف وإيه اللي بيتبقى</h2>
+          <ul class="list-disc pr-6 space-y-1.5 text-white/80">
+            <li><strong class="text-white">بيتحذف نهائياً:</strong> الاسم، البريد الإلكتروني، الصورة الشخصية، أرقام الهاتف، العناوين، ومعرّف الإشعارات.</li>
+            <li>
+              <strong class="text-white">بيتم الاحتفاظ به:</strong> سجلات الطلبات السابقة (بدون ربطها باسمك) لمدة تصل إلى ٥ سنوات،
+              وده مطلوب قانونياً ومحاسبياً فقط.
+            </li>
+          </ul>
+        </section>
+      </div>
+    </div>
+  </main>
+  <Footer />
+</BaseLayout>

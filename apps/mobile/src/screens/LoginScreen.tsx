@@ -12,7 +12,7 @@ import {
   User as UserIcon,
 } from 'lucide-react-native';
 import { useState } from 'react';
-import { Controller, useForm } from 'react-hook-form';
+import { Controller, useForm, type Resolver } from 'react-hook-form';
 import {
   Alert,
   KeyboardAvoidingView,
@@ -27,6 +27,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { type LoginInput, loginSchema } from '@tamem/validators';
+import type { z } from 'zod';
 
 import { GoogleSignInButton } from '../components/GoogleSignInButton';
 import { IconField } from '../components/IconField';
@@ -48,6 +49,9 @@ import {
 
 type NavProp = NativeStackNavigationProp<AuthStackParamList, 'Login'>;
 type LoginRouteProp = RouteProp<AuthStackParamList, 'Login'>;
+
+/** What the fields actually hold, i.e. loginSchema BEFORE its transform. */
+type LoginFormValues = z.input<typeof loginSchema>;
 
 // Errors now go through the shared lib/authErrors helper.
 
@@ -89,12 +93,23 @@ export function LoginScreen() {
     setPendingResolve(null);
   };
 
+  // loginSchema ends in a .transform() that folds `phone` into `identifier`, so
+  // its INPUT (what the fields hold) and its OUTPUT (what onSubmit receives) are
+  // different shapes. Typing the form with only the output made every field name
+  // here a lie: `values.phone` was always undefined at submit, so login posted an
+  // empty identifier and the server answered "أدخل البريد وكلمة المرور" — for
+  // every user, on every build. tsc flagged all of it; the Android build never
+  // runs tsc, so it shipped. Keep all three generics.
   const {
     control,
     handleSubmit,
     formState: { errors },
-  } = useForm<LoginInput>({
-    resolver: zodResolver(loginSchema),
+  } = useForm<LoginFormValues, unknown, LoginInput>({
+    // @hookform/resolvers v3 predates react-hook-form's TTransformedValues
+    // generic: zodResolver is typed as Resolver<TFieldValues> and cannot express
+    // "input shape in, transformed shape out". It DOES hand handleSubmit the
+    // parsed output at runtime, so the cast states what actually happens.
+    resolver: zodResolver(loginSchema) as unknown as Resolver<LoginFormValues, unknown, LoginInput>,
     defaultValues: { phone: '', password: '' },
   });
 
@@ -102,7 +117,9 @@ export function LoginScreen() {
     setLoading(true);
     setErrorMsg(null);
     try {
-      const res = await api.login(values.phone, values.password, initialRole);
+      // `identifier` is the transform's output: the phone already normalised to
+      // +20… (or a lowercased email). Never read `values.phone` here.
+      const res = await api.login(values.identifier, values.password, initialRole);
       if (initialRole === 'MERCHANT' && res.user.role !== 'MERCHANT') {
         Alert.alert('حساب غير تاجر', 'هذا الحساب ليس تاجر — هل تريد التسجيل كتاجر؟', [
           { text: 'إلغاء', style: 'cancel' },
