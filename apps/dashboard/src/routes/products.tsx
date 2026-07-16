@@ -1,5 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
+  AlertTriangle,
+  Archive,
   ArrowDown,
   ArrowUp,
   ArrowUpDown,
@@ -7,7 +9,11 @@ import {
   CheckCircle2,
   Copy,
   Download,
+  FileSpreadsheet,
+  FileText,
+  FileUp,
   GripVertical,
+  HelpCircle,
   Image as ImageIcon,
   ImageOff,
   ImagePlus,
@@ -39,6 +45,14 @@ import { StatCard } from '../components/ui/StatCard.js';
 import { ErrorState } from '../components/ui/States.js';
 import { api } from '../lib/api.js';
 import { formatCount, formatMoney } from '../lib/format.js';
+import type { ParsedSheet } from '../lib/productsSheet.js';
+import {
+  buildArchiveWorkbook,
+  buildErrorCsv,
+  buildImportWorkbook,
+  downloadBlob,
+  readProductsFile,
+} from '../lib/productsSheet.js';
 import type { Tone } from '../lib/statusRegistry.js';
 import { TONE } from '../lib/statusRegistry.js';
 import { uploadFile } from '../lib/uploadFile.js';
@@ -299,30 +313,9 @@ export function ProductsPage() {
     setSelected(next);
   };
 
-  const exportCsv = (rows: Row[]) => {
-    const head = ['الاسم', 'English', 'SKU', 'التاجر', 'السعر', 'المخزون', 'متاح'];
-    const esc = (v: unknown) => `"${String(v ?? '').replace(/"/g, '""')}"`;
-    const lines = rows.map((p) =>
-      [
-        p.nameAr,
-        p.name,
-        p.sku,
-        p.merchant?.storeNameAr,
-        p.price,
-        p.stock,
-        p.isAvailable ? 'نعم' : 'لا',
-      ]
-        .map(esc)
-        .join(','),
-    );
-    const csv = '﻿' + [head.map(esc).join(','), ...lines].join('\n');
-    const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `products-${rows.length}.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
-  };
+  /** Export always goes through the dialog — the file's shape depends on what
+   *  the admin plans to do with it, which only they know. */
+  const [exportRows, setExportRows] = useState<Row[] | null>(null);
 
   const setSort = (key: Exclude<SortKey, null>) => {
     if (sortBy === key) setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
@@ -349,7 +342,7 @@ export function ProductsPage() {
             <Button
               variant="outline"
               size="md"
-              onClick={() => exportCsv(filtered)}
+              onClick={() => setExportRows(filtered)}
               disabled={!filtered.length}
             >
               <Download className="w-4 h-4" />
@@ -585,7 +578,7 @@ export function ProductsPage() {
             تعطيل
           </button>
           <button
-            onClick={() => exportCsv(filtered.filter((p) => selected.has(p.id)))}
+            onClick={() => setExportRows(filtered.filter((p) => selected.has(p.id)))}
             className="text-xs font-bold px-2 py-1 rounded hover:bg-white/10 inline-flex items-center gap-1"
           >
             <Download className="w-3.5 h-3.5" />
@@ -918,8 +911,18 @@ export function ProductsPage() {
       {importOpen && (
         <ImportDialog
           merchants={(merchants?.items as Row[]) ?? []}
+          products={filtered}
           defaultMerchantId={merchantFilter}
           onClose={() => setImportOpen(false)}
+        />
+      )}
+      {exportRows && (
+        <ExportDialog
+          products={exportRows}
+          merchantNames={((merchants?.items as Row[]) ?? []).map((m) =>
+            String(m.storeNameAr ?? ''),
+          )}
+          onClose={() => setExportRows(null)}
         />
       )}
       <ConfirmDialog
@@ -1372,258 +1375,488 @@ function QuickEditDrawer({
   );
 }
 
-// ── CSV import ──
-
-const IMPORT_HEADERS = ['الاسم', 'English', 'السعر', 'المخزون', 'SKU'];
-
-type ImportRow = { nameAr: string; name: string; price: number; stock?: number; sku?: string };
+// ── Export / import ──
 
 /**
- * Minimal RFC-4180 reader: handles quoted fields, escaped quotes and CRLF.
- * The delimiter is sniffed from the header line because Excel writes `;` under
- * an Arabic locale and `,` under an English one.
+ * Two very different jobs sit behind one "export" button: keeping a readable
+ * copy, or producing a file the admin edits and uploads back. Only the second
+ * may carry the product id, so the choice is asked rather than guessed.
  */
-function parseCsv(text: string): string[][] {
-  const s = text.replace(/^﻿/, '');
-  const head = s.slice(0, s.indexOf('\n') + 1 || s.length);
-  const delim = head.split(';').length - 1 > head.split(',').length - 1 ? ';' : ',';
-  const rows: string[][] = [];
-  let row: string[] = [];
-  let field = '';
-  let quoted = false;
-  for (let i = 0; i < s.length; i++) {
-    const c = s[i];
-    if (quoted) {
-      if (c === '"') {
-        if (s[i + 1] === '"') {
-          field += '"';
-          i++;
-        } else quoted = false;
-      } else field += c;
-    } else if (c === '"') quoted = true;
-    else if (c === delim) {
-      row.push(field);
-      field = '';
-    } else if (c === '\n') {
-      row.push(field);
-      rows.push(row);
-      row = [];
-      field = '';
-    } else if (c !== '\r') field += c;
-  }
-  if (field !== '' || row.length) {
-    row.push(field);
-    rows.push(row);
-  }
-  return rows.filter((r) => r.some((c) => c.trim() !== ''));
+function ExportDialog({
+  products,
+  merchantNames,
+  onClose,
+}: {
+  products: Row[];
+  merchantNames: string[];
+  onClose: () => void;
+}) {
+  const [mode, setMode] = useState<'archive' | 'reimport'>('archive');
+  const [help, setHelp] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  const run = async () => {
+    setBusy(true);
+    try {
+      if (mode === 'archive') {
+        downloadBlob(await buildArchiveWorkbook(products), 'تميم-المنتجات.xlsx');
+      } else {
+        downloadBlob(
+          await buildImportWorkbook({ mode: 'data', withId: true, products, merchantNames }),
+          'تميم-المنتجات-للتعديل.xlsx',
+        );
+      }
+      toast.success(`تم تصدير ${formatCount(products.length)} منتج`);
+      onClose();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'فشل التصدير');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Dialog
+      open
+      onOpenChange={(o) => !o && onClose()}
+      title="تصدير المنتجات"
+      description="اختر طريقة استخدام الملف بعد تنزيله."
+      size="lg"
+    >
+      <div className="space-y-3">
+        <ChoiceCard
+          checked={mode === 'archive'}
+          onSelect={() => setMode('archive')}
+          icon={<Archive className="w-5 h-5" />}
+          title="تصدير عادي للاحتفاظ بالبيانات"
+          desc="للمراجعة أو الأرشفة. أعمدة واضحة للقراءة بدون حقول تقنية داخلية."
+        />
+        <ChoiceCard
+          checked={mode === 'reimport'}
+          onSelect={() => setMode('reimport')}
+          icon={<FileUp className="w-5 h-5" />}
+          title="تصدير للتعديل وإعادة الاستيراد"
+          desc="نزّل المنتجات، عدّلها في Excel، ثم ارفع الملف مرة أخرى لتحديث المنتجات الحالية."
+        />
+
+        {mode === 'reimport' && (
+          <div className="flex gap-2 rounded-lg border border-amber-300 bg-amber-50 p-3 text-xs text-amber-900 leading-5">
+            <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+            <span>
+              سيتم تضمين المعرّف الفريد لكل منتج لضمان تحديث المنتجات الحالية عند إعادة استيراد
+              الملف. <b>لا تقم بحذف أو تعديل هذا العمود.</b> (العمود مقفول داخل الملف.)
+            </span>
+          </div>
+        )}
+
+        <button
+          type="button"
+          onClick={() => setHelp((h) => !h)}
+          className="inline-flex items-center gap-1 text-xs font-bold text-brand-red hover:underline"
+        >
+          <HelpCircle className="w-3.5 h-3.5" />
+          ما الفرق بين النوعين؟
+        </button>
+        {help && (
+          <div className="rounded-lg bg-muted/40 p-3 text-xs text-muted-foreground leading-6 space-y-1">
+            <div>
+              • <b className="text-foreground">التصدير العادي</b> مناسب للحفظ والمراجعة — لا يُستخدم
+              لتحديث البيانات مرة أخرى.
+            </div>
+            <div>
+              • <b className="text-foreground">التصدير المتوافق مع الاستيراد</b> مناسب للتعديل
+              الجماعي وتحديث المنتجات الحالية، وأعمدته وترتيبها مطابقة تماماً لشاشة الاستيراد.
+            </div>
+          </div>
+        )}
+
+        <div className="rounded-lg bg-muted/40 p-3 text-sm">
+          هيتم تصدير <b>{formatCount(products.length)}</b> منتج (حسب الفلاتر الحالية).
+        </div>
+
+        <div className="flex items-center gap-2 pt-1">
+          <Button onClick={() => void run()} disabled={busy || !products.length}>
+            {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
+            تنزيل الملف
+          </Button>
+          <Button variant="ghost" onClick={onClose} className="ms-auto">
+            إلغاء
+          </Button>
+        </div>
+      </div>
+    </Dialog>
+  );
 }
 
-/** Excel writes prices as "1,200" and Arabic keyboards produce ٠-٩ — take both. */
-function toNum(raw: string): number {
-  const s = raw
-    .replace(/[٠-٩]/g, (d) => String('٠١٢٣٤٥٦٧٨٩'.indexOf(d)))
-    .replace(/[۰-۹]/g, (d) => String('۰۱۲۳۴۵۶۷۸۹'.indexOf(d)))
-    .replace(/[,٬\s]/g, '');
-  return s === '' ? NaN : Number(s);
-}
-
-function downloadCsv(csv: string, filename: string) {
-  const url = URL.createObjectURL(new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8' }));
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = filename;
-  a.click();
-  URL.revokeObjectURL(url);
+function ChoiceCard({
+  checked,
+  onSelect,
+  icon,
+  title,
+  desc,
+}: {
+  checked: boolean;
+  onSelect: () => void;
+  icon: React.ReactNode;
+  title: string;
+  desc: string;
+}) {
+  return (
+    <button
+      type="button"
+      role="radio"
+      aria-checked={checked}
+      onClick={onSelect}
+      className={`w-full text-start flex gap-3 rounded-xl border p-3 transition ${
+        checked
+          ? 'border-brand-red bg-brand-red/5 ring-1 ring-brand-red/30'
+          : 'border-border hover:bg-muted/40'
+      }`}
+    >
+      <span
+        className={`grid place-items-center w-9 h-9 rounded-lg shrink-0 ${
+          checked ? 'bg-brand-red text-white' : 'bg-muted text-muted-foreground'
+        }`}
+      >
+        {icon}
+      </span>
+      <span className="flex-1 min-w-0">
+        <span className="block font-bold text-sm">{title}</span>
+        <span className="block text-xs text-muted-foreground mt-0.5 leading-5">{desc}</span>
+      </span>
+      <span
+        className={`mt-1 w-4 h-4 rounded-full border-2 shrink-0 ${
+          checked ? 'border-brand-red bg-brand-red' : 'border-input'
+        }`}
+      />
+    </button>
+  );
 }
 
 /**
- * Bulk-create from a spreadsheet. Columns are matched by header name, so the
- * template (or an edited export) both work. There is no bulk-create endpoint,
- * so rows go one at a time and each failure is reported against its row rather
- * than aborting the whole run.
+ * Spreadsheet import. The file is fully validated and previewed before a
+ * single request is sent: the admin sees how many rows will be created vs
+ * updated, every per-cell problem, and can download the bad rows to fix.
  */
 function ImportDialog({
   merchants,
+  products,
   defaultMerchantId,
   onClose,
 }: {
   merchants: Row[];
+  products: Row[];
   defaultMerchantId: string;
   onClose: () => void;
 }) {
   const qc = useQueryClient();
   const [merchantId, setMerchantId] = useState(defaultMerchantId);
-  const [rows, setRows] = useState<ImportRow[] | null>(null);
+  const [sheet, setSheet] = useState<ParsedSheet | null>(null);
   const [fileName, setFileName] = useState('');
-  const [skipped, setSkipped] = useState<string[]>([]);
-  const [result, setResult] = useState<{ ok: number; fail: string[] } | null>(null);
+  const [reading, setReading] = useState(false);
+  const [busyTpl, setBusyTpl] = useState(false);
+  const [result, setResult] = useState<{ created: number; updated: number; fail: string[] } | null>(
+    null,
+  );
   const fileRef = useRef<HTMLInputElement | null>(null);
+
+  const merchantNames = useMemo(
+    () => merchants.map((m) => String(m.storeNameAr ?? '')).filter(Boolean),
+    [merchants],
+  );
+
+  // Ids are matched against the whole catalogue, not the filtered page — an
+  // admin can export one merchant and import the file while another is
+  // selected, and those rows must still be recognised as updates. The API
+  // caps pageSize at 200, so walk every page rather than asking for one big
+  // one (which 400s, leaving every row wrongly marked "new").
+  const { data: knownIds, isLoading: idsLoading } = useQuery({
+    queryKey: ['admin', 'products', 'known-ids'],
+    queryFn: async () => {
+      const ids = new Set<string>();
+      for (let page = 1; page <= 50; page++) {
+        const r = await api.adminListProducts({ page, pageSize: 200 });
+        (r.items as Row[]).forEach((p) => ids.add(String(p.id)));
+        if (!r.items.length || page >= (r.pagination?.totalPages ?? 1)) break;
+      }
+      return ids;
+    },
+  });
+
+  const template = async (mode: 'blank' | 'example' | 'data') => {
+    setBusyTpl(true);
+    try {
+      const blob = await buildImportWorkbook({
+        mode,
+        withId: mode === 'data',
+        products,
+        merchantNames,
+      });
+      downloadBlob(
+        blob,
+        mode === 'data'
+          ? 'تميم-المنتجات-للتعديل.xlsx'
+          : mode === 'example'
+            ? 'تميم-قالب-مع-مثال.xlsx'
+            : 'تميم-قالب-فارغ.xlsx',
+      );
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'فشل تجهيز القالب');
+    } finally {
+      setBusyTpl(false);
+    }
+  };
 
   const readFile = async (f: File | undefined) => {
     if (!f) return;
+    // Without the id set every row would look new and re-importing an edited
+    // export would duplicate the catalogue instead of updating it.
+    if (!knownIds) {
+      toast.error('لم يتم تحميل قائمة المنتجات بعد — انتظر لحظة وحاول مرة أخرى.');
+      return;
+    }
     setFileName(f.name);
     setResult(null);
-    setSkipped([]);
-    setRows(null);
-    let table: string[][];
+    setSheet(null);
+    setReading(true);
     try {
-      table = parseCsv(await f.text());
-    } catch {
-      setSkipped(['تعذّرت قراءة الملف. تأكد أنه CSV بترميز UTF-8.']);
-      return;
-    }
-    const [headRow, ...body] = table;
-    if (!headRow || body.length === 0) {
-      setSkipped(['الملف فاضي أو فيه صف العناوين فقط.']);
-      return;
-    }
-    const head = headRow.map((h) => h.trim().toLowerCase());
-    const col = (...names: string[]) =>
-      head.findIndex((h) => names.some((n) => h === n.toLowerCase()));
-    const iNameAr = col('الاسم', 'الاسم بالعربية', 'namear');
-    const iName = col('english', 'الاسم بالإنجليزية', 'name');
-    const iPrice = col('السعر', 'price');
-    const iStock = col('المخزون', 'stock');
-    const iSku = col('sku', 'الكود');
-    if (iNameAr < 0 || iPrice < 0) {
-      setSkipped(['الملف لازم يحتوي على عمودَي «الاسم» و«السعر». نزّل القالب واستخدمه.']);
-      return;
-    }
-    const skips: string[] = [];
-    const parsed: ImportRow[] = [];
-    body.forEach((r, i) => {
-      const line = i + 2;
-      const nameAr = (r[iNameAr] ?? '').trim();
-      const priceRaw = (r[iPrice] ?? '').trim();
-      const price = toNum(priceRaw);
-      if (!nameAr) {
-        skips.push(`صف ${line}: الاسم فاضي`);
-        return;
-      }
-      if (!Number.isFinite(price) || price < 0) {
-        skips.push(`صف ${line}: سعر غير صالح «${priceRaw}»`);
-        return;
-      }
-      const stockRaw = iStock >= 0 ? (r[iStock] ?? '').trim() : '';
-      const stockNum = toNum(stockRaw);
-      parsed.push({
-        nameAr,
-        name: iName >= 0 ? (r[iName] ?? '').trim() : '',
-        price,
-        ...(stockRaw !== '' && Number.isFinite(stockNum) && stockNum >= 0
-          ? { stock: Math.trunc(stockNum) }
-          : {}),
-        ...(iSku >= 0 && (r[iSku] ?? '').trim() ? { sku: (r[iSku] ?? '').trim() } : {}),
+      const parsed = await readProductsFile(f, {
+        merchantsByName: new Map(
+          merchants.map((m) => [String(m.storeNameAr ?? '').toLowerCase(), String(m.id)]),
+        ),
+        knownIds: knownIds ?? new Set<string>(),
+        defaultMerchantId: merchantId,
+        defaultMerchantName: merchants.find((m) => m.id === merchantId)?.storeNameAr ?? '',
       });
-    });
-    setSkipped(skips);
-    setRows(parsed);
+      setSheet(parsed);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'فشلت قراءة الملف');
+    } finally {
+      setReading(false);
+    }
   };
 
   const run = useMutation({
     mutationFn: async () => {
       const fail: string[] = [];
-      let ok = 0;
-      for (const r of rows ?? []) {
+      let created = 0;
+      let updated = 0;
+      for (const r of sheet?.valid ?? []) {
         try {
-          await api.adminCreateProduct({
-            merchantId,
-            nameAr: r.nameAr,
-            name: r.name || r.nameAr,
-            price: r.price,
-            isAvailable: true,
-            ...(r.stock !== undefined ? { stock: r.stock } : {}),
-            ...(r.sku ? { sku: r.sku } : {}),
-          });
-          ok++;
+          if (r.action === 'update' && r.id) {
+            await api.adminUpdateProduct(r.id, { ...r.data, merchantId: r.merchantId });
+            updated++;
+          } else {
+            await api.adminCreateProduct({ ...r.data, merchantId: r.merchantId });
+            created++;
+          }
         } catch (e) {
-          fail.push(`${r.nameAr}: ${e instanceof Error ? e.message : 'فشل الإنشاء'}`);
+          fail.push(`صف ${r.line} (${r.data.nameAr}): ${e instanceof Error ? e.message : 'فشل'}`);
         }
       }
-      return { ok, fail };
+      return { created, updated, fail };
     },
     onSuccess: (r) => {
       setResult(r);
       qc.invalidateQueries({ queryKey: ['admin', 'products'] });
-      if (r.ok) toast.success(`تم استيراد ${formatCount(r.ok)} منتج`);
+      if (r.created || r.updated)
+        toast.success(`تم إنشاء ${formatCount(r.created)} وتحديث ${formatCount(r.updated)}`);
       if (r.fail.length) toast.error(`فشل ${formatCount(r.fail.length)} صف`);
     },
     onError: (e: Error) => toast.error(e.message),
   });
 
-  const merchantName = merchants.find((m) => m.id === merchantId)?.storeNameAr;
-  const canRun = !!merchantId && !!rows?.length && !run.isPending;
+  const creates = sheet?.valid.filter((r) => r.action === 'create').length ?? 0;
+  const updates = sheet?.valid.filter((r) => r.action === 'update').length ?? 0;
+  const canRun = !!sheet?.valid.length && !run.isPending && !result;
 
   return (
-    <Dialog open onOpenChange={(o) => !o && onClose()} title="استيراد منتجات من ملف" size="lg">
+    <Dialog
+      open
+      onOpenChange={(o) => !o && onClose()}
+      title="استيراد المنتجات"
+      description="نزّل قالباً جاهزاً، املأ بياناتك، ثم ارفع الملف."
+      size="xl"
+    >
       <div className="space-y-4">
-        <Field label="التاجر" required hint="كل المنتجات في الملف هتتضاف للتاجر ده.">
+        {/* ── 1. templates ── */}
+        <div>
+          <div className="text-sm font-bold mb-2">١. نزّل قالباً</div>
+          <div className="grid md:grid-cols-3 gap-2">
+            <TemplateBtn
+              busy={busyTpl}
+              onClick={() => void template('blank')}
+              icon={<FileSpreadsheet className="w-4 h-4" />}
+              title="قالب فارغ"
+              desc="لإضافة منتجات جديدة من البداية."
+            />
+            <TemplateBtn
+              busy={busyTpl}
+              onClick={() => void template('example')}
+              icon={<FileText className="w-4 h-4" />}
+              title="قالب مع مثال"
+              desc="يحتوي صفاً نموذجياً يوضح طريقة الإدخال."
+            />
+            <TemplateBtn
+              busy={busyTpl}
+              onClick={() => void template('data')}
+              icon={<FileUp className="w-4 h-4" />}
+              title="المنتجات الحالية للتعديل"
+              desc={`${formatCount(products.length)} منتج مع المعرّف الفريد للتحديث.`}
+            />
+          </div>
+          <p className="text-xs text-muted-foreground mt-2 leading-5">
+            حمّل نموذجاً جاهزاً يحتوي على الأعمدة المطلوبة ومثالاً توضيحياً، ثم املأ بياناتك وارفع
+            الملف. كل قالب فيه شيت «Instructions» بشرح كل عمود.
+          </p>
+        </div>
+
+        {/* ── 2. default merchant ── */}
+        <div>
+          <div className="text-sm font-bold mb-2">٢. التاجر الافتراضي</div>
           <select
             value={merchantId}
             onChange={(e) => setMerchantId(e.target.value)}
             className="w-full px-3 py-2 rounded-lg border border-input bg-popover text-sm"
           >
-            <option value="">— اختر تاجراً —</option>
+            <option value="">— بدون —</option>
             {merchants.map((m) => (
               <option key={m.id} value={m.id}>
                 {m.storeNameAr}
               </option>
             ))}
           </select>
-        </Field>
-
-        <div className="rounded-lg border border-dashed border-border p-4 text-center space-y-2">
-          <input
-            ref={fileRef}
-            type="file"
-            accept=".csv,text/csv"
-            className="hidden"
-            onChange={(e) => void readFile(e.target.files?.[0])}
-          />
-          <Button variant="outline" onClick={() => fileRef.current?.click()}>
-            <Upload className="w-4 h-4" />
-            اختر ملف CSV
-          </Button>
-          <p className="text-xs text-muted-foreground">
-            {fileName || 'الأعمدة المطلوبة: الاسم، السعر. الاختيارية: English، المخزون، SKU.'}
+          <p className="text-xs text-muted-foreground mt-1">
+            يُستخدم فقط للصفوف اللي عمود «التاجر» فيها فاضي.
           </p>
-          <button
-            type="button"
-            onClick={() =>
-              downloadCsv(
-                [
-                  IMPORT_HEADERS.join(','),
-                  ['شاي ليبتون', 'Lipton Tea', '25', '100', 'TEA-01'].join(','),
-                ].join('\n'),
-                'tamem-products-template.csv',
-              )
-            }
-            className="text-xs font-bold text-brand-red hover:underline"
-          >
-            تحميل قالب جاهز
-          </button>
         </div>
 
-        {rows && !result && (
-          <div className="rounded-lg bg-muted/40 p-3 text-sm">
-            <span className="font-bold">{formatCount(rows.length)}</span> منتج جاهز للاستيراد
-            {merchantName ? ` إلى «${merchantName}»` : ''}.
+        {/* ── 3. upload ── */}
+        <div>
+          <div className="text-sm font-bold mb-2">٣. ارفع الملف</div>
+          <div className="rounded-lg border border-dashed border-border p-4 text-center space-y-2">
+            <input
+              ref={fileRef}
+              type="file"
+              accept=".xlsx,.xls,.csv,text/csv"
+              className="hidden"
+              onChange={(e) => void readFile(e.target.files?.[0])}
+            />
+            <Button
+              variant="outline"
+              onClick={() => fileRef.current?.click()}
+              disabled={idsLoading || reading}
+            >
+              {reading || idsLoading ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : (
+                <Upload className="w-4 h-4" />
+              )}
+              اختر ملف Excel أو CSV
+            </Button>
+            <p className="text-xs text-muted-foreground">{fileName || 'لم يتم اختيار ملف بعد.'}</p>
+          </div>
+        </div>
+
+        {sheet?.fatal && (
+          <div className="rounded-lg border border-destructive/40 bg-destructive/5 p-3 text-sm text-destructive">
+            {sheet.fatal}
           </div>
         )}
 
-        {skipped.length > 0 && !result && (
-          <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-xs text-amber-900 space-y-0.5 max-h-32 overflow-y-auto">
-            <div className="font-bold">تم تخطي {formatCount(skipped.length)} صف:</div>
-            {skipped.slice(0, 20).map((s) => (
-              <div key={s}>• {s}</div>
-            ))}
-            {skipped.length > 20 && <div>… و{formatCount(skipped.length - 20)} غيرها</div>}
+        {/* ── report ── */}
+        {sheet && !sheet.fatal && !result && (
+          <div className="space-y-3">
+            <div className="grid grid-cols-3 gap-2 text-center">
+              <ReportTile tone="green" label="منتجات جديدة" value={creates} />
+              <ReportTile tone="blue" label="تحديث لموجود" value={updates} />
+              <ReportTile tone="red" label="صفوف بها أخطاء" value={sheet.invalid.length} />
+            </div>
+
+            {sheet.invalid.length > 0 && (
+              <div className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 space-y-2">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-xs font-bold text-destructive">
+                    الصفوف دي هتتخطى — صحّحها وارفع الملف تاني:
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      downloadBlob(
+                        new Blob([buildErrorCsv(sheet)], { type: 'text/csv;charset=utf-8' }),
+                        'تميم-أخطاء-الاستيراد.csv',
+                      )
+                    }
+                    className="text-xs font-bold text-brand-red hover:underline inline-flex items-center gap-1 shrink-0"
+                  >
+                    <Download className="w-3.5 h-3.5" />
+                    تنزيل ملف الأخطاء
+                  </button>
+                </div>
+                <div className="max-h-32 overflow-y-auto text-xs space-y-0.5">
+                  {sheet.invalid.slice(0, 25).map((r) =>
+                    r.errors.map((e, i) => (
+                      <div key={`${r.line}-${i}`}>
+                        <b>صف {formatCount(r.line)}</b> — <b>{e.column}</b>: {e.message}
+                      </div>
+                    )),
+                  )}
+                  {sheet.invalid.length > 25 && (
+                    <div className="text-muted-foreground">
+                      … وغيرها. نزّل ملف الأخطاء للقائمة الكاملة.
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {sheet.valid.length > 0 && (
+              <div>
+                <div className="text-xs font-bold mb-1">
+                  معاينة أول {Math.min(5, sheet.valid.length)} صفوف:
+                </div>
+                <div className="overflow-x-auto rounded-lg border border-border">
+                  <table className="w-full text-xs">
+                    <thead className="bg-muted/50 text-muted-foreground">
+                      <tr className="text-right">
+                        <th className="px-2 py-1.5 font-bold">الإجراء</th>
+                        <th className="px-2 py-1.5 font-bold">الاسم</th>
+                        <th className="px-2 py-1.5 font-bold">التاجر</th>
+                        <th className="px-2 py-1.5 font-bold">السعر</th>
+                        <th className="px-2 py-1.5 font-bold">المخزون</th>
+                        <th className="px-2 py-1.5 font-bold">الحالة</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {sheet.valid.slice(0, 5).map((r) => (
+                        <tr key={r.line} className="border-t border-border/50">
+                          <td className="px-2 py-1.5">
+                            <TonePill tone={r.action === 'create' ? 'green' : 'blue'}>
+                              {r.action === 'create' ? 'جديد' : 'تحديث'}
+                            </TonePill>
+                          </td>
+                          <td className="px-2 py-1.5 font-bold">{String(r.data.nameAr ?? '')}</td>
+                          <td className="px-2 py-1.5">{r.merchantName || '—'}</td>
+                          <td className="px-2 py-1.5">{formatMoney(Number(r.data.price ?? 0))}</td>
+                          <td className="px-2 py-1.5">
+                            {r.data.stock == null ? '—' : formatCount(Number(r.data.stock))}
+                          </td>
+                          <td className="px-2 py-1.5">{r.data.isAvailable ? 'متاح' : 'معطّل'}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
           </div>
         )}
 
         {result && (
           <div className="rounded-lg border border-border p-3 text-sm space-y-1">
-            <div className="font-bold text-green-700">✓ تم إنشاء {formatCount(result.ok)} منتج</div>
+            <div className="font-bold text-green-700">
+              ✓ تم إنشاء {formatCount(result.created)} منتج وتحديث {formatCount(result.updated)}.
+            </div>
             {result.fail.length > 0 && (
               <div className="text-xs text-destructive space-y-0.5 max-h-32 overflow-y-auto">
                 <div className="font-bold">فشل {formatCount(result.fail.length)}:</div>
@@ -1639,7 +1872,9 @@ function ImportDialog({
           {!result && (
             <Button onClick={() => run.mutate()} disabled={!canRun}>
               {run.isPending && <Loader2 className="w-4 h-4 animate-spin" />}
-              {run.isPending ? 'جارٍ الاستيراد…' : 'استيراد'}
+              {run.isPending
+                ? 'جارٍ الاستيراد…'
+                : `استيراد ${sheet?.valid.length ? formatCount(sheet.valid.length) + ' صف' : ''}`}
             </Button>
           )}
           <Button variant={result ? 'primary' : 'ghost'} onClick={onClose} className="ms-auto">
@@ -1651,6 +1886,43 @@ function ImportDialog({
   );
 }
 
+function TemplateBtn({
+  busy,
+  onClick,
+  icon,
+  title,
+  desc,
+}: {
+  busy: boolean;
+  onClick: () => void;
+  icon: React.ReactNode;
+  title: string;
+  desc: string;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={busy}
+      className="text-start rounded-lg border border-border p-2.5 hover:bg-muted/40 hover:border-brand-red/40 transition disabled:opacity-60"
+    >
+      <span className="inline-flex items-center gap-1.5 font-bold text-sm text-brand-dark">
+        {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : icon}
+        {title}
+      </span>
+      <span className="block text-[11px] text-muted-foreground mt-0.5 leading-4">{desc}</span>
+    </button>
+  );
+}
+
+function ReportTile({ tone, label, value }: { tone: Tone; label: string; value: number }) {
+  return (
+    <div className={`rounded-lg p-2.5 ${TONE[tone].soft}`}>
+      <div className="text-lg font-black">{formatCount(value)}</div>
+      <div className="text-[11px] font-bold opacity-80">{label}</div>
+    </div>
+  );
+}
 /**
  * Menu-image mode, surfaced on the products page. When a merchant is selected
  * in the filter, the admin can upload photo(s) of that merchant's paper menu
