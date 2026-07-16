@@ -1,14 +1,30 @@
 ---
+import SeoSchema from '../components/SeoSchema.astro';
+
 interface Props {
   title?: string;
   description?: string;
   ogImage?: string;
+  noindex?: boolean;
 }
 const {
-  title = 'تميم للتوصيل · توصيلك في أمان معانا',
-  description = 'منصة توصيل وشحن متكاملة تخدم قفط وقنا والصعيد. دليفري، شحن بين المناطق، وطلبات تجار B2B.',
+  title = 'تميم للتوصيل | دليفري وشحن في قفط وقنا وصعيد مصر',
+  description = 'أول تطبيق توصيل دليفري وشحن متكامل في صعيد مصر. اطلب من مطاعم وصيدليات وسوبر ماركت قفط، أو اشحن طرودك لأي محافظة — المقر الرئيسي في مركز قفط، قنا.',
   ogImage = '/og-image.png',
+  noindex = false,
 } = Astro.props;
+
+const SITE = Astro.site ?? new URL('https://deliverytamem.com');
+// build.format is 'directory', so pages are served WITH a trailing slash
+// (dist/privacy/index.html → /privacy/). Normalise so canonical, og:url and the
+// generated sitemap all spell the URL the same way — otherwise every non-root
+// page canonicalises to a URL that 301s, and Google drops it as "page with redirect".
+const pathname = Astro.url.pathname.endsWith('/') ? Astro.url.pathname : `${Astro.url.pathname}/`;
+const canonical = new URL(pathname, SITE).href;
+// Open Graph requires an ABSOLUTE url. This was previously a bare '/og-image.png',
+// so Facebook/WhatsApp silently dropped it and every shared link rendered with
+// no thumbnail — on the two channels this brand actually runs on.
+const ogImageUrl = new URL(ogImage, SITE).href;
 ---
 
 <!doctype html>
@@ -17,15 +33,31 @@ const {
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="theme-color" content="#E0301E" />
-    <meta name="robots" content="index, follow" />
     <title>{title}</title>
     <meta name="description" content={description} />
+    <link rel="canonical" href={canonical} />
+    {noindex
+      ? <meta name="robots" content="noindex, nofollow" />
+      : <meta name="robots" content="index, follow, max-image-preview:large, max-snippet:-1" />}
+    <meta name="author" content="تميم للتوصيل" />
+
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content={canonical} />
+    <meta property="og:site_name" content="تميم للتوصيل" />
     <meta property="og:title" content={title} />
     <meta property="og:description" content={description} />
-    <meta property="og:type" content="website" />
-    <meta property="og:image" content={ogImage} />
+    <meta property="og:image" content={ogImageUrl} />
+    <meta property="og:image:secure_url" content={ogImageUrl} />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="تميم للتوصيل — دليفري وشحن في قفط وقنا وصعيد مصر" />
     <meta property="og:locale" content="ar_EG" />
+
     <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content={title} />
+    <meta name="twitter:description" content={description} />
+    <meta name="twitter:image" content={ogImageUrl} />
+
     <link rel="icon" type="image/png" href="/favicon.png" />
     <link rel="apple-touch-icon" href="/logo.png" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -34,6 +66,7 @@ const {
       href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;700;800;900&family=Tajawal:wght@400;500;700;800;900&display=swap"
       rel="stylesheet"
     />
+    <SeoSchema />
   </head>
   <body class="font-body antialiased overflow-x-hidden text-white" style="background:#0F0805;">
     <slot />
@@ -45,11 +78,14 @@ const {
     <script is:inline>
       (async () => {
         try {
+          // NOTE: api.deliverytamem.com does not exist (DNS returns nothing) —
+          // the live API is served from the backendtamem subdomain. Pointing at
+          // the wrong host made every dashboard edit silently never reach the site.
           const apiBase =
             window.localStorage.getItem('tamem-api-base') ||
             (window.location.hostname === 'localhost'
               ? 'http://localhost:4000/api/v1'
-              : 'https://api.deliverytamem.com/api/v1');
+              : 'https://backendtamem.deliverytamem.com/api/v1');
           const res = await fetch(`${apiBase}/site-config`, { credentials: 'omit' });
           if (!res.ok) return;
           const { data } = await res.json();
@@ -103,7 +139,15 @@ const {
   h1, h2, h3, h4 {
     font-family: 'Cairo', system-ui, sans-serif;
     font-weight: 900;
-    letter-spacing: -0.01em;
+    /* No negative tracking: Arabic is a connected script, so tightening it
+       pulls joined letterforms into each other. Latin-first default, wrong here. */
+    letter-spacing: normal;
+  }
+  /* background-clip:text paints only the glyphs, so a tight line box shears the
+     descenders off gradient headings. inline-block + padding gives them room. */
+  .shine-text {
+    display: inline-block;
+    padding-bottom: 0.12em;
   }
 
   /* ===== Reveal-on-scroll animations ===== */
@@ -121,6 +165,18 @@ const {
   .reveal-delay-2 { transition-delay: 0.16s; }
   .reveal-delay-3 { transition-delay: 0.24s; }
   .reveal-delay-4 { transition-delay: 0.32s; }
+  .reveal-delay-5 { transition-delay: 0.40s; }
+
+  /* .reveal starts at opacity:0 and only the IntersectionObserver adds .in —
+     so a JS failure would leave the whole page permanently invisible, and
+     users who asked the OS for less motion still got every animation.
+     This block is both the reduced-motion honour and the no-JS safety net. */
+  @media (prefers-reduced-motion: reduce) {
+    .reveal { opacity: 1 !important; transform: none !important; transition: none !important; }
+    .float-anim, .blob-anim, .shine-text, .pulse-ring::after { animation: none !important; }
+    .tilt-card, .tilt-card:hover { transition: none !important; transform: none !important; }
+    html { scroll-behavior: auto; }
+  }
 
   /* ===== Continuous animations ===== */
   @keyframes float {

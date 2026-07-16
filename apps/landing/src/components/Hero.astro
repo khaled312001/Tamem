@@ -39,7 +39,7 @@ const waLink = `https://wa.me/${WHATSAPP.replace(/[^\d]/g, '')}?text=${encodeURI
         <span class="relative inline-flex w-2 h-2 rounded-full" style="background: #F2A93B;">
           <span class="absolute inline-flex w-full h-full rounded-full opacity-75 animate-ping" style="background: #F2A93B;"></span>
         </span>
-        خدمة متاحة الآن في قفط — توسّع قريب
+        شغّالين دلوقتي في قفط — وقريب في باقي قنا
       </div>
 
       <!-- TAMEM DELIVERY brand block (lifted from splash) -->
@@ -52,20 +52,27 @@ const waLink = `https://wa.me/${WHATSAPP.replace(/[^\d]/g, '')}?text=${encodeURI
         </div>
       </div>
 
+      {/* Arabic needs far more leading than Latin at display sizes: Cairo 900
+          stacks dots below (ب/ي) against dots above (ف/ق) on the next line, so
+          1.4 made the lines collide and clipped the descenders of the last one.
+          Sizes are explicit rem, not text-5xl/6xl: those Tailwind steps ship
+          their own line-height (text-6xl => line-height:1), which silently
+          overrode the leading these lines need. */}
       <h1
-        class="reveal reveal-delay-1 text-[2.6rem] sm:text-6xl lg:text-7xl font-black leading-[1.4] mb-6"
+        class="reveal reveal-delay-1 text-[2.15rem] sm:text-[2.75rem] lg:text-[3.4rem] xl:text-[3.75rem] font-black leading-[1.75] sm:leading-[1.6] lg:leading-[1.45] mb-6 text-balance"
         data-site="heroTitle"
       >
-        <span class="block pb-1">توصيلك في</span>
-        <span class="block">أمان <span class="shine-text">معانا</span></span>
+        <span class="block pb-1">أول تطبيق دليفري وشحن</span>
+        <span class="block pb-2">متكامل في <span class="shine-text">صعيد مصر</span></span>
       </h1>
 
       <p
         class="reveal reveal-delay-2 text-lg md:text-xl text-white/85 mb-8 max-w-xl lg:mx-0 mx-auto leading-relaxed"
         data-site="heroSubtitle"
       >
-        منصة توصيل وشحن متكاملة. اطلب من <strong class="text-white">السوبر ماركت أو الصيدلية أو المطعم</strong>،
-        اشحن طرود بين المحافظات، أو شغّل تجارتك مع مندوبين ثقة — كله من تطبيق واحد، في 3 ضغطات.
+        اطلب من <strong class="text-white">السوبر ماركت أو الصيدلية أو المطعم</strong> في قفط،
+        اشحن طرودك لأي محافظة، أو شغّل تجارتك مع مندوبين ثقة — كله من تطبيق واحد.
+        مقرنا الرئيسي في <strong class="text-white">مركز قفط، محافظة قنا</strong>.
       </p>
 
       <!-- Tagline pill (from splash) -->
@@ -105,7 +112,9 @@ const waLink = `https://wa.me/${WHATSAPP.replace(/[^\d]/g, '')}?text=${encodeURI
             <div class="w-7 h-7 rounded-full border-2 border-brand-dark" style="background: linear-gradient(135deg,#F2A93B,#FFE7B5);"></div>
             <div class="w-7 h-7 rounded-full border-2 border-brand-dark" style="background: linear-gradient(135deg,#FFE7B5,#fff);"></div>
           </div>
-          <span class="text-white/85"><strong class="text-white">+100</strong> طلب يومياً</span>
+          {/* Was "+100 طلب يومياً" — an unverifiable figure. Replaced with the
+              real coverage from the live delivery-zone table (39 areas in Qift). */}
+          <span class="text-white/85"><strong class="text-white">٣٩</strong> منطقة في قفط وقراه</span>
         </div>
         <div class="flex items-center gap-1.5">
           {[1,2,3,4,5].map(() => (
@@ -137,7 +146,7 @@ const waLink = `https://wa.me/${WHATSAPP.replace(/[^\d]/g, '')}?text=${encodeURI
           class="relative w-[280px] md:w-[340px] aspect-square rounded-full overflow-hidden border-[3px] shadow-[0_20px_40px_-10px_rgba(0,0,0,0.5)] float-anim bg-white grid place-items-center p-8"
           style="border-color: rgba(255,255,255,0.18);"
         >
-          <img src="/logo.png" alt="تميم" class="w-full h-full object-contain" />
+          <img src="/logo.png" alt="تميم للتوصيل — دليفري وشحن في صعيد مصر" class="w-full h-full object-contain" />
         </div>
 
         <!-- Rider portrait badge (rotated tile in corner — splash style) -->
@@ -147,7 +156,7 @@ const waLink = `https://wa.me/${WHATSAPP.replace(/[^\d]/g, '')}?text=${encodeURI
         >
           <img
             src="/delivery-rider.png"
-            alt="ساعي تميم"
+            alt="مندوب توصيل تميم في مركز قفط، محافظة قنا"
             class="w-full h-full object-cover rounded-xl"
           />
         </div>

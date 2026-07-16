@@ -1,11 +1,32 @@
 ---
 import Icon, { type IconName } from './Icon.astro';
+import { TAMEM_PRIMARY_WHATSAPP } from '../config/contact';
 
 const steps: { num: string; title: string; desc: string; icon: IconName }[] = [
-  { num: '01', title: 'اختر الخدمة', desc: 'دليفري أو شحن أو طلب تاجر — أو استخدم زر الطلب السريع.', icon: 'sparkles' },
-  { num: '02', title: 'أرسل الطلب', desc: 'تفاصيل + صور + موقع — بدون فورمات معقّدة.', icon: 'pen' },
-  { num: '03', title: 'استلم تأكيد', desc: 'إشعار فوري + رسالة واتساب + سعر تقديري.', icon: 'bell' },
-  { num: '04', title: 'تابع وتسلّم', desc: 'تتبع لحظي للمندوب على الخريطة + استلام آمن.', icon: 'check' },
+  {
+    num: '01',
+    title: 'اختار الخدمة اللي محتاجها',
+    desc: 'دليفري جوّه قفط، أو شحن لأي محافظة، أو طلب تاجر — ولو مستعجل، اضغط زرّ الطلب السريع.',
+    icon: 'shopping-bag',
+  },
+  {
+    num: '02',
+    title: 'ابعت طلبك في ثانية',
+    desc: 'اكتب اللي عايزه، أو صوّره بالكاميرا، أو سجّل صوتك — وحدّد مكانك على الخريطة.',
+    icon: 'pen',
+  },
+  {
+    num: '03',
+    title: 'يوصلك السعر… وانت اللي توافق',
+    desc: 'نبعتلك السعر واضح على التطبيق والواتساب قبل ما المندوب يتحرك. مفيش مفاجآت في الآخر.',
+    icon: 'bell',
+  },
+  {
+    num: '04',
+    title: 'تابع مندوبك لحد باب البيت',
+    desc: 'اتطمّن على طلبك خطوة بخطوة، وادفع كاش أو فودافون كاش أو إنستاباي عند الاستلام.',
+    icon: 'bike',
+  },
 ];
 ---
 
@@ -17,52 +38,116 @@ const steps: { num: string; title: string; desc: string; icon: IconName }[] = [
         style="background: rgba(236,122,44,0.15); color: #F2A93B; border-color: rgba(236,122,44,0.25);"
       >
         <Icon name="route" size={14} />
-        كيف يعمل
+        إزاي تطلب
       </span>
       <h2 class="text-3xl md:text-5xl font-black mb-4 text-white">
-        من فكرة الطلب لـ <span style="color: #F2A93B;">"وصل"</span> — 4 خطوات
+        <span style="color: #F2A93B;">٤ خطوات بس</span>… ويوصلك لحد باب البيت
       </h2>
-      <p class="text-white/60 max-w-xl mx-auto">
-        صممنا الـ flow بحيث يكون أبسط من أي تطبيق توصيل تاني.
+      <p class="text-white/70 max-w-2xl mx-auto leading-relaxed">
+        من أول ما تختار الخدمة لحد ما الطلب يوصل إيدك — كل خطوة واضحة، والسعر قدامك قبل ما نتحرك.
+        دليفري وشحن من مقرنا الرئيسي في <strong class="text-white font-bold">مركز قفط، محافظة قنا</strong>.
       </p>
     </div>
 
-    <div class="relative grid md:grid-cols-4 gap-8">
-      <svg
-        class="hidden md:block absolute top-12 right-[12.5%] left-[12.5%] w-3/4 h-1 mx-auto pointer-events-none"
-        preserveAspectRatio="none" viewBox="0 0 100 1"
-      >
-        <line x1="0" y1="0.5" x2="100" y2="0.5" stroke="#F2A93B" stroke-width="1.5" stroke-dasharray="3 4" opacity="0.35"/>
-      </svg>
-
-      {steps.map((step, i) => (
-        <div class={`reveal reveal-delay-${i + 1} relative text-center`}>
-          <div class="relative inline-flex w-24 h-24 mb-5">
-            <div
-              class="absolute inset-0 rounded-full blur-xl opacity-60"
-              style="background: linear-gradient(135deg,#E0301E,#F2A93B);"
-            ></div>
-            <div
-              class="absolute inset-0 rounded-full border-[1.5px]"
-              style="border-color: rgba(242,169,59,0.4); transform: scale(1.08);"
-            ></div>
-            <div
-              class="relative w-24 h-24 rounded-full grid place-items-center shadow-2xl hover:scale-105 transition-all"
-              style="background: rgba(20,10,8,0.95); border: 1px solid rgba(242,169,59,0.2);"
-            >
-              <Icon name={step.icon} size={32} class="text-brand-gold" />
-            </div>
-            <div
-              class="absolute -top-2 -right-2 w-10 h-10 rounded-full grid place-items-center font-black text-sm shadow-md border-4"
-              style="background: #F2A93B; color: #241310; border-color: #0F0805;"
-            >
-              {step.num}
-            </div>
-          </div>
-          <h3 class="text-lg font-black mb-2 text-white">{step.title}</h3>
-          <p class="text-sm text-white/60 leading-relaxed max-w-[20ch] mx-auto">{step.desc}</p>
+    <div class="relative">
+      {/* Desktop rail. Symmetric mx- inset instead of left+right+width, which
+          was over-constrained and overshot the end discs. */}
+      <div class="pointer-events-none absolute inset-x-0 top-12 hidden md:block" aria-hidden="true">
+        <div
+          class="mx-[12.5%] h-px"
+          style="background-image: repeating-linear-gradient(to right, rgba(242,169,59,0.55) 0 6px, transparent 6px 14px);
+                 -webkit-mask-image: linear-gradient(to right, transparent, #000 10%, #000 90%, transparent);
+                 mask-image: linear-gradient(to right, transparent, #000 10%, #000 90%, transparent);"
+        >
         </div>
-      ))}
+      </div>
+
+      {/* An ordered procedure should BE an ordered list — screen readers then
+          announce "1 of 4" instead of the order existing only as a visual hint. */}
+      <ol class="relative list-none grid md:grid-cols-4 gap-10 md:gap-8">
+        {steps.map((step, i) => (
+          <li class={`reveal reveal-delay-${i + 1} relative flex items-start gap-4 md:flex-col md:items-center md:gap-0 md:text-center`}>
+            {/* Mobile timeline rail — the desktop connector was hidden on mobile
+                with nothing replacing it, so the "these are steps" metaphor was
+                lost exactly where most customers are. */}
+            {i < steps.length - 1 && (
+              <span
+                class="absolute top-16 -bottom-10 start-7 w-px md:hidden"
+                aria-hidden="true"
+                style="background-image: repeating-linear-gradient(to bottom, rgba(242,169,59,0.55) 0 5px, transparent 5px 12px);"
+              ></span>
+            )}
+
+            <div class="relative shrink-0 w-14 h-14 md:w-24 md:h-24 md:mb-5">
+              <div
+                class="absolute inset-0 rounded-full blur-lg md:blur-xl opacity-50"
+                style="background: linear-gradient(135deg,#E0301E,#F2A93B);"
+              >
+              </div>
+              <div
+                class="absolute inset-0 rounded-full border-[1.5px] hidden md:block"
+                style="border-color: rgba(242,169,59,0.4); transform: scale(1.08);"
+              >
+              </div>
+              <div
+                class="relative w-full h-full rounded-full grid place-items-center shadow-2xl"
+                style="background: rgba(20,10,8,0.95); border: 1px solid rgba(242,169,59,0.25);"
+              >
+                <Icon name={step.icon} size={32} class="text-brand-gold w-6 h-6 md:w-8 md:h-8" />
+              </div>
+              {/* -end-* is the logical inset — correct under RTL and LTR alike. */}
+              <div
+                class="absolute -top-1.5 -end-1.5 md:-top-2 md:-end-2 w-7 h-7 md:w-10 md:h-10 rounded-full grid place-items-center font-black text-[11px] md:text-sm shadow-md border-4"
+                style="background: #F2A93B; color: #241310; border-color: #0F0805;"
+                aria-hidden="true"
+              >
+                {step.num}
+              </div>
+            </div>
+
+            <div class="pt-1.5 md:pt-0">
+              <h3 class="text-lg md:text-xl font-black mb-1.5 text-white">{step.title}</h3>
+              <p class="text-sm text-white/70 leading-relaxed md:max-w-[26ch] md:mx-auto">{step.desc}</p>
+            </div>
+          </li>
+        ))}
+      </ol>
+    </div>
+
+    {/* The section used to walk the user to peak intent and then hand them
+        nothing to do. */}
+    <div class="reveal reveal-delay-5 mt-14 md:mt-16">
+      <div
+        class="relative overflow-hidden rounded-3xl border p-7 md:p-8 text-center md:text-right md:flex md:items-center md:justify-between gap-6"
+        style="background: linear-gradient(135deg, rgba(224,48,30,0.16), rgba(242,169,59,0.06)); border-color: rgba(242,169,59,0.22);"
+      >
+        <div>
+          <h3 class="text-xl md:text-2xl font-black text-white mb-1.5">جاهز تبعت أول طلب؟</h3>
+          <p class="text-sm md:text-base text-white/70 leading-relaxed">
+            ابعتلنا على واتساب دلوقتي — فريق تميم في مركز قفط جاهز يستقبل طلبك ويبعتلك السعر فوراً.
+          </p>
+        </div>
+        <div class="flex flex-wrap gap-3 justify-center md:justify-start shrink-0 mt-5 md:mt-0">
+          <a
+            href={TAMEM_PRIMARY_WHATSAPP}
+            target="_blank"
+            rel="noreferrer"
+            data-site="primaryWhatsapp"
+            class="inline-flex items-center gap-2 bg-white text-brand-dark font-bold px-6 py-3.5 rounded-2xl transition-all hover:scale-105 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-gold focus-visible:ring-offset-2 focus-visible:ring-offset-[#150A07]"
+          >
+            <Icon name="whatsapp" size={20} class="text-brand-red" />
+            اطلب على واتساب
+          </a>
+          <a
+            href="#services"
+            class="inline-flex items-center gap-2 backdrop-blur text-white font-bold px-6 py-3.5 rounded-2xl border transition hover:bg-white/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-gold focus-visible:ring-offset-2 focus-visible:ring-offset-[#150A07]"
+            style="background: rgba(255,255,255,0.10); border-color: rgba(255,255,255,0.20);"
+          >
+            اعرف خدماتنا
+            <Icon name="chevron-left" size={16} />
+          </a>
+        </div>
+      </div>
     </div>
   </div>
 </section>

@@ -63,4 +63,6 @@ export const TAMEM_CONTACTS: ContactLine[] = [
 export const TAMEM_PRIMARY_PHONE = TAMEM_CONTACTS[0].phone;
 export const TAMEM_PRIMARY_WHATSAPP = TAMEM_CONTACTS[0].whatsapp;
 
-export const TAMEM_ADDRESS_AR = 'المقر الرئيسي — مدينة قفط، محافظة قنا';
+// Qift is a markaz, not a madina — the owner's own wording, and the form that
+// matches how people actually search for it locally.
+export const TAMEM_ADDRESS_AR = 'المقر الرئيسي — مركز قفط، محافظة قنا';

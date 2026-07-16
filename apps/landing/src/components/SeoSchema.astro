@@ -1,0 +1,104 @@
+---
+/**
+ * JSON-LD structured data. The site previously shipped none at all, which for a
+ * local-intent business is the single biggest SEO gap: without LocalBusiness
+ * there is no entity for Google to attach a knowledge panel or map-pack result
+ * to. Kept in one component so every page inherits the same @graph.
+ *
+ * Every value here is verified against the running system — do not add claims
+ * (ratings, review counts, price ranges) that cannot be substantiated. An
+ * aggregateRating for an unpublished app would be fabricated structured data
+ * and is a Google spam-policy violation, so there is deliberately none.
+ */
+import { TAMEM_CONTACTS } from '../config/contact';
+
+const SITE = 'https://deliverytamem.com';
+
+const schema = {
+  '@context': 'https://schema.org',
+  '@graph': [
+    {
+      '@type': 'Organization',
+      '@id': `${SITE}/#organization`,
+      name: 'تميم للتوصيل',
+      alternateName: ['Tamem Delivery', 'تميم دليفري', 'تميم'],
+      url: `${SITE}/`,
+      logo: {
+        '@type': 'ImageObject',
+        '@id': `${SITE}/#logo`,
+        url: `${SITE}/logo.png`,
+        caption: 'تميم للتوصيل',
+      },
+      image: { '@id': `${SITE}/#logo` },
+      email: 'info@deliverytamem.com',
+      description:
+        'أول تطبيق توصيل دليفري وشحن متكامل في صعيد مصر. المقر الرئيسي في مركز قفط، محافظة قنا.',
+      foundingLocation: { '@type': 'Place', name: 'مركز قفط، محافظة قنا، مصر' },
+      sameAs: [
+        'https://www.facebook.com/profile.php?id=100064713581319',
+        'https://www.tiktok.com/@deliverytamem0',
+      ],
+      contactPoint: TAMEM_CONTACTS.map((c) => ({
+        '@type': 'ContactPoint',
+        telephone: c.phone,
+        contactType: c.key === 'support' ? 'customer support' : 'sales',
+        name: c.labelAr,
+        areaServed: 'EG',
+        availableLanguage: ['ar'],
+      })),
+    },
+    {
+      '@type': ['LocalBusiness', 'DeliveryService'],
+      '@id': `${SITE}/#localbusiness`,
+      parentOrganization: { '@id': `${SITE}/#organization` },
+      name: 'تميم للتوصيل — الفرع الرئيسي',
+      description:
+        'خدمة دليفري داخل مركز قفط، وشحن بين المحافظات، وطلبات تجار — من صعيد مصر.',
+      url: `${SITE}/`,
+      image: { '@id': `${SITE}/#logo` },
+      telephone: TAMEM_CONTACTS[0].phone,
+      email: 'info@deliverytamem.com',
+      currenciesAccepted: 'EGP',
+      paymentAccepted: 'Cash, Vodafone Cash, InstaPay',
+      address: {
+        '@type': 'PostalAddress',
+        streetAddress: 'المقر الرئيسي — مركز قفط',
+        addressLocality: 'قفط',
+        addressRegion: 'محافظة قنا',
+        addressCountry: 'EG',
+      },
+      // Qift town centre. Replace with the exact branch pin once available —
+      // an inaccurate pin is worse than none for map-pack matching.
+      geo: { '@type': 'GeoCoordinates', latitude: 25.9959, longitude: 32.8158 },
+      areaServed: [
+        { '@type': 'AdministrativeArea', name: 'مركز قفط' },
+        { '@type': 'AdministrativeArea', name: 'محافظة قنا' },
+      ],
+      // Matches Contact.astro / Footer.astro exactly — 10:00 to 01:00 next day.
+      openingHoursSpecification: [
+        {
+          '@type': 'OpeningHoursSpecification',
+          dayOfWeek: ['Saturday', 'Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'],
+          opens: '10:00',
+          closes: '01:00',
+        },
+      ],
+      sameAs: [
+        'https://www.facebook.com/profile.php?id=100064713581319',
+        'https://www.tiktok.com/@deliverytamem0',
+      ],
+    },
+    {
+      '@type': 'WebSite',
+      '@id': `${SITE}/#website`,
+      url: `${SITE}/`,
+      name: 'تميم للتوصيل',
+      description: 'أول تطبيق توصيل دليفري وشحن متكامل في صعيد مصر',
+      publisher: { '@id': `${SITE}/#organization` },
+      inLanguage: 'ar-EG',
+    },
+  ],
+};
+---
+
+<script type="application/ld+json" set:html={JSON.stringify(schema)} is:inline />

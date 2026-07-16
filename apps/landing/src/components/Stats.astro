@@ -1,11 +1,15 @@
 ---
 import Icon, { type IconName } from './Icon.astro';
 
+// Every figure here is verifiable — no estimated order counts, no governorate
+// coverage we don't actually operate in yet. The zone numbers come from the live
+// delivery-zone table (Qift: 9 villages / 39 areas); the phone lines from
+// config/contact.ts; the payment methods from the backend's PaymentMethod enum.
 const stats: { value: string; suffix?: string; label: string; icon: IconName; color: string }[] = [
-  { value: '30', suffix: 'دقيقة', label: 'متوسط زمن التوصيل', icon: 'clock', color: '#F2A93B' },
-  { value: '17+', label: 'متجر وصيدلية ومطعم', icon: 'store', color: '#EC7A2C' },
-  { value: '24/7', label: 'دعم فني متاح', icon: 'phone', color: '#E0301E' },
-  { value: '4', suffix: 'محافظات', label: 'قنا · الأقصر · أسوان · البحر الأحمر', icon: 'map-pin', color: '#F2A93B' },
+  { value: '30-45', suffix: 'دقيقة', label: 'متوسط زمن التوصيل داخل قفط', icon: 'clock', color: '#F2A93B' },
+  { value: '39', suffix: 'منطقة', label: 'تغطية مركز قفط وقراه', icon: 'map-pin', color: '#EC7A2C' },
+  { value: '4', suffix: 'خطوط', label: 'خطوط دليفري وشحن ودعم', icon: 'phone', color: '#E0301E' },
+  { value: '3', suffix: 'طرق دفع', label: 'كاش · فودافون كاش · إنستاباي', icon: 'wallet', color: '#F2A93B' },
 ];
 ---
 

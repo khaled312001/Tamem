@@ -24,6 +24,13 @@ buildscript {
 apply plugin: "com.facebook.react.rootproject"
 
 allprojects {
+    // Windows MAX_PATH (260) workaround: the deep node_modules build/.transforms
+    // paths (e.g. expo-location's jetified smartlocation dex) blow past the limit
+    // during mergeDexRelease. Redirect every subproject's build dir to a short
+    // root so transform paths stay well under 260 chars.
+    if (project != rootProject) {
+        layout.buildDirectory.set(new File("E:/tb/" + project.name))
+    }
     repositories {
         maven {
             // All of React Native (JS, Obj-C sources, Android binaries) is installed from npm
