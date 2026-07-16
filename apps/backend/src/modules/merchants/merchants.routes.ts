@@ -8,6 +8,8 @@ export const adminMerchantsRouter: Router = Router();
 
 adminMerchantsRouter.get('/', ctrl.list);
 adminMerchantsRouter.post('/', ctrl.create);
+// Before '/:id' — otherwise Express reads 'stats' as a merchant id.
+adminMerchantsRouter.get('/stats', ctrl.stats);
 adminMerchantsRouter.get('/:id', ctrl.get);
 adminMerchantsRouter.patch('/:id', ctrl.update);
 adminMerchantsRouter.delete('/:id', ctrl.remove);
