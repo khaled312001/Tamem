@@ -2,6 +2,7 @@ import type { RequestHandler } from 'express';
 import { z } from 'zod';
 
 import { prisma } from '../../db/prisma.js';
+import { diffProduct, productActionFor, recordProductHistory } from '../audit/audit.controller.js';
 import { NotFoundError } from '../../utils/errors.js';
 import { created, noContent, ok, paginated } from '../../utils/response.js';
 
@@ -104,6 +105,11 @@ export const create: RequestHandler = async (req, res, next) => {
   try {
     const input = createSchema.parse(req.body);
     const product = await prisma.product.create({ data: toPrismaProductData(input) });
+    await recordProductHistory(req, {
+      productId: product.id,
+      productName: product.nameAr,
+      action: 'CREATE',
+    });
     created(res, product);
   } catch (err) {
     next(err);
@@ -113,10 +119,28 @@ export const create: RequestHandler = async (req, res, next) => {
 export const update: RequestHandler = async (req, res, next) => {
   try {
     const input = updateSchema.parse(req.body);
+    const id = param(req.params.id);
+    // Read first: the old values are what the trail is for, and the update
+    // destroys them.
+    const before = await prisma.product.findUnique({ where: { id } });
     const product = await prisma.product.update({
-      where: { id: param(req.params.id) },
+      where: { id },
       data: toPrismaProductData(input),
     });
+    if (before) {
+      const changes = diffProduct(
+        before as unknown as Record<string, unknown>,
+        product as unknown as Record<string, unknown>,
+      );
+      if (changes.length) {
+        await recordProductHistory(req, {
+          productId: id,
+          productName: product.nameAr,
+          action: productActionFor(changes),
+          changes,
+        });
+      }
+    }
     ok(res, product);
   } catch (err) {
     next(err);
@@ -126,9 +150,17 @@ export const update: RequestHandler = async (req, res, next) => {
 export const remove: RequestHandler = async (req, res, next) => {
   try {
     const id = param(req.params.id);
+    // Captured before the row is gone — a trail that can only say "cmr9b… was
+    // deleted" is useless.
+    const doomed = await prisma.product.findUnique({ where: { id }, select: { nameAr: true } });
     try {
       // Real delete — admins asked to actually remove products, not just hide.
       await prisma.product.delete({ where: { id } });
+      await recordProductHistory(req, {
+        productId: id,
+        productName: doomed?.nameAr ?? null,
+        action: 'DELETE',
+      });
     } catch (err) {
       // A product referenced by an existing order can't be hard-deleted
       // (FK). Fall back to deactivating it so the admin still gets it out of
@@ -140,6 +172,12 @@ export const remove: RequestHandler = async (req, res, next) => {
         (err as { code?: string }).code === 'P2003'
       ) {
         await prisma.product.update({ where: { id }, data: { isAvailable: false } });
+        await recordProductHistory(req, {
+          productId: id,
+          productName: doomed?.nameAr ?? null,
+          action: 'DEACTIVATE',
+          changes: [{ field: 'isAvailable', old: true, new: false }],
+        });
       } else {
         throw err;
       }
@@ -153,10 +191,25 @@ export const remove: RequestHandler = async (req, res, next) => {
 export const bulkAvailability: RequestHandler = async (req, res, next) => {
   try {
     const input = bulkSchema.parse(req.body);
+    // Read first: updateMany can't say which rows actually flipped, and logging
+    // products that were already in the target state would be a lie.
+    const before = await prisma.product.findMany({
+      where: { id: { in: input.ids } },
+      select: { id: true, nameAr: true, isAvailable: true },
+    });
     const result = await prisma.product.updateMany({
       where: { id: { in: input.ids } },
       data: { isAvailable: input.isAvailable },
     });
+    for (const p of before) {
+      if (p.isAvailable === input.isAvailable) continue;
+      await recordProductHistory(req, {
+        productId: p.id,
+        productName: p.nameAr,
+        action: input.isAvailable ? 'ACTIVATE' : 'DEACTIVATE',
+        changes: [{ field: 'isAvailable', old: p.isAvailable, new: input.isAvailable }],
+      });
+    }
     ok(res, { updated: result.count });
   } catch (err) {
     next(err);

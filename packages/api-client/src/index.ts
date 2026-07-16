@@ -531,12 +531,51 @@ export class TamemClient {
   async adminListProducts(params?: Record<string, unknown>): Promise<Paginated<unknown>> {
     return this.requestPaginated({ method: 'GET', url: '/admin/products', params });
   }
-  async adminCreateProduct(data: unknown): Promise<unknown> {
-    return this.request({ method: 'POST', url: '/admin/products', data });
+  /**
+   * `headers` carries import attribution (X-Import-Job / X-Import-File). It only
+   * tells the server WHERE a change came from — the audit record itself is
+   * written server-side and cannot be suppressed from here.
+   */
+  async adminCreateProduct(data: unknown, headers?: Record<string, string>): Promise<unknown> {
+    return this.request({ method: 'POST', url: '/admin/products', data, headers });
   }
-  async adminUpdateProduct(id: string, data: unknown): Promise<unknown> {
-    return this.request({ method: 'PATCH', url: `/admin/products/${id}`, data });
+  async adminUpdateProduct(
+    id: string,
+    data: unknown,
+    headers?: Record<string, string>,
+  ): Promise<unknown> {
+    return this.request({ method: 'PATCH', url: `/admin/products/${id}`, data, headers });
   }
+  // ===== Audit trail =====
+  async adminProductHistory(
+    id: string,
+    params?: Record<string, unknown>,
+  ): Promise<Paginated<unknown>> {
+    return this.requestPaginated({ method: 'GET', url: `/admin/products/${id}/history`, params });
+  }
+  async adminListImportJobs(params?: Record<string, unknown>): Promise<Paginated<unknown>> {
+    return this.requestPaginated({ method: 'GET', url: '/admin/import-jobs', params });
+  }
+  async adminGetImportJob(id: string): Promise<unknown> {
+    return this.request({ method: 'GET', url: `/admin/import-jobs/${id}` });
+  }
+  async adminCreateImportJob(data: unknown): Promise<unknown> {
+    return this.request({ method: 'POST', url: '/admin/import-jobs', data });
+  }
+  async adminUpdateImportJob(id: string, data: unknown): Promise<unknown> {
+    return this.request({ method: 'PATCH', url: `/admin/import-jobs/${id}`, data });
+  }
+  async adminLogImportRows(id: string, rows: unknown[]): Promise<unknown> {
+    return this.request({ method: 'POST', url: `/admin/import-jobs/${id}/rows`, data: { rows } });
+  }
+  async adminImportJobProducts(id: string): Promise<unknown[]> {
+    return this.request({ method: 'GET', url: `/admin/import-jobs/${id}/products` });
+  }
+  /** Deletes the log entry only — products it created/updated are untouched. */
+  async adminDeleteImportJob(id: string): Promise<void> {
+    await this.http.request({ method: 'DELETE', url: `/admin/import-jobs/${id}` });
+  }
+
   async adminDeleteProduct(id: string): Promise<void> {
     await this.http.request({ method: 'DELETE', url: `/admin/products/${id}` });
   }
