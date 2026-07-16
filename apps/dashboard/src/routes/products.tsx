@@ -1,5 +1,14 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Box, GripVertical, ImagePlus, Loader2, Pencil, Plus, Trash2 } from 'lucide-react';
+import {
+  Box,
+  GripVertical,
+  Image as ImageIcon,
+  ImagePlus,
+  Loader2,
+  Pencil,
+  Plus,
+  Trash2,
+} from 'lucide-react';
 import { useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
 
@@ -40,6 +49,13 @@ export function ProductsPage() {
     queryKey: ['admin', 'merchants', 'all'],
     queryFn: () => api.adminListMerchants({ pageSize: 100 }),
   });
+
+  // The merchant currently selected in the filter — when set, the admin can
+  // manage that merchant's menu-image mode (upload a menu photo instead of
+  // entering products one by one) right here on the products page.
+  const selectedMerchant = (merchants?.items as Row[] | undefined)?.find(
+    (m) => m.id === merchantFilter,
+  );
 
   const { data, isLoading } = useQuery({
     queryKey: ['admin', 'products', merchantFilter, search],
@@ -166,6 +182,10 @@ export function ProductsPage() {
         )}
       </div>
 
+      {selectedMerchant && (
+        <MerchantMenuPanel key={selectedMerchant.id} merchant={selectedMerchant} />
+      )}
+
       <div className="bg-white rounded-xl border border-border overflow-hidden">
         {isLoading ? (
           <div className="p-6">
@@ -276,6 +296,127 @@ export function ProductsPage() {
           merchants={(merchants?.items as Row[]) ?? []}
           onClose={() => setEditing(null)}
         />
+      )}
+    </div>
+  );
+}
+
+/**
+ * Menu-image mode, surfaced on the products page. When a merchant is selected
+ * in the filter, the admin can upload photo(s) of that merchant's paper menu
+ * instead of entering products one by one. Saves to the merchant's menuImages.
+ */
+function MerchantMenuPanel({ merchant }: { merchant: Row }) {
+  const qc = useQueryClient();
+  const [images, setImages] = useState<string[]>(() => toImageList(merchant.menuImages));
+  const [uploading, setUploading] = useState(false);
+  const fileRef = useRef<HTMLInputElement | null>(null);
+
+  const save = useMutation({
+    mutationFn: (next: string[]) => api.adminUpdateMerchant(merchant.id, { menuImages: next }),
+    onSuccess: () => {
+      toast.success('تم حفظ منيو المتجر');
+      qc.invalidateQueries({ queryKey: ['admin', 'merchants'] });
+    },
+    onError: (err: Error) => toast.error(err.message),
+  });
+
+  const commit = (next: string[]) => {
+    setImages(next);
+    save.mutate(next);
+  };
+
+  const pick = async (files: FileList | null) => {
+    if (!files || files.length === 0) return;
+    const remaining = 8 - images.length;
+    if (remaining <= 0) {
+      toast.error('الحد الأقصى 8 صور');
+      return;
+    }
+    const picked = Array.from(files).slice(0, remaining);
+    setUploading(true);
+    try {
+      const results = await Promise.all(picked.map((f) => uploadFile(f)));
+      commit([...images, ...results.map((r) => r.url)]);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'فشل رفع الصورة');
+    } finally {
+      setUploading(false);
+      if (fileRef.current) fileRef.current.value = '';
+    }
+  };
+
+  const hasMenu = images.length > 0;
+
+  return (
+    <div
+      className={`rounded-xl border p-4 md:p-5 ${
+        hasMenu ? 'border-brand-red/30 bg-brand-red/5' : 'border-dashed border-border bg-muted/20'
+      }`}
+    >
+      <div className="flex items-start gap-3">
+        <span className="grid place-items-center w-10 h-10 rounded-xl bg-brand-red/10 text-brand-red shrink-0">
+          <ImageIcon className="w-5 h-5" />
+        </span>
+        <div className="flex-1 min-w-0">
+          <div className="font-bold text-brand-dark">منيو المتجر — {merchant.storeNameAr}</div>
+          <p className="text-xs text-muted-foreground mt-0.5 leading-5">
+            {hasMenu
+              ? 'هذا التاجر يعرض صورة منيو للعميل ويطلب منها مباشرة. (أي منتجات فردية بالأسفل تظهر كمان.)'
+              : 'للتجار اللي بيبعتوا صورة منيو بدل إدخال منتج-منتج. ارفع صور المنيو هنا، أو استخدم الجدول بالأسفل لإضافة منتجات فردية.'}
+          </p>
+        </div>
+      </div>
+
+      <div className="mt-3 flex flex-wrap gap-3">
+        {images.map((url, idx) => (
+          <div
+            key={`${url}-${idx}`}
+            className="relative w-24 h-24 rounded-lg overflow-hidden border border-border group bg-white"
+          >
+            <img src={url} alt="" className="w-full h-full object-cover" />
+            <button
+              type="button"
+              onClick={() => commit(images.filter((_, i) => i !== idx))}
+              disabled={save.isPending}
+              className="absolute top-1 end-1 p-1 rounded-md bg-white/90 text-destructive opacity-0 group-hover:opacity-100 transition shadow disabled:opacity-50"
+              aria-label="حذف"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        ))}
+        {images.length < 8 && (
+          <button
+            type="button"
+            onClick={() => fileRef.current?.click()}
+            disabled={uploading || save.isPending}
+            className="w-24 h-24 rounded-lg border-2 border-dashed border-border grid place-items-center text-muted-foreground hover:border-brand-red hover:text-brand-red transition disabled:opacity-60"
+          >
+            {uploading ? (
+              <Loader2 className="w-5 h-5 animate-spin" />
+            ) : (
+              <span className="flex flex-col items-center gap-1">
+                <ImagePlus className="w-5 h-5" />
+                <span className="text-[10px] font-bold">رفع منيو</span>
+              </span>
+            )}
+          </button>
+        )}
+        <input
+          ref={fileRef}
+          type="file"
+          accept="image/*"
+          multiple
+          className="hidden"
+          onChange={(e) => void pick(e.target.files)}
+        />
+      </div>
+
+      {save.isPending && (
+        <div className="mt-2 text-xs text-muted-foreground flex items-center gap-1">
+          <Loader2 className="w-3 h-3 animate-spin" /> جارٍ الحفظ…
+        </div>
       )}
     </div>
   );
