@@ -118,10 +118,25 @@ export const update: RequestHandler = async (req, res, next) => {
 
 export const remove: RequestHandler = async (req, res, next) => {
   try {
-    await prisma.product.update({
-      where: { id: param(req.params.id) },
-      data: { isAvailable: false },
-    });
+    const id = param(req.params.id);
+    try {
+      // Real delete — admins asked to actually remove products, not just hide.
+      await prisma.product.delete({ where: { id } });
+    } catch (err) {
+      // A product referenced by an existing order can't be hard-deleted
+      // (FK). Fall back to deactivating it so the admin still gets it out of
+      // the catalog without corrupting order history.
+      if (
+        err &&
+        typeof err === 'object' &&
+        'code' in err &&
+        (err as { code?: string }).code === 'P2003'
+      ) {
+        await prisma.product.update({ where: { id }, data: { isAvailable: false } });
+      } else {
+        throw err;
+      }
+    }
     noContent(res);
   } catch (err) {
     next(err);

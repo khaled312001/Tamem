@@ -289,6 +289,9 @@ model MerchantProfile {
   description  String?  @db.Text
   logoUrl      String?
   coverUrl     String?
+  /// Public store contact number, shown to customers. Optional — falls back
+  /// to the owner's login phone (User.phone) when null.
+  phone        String?  @db.VarChar(20)
   addressLine  String   @db.VarChar(500)
   lat          Decimal  @db.Decimal(10, 7)
   lng          Decimal  @db.Decimal(10, 7)

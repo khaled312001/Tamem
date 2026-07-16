@@ -28,8 +28,19 @@ const createMerchantSchema = z.object({
   storeNameAr: z.string().trim().min(2).max(120),
   categoryId: z.string(),
   description: z.string().max(2000).optional(),
-  logoUrl: z.string().url().optional(),
-  coverUrl: z.string().url().optional(),
+  // Empty string ('') is treated as "clear it" → null, so the edit form can
+  // remove a logo/cover. A non-empty value must be a valid URL.
+  logoUrl: z.preprocess((v) => (v === '' ? null : v), z.string().url().nullable().optional()),
+  coverUrl: z.preprocess((v) => (v === '' ? null : v), z.string().url().nullable().optional()),
+  // Public store phone — distinct from `phone` above (the owner's login).
+  // Optional; when omitted the store falls back to the owner's number.
+  storePhone: z
+    .string()
+    .trim()
+    .regex(/^\+?\d{8,15}$/)
+    .optional(),
+  // Commission Tamem takes from this merchant's orders, as a percentage.
+  commissionPct: z.number().min(0).max(100).optional(),
   addressLine: z.string().trim().min(2).max(500),
   lat: z.number(),
   lng: z.number(),
@@ -90,7 +101,8 @@ export const list: RequestHandler = async (req, res, next) => {
         take: q.pageSize,
         orderBy: { createdAt: 'desc' },
         include: {
-          user: { select: { id: true, name: true, phone: true } },
+          // secondaryPhones is needed so the edit dialog can pre-fill them.
+          user: { select: { id: true, name: true, phone: true, secondaryPhones: true } },
           category: { select: { id: true, name: true, nameAr: true } },
           _count: { select: { products: true } },
         },
@@ -146,6 +158,8 @@ export const create: RequestHandler = async (req, res, next) => {
             description: input.description,
             logoUrl: input.logoUrl,
             coverUrl: input.coverUrl,
+            phone: input.storePhone,
+            commissionPct: input.commissionPct,
             addressLine: input.addressLine,
             lat: input.lat,
             lng: input.lng,
@@ -179,6 +193,7 @@ export const update: RequestHandler = async (req, res, next) => {
       'description',
       'logoUrl',
       'coverUrl',
+      'commissionPct',
       'addressLine',
       'lat',
       'lng',
@@ -189,6 +204,9 @@ export const update: RequestHandler = async (req, res, next) => {
     ] as const) {
       if (input[k] !== undefined) profileData[k] = input[k];
     }
+    // API field `storePhone` maps to the profile's `phone` column (kept
+    // distinct from the owner's login phone).
+    if (input.storePhone !== undefined) profileData.phone = input.storePhone;
 
     const updated = await prisma.merchantProfile.update({
       where: { id: merchantId },

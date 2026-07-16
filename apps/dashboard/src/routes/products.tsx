@@ -31,6 +31,7 @@ function toImageList(value: unknown): string[] {
 export function ProductsPage() {
   const qc = useQueryClient();
   const [merchantFilter, setMerchantFilter] = useState('');
+  const [search, setSearch] = useState('');
   const [createOpen, setCreateOpen] = useState(false);
   const [editing, setEditing] = useState<Row | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -41,11 +42,12 @@ export function ProductsPage() {
   });
 
   const { data, isLoading } = useQuery({
-    queryKey: ['admin', 'products', merchantFilter],
+    queryKey: ['admin', 'products', merchantFilter, search],
     queryFn: () =>
       api.adminListProducts({
         pageSize: 100,
         ...(merchantFilter ? { merchantId: merchantFilter } : {}),
+        ...(search.trim() ? { search: search.trim() } : {}),
       }),
   });
 
@@ -62,6 +64,28 @@ export function ProductsPage() {
       api.adminBulkProductAvailability(ids, isAvailable),
     onSuccess: () => {
       toast.success('تم التحديث');
+      setSelected(new Set());
+      qc.invalidateQueries({ queryKey: ['admin', 'products'] });
+    },
+    onError: (err: Error) => toast.error(err.message),
+  });
+
+  const deleteMut = useMutation({
+    mutationFn: (id: string) => api.adminDeleteProduct(id),
+    onSuccess: () => {
+      toast.success('تم حذف المنتج');
+      setSelected(new Set());
+      qc.invalidateQueries({ queryKey: ['admin', 'products'] });
+    },
+    onError: (err: Error) => toast.error(err.message),
+  });
+
+  const bulkDeleteMut = useMutation({
+    mutationFn: async (ids: string[]) => {
+      for (const id of ids) await api.adminDeleteProduct(id);
+    },
+    onSuccess: () => {
+      toast.success('تم حذف المنتجات المحددة');
       setSelected(new Set());
       qc.invalidateQueries({ queryKey: ['admin', 'products'] });
     },
@@ -88,12 +112,12 @@ export function ProductsPage() {
         </Button>
       </div>
 
-      <div className="bg-white rounded-xl border border-border p-4 flex items-center gap-3">
+      <div className="bg-white rounded-xl border border-border p-4 flex flex-wrap items-center gap-3">
         <label className="text-sm font-bold">التاجر:</label>
         <select
           value={merchantFilter}
           onChange={(e) => setMerchantFilter(e.target.value)}
-          className="px-3 py-2 rounded-lg border border-input bg-white text-sm"
+          className="px-3 py-2 rounded-lg border border-input bg-white text-sm min-w-[180px]"
         >
           <option value="">جميع التجار</option>
           {(merchants?.items as Row[] | undefined)?.map((m) => (
@@ -102,6 +126,13 @@ export function ProductsPage() {
             </option>
           ))}
         </select>
+        <input
+          type="search"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="ابحث باسم المنتج…"
+          className="px-3 py-2 rounded-lg border border-input bg-white text-sm flex-1 min-w-[160px]"
+        />
         {selected.size > 0 && (
           <div className="ms-auto flex gap-2">
             <Button
@@ -117,6 +148,19 @@ export function ProductsPage() {
               onClick={() => bulkMut.mutate({ ids: Array.from(selected), isAvailable: false })}
             >
               تعطيل ({selected.size})
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              className="text-destructive border-destructive/40 hover:bg-destructive/10"
+              disabled={bulkDeleteMut.isPending}
+              onClick={() => {
+                if (window.confirm(`حذف ${selected.size} منتج نهائياً؟`))
+                  bulkDeleteMut.mutate(Array.from(selected));
+              }}
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+              حذف ({selected.size})
             </Button>
           </div>
         )}
@@ -188,14 +232,27 @@ export function ProductsPage() {
                       {p.stock !== null ? <Badge>{p.stock}</Badge> : '—'}
                     </td>
                     <td className="px-3 py-2">
-                      <button
-                        type="button"
-                        onClick={() => setEditing(p)}
-                        className="p-1.5 rounded-md hover:bg-muted text-muted-foreground hover:text-foreground"
-                        aria-label="تعديل"
-                      >
-                        <Pencil className="w-4 h-4" />
-                      </button>
+                      <div className="flex items-center gap-1">
+                        <button
+                          type="button"
+                          onClick={() => setEditing(p)}
+                          className="p-1.5 rounded-md hover:bg-muted text-muted-foreground hover:text-foreground"
+                          aria-label="تعديل"
+                        >
+                          <Pencil className="w-4 h-4" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (window.confirm(`حذف المنتج "${p.nameAr}"؟`)) deleteMut.mutate(p.id);
+                          }}
+                          disabled={deleteMut.isPending}
+                          className="p-1.5 rounded-md hover:bg-destructive/10 text-muted-foreground hover:text-destructive disabled:opacity-50"
+                          aria-label="حذف"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))}

@@ -17,7 +17,7 @@
 import crypto from 'node:crypto';
 
 import { env, adminOtpRecipients } from '../../config/env.js';
-import { logger } from '../../lib/logger.js';
+import { logger } from '../../utils/logger.js';
 import { sendMail } from '../../lib/mail.js';
 
 interface Pending {
