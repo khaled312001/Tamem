@@ -79,6 +79,7 @@ const NAV_SECTIONS: NavSection[] = [
     items: [
       { to: '/services', icon: Sparkles, label: 'الخدمات' },
       { to: '/products', icon: Box, label: 'المنتجات' },
+      { to: '/categories', icon: Tag, label: 'التصنيفات' },
       { to: '/pricing', icon: DollarSign, label: 'التسعير' },
       { to: '/coupons', icon: Tag, label: 'الكوبونات' },
     ],
