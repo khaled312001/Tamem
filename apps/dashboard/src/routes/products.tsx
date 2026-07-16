@@ -14,6 +14,7 @@ import {
   FileUp,
   GripVertical,
   HelpCircle,
+  History,
   Image as ImageIcon,
   ImageOff,
   ImagePlus,
@@ -39,6 +40,7 @@ import { Button } from '../components/ui/Button.js';
 import { ConfirmDialog } from '../components/ui/ConfirmDialog.js';
 import { Dialog, Drawer } from '../components/ui/Dialog.js';
 import { Field, Input, Textarea } from '../components/ui/Input.js';
+import { ProductHistoryDrawer } from '../components/ProductHistoryDrawer.js';
 import { PageHeader } from '../components/ui/PageHeader.js';
 import { EmptyState, TableSkeleton } from '../components/ui/Skeleton.js';
 import { StatCard } from '../components/ui/StatCard.js';
@@ -148,6 +150,7 @@ export function ProductsPage() {
   const [createOpen, setCreateOpen] = useState(false);
   const [editing, setEditing] = useState<Row | null>(null);
   const [quickEdit, setQuickEdit] = useState<Row | null>(null);
+  const [historyFor, setHistoryFor] = useState<Row | null>(null);
   const [importOpen, setImportOpen] = useState(false);
   const [confirmDel, setConfirmDel] = useState<Row | null>(null);
   const [confirmBulkDel, setConfirmBulkDel] = useState(false);
@@ -755,6 +758,7 @@ export function ProductsPage() {
                                 </button>
                                 <RowMenu
                                   onDuplicate={() => duplicateMut.mutate(p)}
+                                  onHistory={() => setHistoryFor(p)}
                                   onDelete={() => setConfirmDel(p)}
                                 />
                               </div>
@@ -906,6 +910,13 @@ export function ProductsPage() {
             setEditing(p);
           }}
           onPreview={setPreview}
+        />
+      )}
+      {historyFor && (
+        <ProductHistoryDrawer
+          key={historyFor.id}
+          product={historyFor}
+          onClose={() => setHistoryFor(null)}
         />
       )}
       {importOpen && (
@@ -1111,7 +1122,15 @@ function StockEdit({
   );
 }
 
-function RowMenu({ onDuplicate, onDelete }: { onDuplicate: () => void; onDelete: () => void }) {
+function RowMenu({
+  onDuplicate,
+  onHistory,
+  onDelete,
+}: {
+  onDuplicate: () => void;
+  onHistory: () => void;
+  onDelete: () => void;
+}) {
   const [open, setOpen] = useState(false);
   return (
     <div className="relative">
@@ -1135,6 +1154,15 @@ function RowMenu({ onDuplicate, onDelete }: { onDuplicate: () => void; onDelete:
               className="w-full text-start px-3 py-2 hover:bg-muted inline-flex items-center gap-2"
             >
               <Copy className="w-4 h-4" /> نسخ المنتج
+            </button>
+            <button
+              onClick={() => {
+                setOpen(false);
+                onHistory();
+              }}
+              className="w-full text-start px-3 py-2 hover:bg-muted inline-flex items-center gap-2"
+            >
+              <History className="w-4 h-4" /> سجل التغييرات
             </button>
             <button
               onClick={() => {
@@ -1564,9 +1592,17 @@ function ImportDialog({
   const [fileName, setFileName] = useState('');
   const [reading, setReading] = useState(false);
   const [busyTpl, setBusyTpl] = useState(false);
-  const [result, setResult] = useState<{ created: number; updated: number; fail: string[] } | null>(
-    null,
-  );
+  const [result, setResult] = useState<{
+    created: number;
+    updated: number;
+    fail: string[];
+    cancelled?: boolean;
+    jobId?: string;
+  } | null>(null);
+  const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
+  // A ref, not state: the import loop reads it between rows and must see the
+  // latest value without waiting for a re-render.
+  const cancelRef = useRef(false);
   const fileRef = useRef<HTMLInputElement | null>(null);
 
   const merchantNames = useMemo(
@@ -1656,32 +1692,117 @@ function ImportDialog({
 
   const run = useMutation({
     mutationFn: async () => {
+      const valid = sheet?.valid ?? [];
+      const invalid = sheet?.invalid ?? [];
+
+      // Open the job BEFORE touching a single product: if this run dies halfway
+      // (tab closed, network drops) the record still exists and says so, rather
+      // than leaving changes nobody can trace.
+      const job = (await api.adminCreateImportJob({
+        fileName,
+        status: 'PROCESSING',
+        kind: creates && updates ? 'MIXED' : creates ? 'CREATE' : 'UPDATE',
+        totalRows: valid.length + invalid.length,
+      })) as Row;
+      const jobId = String(job.id);
+
+      // Attribution only — the server writes the audit record either way.
+      const headers = { 'X-Import-Job': jobId, 'X-Import-File': encodeURIComponent(fileName) };
+
+      const rowLogs: Row[] = invalid.map((r) => ({
+        line: r.line,
+        productName: String(r.data.nameAr ?? ''),
+        sku: r.data.sku ? String(r.data.sku) : undefined,
+        action: 'skip',
+        status: 'error',
+        errorColumn: r.errors[0]?.column,
+        errorMessage: r.errors[0]?.message,
+      }));
+
       const fail: string[] = [];
       let created = 0;
       let updated = 0;
-      for (const r of sheet?.valid ?? []) {
+      let cancelled = false;
+
+      for (const [i, r] of valid.entries()) {
+        if (cancelRef.current) {
+          cancelled = true;
+          break;
+        }
+        setProgress({ done: i, total: valid.length });
         try {
+          let productId = r.id;
           if (r.action === 'update' && r.id) {
-            await api.adminUpdateProduct(r.id, { ...r.data, merchantId: r.merchantId });
+            await api.adminUpdateProduct(r.id, { ...r.data, merchantId: r.merchantId }, headers);
             updated++;
           } else {
-            await api.adminCreateProduct({ ...r.data, merchantId: r.merchantId });
+            const made = (await api.adminCreateProduct(
+              { ...r.data, merchantId: r.merchantId },
+              headers,
+            )) as Row;
+            productId = made?.id;
             created++;
           }
+          rowLogs.push({
+            line: r.line,
+            productId,
+            productName: String(r.data.nameAr ?? ''),
+            sku: r.data.sku ? String(r.data.sku) : undefined,
+            action: r.action,
+            status: 'ok',
+          });
         } catch (e) {
-          fail.push(`صف ${r.line} (${r.data.nameAr}): ${e instanceof Error ? e.message : 'فشل'}`);
+          const msg = e instanceof Error ? e.message : 'فشل';
+          fail.push(`صف ${r.line} (${r.data.nameAr}): ${msg}`);
+          rowLogs.push({
+            line: r.line,
+            productName: String(r.data.nameAr ?? ''),
+            action: r.action,
+            status: 'error',
+            errorMessage: msg,
+          });
         }
       }
-      return { created, updated, fail };
+      setProgress({ done: valid.length, total: valid.length });
+
+      const status = cancelled
+        ? 'CANCELLED'
+        : fail.length && !created && !updated
+          ? 'FAILED'
+          : fail.length || invalid.length
+            ? 'PARTIAL'
+            : 'COMPLETED';
+
+      // Bookkeeping must never lose the run itself: if writing the log fails,
+      // the products are already imported and the admin still needs the result.
+      try {
+        if (rowLogs.length) await api.adminLogImportRows(jobId, rowLogs);
+        await api.adminUpdateImportJob(jobId, {
+          status,
+          createdCount: created,
+          updatedCount: updated,
+          skippedCount: invalid.length,
+          errorCount: fail.length,
+        });
+      } catch {
+        toast.error('تم الاستيراد لكن تعذّر حفظ سجل العملية');
+      }
+
+      return { created, updated, fail, cancelled, jobId };
     },
     onSuccess: (r) => {
       setResult(r);
       qc.invalidateQueries({ queryKey: ['admin', 'products'] });
-      if (r.created || r.updated)
+      qc.invalidateQueries({ queryKey: ['admin', 'import-jobs'] });
+      if (r.cancelled) toast.info(`تم الإلغاء بعد ${formatCount(r.created + r.updated)} صف`);
+      else if (r.created || r.updated)
         toast.success(`تم إنشاء ${formatCount(r.created)} وتحديث ${formatCount(r.updated)}`);
       if (r.fail.length) toast.error(`فشل ${formatCount(r.fail.length)} صف`);
     },
     onError: (e: Error) => toast.error(e.message),
+    onSettled: () => {
+      cancelRef.current = false;
+    },
   });
 
   const creates = sheet?.valid.filter((r) => r.action === 'create').length ?? 0;
@@ -1883,6 +2004,36 @@ function ImportDialog({
                 ))}
               </div>
             )}
+          </div>
+        )}
+
+        {run.isPending && progress && (
+          <div className="space-y-1.5">
+            <div className="flex items-center justify-between text-xs">
+              <span className="font-bold">
+                جارٍ الاستيراد… {formatCount(progress.done)} / {formatCount(progress.total)}
+              </span>
+              <button
+                type="button"
+                onClick={() => {
+                  cancelRef.current = true;
+                }}
+                className="font-bold text-brand-red hover:underline"
+              >
+                إلغاء العملية
+              </button>
+            </div>
+            <div className="h-2 rounded-full bg-muted overflow-hidden">
+              <div
+                className="h-full bg-brand-red transition-[width] duration-200"
+                style={{
+                  width: `${progress.total ? Math.round((progress.done / progress.total) * 100) : 0}%`,
+                }}
+              />
+            </div>
+            <p className="text-[11px] text-muted-foreground">
+              الصفوف اللي خلصت اتحفظت بالفعل — الإلغاء بيوقف الباقي بس.
+            </p>
           </div>
         )}
 
