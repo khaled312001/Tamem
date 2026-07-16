@@ -29,6 +29,7 @@ import { ORDER_TRANSITIONS, ORDER_STATUS_AR } from '@tamem/types';
 import type { OrderStatus } from '@tamem/types';
 
 import { Badge, StatusBadge } from '../components/ui/Badge.js';
+import { formatDate, formatDateTime, formatMoney } from '../lib/format.js';
 import { Button } from '../components/ui/Button.js';
 import { Dialog, Drawer } from '../components/ui/Dialog.js';
 import { Field, Input, Textarea } from '../components/ui/Input.js';
@@ -667,12 +668,12 @@ export function OrdersPage() {
                           </td>
                           <td className="px-4 py-3">
                             {(o.finalPrice ?? o.quotedPrice)
-                              ? `${Number(o.finalPrice ?? o.quotedPrice).toLocaleString('ar-EG')} ج.م`
+                              ? formatMoney(o.finalPrice ?? o.quotedPrice)
                               : '—'}
                           </td>
                           <td className="px-4 py-3">{o.assignedDriver?.name ?? '—'}</td>
                           <td className="px-4 py-3 text-xs text-muted-foreground">
-                            {new Date(o.createdAt).toLocaleDateString('ar-EG')}
+                            {formatDate(o.createdAt)}
                           </td>
                           <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
                             <div className="flex items-center justify-center gap-1">
@@ -753,7 +754,9 @@ export function OrdersPage() {
                                 </td>
                                 <td className="px-4 py-2">
                                   {(sub.finalPrice ?? sub.merchantSubtotal ?? sub.quotedPrice)
-                                    ? `${Number(sub.finalPrice ?? sub.merchantSubtotal ?? sub.quotedPrice).toLocaleString('ar-EG')} ج.م`
+                                    ? formatMoney(
+                                        sub.finalPrice ?? sub.merchantSubtotal ?? sub.quotedPrice,
+                                      )
                                     : '—'}
                                 </td>
                                 <td className="px-4 py-2">{sub.assignedDriver?.name ?? '—'}</td>
@@ -940,9 +943,7 @@ function OrderDetailDrawer({ orderId, onClose }: { orderId: string; onClose: () 
         <div className="space-y-6">
           <div className="flex items-center justify-between">
             <StatusBadge status={order.status} size="md" />
-            <div className="text-sm text-muted-foreground">
-              {new Date(order.createdAt).toLocaleString('ar-EG')}
-            </div>
+            <div className="text-sm text-muted-foreground">{formatDateTime(order.createdAt)}</div>
           </div>
 
           <Section title="العميل">
@@ -985,7 +986,7 @@ function OrderDetailDrawer({ orderId, onClose }: { orderId: string; onClose: () 
                     </span>
                     {it.unitPriceSnapshot && (
                       <span className="text-muted-foreground">
-                        {(Number(it.unitPriceSnapshot) * it.quantity).toLocaleString('ar-EG')} ج.م
+                        {formatMoney(Number(it.unitPriceSnapshot) * it.quantity)}
                       </span>
                     )}
                   </li>
@@ -999,17 +1000,13 @@ function OrderDetailDrawer({ orderId, onClose }: { orderId: string; onClose: () 
               <div>
                 <div className="text-muted-foreground">السعر المعروض</div>
                 <div className="font-bold">
-                  {order.quotedPrice
-                    ? `${Number(order.quotedPrice).toLocaleString('ar-EG')} ج.م`
-                    : '—'}
+                  {order.quotedPrice ? formatMoney(order.quotedPrice) : '—'}
                 </div>
               </div>
               <div>
                 <div className="text-muted-foreground">السعر النهائي</div>
                 <div className="font-bold">
-                  {order.finalPrice
-                    ? `${Number(order.finalPrice).toLocaleString('ar-EG')} ج.م`
-                    : '—'}
+                  {order.finalPrice ? formatMoney(order.finalPrice) : '—'}
                 </div>
               </div>
             </div>
@@ -1050,7 +1047,7 @@ function OrderDetailDrawer({ orderId, onClose }: { orderId: string; onClose: () 
                       <div className="text-muted-foreground mt-1 text-xs">{h.reason}</div>
                     )}
                     <div className="text-xs text-muted-foreground mt-1">
-                      {h.changedBy?.name ?? ''} · {new Date(h.createdAt).toLocaleString('ar-EG')}
+                      {h.changedBy?.name ?? ''} · {formatDateTime(h.createdAt)}
                     </div>
                   </li>
                 ))}
