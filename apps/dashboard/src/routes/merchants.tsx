@@ -340,6 +340,11 @@ function StoreProfileFields({
   patch: (p: Partial<StoreFields>) => void;
   categories: Row[] | undefined;
 }) {
+  // A hidden category must not be offered as a choice. The one this merchant is
+  // already on stays listed even when hidden, though — dropping it would blank
+  // the field and silently re-assign the store on the next save.
+  const options = (categories ?? []).filter((c) => c.isActive || c.id === form.categoryId);
+
   return (
     <>
       <Field label="التصنيف" required>
@@ -349,9 +354,10 @@ function StoreProfileFields({
           className="w-full px-3 py-2 rounded-lg border border-input bg-white text-sm"
         >
           <option value="">— اختر —</option>
-          {categories?.map((c) => (
+          {options.map((c) => (
             <option key={c.id} value={c.id}>
               {c.nameAr}
+              {c.isActive ? '' : ' (مخفي)'}
             </option>
           ))}
         </select>

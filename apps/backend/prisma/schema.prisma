@@ -115,23 +115,23 @@ enum NotificationType {
 
 enum AlertType {
   // Orders
-  PENDING_ORDER                  // priced but customer never approved
-  MERCHANT_NOT_ACCEPTING         // merchant didn't accept in window
-  ORDER_STALE_IN_STAGE           // stuck in any stage too long
-  DRIVER_NOT_ASSIGNED            // no driver within window
-  DRIVER_PICKUP_LATE             // driver assigned but not picked up in window
-  DRIVER_DELIVERY_LATE           // in route but not delivered in window
+  PENDING_ORDER // priced but customer never approved
+  MERCHANT_NOT_ACCEPTING // merchant didn't accept in window
+  ORDER_STALE_IN_STAGE // stuck in any stage too long
+  DRIVER_NOT_ASSIGNED // no driver within window
+  DRIVER_PICKUP_LATE // driver assigned but not picked up in window
+  DRIVER_DELIVERY_LATE // in route but not delivered in window
   // People / system
-  DRIVER_NOT_RESPONDING          // BUSY but no location ping
-  CASH_LIMIT_EXCEEDED            // driver carrying too much cash
-  COMPLAINT                      // customer complaint
+  DRIVER_NOT_RESPONDING // BUSY but no location ping
+  CASH_LIMIT_EXCEEDED // driver carrying too much cash
+  COMPLAINT // customer complaint
   // Payments
-  PAYMENT_PENDING                // online payment never confirmed
-  PAYMENT_FAILED                 // gateway returned error
-  REFUND_REQUESTED               // customer asked for refund
-  ORDER_CANCELLED_AFTER_PAY      // bad — refund flow blocked
+  PAYMENT_PENDING // online payment never confirmed
+  PAYMENT_FAILED // gateway returned error
+  REFUND_REQUESTED // customer asked for refund
+  ORDER_CANCELLED_AFTER_PAY // bad — refund flow blocked
   // System
-  STATUS_UPDATE_ERROR            // backend failed to write a status change
+  STATUS_UPDATE_ERROR // backend failed to write a status change
 }
 
 /// Broad category — used for the dashboard filter chips and stats cards.
@@ -156,10 +156,10 @@ enum AlertSeverity {
 
 enum AlertStatus {
   OPEN
-  ACKNOWLEDGED   // someone is working on it
+  ACKNOWLEDGED // someone is working on it
   RESOLVED
-  DISMISSED      // false positive / no action needed
-  ESCALATED      // bumped to a supervisor
+  DISMISSED // false positive / no action needed
+  ESCALATED // bumped to a supervisor
 }
 
 enum LinkType {
@@ -174,41 +174,41 @@ enum LinkType {
 // ============================================
 
 model User {
-  id              String   @id @default(cuid())
-  phone           String   @unique
-  passwordHash    String?
-  name            String
-  email           String?  @unique
-  avatarUrl       String?
-  role            UserRole @default(CUSTOMER)
-  googleId        String?  @unique
-  isPhoneVerified Boolean  @default(false)
-  isActive        Boolean  @default(true)
-  city            String?
-  governorate     String?
-  defaultAddress  String?  @db.VarChar(500)
+  id                     String    @id @default(cuid())
+  phone                  String    @unique
+  passwordHash           String?
+  name                   String
+  email                  String?   @unique
+  avatarUrl              String?
+  role                   UserRole  @default(CUSTOMER)
+  googleId               String?   @unique
+  isPhoneVerified        Boolean   @default(false)
+  isActive               Boolean   @default(true)
+  city                   String?
+  governorate            String?
+  defaultAddress         String?   @db.VarChar(500)
   /// Secondary contact phones — primary `phone` stays the login identity.
   /// Stored as JSON array of strings so the admin can add/remove without
   /// needing migrations or a separate table.
-  secondaryPhones Json?
-  fcmToken        String?
-  passwordResetHash     String?
+  secondaryPhones        Json?
+  fcmToken               String?
+  passwordResetHash      String?
   passwordResetExpiresAt DateTime?
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  createdAt              DateTime  @default(now())
+  updatedAt              DateTime  @updatedAt
 
   driverProfile   DriverProfile?
   merchantProfile MerchantProfile?
-  customerOrders  Order[]          @relation("CustomerOrders")
-  driverOrders    Order[]          @relation("DriverOrders")
+  customerOrders  Order[]              @relation("CustomerOrders")
+  driverOrders    Order[]              @relation("DriverOrders")
   refreshTokens   RefreshToken[]
   notifications   Notification[]
   statusChanges   OrderStatusHistory[]
-  resolvedAlerts  Alert[]          @relation("AlertResolver")
-  confirmedPays   Payment[]        @relation("PaymentConfirmer")
-  servicesCreated Service[]        @relation("ServiceCreator")
+  resolvedAlerts  Alert[]              @relation("AlertResolver")
+  confirmedPays   Payment[]            @relation("PaymentConfirmer")
+  servicesCreated Service[]            @relation("ServiceCreator")
   savedAddresses  CustomerAddress[]
-  recurringOrders RecurringOrder[] @relation("CustomerRecurring")
+  recurringOrders RecurringOrder[]     @relation("CustomerRecurring")
 
   @@index([role])
   @@index([phone])
@@ -279,46 +279,46 @@ enum MerchantStatus {
 }
 
 model MerchantProfile {
-  id           String   @id @default(cuid())
-  userId       String   @unique
-  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  storeName    String
-  storeNameAr  String
-  categoryId   String
-  category     Category @relation(fields: [categoryId], references: [id])
-  description  String?  @db.Text
-  logoUrl      String?
-  coverUrl     String?
+  id            String         @id @default(cuid())
+  userId        String         @unique
+  user          User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  storeName     String
+  storeNameAr   String
+  categoryId    String
+  category      Category       @relation(fields: [categoryId], references: [id])
+  description   String?        @db.Text
+  logoUrl       String?
+  coverUrl      String?
   /// Public store contact number, shown to customers. Optional — falls back
   /// to the owner's login phone (User.phone) when null.
-  phone        String?  @db.VarChar(20)
+  phone         String?        @db.VarChar(20)
   /// Menu-image mode: a merchant that doesn't list individual products can
   /// instead have one or more photos of their paper menu. When non-empty the
   /// customer app shows these images (zoomable) + a free-text order CTA.
   /// JSON array of image URLs. Empty/null = the merchant uses structured
   /// products instead.
-  menuImages   Json?
-  addressLine  String   @db.VarChar(500)
-  lat          Decimal  @db.Decimal(10, 7)
-  lng          Decimal  @db.Decimal(10, 7)
-  governorate  String
-  city         String
+  menuImages    Json?
+  addressLine   String         @db.VarChar(500)
+  lat           Decimal        @db.Decimal(10, 7)
+  lng           Decimal        @db.Decimal(10, 7)
+  governorate   String
+  city          String
   /// Legacy free-text JSON — superseded by the structured BusinessHours rows
   /// below. Kept for backwards compat with older seeds.
-  openHours    Json?
+  openHours     Json?
   /// Legacy quick toggle. Now derived from `manualStatus` + business hours.
-  isOpen       Boolean  @default(true)
+  isOpen        Boolean        @default(true)
   /// Admin/merchant manual override. OPEN = use business hours. CLOSED /
   /// TEMPORARILY_CLOSED = block orders regardless of schedule.
-  manualStatus MerchantStatus @default(OPEN)
+  manualStatus  MerchantStatus @default(OPEN)
   /// IANA timezone for hour resolution. Egypt is Africa/Cairo by default.
-  timezone     String   @default("Africa/Cairo") @db.VarChar(60)
+  timezone      String         @default("Africa/Cairo") @db.VarChar(60)
   /// Default commission percentage Tamem takes from orders at this merchant.
   /// e.g. 15 = 15%. Falls back to the platform-wide setting when null.
-  commissionPct Decimal? @db.Decimal(5, 2)
-  rating       Decimal? @db.Decimal(3, 2)
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  commissionPct Decimal?       @db.Decimal(5, 2)
+  rating        Decimal?       @db.Decimal(3, 2)
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
 
   products      Product[]
   businessHours MerchantBusinessHours[]
@@ -396,10 +396,10 @@ model Service {
   createdAt                  DateTime        @default(now())
   updatedAt                  DateTime        @updatedAt
 
-  fields           ServiceField[]
-  orders           Order[]
-  rules            PricingRule[]
-  recurringOrders  RecurringOrder[]
+  fields          ServiceField[]
+  orders          Order[]
+  rules           PricingRule[]
+  recurringOrders RecurringOrder[]
 
   @@index([category, isActive])
 }
@@ -432,51 +432,51 @@ model ServiceField {
 // ============================================
 
 model Order {
-  id                  String          @id @default(cuid())
-  orderNumber         String          @unique
-  serviceId           String
-  service             Service         @relation(fields: [serviceId], references: [id])
-  customerId          String
-  customer            User            @relation("CustomerOrders", fields: [customerId], references: [id])
-  category            ServiceCategory
-  status              OrderStatus     @default(NEW)
-  merchantId          String?
-  assignedDriverId    String?
-  assignedDriver      User?           @relation("DriverOrders", fields: [assignedDriverId], references: [id])
-  customData          Json?
-  notes               String?         @db.Text
-  imageUrls           Json?
+  id               String          @id @default(cuid())
+  orderNumber      String          @unique
+  serviceId        String
+  service          Service         @relation(fields: [serviceId], references: [id])
+  customerId       String
+  customer         User            @relation("CustomerOrders", fields: [customerId], references: [id])
+  category         ServiceCategory
+  status           OrderStatus     @default(NEW)
+  merchantId       String?
+  assignedDriverId String?
+  assignedDriver   User?           @relation("DriverOrders", fields: [assignedDriverId], references: [id])
+  customData       Json?
+  notes            String?         @db.Text
+  imageUrls        Json?
 
   // single-point fields (DELIVERY + SHIPPING)
-  pickupLat           Decimal?        @db.Decimal(10, 7)
-  pickupLng           Decimal?        @db.Decimal(10, 7)
-  pickupAddress       String?         @db.VarChar(500)
-  deliveryLat         Decimal?        @db.Decimal(10, 7)
-  deliveryLng         Decimal?        @db.Decimal(10, 7)
-  deliveryAddress     String?         @db.VarChar(500)
+  pickupLat       Decimal? @db.Decimal(10, 7)
+  pickupLng       Decimal? @db.Decimal(10, 7)
+  pickupAddress   String?  @db.VarChar(500)
+  deliveryLat     Decimal? @db.Decimal(10, 7)
+  deliveryLng     Decimal? @db.Decimal(10, 7)
+  deliveryAddress String?  @db.VarChar(500)
 
   // delivery-zone snapshot (city/village/area)
-  cityId              String?
-  villageId           String?
-  areaId              String?
-  city                City?           @relation(fields: [cityId], references: [id])
-  village             Village?        @relation(fields: [villageId], references: [id])
-  area                Area?           @relation(fields: [areaId], references: [id])
+  cityId    String?
+  villageId String?
+  areaId    String?
+  city      City?    @relation(fields: [cityId], references: [id])
+  village   Village? @relation(fields: [villageId], references: [id])
+  area      Area?    @relation(fields: [areaId], references: [id])
 
   // shipping-specific
-  weightKg            Decimal?        @db.Decimal(8, 2)
+  weightKg            Decimal?      @db.Decimal(8, 2)
   sizeCategory        SizeCategory?
-  isFragile           Boolean?        @default(false)
-  speedTier           SpeedTier?      @default(STANDARD)
-  estimatedDistanceKm Decimal?        @db.Decimal(8, 2)
+  isFragile           Boolean?      @default(false)
+  speedTier           SpeedTier?    @default(STANDARD)
+  estimatedDistanceKm Decimal?      @db.Decimal(8, 2)
 
   // pricing + discounts
-  quotedPrice         Decimal?        @db.Decimal(10, 2)
-  finalPrice          Decimal?        @db.Decimal(10, 2)
-  currency            String          @default("EGP")
-  couponCode          String?         @db.VarChar(40)
-  discountAmount      Decimal?        @db.Decimal(10, 2)
-  walletUsed          Decimal?        @db.Decimal(10, 2)
+  quotedPrice        Decimal? @db.Decimal(10, 2)
+  finalPrice         Decimal? @db.Decimal(10, 2)
+  currency           String   @default("EGP")
+  couponCode         String?  @db.VarChar(40)
+  discountAmount     Decimal? @db.Decimal(10, 2)
+  walletUsed         Decimal? @db.Decimal(10, 2)
   /// Breakdown for the accountant report. All optional because legacy orders
   /// won't have them. The convention:
   ///   merchantSubtotal  = sum of items the merchant gets credit for
@@ -484,50 +484,50 @@ model Order {
   ///   platformCommission= what Tamem keeps (typically a % of merchantSubtotal)
   ///   merchantPayout    = merchantSubtotal - platformCommission
   /// finalPrice = merchantSubtotal + deliveryFee - discountAmount - walletUsed
-  merchantSubtotal    Decimal?        @db.Decimal(10, 2)
-  deliveryFee         Decimal?        @db.Decimal(10, 2)
-  platformCommission  Decimal?        @db.Decimal(10, 2)
-  merchantPayout      Decimal?        @db.Decimal(10, 2)
+  merchantSubtotal   Decimal? @db.Decimal(10, 2)
+  deliveryFee        Decimal? @db.Decimal(10, 2)
+  platformCommission Decimal? @db.Decimal(10, 2)
+  merchantPayout     Decimal? @db.Decimal(10, 2)
 
   // payment
-  paymentMethod       PaymentMethod?
-  paymentStatus       PaymentStatus   @default(PENDING)
+  paymentMethod PaymentMethod?
+  paymentStatus PaymentStatus  @default(PENDING)
 
   // scheduling — non-null = customer wants this delivered at this future time
-  scheduledFor        DateTime?
+  scheduledFor DateTime?
 
   // manual flag — orders created by admin from dashboard (phone-in orders)
-  createdByAdminId    String?
+  createdByAdminId String?
 
   // timestamps for lifecycle
-  customerApprovedAt  DateTime?
-  pickedUpAt          DateTime?
-  deliveredAt         DateTime?
-  completedAt         DateTime?
-  cancelledAt         DateTime?
-  cancellationReason  String?         @db.VarChar(500)
-  whatsappSentAt      DateTime?
+  customerApprovedAt DateTime?
+  pickedUpAt         DateTime?
+  deliveredAt        DateTime?
+  completedAt        DateTime?
+  cancelledAt        DateTime?
+  cancellationReason String?   @db.VarChar(500)
+  whatsappSentAt     DateTime?
 
-  createdAt           DateTime        @default(now())
-  updatedAt           DateTime        @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  items               OrderItem[]
-  pickupPoints        OrderPickupPoint[]
-  deliveryPoints      OrderDeliveryPoint[]
-  statusHistory       OrderStatusHistory[]
-  payments            Payment[]
-  alerts              Alert[]
-  review              OrderReview?
-  couponRedemption    CouponRedemption?
+  items                OrderItem[]
+  pickupPoints         OrderPickupPoint[]
+  deliveryPoints       OrderDeliveryPoint[]
+  statusHistory        OrderStatusHistory[]
+  payments             Payment[]
+  alerts               Alert[]
+  review               OrderReview?
+  couponRedemption     CouponRedemption?
   supervisorDispatches SupervisorOrderDispatch[]
 
   /// Multi-merchant carts produce one "parent" order (no merchantId,
   /// holds the totals + payment) and N child orders (one per merchant,
   /// each tracked + assigned a driver independently). Single-merchant
   /// carts skip the parent and create a single regular Order.
-  parentOrderId       String?
-  parentOrder         Order?         @relation("OrderSubOrders", fields: [parentOrderId], references: [id])
-  subOrders           Order[]        @relation("OrderSubOrders")
+  parentOrderId String?
+  parentOrder   Order?  @relation("OrderSubOrders", fields: [parentOrderId], references: [id])
+  subOrders     Order[] @relation("OrderSubOrders")
 
   @@index([status, createdAt(sort: Desc)])
   @@index([customerId, createdAt(sort: Desc)])
@@ -542,56 +542,56 @@ model Order {
 /// optionally the driver / merchant separately. We recompute the driver's and
 /// merchant's running average ratings whenever a review is created.
 model OrderReview {
-  id            String   @id @default(cuid())
-  orderId       String   @unique
-  order         Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
-  customerId    String
-  driverId      String?
-  merchantId    String?
-  rating        Int      // 1..5, overall order experience
-  driverRating  Int?     // 1..5, optional
-  merchantRating Int?    // 1..5, optional
-  comment       String?  @db.VarChar(1000)
-  createdAt     DateTime @default(now())
+  id             String   @id @default(cuid())
+  orderId        String   @unique
+  order          Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  customerId     String
+  driverId       String?
+  merchantId     String?
+  rating         Int // 1..5, overall order experience
+  driverRating   Int? // 1..5, optional
+  merchantRating Int? // 1..5, optional
+  comment        String?  @db.VarChar(1000)
+  createdAt      DateTime @default(now())
 
   @@index([driverId])
   @@index([merchantId])
 }
 
 model OrderItem {
-  id                  String   @id @default(cuid())
+  id                  String            @id @default(cuid())
   orderId             String
-  order               Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  order               Order             @relation(fields: [orderId], references: [id], onDelete: Cascade)
   productId           String?
-  product             Product? @relation(fields: [productId], references: [id])
+  product             Product?          @relation(fields: [productId], references: [id])
   productNameSnapshot String
-  unitPriceSnapshot   Decimal? @db.Decimal(10, 2)
+  unitPriceSnapshot   Decimal?          @db.Decimal(10, 2)
   quantity            Int
   merchantId          String?
   pickupPointId       String?
   pickupPoint         OrderPickupPoint? @relation(fields: [pickupPointId], references: [id])
-  notes               String?  @db.VarChar(500)
+  notes               String?           @db.VarChar(500)
 
   @@index([orderId])
   @@index([productId])
 }
 
 model OrderPickupPoint {
-  id            String    @id @default(cuid())
-  orderId       String
-  order         Order     @relation(fields: [orderId], references: [id], onDelete: Cascade)
-  sortOrder     Int       @default(0)
-  merchantId    String?
-  label         String?
-  address       String    @db.VarChar(500)
-  lat           Decimal   @db.Decimal(10, 7)
-  lng           Decimal   @db.Decimal(10, 7)
-  contactName   String?
-  contactPhone  String?
-  notes         String?   @db.VarChar(500)
-  arrivedAt     DateTime?
-  pickedUpAt    DateTime?
-  items         OrderItem[]
+  id           String      @id @default(cuid())
+  orderId      String
+  order        Order       @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  sortOrder    Int         @default(0)
+  merchantId   String?
+  label        String?
+  address      String      @db.VarChar(500)
+  lat          Decimal     @db.Decimal(10, 7)
+  lng          Decimal     @db.Decimal(10, 7)
+  contactName  String?
+  contactPhone String?
+  notes        String?     @db.VarChar(500)
+  arrivedAt    DateTime?
+  pickedUpAt   DateTime?
+  items        OrderItem[]
 
   @@index([orderId])
 }
@@ -614,17 +614,17 @@ model OrderDeliveryPoint {
 }
 
 model OrderStatusHistory {
-  id            String      @id @default(cuid())
+  id            String       @id @default(cuid())
   orderId       String
-  order         Order       @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  order         Order        @relation(fields: [orderId], references: [id], onDelete: Cascade)
   fromStatus    OrderStatus?
   toStatus      OrderStatus
   changedById   String
-  changedBy     User        @relation(fields: [changedById], references: [id])
+  changedBy     User         @relation(fields: [changedById], references: [id])
   changedByRole UserRole
-  reason        String?     @db.VarChar(500)
+  reason        String?      @db.VarChar(500)
   metadata      Json?
-  createdAt     DateTime    @default(now())
+  createdAt     DateTime     @default(now())
 
   @@index([orderId, createdAt])
 }
@@ -634,50 +634,50 @@ model OrderStatusHistory {
 // ============================================
 
 model Product {
-  id          String          @id @default(cuid())
-  merchantId  String
-  merchant    MerchantProfile @relation(fields: [merchantId], references: [id], onDelete: Cascade)
-  name        String
-  nameAr      String
-  description String?         @db.Text
-  imageUrl    String?
+  id            String          @id @default(cuid())
+  merchantId    String
+  merchant      MerchantProfile @relation(fields: [merchantId], references: [id], onDelete: Cascade)
+  name          String
+  nameAr        String
+  description   String?         @db.Text
+  imageUrl      String?
   /// Extra image URLs captured from an external API. Single Json array.
-  imageUrls   Json?
-  price       Decimal         @db.Decimal(10, 2)
+  imageUrls     Json?
+  price         Decimal         @db.Decimal(10, 2)
   /// Optional discounted price — when set, mobile shows the strike-through.
-  salePrice   Decimal?        @db.Decimal(10, 2)
+  salePrice     Decimal?        @db.Decimal(10, 2)
   /// Optional percentage discount 0..90. When set, the mobile renders the
   /// effective price as `price * (1 - discount/100)`. Independent of
   /// `salePrice` (admin can use either knob).
-  discount    Decimal?        @db.Decimal(5, 2)
+  discount      Decimal?        @db.Decimal(5, 2)
   /// Daily availability window in the merchant's local time, HH:MM 24h.
   /// Both null = always available. Both set = product is only orderable
   /// when current local time is within [availableFrom, availableTo].
-  availableFrom String?       @db.VarChar(5)
-  availableTo   String?       @db.VarChar(5)
-  unit        String?
+  availableFrom String?         @db.VarChar(5)
+  availableTo   String?         @db.VarChar(5)
+  unit          String?
   /// Stock-keeping unit. Used as the de-dup key when syncing from an
   /// external API: (merchantId, sku) is unique.
-  sku         String?         @db.VarChar(80)
+  sku           String?         @db.VarChar(80)
   /// Raw ID from the external API (when a merchant doesn't expose a real
   /// SKU). Used as a secondary upsert key when SKU is missing.
-  externalId  String?         @db.VarChar(120)
-  barcode     String?         @db.VarChar(80)
-  weight      Decimal?        @db.Decimal(10, 3)
-  categoryName String?        @db.VarChar(120)
-  isAvailable Boolean         @default(true)
-  stock       Int?
-  sortOrder   Int             @default(0)
+  externalId    String?         @db.VarChar(120)
+  barcode       String?         @db.VarChar(80)
+  weight        Decimal?        @db.Decimal(10, 3)
+  categoryName  String?         @db.VarChar(120)
+  isAvailable   Boolean         @default(true)
+  stock         Int?
+  sortOrder     Int             @default(0)
   /// Last time this product was written by the external-API sync. Null for
   /// hand-entered products so we never clobber them.
-  lastSyncedAt DateTime?
+  lastSyncedAt  DateTime?
   /// Soft-hidden when the merchant's API stopped returning this product
   /// (per their config — admin can choose to hide instead of delete).
-  isHidden    Boolean         @default(false)
-  createdAt   DateTime        @default(now())
-  updatedAt   DateTime        @updatedAt
+  isHidden      Boolean         @default(false)
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
 
-  orderItems  OrderItem[]
+  orderItems OrderItem[]
 
   @@unique([merchantId, sku])
   @@index([merchantId, isAvailable])
@@ -689,27 +689,27 @@ model Product {
 // ============================================
 
 model PricingRule {
-  id                 String   @id @default(cuid())
-  serviceId          String
-  service            Service  @relation(fields: [serviceId], references: [id], onDelete: Cascade)
-  governorate        String?
-  city               String?
-  basePrice          Decimal  @default(0) @db.Decimal(10, 2)
-  pricePerKm         Decimal  @default(0) @db.Decimal(10, 2)
-  pricePerKg         Decimal  @default(0) @db.Decimal(10, 2)
-  minPrice           Decimal  @default(0) @db.Decimal(10, 2)
-  maxPrice           Decimal? @db.Decimal(10, 2)
-  fragileSurcharge   Decimal  @default(0) @db.Decimal(10, 2)
-  expressSurcharge   Decimal  @default(0) @db.Decimal(10, 2)
-  weekendMultiplier  Decimal? @db.Decimal(5, 2)
-  nightMultiplier    Decimal? @db.Decimal(5, 2)
-  nightStartHour     Int?
-  nightEndHour       Int?
-  isActive           Boolean  @default(true)
-  effectiveFrom      DateTime?
-  effectiveTo        DateTime?
-  createdAt          DateTime @default(now())
-  updatedAt          DateTime @updatedAt
+  id                String    @id @default(cuid())
+  serviceId         String
+  service           Service   @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+  governorate       String?
+  city              String?
+  basePrice         Decimal   @default(0) @db.Decimal(10, 2)
+  pricePerKm        Decimal   @default(0) @db.Decimal(10, 2)
+  pricePerKg        Decimal   @default(0) @db.Decimal(10, 2)
+  minPrice          Decimal   @default(0) @db.Decimal(10, 2)
+  maxPrice          Decimal?  @db.Decimal(10, 2)
+  fragileSurcharge  Decimal   @default(0) @db.Decimal(10, 2)
+  expressSurcharge  Decimal   @default(0) @db.Decimal(10, 2)
+  weekendMultiplier Decimal?  @db.Decimal(5, 2)
+  nightMultiplier   Decimal?  @db.Decimal(5, 2)
+  nightStartHour    Int?
+  nightEndHour      Int?
+  isActive          Boolean   @default(true)
+  effectiveFrom     DateTime?
+  effectiveTo       DateTime?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
 
   @@index([serviceId, isActive])
   @@index([governorate])
@@ -735,10 +735,10 @@ model Payment {
   createdAt       DateTime      @default(now())
 
   // refund tracking — set when admin reverses a confirmed payment
-  refundedAt      DateTime?
-  refundedById    String?
-  refundAmount    Decimal?      @db.Decimal(10, 2)
-  refundReason    String?       @db.VarChar(500)
+  refundedAt   DateTime?
+  refundedById String?
+  refundAmount Decimal?  @db.Decimal(10, 2)
+  refundReason String?   @db.VarChar(500)
 
   @@index([orderId])
   @@index([status])
@@ -749,61 +749,61 @@ model Payment {
 // ============================================
 
 model Notification {
-  id        String              @id @default(cuid())
-  userId    String
-  user      User                @relation(fields: [userId], references: [id], onDelete: Cascade)
-  type      NotificationType
-  title     String
-  titleAr   String
-  body      String              @db.Text
-  bodyAr    String              @db.Text
-  data      Json?
-  channel   NotificationChannel @default(IN_APP)
-  isRead    Boolean             @default(false)
-  sentAt    DateTime            @default(now())
-  readAt    DateTime?
+  id      String              @id @default(cuid())
+  userId  String
+  user    User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type    NotificationType
+  title   String
+  titleAr String
+  body    String              @db.Text
+  bodyAr  String              @db.Text
+  data    Json?
+  channel NotificationChannel @default(IN_APP)
+  isRead  Boolean             @default(false)
+  sentAt  DateTime            @default(now())
+  readAt  DateTime?
 
   @@index([userId, isRead, sentAt(sort: Desc)])
 }
 
 model Alert {
-  id               String         @id @default(cuid())
-  type             AlertType
-  category         AlertCategory  @default(SYSTEM)
-  severity         AlertSeverity  @default(MEDIUM)
-  status           AlertStatus    @default(OPEN)
-  title            String
-  titleAr          String
-  description      String         @db.Text
-  descriptionAr    String         @db.Text
-  relatedOrderId   String?
-  relatedOrder     Order?         @relation(fields: [relatedOrderId], references: [id], onDelete: SetNull)
-  relatedUserId    String?
+  id                    String        @id @default(cuid())
+  type                  AlertType
+  category              AlertCategory @default(SYSTEM)
+  severity              AlertSeverity @default(MEDIUM)
+  status                AlertStatus   @default(OPEN)
+  title                 String
+  titleAr               String
+  description           String        @db.Text
+  descriptionAr         String        @db.Text
+  relatedOrderId        String?
+  relatedOrder          Order?        @relation(fields: [relatedOrderId], references: [id], onDelete: SetNull)
+  relatedUserId         String?
   /// Stable key for deduplication. Pattern: `{type}:{orderId|userId}:{trigger}`.
   /// The cron checks this before inserting a duplicate alert for the same
   /// problem on the same target — only a fresh trigger (status change, new
   /// dispute) creates a new row.
-  triggerKey       String?        @db.VarChar(140)
+  triggerKey            String?       @db.VarChar(140)
   /// Free-text reason that triggered this firing — surfaced in the detail
   /// panel and useful when the same key fires for different reasons.
-  triggerReason    String?        @db.VarChar(255)
+  triggerReason         String?       @db.VarChar(255)
   // Legacy boolean kept for backwards compat — derived from `status`.
-  isResolved       Boolean        @default(false)
+  isResolved            Boolean       @default(false)
   // Workflow timestamps + actors
-  ackedById        String?
-  ackedAt          DateTime?
-  resolvedById     String?
-  resolvedBy       User?          @relation("AlertResolver", fields: [resolvedById], references: [id])
-  resolvedAt       DateTime?
-  resolutionNotes  String?        @db.VarChar(500)
-  dismissedById    String?
-  dismissedAt      DateTime?
-  escalatedById    String?
-  escalatedAt      DateTime?
+  ackedById             String?
+  ackedAt               DateTime?
+  resolvedById          String?
+  resolvedBy            User?         @relation("AlertResolver", fields: [resolvedById], references: [id])
+  resolvedAt            DateTime?
+  resolutionNotes       String?       @db.VarChar(500)
+  dismissedById         String?
+  dismissedAt           DateTime?
+  escalatedById         String?
+  escalatedAt           DateTime?
   /// Computed at resolve time so we don't recompute in every list query.
   resolutionDurationSec Int?
-  createdAt        DateTime       @default(now())
-  updatedAt        DateTime       @default(now()) @updatedAt
+  createdAt             DateTime      @default(now())
+  updatedAt             DateTime      @default(now()) @updatedAt
 
   @@index([status, severity, createdAt(sort: Desc)])
   @@index([category])
@@ -816,18 +816,18 @@ model Alert {
 // ============================================
 
 model Offer {
-  id        String   @id @default(cuid())
+  id        String    @id @default(cuid())
   title     String
   titleAr   String
   imageUrl  String
-  linkType  LinkType @default(NONE)
+  linkType  LinkType  @default(NONE)
   linkValue String?
-  sortOrder Int      @default(0)
-  isActive  Boolean  @default(true)
+  sortOrder Int       @default(0)
+  isActive  Boolean   @default(true)
   startsAt  DateTime?
   endsAt    DateTime?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
 
   @@index([isActive, sortOrder])
 }
@@ -849,15 +849,15 @@ model Setting {
 // ============================================
 
 model RefreshToken {
-  id        String   @id @default(cuid())
+  id        String    @id @default(cuid())
   userId    String
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  tokenHash String   @unique
-  userAgent String?  @db.VarChar(500)
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String    @unique
+  userAgent String?   @db.VarChar(500)
   ip        String?
   expiresAt DateTime
   revokedAt DateTime?
-  createdAt DateTime @default(now())
+  createdAt DateTime  @default(now())
 
   @@index([userId])
 }
@@ -872,28 +872,28 @@ enum CouponType {
 }
 
 model Coupon {
-  id              String       @id @default(cuid())
-  code            String       @unique @db.VarChar(40)
-  type            CouponType
+  id             String     @id @default(cuid())
+  code           String     @unique @db.VarChar(40)
+  type           CouponType
   /// PERCENTAGE: 0..100. FLAT: amount in EGP.
-  value           Decimal      @db.Decimal(10, 2)
+  value          Decimal    @db.Decimal(10, 2)
   /// Order must be at least this much for the coupon to apply.
-  minOrderAmount  Decimal?     @db.Decimal(10, 2)
+  minOrderAmount Decimal?   @db.Decimal(10, 2)
   /// For PERCENTAGE, caps the discount at this absolute amount.
-  maxDiscount     Decimal?     @db.Decimal(10, 2)
+  maxDiscount    Decimal?   @db.Decimal(10, 2)
   /// Optional time window. Null = no bound.
-  validFrom       DateTime?
-  validTo         DateTime?
+  validFrom      DateTime?
+  validTo        DateTime?
   /// Hard cap on total redemptions across all users. Null = unlimited.
-  usageLimit      Int?
+  usageLimit     Int?
   /// Per-user cap. Defaults to 1 (single-use per customer) when null.
-  usagePerUser    Int?         @default(1)
-  isActive        Boolean      @default(true)
-  description     String?      @db.VarChar(500)
-  createdAt       DateTime     @default(now())
-  updatedAt       DateTime     @updatedAt
+  usagePerUser   Int?       @default(1)
+  isActive       Boolean    @default(true)
+  description    String?    @db.VarChar(500)
+  createdAt      DateTime   @default(now())
+  updatedAt      DateTime   @updatedAt
 
-  redemptions     CouponRedemption[]
+  redemptions CouponRedemption[]
 
   @@index([isActive, code])
 }
@@ -937,18 +937,18 @@ model Wallet {
 }
 
 model WalletTransaction {
-  id            String       @id @default(cuid())
-  walletId      String
-  wallet        Wallet       @relation(fields: [walletId], references: [id], onDelete: Cascade)
-  type          WalletTxType
+  id           String       @id @default(cuid())
+  walletId     String
+  wallet       Wallet       @relation(fields: [walletId], references: [id], onDelete: Cascade)
+  type         WalletTxType
   /// Positive amount; the type field determines the sign.
-  amount        Decimal      @db.Decimal(10, 2)
+  amount       Decimal      @db.Decimal(10, 2)
   /// Wallet balance after this tx is applied.
-  balanceAfter  Decimal      @db.Decimal(10, 2)
-  orderId       String?      @db.VarChar(40)
-  reason        String?      @db.VarChar(500)
-  createdById   String?
-  createdAt     DateTime     @default(now())
+  balanceAfter Decimal      @db.Decimal(10, 2)
+  orderId      String?      @db.VarChar(40)
+  reason       String?      @db.VarChar(500)
+  createdById  String?
+  createdAt    DateTime     @default(now())
 
   @@index([walletId, createdAt(sort: Desc)])
   @@index([orderId])
@@ -962,15 +962,15 @@ model WalletTransaction {
 // (5 min) and attempts capped at 5 to defeat brute force. Old rows are
 // hard-deleted by the daily auth cleanup cron, not by row-level TTL.
 model OtpCode {
-  id         String   @id @default(cuid())
-  phone      String   @db.VarChar(20)
-  codeHash   String   @db.VarChar(64)
+  id         String    @id @default(cuid())
+  phone      String    @db.VarChar(20)
+  codeHash   String    @db.VarChar(64)
   /// Purpose — distinguishes a registration OTP from a password-reset OTP.
-  purpose    String   @default("VERIFY") @db.VarChar(20)
-  attempts   Int      @default(0)
+  purpose    String    @default("VERIFY") @db.VarChar(20)
+  attempts   Int       @default(0)
   consumedAt DateTime?
   expiresAt  DateTime
-  createdAt  DateTime @default(now())
+  createdAt  DateTime  @default(now())
 
   @@index([phone, createdAt(sort: Desc)])
   @@index([expiresAt])
@@ -1023,43 +1023,43 @@ enum RecurringFrequency {
 }
 
 model RecurringOrder {
-  id              String              @id @default(cuid())
-  customerId      String
-  customer        User                @relation("CustomerRecurring", fields: [customerId], references: [id], onDelete: Cascade)
-  serviceId       String
-  service         Service             @relation(fields: [serviceId], references: [id])
+  id         String          @id @default(cuid())
+  customerId String
+  customer   User            @relation("CustomerRecurring", fields: [customerId], references: [id], onDelete: Cascade)
+  serviceId  String
+  service    Service         @relation(fields: [serviceId], references: [id])
   /// Optional label shown to the customer ("مياه أسبوعية", "أدوية الشهر").
-  label           String?             @db.VarChar(120)
-  category        ServiceCategory
-  merchantId      String?
+  label      String?         @db.VarChar(120)
+  category   ServiceCategory
+  merchantId String?
 
   // Order inputs — mirror Order's create-time fields, minus pricing/status.
   customData      Json?
-  notes           String?             @db.Text
+  notes           String?        @db.Text
   imageUrls       Json?
   paymentMethod   PaymentMethod?
-  deliveryAddress String?             @db.VarChar(500)
-  deliveryLat     Decimal?            @db.Decimal(10, 7)
-  deliveryLng     Decimal?            @db.Decimal(10, 7)
+  deliveryAddress String?        @db.VarChar(500)
+  deliveryLat     Decimal?       @db.Decimal(10, 7)
+  deliveryLng     Decimal?       @db.Decimal(10, 7)
 
   // Cadence
-  frequency       RecurringFrequency
+  frequency  RecurringFrequency
   /// 0=Sun..6=Sat (for WEEKLY/BIWEEKLY). null for DAILY/MONTHLY.
-  dayOfWeek       Int?
+  dayOfWeek  Int?
   /// 1..28 for MONTHLY (kept <=28 to dodge month-length edge cases). null otherwise.
-  dayOfMonth      Int?
+  dayOfMonth Int?
   /// Local hour 0..23 we want the order created. Combined with the
   /// customer's TZ offset client-side; server stores literal hour.
-  hour            Int                 @default(10)
+  hour       Int                @default(10)
 
-  isActive        Boolean             @default(true)
+  isActive        Boolean   @default(true)
   lastGeneratedAt DateTime?
   nextRunAt       DateTime
   /// Stop auto-generating after this date (null = forever).
   endsAt          DateTime?
 
-  createdAt       DateTime            @default(now())
-  updatedAt       DateTime            @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@index([customerId, isActive])
   @@index([nextRunAt, isActive])
@@ -1075,35 +1075,35 @@ model RecurringOrder {
 // The mobile fetches it on cold start; the dashboard PATCHes it.
 
 model HomeConfig {
-  id                String   @id @default("singleton")
-  heroGreeting      String?  @db.VarChar(120)
-  heroSubtitle      String?  @db.VarChar(160)
+  id                  String   @id @default("singleton")
+  heroGreeting        String?  @db.VarChar(120)
+  heroSubtitle        String?  @db.VarChar(160)
   /// JSON array of strings — hex colors used to render the gradient
   /// (length must be 2-4). Falls back to brand red→orange when null.
-  heroGradient      Json?
-  trustStripTitle   String?  @db.VarChar(120)
-  trustStripSubtitle String?  @db.VarChar(160)
+  heroGradient        Json?
+  trustStripTitle     String?  @db.VarChar(120)
+  trustStripSubtitle  String?  @db.VarChar(160)
   /// Preferred way to set the promo banner — pick an existing Coupon and
   /// the mobile renders its title/code/description live. Falls back to the
   /// free-text fields below when null (legacy or quick one-off banners).
-  promoBannerCouponId String? @db.VarChar(30)
-  promoBannerTitle  String?  @db.VarChar(140)
-  promoBannerCode   String?  @db.VarChar(40)
+  promoBannerCouponId String?  @db.VarChar(30)
+  promoBannerTitle    String?  @db.VarChar(140)
+  promoBannerCode     String?  @db.VarChar(40)
   /// JSON array of service keys ('delivery-supermarket', 'delivery-pharmacy', ...)
   /// that should appear on the home tiles, in display order. When null we
   /// render whatever the Services table returns.
-  visibleServiceKeys Json?
+  visibleServiceKeys  Json?
   /// JSON array of merchant IDs to pin in the "featured" rail. Null = pick
   /// top-rated 4 from the merchants table.
   featuredMerchantIds Json?
   /// JSON array of offer IDs to display. Null = newest offer.
-  featuredOfferIds  Json?
+  featuredOfferIds    Json?
   /// When false, hide promo banner entirely.
-  showPromoBanner   Boolean  @default(true)
+  showPromoBanner     Boolean  @default(true)
   /// When false, hide the trust strip at the bottom.
-  showTrustStrip    Boolean  @default(true)
-  updatedAt         DateTime @updatedAt
-  updatedById       String?
+  showTrustStrip      Boolean  @default(true)
+  updatedAt           DateTime @updatedAt
+  updatedById         String?
 }
 
 // ============================================
@@ -1117,9 +1117,9 @@ model HomeConfig {
 
 enum ProductApiAuthType {
   NONE
-  API_KEY        // sent as header `X-API-Key` by default (configurable)
-  BEARER         // Authorization: Bearer <token>
-  BASIC          // Authorization: Basic base64(user:pass)
+  API_KEY // sent as header `X-API-Key` by default (configurable)
+  BEARER // Authorization: Bearer <token>
+  BASIC // Authorization: Basic base64(user:pass)
 }
 
 enum ProductApiMethod {
@@ -1138,51 +1138,51 @@ enum ProductApiSyncInterval {
 /// What to do with products that previously came from this API but vanished
 /// in the latest sync (admin-tunable per merchant).
 enum MissingProductPolicy {
-  IGNORE          // leave them as-is
+  IGNORE // leave them as-is
   MARK_UNAVAILABLE
-  HIDE            // soft-hide (isHidden = true)
-  DELETE          // hard delete — only used after explicit admin confirm
+  HIDE // soft-hide (isHidden = true)
+  DELETE // hard delete — only used after explicit admin confirm
 }
 
 model MerchantApiConfig {
-  id              String                 @id @default(cuid())
-  merchantId      String                 @unique
-  merchant        MerchantProfile        @relation(fields: [merchantId], references: [id], onDelete: Cascade)
-  apiUrl          String                 @db.VarChar(500)
-  method          ProductApiMethod       @default(GET)
-  authType        ProductApiAuthType     @default(NONE)
+  id             String                 @id @default(cuid())
+  merchantId     String                 @unique
+  merchant       MerchantProfile        @relation(fields: [merchantId], references: [id], onDelete: Cascade)
+  apiUrl         String                 @db.VarChar(500)
+  method         ProductApiMethod       @default(GET)
+  authType       ProductApiAuthType     @default(NONE)
   /// Header name when authType=API_KEY. Defaults to `X-API-Key`.
-  authHeaderName  String?                @db.VarChar(60)
+  authHeaderName String?                @db.VarChar(60)
   /// Encrypted ciphertext (AES-256-GCM) of the API key / bearer token /
   /// `user:pass` for basic auth. Null = no auth or not saved yet.
-  tokenSecret     String?                @db.Text
+  tokenSecret    String?                @db.Text
   /// JSON object of extra request headers (e.g. {"Accept": "application/json"}).
-  extraHeaders    Json?
+  extraHeaders   Json?
   /// JSON body for POST requests. Null for GET.
-  requestBody     Json?
+  requestBody    Json?
   /// Where the products array lives inside the response. Empty/null = root.
   /// Examples: "products", "data", "items", "result.products"
-  productsPath    String?                @db.VarChar(120)
+  productsPath   String?                @db.VarChar(120)
   /// Field mapping — admin maps source field paths (left) to internal
   /// product fields (right). JSON object like:
   ///   { "nameAr": "title", "price": "regular_price", "image": "image_url" }
-  fieldMapping    Json?
-  syncInterval    ProductApiSyncInterval @default(DISABLED)
+  fieldMapping   Json?
+  syncInterval   ProductApiSyncInterval @default(DISABLED)
   /// What to do when a previously-synced product disappears from the feed.
-  missingPolicy   MissingProductPolicy   @default(MARK_UNAVAILABLE)
+  missingPolicy  MissingProductPolicy   @default(MARK_UNAVAILABLE)
   /// Set after a successful test or sync to surface a green status badge.
-  isConnected     Boolean                @default(false)
+  isConnected    Boolean                @default(false)
   /// Cached last error string, for display in the connection status block.
-  lastError       String?                @db.VarChar(500)
-  lastSyncedAt    DateTime?
+  lastError      String?                @db.VarChar(500)
+  lastSyncedAt   DateTime?
   /// Marker used by the cron to decide which configs are due. Mirrors
   /// `lastSyncedAt` + the interval; reset on config change.
-  nextSyncAt      DateTime?
-  isActive        Boolean                @default(true)
-  createdAt       DateTime               @default(now())
-  updatedAt       DateTime               @updatedAt
+  nextSyncAt     DateTime?
+  isActive       Boolean                @default(true)
+  createdAt      DateTime               @default(now())
+  updatedAt      DateTime               @updatedAt
 
-  logs            ProductSyncLog[]
+  logs ProductSyncLog[]
 
   @@index([isActive, nextSyncAt])
 }
@@ -1190,7 +1190,7 @@ model MerchantApiConfig {
 enum SyncRunStatus {
   RUNNING
   SUCCESS
-  PARTIAL    // succeeded with some failed items
+  PARTIAL // succeeded with some failed items
   FAILED
 }
 
@@ -1201,23 +1201,23 @@ enum SyncTrigger {
 }
 
 model ProductSyncLog {
-  id              String            @id @default(cuid())
-  configId        String
-  config          MerchantApiConfig @relation(fields: [configId], references: [id], onDelete: Cascade)
-  merchantId      String
-  trigger         SyncTrigger       @default(MANUAL)
-  startedAt       DateTime          @default(now())
-  finishedAt      DateTime?
-  status          SyncRunStatus     @default(RUNNING)
-  fetchedCount    Int               @default(0)
-  createdCount    Int               @default(0)
-  updatedCount    Int               @default(0)
-  failedCount     Int               @default(0)
-  hiddenCount     Int               @default(0)
+  id            String            @id @default(cuid())
+  configId      String
+  config        MerchantApiConfig @relation(fields: [configId], references: [id], onDelete: Cascade)
+  merchantId    String
+  trigger       SyncTrigger       @default(MANUAL)
+  startedAt     DateTime          @default(now())
+  finishedAt    DateTime?
+  status        SyncRunStatus     @default(RUNNING)
+  fetchedCount  Int               @default(0)
+  createdCount  Int               @default(0)
+  updatedCount  Int               @default(0)
+  failedCount   Int               @default(0)
+  hiddenCount   Int               @default(0)
   /// Brief error summary when status=FAILED. Long stack traces go to the logger.
-  errorMessage    String?           @db.VarChar(500)
+  errorMessage  String?           @db.VarChar(500)
   /// User who triggered MANUAL sync. Null for AUTO.
-  triggeredById   String?
+  triggeredById String?
 
   @@index([merchantId, startedAt(sort: Desc)])
   @@index([configId, startedAt(sort: Desc)])
@@ -1234,48 +1234,48 @@ enum ShiftKind {
 }
 
 model Supervisor {
-  id                String   @id @default(cuid())
-  name              String
-  whatsappPhone     String   @db.VarChar(20)
-  isActive          Boolean  @default(true)
-  notes             String?  @db.VarChar(500)
-  createdAt         DateTime @default(now())
-  updatedAt         DateTime @updatedAt
+  id            String   @id @default(cuid())
+  name          String
+  whatsappPhone String   @db.VarChar(20)
+  isActive      Boolean  @default(true)
+  notes         String?  @db.VarChar(500)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
 
-  shifts            SupervisorShift[]
-  dispatches        SupervisorOrderDispatch[]
+  shifts     SupervisorShift[]
+  dispatches SupervisorOrderDispatch[]
 
   @@index([isActive])
   @@index([createdAt(sort: Desc)])
 }
 
 model SupervisorShift {
-  id                String     @id @default(cuid())
-  supervisorId      String
-  supervisor        Supervisor @relation(fields: [supervisorId], references: [id], onDelete: Cascade)
-  kind              ShiftKind
-  startTime         String     @db.VarChar(5) /// HH:mm format, e.g. "08:00"
-  endTime           String     @db.VarChar(5) /// HH:mm format, e.g. "16:00"
+  id           String     @id @default(cuid())
+  supervisorId String
+  supervisor   Supervisor @relation(fields: [supervisorId], references: [id], onDelete: Cascade)
+  kind         ShiftKind
+  startTime    String     @db.VarChar(5) /// HH:mm format, e.g. "08:00"
+  endTime      String     @db.VarChar(5) /// HH:mm format, e.g. "16:00"
   /// JSON array of integers (0=Sunday..6=Saturday). Empty array = all days.
-  daysOfWeek        Json       @default("[]")
-  isActive          Boolean    @default(true)
-  createdAt         DateTime   @default(now())
-  updatedAt         DateTime   @updatedAt
+  daysOfWeek   Json       @default("[]")
+  isActive     Boolean    @default(true)
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
 
   @@index([supervisorId, isActive])
   @@index([kind])
 }
 
 model SupervisorOrderDispatch {
-  id                String     @id @default(cuid())
-  supervisorId      String
-  supervisor        Supervisor @relation(fields: [supervisorId], references: [id], onDelete: Cascade)
-  orderId           String
-  order             Order      @relation(fields: [orderId], references: [id], onDelete: Cascade)
-  sentAt            DateTime   @default(now())
-  status            String     @default("SENT") @db.VarChar(10) /// "SENT" or "FAILED"
-  errorMessage      String?    @db.VarChar(500)
-  createdAt         DateTime   @default(now())
+  id           String     @id @default(cuid())
+  supervisorId String
+  supervisor   Supervisor @relation(fields: [supervisorId], references: [id], onDelete: Cascade)
+  orderId      String
+  order        Order      @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  sentAt       DateTime   @default(now())
+  status       String     @default("SENT") @db.VarChar(10) /// "SENT" or "FAILED"
+  errorMessage String?    @db.VarChar(500)
+  createdAt    DateTime   @default(now())
 
   @@index([supervisorId, createdAt(sort: Desc)])
   @@index([orderId])
@@ -1345,4 +1345,142 @@ model Area {
 
   @@unique([villageId, nameAr])
   @@index([villageId, isActive])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Product audit trail
+//
+// Answers: who changed what, when, and from which file. Written server-side on
+// every write path so it cannot be forged or skipped by a client that forgets.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// What caused a change. IMPORT rows carry `importJobId`, so a product's
+/// timeline can link straight back to the spreadsheet that changed it.
+enum ChangeSource {
+  MANUAL
+  IMPORT
+  API_SYNC
+  SYSTEM
+}
+
+enum ProductAction {
+  CREATE
+  UPDATE
+  DELETE
+  ACTIVATE
+  DEACTIVATE
+  ARCHIVE
+  RESTORE
+}
+
+model ProductHistory {
+  id String @id @default(cuid())
+
+  /// Deliberately NOT a relation: the trail has to outlive the product, and a
+  /// cascading delete would erase exactly the record you need after a mistake.
+  productId   String  @db.VarChar(80)
+  /// Denormalised so a deleted product still reads as a name, not an id.
+  productName String? @db.VarChar(255)
+
+  action ProductAction
+  source ChangeSource  @default(MANUAL)
+
+  actorId   String? @db.VarChar(80)
+  /// Denormalised for the same reason as productName — an admin can be removed.
+  actorName String? @db.VarChar(160)
+
+  /// Set when source = IMPORT. Not a relation so deleting an import log entry
+  /// never takes product history with it.
+  importJobId    String? @db.VarChar(80)
+  /// The file's name at the time, kept even if the job row is later deleted.
+  importFileName String? @db.VarChar(255)
+
+  /// Only the fields that actually changed:
+  /// [{ field, label, old, new }]. Null for CREATE/DELETE.
+  changes Json?
+
+  createdAt DateTime @default(now())
+
+  @@index([productId, createdAt(sort: Desc)])
+  @@index([importJobId])
+  @@index([actorId, createdAt(sort: Desc)])
+  @@index([createdAt(sort: Desc)])
+}
+
+enum ImportStatus {
+  PENDING
+  VALIDATING
+  PROCESSING
+  COMPLETED
+  PARTIAL
+  FAILED
+  CANCELLED
+}
+
+enum ImportKind {
+  CREATE
+  UPDATE
+  MIXED
+}
+
+model ImportJob {
+  id String @id @default(cuid())
+
+  fileName String  @db.VarChar(255)
+  /// Uploaded copy of the sheet, so "download the original file" returns
+  /// exactly what was processed rather than a re-export.
+  fileUrl  String? @db.VarChar(500)
+
+  actorId   String? @db.VarChar(80)
+  actorName String? @db.VarChar(160)
+
+  status ImportStatus @default(PENDING)
+  kind   ImportKind   @default(MIXED)
+
+  totalRows    Int @default(0)
+  createdCount Int @default(0)
+  updatedCount Int @default(0)
+  skippedCount Int @default(0)
+  errorCount   Int @default(0)
+
+  /// Short reason when status = FAILED.
+  errorMessage String? @db.VarChar(500)
+
+  startedAt  DateTime  @default(now())
+  finishedAt DateTime?
+
+  rows ImportRowLog[]
+
+  @@index([startedAt(sort: Desc)])
+  @@index([actorId, startedAt(sort: Desc)])
+  @@index([status, startedAt(sort: Desc)])
+}
+
+model ImportRowLog {
+  id    String    @id @default(cuid())
+  jobId String
+  job   ImportJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  /// 1-based row number as the admin sees it in Excel, so a reported error
+  /// points at the row they can actually go and fix.
+  line Int
+
+  productId   String? @db.VarChar(80)
+  productName String? @db.VarChar(255)
+  sku         String? @db.VarChar(80)
+
+  /// create | update | skip
+  action String @db.VarChar(10)
+  /// ok | error
+  status String @db.VarChar(10)
+
+  errorColumn  String? @db.VarChar(120)
+  errorMessage String? @db.VarChar(500)
+  /// The rejected value, so the error report can show what was wrong.
+  badValue     String? @db.VarChar(255)
+
+  createdAt DateTime @default(now())
+
+  @@index([jobId, line])
+  @@index([productId])
 }
