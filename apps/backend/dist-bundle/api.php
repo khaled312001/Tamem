@@ -62,7 +62,10 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'OPTIONS') {
 
 header('Content-Type: application/json; charset=utf-8');
 
-function jsonOk(array $data, int $code = 200): void {
+// $data is nullable so handlers can mirror Node's `ok(res, x ?? null)` —
+// json_encode already emits {"data":null}. Under declare(strict_types=1) a
+// non-nullable array param would fatal (TypeError → non-JSON 500) instead.
+function jsonOk(?array $data, int $code = 200): void {
     http_response_code($code);
     echo json_encode(['data' => $data], JSON_UNESCAPED_UNICODE);
     exit;
@@ -266,6 +269,20 @@ if ($path === '/socket.io/' || str_starts_with($path, '/socket.io/')) {
     http_response_code(501);
     echo 'realtime disabled — enable Node.js in hPanel to activate live updates';
     exit;
+}
+
+// ─── Global /admin/* guard ──────────────────────────────────────────────
+// Node gates the whole admin namespace in one place (app.ts:163). The shim's
+// handlers each call authUser(), but most never checked the ROLE — which was
+// survivable only while every account holder was staff. /auth/register now
+// mints a CUSTOMER token for any anonymous caller, so an ungated /admin/*
+// handler would hand the whole User table (passwordHash included) to anyone.
+// Gate the namespace once, here, before any admin handler runs.
+if (str_starts_with($path, '/admin/')) {
+    $__admin = authUser();
+    if (!in_array($__admin['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) {
+        jsonErr('غير مسموح', 403, 'FORBIDDEN');
+    }
 }
 
 // ─── ADMIN endpoints (require admin JWT) ────────────────────────────────
@@ -1017,6 +1034,12 @@ if ($method === 'GET' && $path === '/admin/merchants') {
     foreach ($st->fetchAll() as $r) {
         $sec = $r['u_secondaryPhones'] ?? null;
         $secArr = is_string($sec) && $sec !== '' ? (json_decode($sec, true) ?: []) : [];
+        // menuImages is a JSON array in a longtext column. The edit dialog seeds
+        // its form from THIS list row, so omitting the field here doesn't just
+        // hide it — the form initialises to [] and the next save writes [] back,
+        // wiping the merchant's real menu photos. Same trap for phone/commissionPct.
+        $menu = $r['menuImages'] ?? null;
+        $menuArr = is_string($menu) && $menu !== '' ? (json_decode($menu, true) ?: []) : [];
         $rows[] = [
             'id' => $r['id'], 'userId' => $r['userId'],
             'storeName' => $r['storeName'], 'storeNameAr' => $r['storeNameAr'],
@@ -1026,6 +1049,10 @@ if ($method === 'GET' && $path === '/admin/merchants') {
             'isOpen' => (bool)(int)$r['isOpen'], 'rating' => $r['rating'],
             'manualStatus' => $r['manualStatus'] ?? 'OPEN',
             'logoUrl' => $r['logoUrl'] ?? null, 'coverUrl' => $r['coverUrl'] ?? null,
+            // The store's public number — distinct from user.phone (owner login).
+            'phone' => $r['phone'] ?? null,
+            'commissionPct' => $r['commissionPct'] ?? null,
+            'menuImages' => $menuArr,
             'createdAt' => $r['createdAt'], 'updatedAt' => $r['updatedAt'],
             'user' => ['id' => $r['userId'], 'name' => $r['u_name'], 'phone' => $r['u_phone'], 'email' => $r['u_email'], 'isActive' => (bool)(int)($r['u_isActive'] ?? 1), 'secondaryPhones' => $secArr],
             'category' => $r['c_nameAr'] !== null ? ['id' => $r['categoryId'], 'nameAr' => $r['c_nameAr'], 'name' => $r['c_name']] : null,
@@ -1358,7 +1385,9 @@ if ($method === 'GET' && preg_match('#^/admin/(customers)$#', $path, $m)) {
     $size = min(100, max(1, (int)($_GET['pageSize'] ?? 20)));
     $off = ($page - 1) * $size;
     $total = (int) db()->query("SELECT COUNT(*) FROM `User` WHERE role = '$role'")->fetchColumn();
-    $st = db()->prepare("SELECT * FROM `User` WHERE role = ? ORDER BY createdAt DESC LIMIT $size OFFSET $off");
+    // Explicit columns, never SELECT * — `User` carries passwordHash /
+    // passwordResetHash / googleId / fcmToken, none of which may ever ship.
+    $st = db()->prepare("SELECT id, name, phone, email, avatarUrl, role, isActive, isPhoneVerified, city, governorate, defaultAddress, secondaryPhones, createdAt, updatedAt FROM `User` WHERE role = ? ORDER BY createdAt DESC LIMIT $size OFFSET $off");
     $st->execute([$role]);
     $rows = array_map('jsonizeRow', $st->fetchAll());
     http_response_code(200);
@@ -1640,9 +1669,19 @@ if ($method === 'POST' && $path === '/admin/merchants') {
         $uid = newId();
         $pdo->prepare('INSERT INTO `User` (id, name, phone, passwordHash, role, isActive, isPhoneVerified, city, governorate, createdAt, updatedAt) VALUES (?,?,?,?,?,1,1,?,?,NOW(3),NOW(3))')
             ->execute([$uid, $ownerName, $phone, password_hash($pass, PASSWORD_BCRYPT), 'MERCHANT', $city, $governorate]);
-        $pdo->prepare('INSERT INTO `MerchantProfile` (id, userId, storeName, storeNameAr, categoryId, description, addressLine, lat, lng, governorate, city, isOpen, manualStatus, timezone, createdAt, updatedAt) VALUES (?,?,?,?,?,?,?,?,?,?,?,1,?,?,NOW(3),NOW(3))')
+        // logoUrl/coverUrl/storePhone/commissionPct/menuImages are all part of the
+        // create form's payload; anything not listed here is silently discarded
+        // and the admin has to re-enter it in the edit dialog afterwards.
+        $blank = static fn ($v) => trim((string)($v ?? '')) === '' ? null : trim((string)$v);
+        $menuIn = isset($b['menuImages']) && is_array($b['menuImages']) && $b['menuImages']
+            ? json_encode(array_values($b['menuImages']), JSON_UNESCAPED_UNICODE) : null;
+        $pdo->prepare('INSERT INTO `MerchantProfile` (id, userId, storeName, storeNameAr, categoryId, description, logoUrl, coverUrl, phone, commissionPct, menuImages, addressLine, lat, lng, governorate, city, isOpen, manualStatus, timezone, createdAt, updatedAt) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,?,?,NOW(3),NOW(3))')
             ->execute([newId(), $uid, $storeName, $storeNameAr, $categoryId,
                 (string)($b['description'] ?? ''),
+                $blank($b['logoUrl'] ?? null), $blank($b['coverUrl'] ?? null),
+                $blank($b['storePhone'] ?? null),
+                isset($b['commissionPct']) && $b['commissionPct'] !== '' ? (float)$b['commissionPct'] : null,
+                $menuIn,
                 (string)($b['addressLine'] ?? ($governorate . ' - ' . $city)),
                 (float)($b['lat'] ?? 26.0297), (float)($b['lng'] ?? 32.8146),
                 $governorate, $city, 'OPEN', 'Africa/Cairo']);
@@ -1705,13 +1744,27 @@ if ($method === 'PATCH' && preg_match('#^/admin/merchants/([^/]+)$#', $path, $m)
         $pdo->beginTransaction();
         $pcols = tableColumns('MerchantProfile'); $sets = []; $args = [];
         foreach ($b as $k => $v) {
+            // `phone` is excluded deliberately: in this endpoint's contract a
+            // body `phone` means the OWNER's login number (handled below). Since
+            // MerchantProfile gained its own `phone` column, letting the generic
+            // loop see it would write the owner's number into the store's field.
+            if ($k === 'phone') continue;
             if (isset($pcols[$k]) && !in_array($k, ['id', 'userId', 'createdAt', 'updatedAt'], true)) { $sets[] = "`$k` = ?"; $args[] = coerceForColumn($v, $pcols[$k]); }
+        }
+        // The dashboard calls the store's public number `storePhone`; the column is `phone`.
+        if (array_key_exists('storePhone', $b)) {
+            $sp = trim((string)$b['storePhone']);
+            $sets[] = '`phone` = ?'; $args[] = $sp === '' ? null : $sp;
         }
         if ($sets) { $sets[] = '`updatedAt` = NOW(3)'; $args[] = $id; $pdo->prepare('UPDATE `MerchantProfile` SET ' . implode(',', $sets) . ' WHERE id = ?')->execute($args); }
         $us = []; $ua = [];
         if (array_key_exists('ownerName', $b)) { $us[] = '`name` = ?'; $ua[] = (string)$b['ownerName']; }
         if (array_key_exists('ownerPhone', $b) || array_key_exists('phone', $b)) { $ph = (string)($b['ownerPhone'] ?? $b['phone']); $cl = preg_replace('/[\s\-()]/', '', $ph); if (preg_match('/^(?:\+?20|0)?(1[0125]\d{8})$/', $cl, $mm)) $ph = '+20' . $mm[1]; $us[] = '`phone` = ?'; $ua[] = $ph; }
-        if (array_key_exists('secondaryPhones', $b)) { $us[] = '`secondaryPhones` = ?'; $ua[] = json_encode($b['secondaryPhones'], JSON_UNESCAPED_UNICODE); }
+        // The dashboard has always sent `ownerSecondaryPhones`, but only the bare
+        // `secondaryPhones` key was read here — so extra numbers silently never
+        // saved (0 rows in User.secondaryPhones live). Accept both spellings.
+        $secKey = array_key_exists('ownerSecondaryPhones', $b) ? 'ownerSecondaryPhones' : (array_key_exists('secondaryPhones', $b) ? 'secondaryPhones' : null);
+        if ($secKey !== null) { $us[] = '`secondaryPhones` = ?'; $ua[] = json_encode(array_values((array)$b[$secKey]), JSON_UNESCAPED_UNICODE); }
         if (array_key_exists('isActive', $b)) { $us[] = '`isActive` = ?'; $ua[] = $b['isActive'] ? 1 : 0; }
         if ($us) { $us[] = '`updatedAt` = NOW(3)'; $ua[] = $mp['userId']; $pdo->prepare('UPDATE `User` SET ' . implode(',', $us) . ' WHERE id = ?')->execute($ua); }
         $pdo->commit();
@@ -1966,6 +2019,16 @@ if ($method === 'DELETE' && preg_match('#^/admin/([a-z][a-z0-9-]*)/([^/]+)$#', $
         db()->prepare("DELETE FROM `$tbl` WHERE id = ?")->execute([$m[2]]);
         jsonOk(['deleted' => true]);
     } catch (Throwable $e) {
+        $errno = ($e instanceof PDOException) ? (int)($e->errorInfo[1] ?? 0) : 0;
+        // Mirrors products.controller's P2003 branch: a product referenced by an
+        // existing order can't be hard-deleted (FK 1451), so pull it from the
+        // catalog instead of corrupting order history. Without this the request
+        // falls through to the echo fallback below, which reports success while
+        // the product is still sitting there.
+        if ($tbl === 'Product' && $errno === 1451) {
+            db()->prepare('UPDATE `Product` SET `isAvailable` = 0 WHERE id = ?')->execute([$m[2]]);
+            jsonOk(['deleted' => true, 'deactivated' => true]);
+        }
         error_log('[api.php] generic DELETE ' . $tbl . ' failed: ' . $e->getMessage());
     }
 }
@@ -1982,54 +2045,1294 @@ if (in_array($method, ['POST', 'PATCH', 'PUT', 'DELETE'], true) && str_starts_wi
     jsonOk($echo);
 }
 
-// ─── Non-admin GETs the dashboard also touches ─────────────────────────
-if ($method === 'GET' && $path === '/me') {
-    $u = authUser();
-    $st = db()->prepare('SELECT id, name, phone, email, role, isActive, isPhoneVerified, createdAt FROM `User` WHERE id = ? LIMIT 1');
-    $st->execute([$u['sub'] ?? '']);
-    $user = $st->fetch();
-    if (!$user) jsonErr('المستخدم غير موجود', 404, 'NOT_FOUND');
-    jsonOk($user);
+// ═══════════════════════════════════════════════════════════════════════
+//  CUSTOMER / MOBILE API
+//  Ported from apps/backend/src/modules/** so the Android app works against
+//  this shim. Shapes match the Node controllers EXACTLY — the mobile screens
+//  destructure without guards, so a wrong shape = a crashed screen.
+//  Envelope rules (utils/response.ts): ok → {data}, paginated → {data,meta.pagination},
+//  204 → empty body. NOTE: /auth/refresh puts tokens at data.* (NOT data.tokens).
+// ═══════════════════════════════════════════════════════════════════════
+
+const PROFILE_SQL = 'id, phone, name, email, avatarUrl, role, isPhoneVerified, isActive, city, governorate, defaultAddress, createdAt';
+
+/** Egyptian phone → +20XXXXXXXXXX (mirrors packages/validators phoneSchema). */
+function normPhoneEg(string $raw): ?string {
+    $c = preg_replace('/[\s\-()]/', '', trim($raw)) ?? '';
+    if (!preg_match('/^(?:\+?20|0)?(1[0125]\d{8})$/', $c, $m)) return null;
+    return '+20' . $m[1];
+}
+/** MySQL tinyint(1) → real JSON booleans (Node returns booleans, not "0"/"1"). */
+function boolCast(?array $row, array $keys): ?array {
+    if (!$row) return $row;
+    foreach ($keys as $k) if (array_key_exists($k, $row) && $row[$k] !== null) $row[$k] = (bool) (int) $row[$k];
+    return $row;
+}
+function issueTokens(string $uid, string $role): array {
+    $a = env('JWT_ACCESS_SECRET'); $r = env('JWT_REFRESH_SECRET');
+    if (!$a || !$r) jsonErr('JWT secrets not configured', 500, 'CONFIG_MISSING');
+    $isAdmin = in_array($role, ['ADMIN', 'SUPER_ADMIN'], true);
+    $ttl = $isAdmin ? ((int) env('ADMIN_SESSION_TTL_HOURS', '6')) * 3600 : 15 * 60;
+    return [
+        'accessToken'  => jwtSign(['sub' => $uid, 'role' => $role], $a, $ttl),
+        'refreshToken' => jwtSign(['sub' => $uid, 'typ' => 'refresh'], $r, $isAdmin ? $ttl : 30 * 24 * 3600),
+    ];
+}
+function profileById(string $id): ?array {
+    $st = db()->prepare('SELECT ' . PROFILE_SQL . ' FROM `User` WHERE id = ? LIMIT 1');
+    $st->execute([$id]);
+    $r = $st->fetch() ?: null;
+    return boolCast($r, ['isPhoneVerified', 'isActive']);
+}
+function jsonList(array $rows, int $page, int $pageSize, int $total): void {
+    http_response_code(200);
+    echo json_encode(['data' => $rows, 'meta' => ['pagination' => [
+        'page' => $page, 'pageSize' => $pageSize, 'total' => $total,
+        'totalPages' => $pageSize > 0 ? (int) ceil($total / $pageSize) : 0,
+    ]]], JSON_UNESCAPED_UNICODE);
+    exit;
+}
+function noContent(): void { http_response_code(204); exit; }
+
+// ─── Merchant openness (port of modules/merchants/merchantHours.ts) ─────
+function merchantNextOpenMsg(array $hours, int $dow, int $mins): ?string {
+    $DAYS = ['الأحد', 'الاثنين', 'الثلاثاء', 'الأربعاء', 'الخميس', 'الجمعة', 'السبت'];
+    for ($i = 0; $i < 8; $i++) {
+        $d = ($dow + $i) % 7;
+        $best = null;
+        foreach ($hours as $h) {
+            if ((int) $h['isClosed']) continue;
+            if ((int) $h['dayOfWeek'] !== $d) continue;
+            $o = (int) $h['openMin'];
+            if ($i === 0 && $o <= $mins) continue;
+            if ($best === null || $o < $best) $best = $o;
+        }
+        if ($best !== null) {
+            $hh = intdiv($best, 60) % 24; $mm = $best % 60;
+            $h12 = $hh % 12; if ($h12 === 0) $h12 = 12;
+            $t = sprintf('%d:%02d %s', $h12, $mm, $hh < 12 ? 'ص' : 'م');
+            if ($i === 0) return "يفتح اليوم الساعة $t";
+            if ($i === 1) return "يفتح غداً الساعة $t";
+            return 'يفتح ' . $DAYS[$d] . " الساعة $t";
+        }
+    }
+    return null;
+}
+/** Local [dayOfWeek, minutesIntoDay] in an IANA zone (merchantHours.ts nowInTz). */
+function nowInTz(?string $tz): array {
+    try { $n = new DateTime('now', new DateTimeZone($tz ?: 'Africa/Cairo')); }
+    catch (Throwable $e) { $n = new DateTime('now', new DateTimeZone('Africa/Cairo')); }
+    return [(int) $n->format('w'), (int) $n->format('G') * 60 + (int) $n->format('i')];
+}
+function merchantOpenness(array $m, array $hours): array {
+    $ms = (string) ($m['manualStatus'] ?? 'OPEN');
+    if ($ms === 'CLOSED') return ['isOpenNow' => false, 'reason' => 'MANUAL_CLOSED', 'nextOpenAt' => null, 'message' => 'المتجر مغلق حالياً'];
+    if ($ms === 'TEMPORARILY_CLOSED') return ['isOpenNow' => false, 'reason' => 'MANUAL_TEMP_CLOSED', 'nextOpenAt' => null, 'message' => 'المتجر مغلق مؤقتاً، حاول لاحقاً'];
+    // No configured hours ⇒ always open (matches merchantHours.ts).
+    if (!$hours) return ['isOpenNow' => true, 'reason' => null, 'nextOpenAt' => null, 'message' => null];
+    // Resolve hours in the merchant's own zone, not always Cairo — every caller
+    // must therefore select `timezone` alongside `manualStatus`.
+    [$dow, $mins] = nowInTz($m['timezone'] ?? null);
+    foreach ($hours as $h) {
+        if ((int) $h['isClosed'] || (int) $h['dayOfWeek'] !== $dow) continue;
+        if ($mins >= (int) $h['openMin'] && $mins < (int) $h['closeMin']) {
+            return ['isOpenNow' => true, 'reason' => null, 'nextOpenAt' => null, 'message' => null];
+        }
+    }
+    // A window opened yesterday and runs past midnight (closeMin > 1440).
+    $prev = ($dow + 6) % 7;
+    foreach ($hours as $h) {
+        if ((int) $h['isClosed'] || (int) $h['dayOfWeek'] !== $prev) continue;
+        $c = (int) $h['closeMin'];
+        if ($c > 1440 && $mins < ($c - 1440)) return ['isOpenNow' => true, 'reason' => null, 'nextOpenAt' => null, 'message' => null];
+    }
+    return ['isOpenNow' => false, 'reason' => 'OUT_OF_HOURS', 'nextOpenAt' => null, 'message' => merchantNextOpenMsg($hours, $dow, $mins) ?? 'المتجر مغلق حالياً'];
+}
+// menuImages mirrors catalog.controller's merchantSelect: a merchant with no
+// structured products can instead publish photos of their paper menu, and the
+// app's MerchantDetailScreen renders them in place of the product list.
+const MERCHANT_SEL = 'm.id, m.storeName, m.storeNameAr, m.description, m.logoUrl, m.coverUrl, m.menuImages, m.addressLine, m.lat, m.lng, m.governorate, m.city, m.rating, m.isOpen, m.manualStatus, m.timezone, m.categoryId, c.name AS c_name, c.nameAr AS c_nameAr, c.iconUrl AS c_iconUrl';
+function hoursFor(array $ids): array {
+    if (!$ids) return [];
+    $in = implode(',', array_fill(0, count($ids), '?'));
+    $st = db()->prepare("SELECT * FROM `MerchantBusinessHours` WHERE merchantId IN ($in) ORDER BY dayOfWeek ASC, openMin ASC");
+    $st->execute($ids);
+    $out = [];
+    foreach ($st->fetchAll() as $h) { $out[$h['merchantId']][] = boolCast($h, ['isClosed']); }
+    return $out;
+}
+function merchantShape(array $r, array $hours): array {
+    $m = boolCast($r, ['isOpen']);
+    // MUST decode: the column is longtext, so PDO hands back the raw JSON string.
+    // The app types this as string[] and calls .map on it — shipping the string
+    // would crash MerchantDetailScreen rather than degrade.
+    $menu = $m['menuImages'] ?? null;
+    $m['menuImages'] = is_string($menu) && $menu !== '' ? (json_decode($menu, true) ?: []) : [];
+    $m['category'] = $r['categoryId'] ? ['id' => $r['categoryId'], 'name' => $r['c_name'], 'nameAr' => $r['c_nameAr'], 'iconUrl' => $r['c_iconUrl']] : null;
+    foreach (['c_name', 'c_nameAr', 'c_iconUrl'] as $k) unset($m[$k]);
+    $m['businessHours'] = $hours;
+    $m['openness'] = merchantOpenness($r, $hours);
+    return $m;
+}
+function productShape(array $p): array {
+    $p = jsonizeRow($p);
+    return boolCast($p, ['isAvailable', 'isHidden']);
 }
 
-if ($method === 'GET' && $path === '/me/addresses') {
+// ═══ AUTH ══════════════════════════════════════════════════════════════
+if ($method === 'POST' && $path === '/auth/register') {
+    $b = readJsonBody();
+    $name = trim((string) ($b['name'] ?? ''));
+    $phone = normPhoneEg((string) ($b['phone'] ?? ''));
+    $password = (string) ($b['password'] ?? '');
+    $city = trim((string) ($b['city'] ?? ''));
+    if (mb_strlen($name) < 2 || mb_strlen($name) > 100) jsonErr('الاسم مطلوب (حرفين على الأقل)', 422, 'VALIDATION_ERROR');
+    if (!$phone) jsonErr('رقم هاتف مصري غير صحيح', 422, 'VALIDATION_ERROR');
+    if (strlen($password) < 8 || strlen($password) > 72) jsonErr('كلمة السر 8 أحرف على الأقل', 422, 'VALIDATION_ERROR');
+    if (mb_strlen($city) < 2) jsonErr('المدينة مطلوبة', 422, 'VALIDATION_ERROR');
+    $role = ((string) ($b['role'] ?? '')) === 'MERCHANT' ? 'MERCHANT' : 'CUSTOMER';
+
+    $st = db()->prepare('SELECT id FROM `User` WHERE phone = ? LIMIT 1');
+    $st->execute([$phone]);
+    // ConflictError(message, messageAr) → code CONFLICT, English in `message`.
+    if ($st->fetch()) {
+        http_response_code(409);
+        echo json_encode(['error' => ['code' => 'CONFLICT', 'message' => 'Phone already registered', 'messageAr' => 'هذا الرقم مسجل بالفعل']], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+    $id = newId();
+    db()->prepare('INSERT INTO `User` (id, phone, passwordHash, name, role, city, defaultAddress, isPhoneVerified, isActive, createdAt, updatedAt) VALUES (?,?,?,?,?,?,?,0,1,NOW(3),NOW(3))')
+        ->execute([$id, $phone, password_hash($password, PASSWORD_BCRYPT), $name, $role, $city, ($b['address'] ?? null) ?: null]);
+
+    if ($role === 'MERCHANT') {
+        // Placeholder profile so the merchant tabs render (mirrors auth.controller).
+        $cat = db()->query('SELECT id FROM `Category` WHERE isActive = 1 ORDER BY sortOrder ASC LIMIT 1')->fetch();
+        if ($cat) {
+            db()->prepare('INSERT INTO `MerchantProfile` (id, userId, storeName, storeNameAr, categoryId, addressLine, lat, lng, governorate, city, createdAt, updatedAt) VALUES (?,?,?,?,?,?,0,0,?,?,NOW(3),NOW(3))')
+                ->execute([newId(), $id, 'متجري', 'متجري', $cat['id'], $city, 'قنا', $city]);
+        }
+    }
+    jsonOk(['user' => ['id' => $id, 'name' => $name, 'phone' => $phone, 'role' => $role], 'tokens' => issueTokens($id, $role)], 201);
+}
+
+if ($method === 'POST' && $path === '/auth/refresh') {
+    $b = readJsonBody();
+    $tok = (string) ($b['refreshToken'] ?? '');
+    if (strlen($tok) < 10) jsonErr('Refresh token غير صالح', 401, 'UNAUTHORIZED');
+    $parts = explode('.', $tok);
+    if (count($parts) !== 3) jsonErr('Refresh token غير صالح', 401, 'UNAUTHORIZED');
+    [$h, $p, $sig] = $parts;
+    $expected = b64url(hash_hmac('sha256', "$h.$p", env('JWT_REFRESH_SECRET') ?: '', true));
+    if (!hash_equals($expected, $sig)) jsonErr('Refresh token غير صالح', 401, 'UNAUTHORIZED');
+    $payload = json_decode((string) base64_decode(strtr($p, '-_', '+/')), true) ?: [];
+    if (($payload['exp'] ?? 0) < time()) jsonErr('Refresh token غير صالح', 401, 'UNAUTHORIZED');
+    $st = db()->prepare('SELECT id, role, isActive FROM `User` WHERE id = ? LIMIT 1');
+    $st->execute([$payload['sub'] ?? '']);
+    $u = $st->fetch();
+    if (!$u || !(int) $u['isActive']) jsonErr('الحساب غير مفعّل', 401, 'UNAUTHORIZED');
+    // ⚠️ tokens live at data.* here, NOT data.tokens (matches auth.controller ok(res, tokens)).
+    jsonOk(issueTokens($u['id'], (string) $u['role']));
+}
+
+if ($method === 'POST' && $path === '/auth/logout') { noContent(); }
+
+if ($method === 'POST' && $path === '/auth/otp/request') {
+    $b = readJsonBody();
+    $phone = normPhoneEg((string) ($b['phone'] ?? ''));
+    if (!$phone) jsonErr('رقم هاتف مصري غير صحيح', 422, 'VALIDATION_ERROR');
+    // 60s cooldown (mirrors auth.controller). Compare in SQL — PHP's default
+    // timezone is not guaranteed to match the MySQL session's, so
+    // time() vs strtotime(dbValue) silently skews by the offset.
+    $st = db()->prepare('SELECT 1 FROM `OtpCode` WHERE phone = ? AND createdAt > DATE_SUB(NOW(3), INTERVAL 60 SECOND) LIMIT 1');
+    $st->execute([$phone]);
+    if ($st->fetch()) {
+        jsonOk(['sent' => true, 'channel' => 'COOLDOWN', 'retryInSec' => 60]);
+    }
+    $code = str_pad((string) random_int(0, 999999), 6, '0', STR_PAD_LEFT);
+    db()->prepare("INSERT INTO `OtpCode` (id, phone, codeHash, purpose, attempts, expiresAt, createdAt) VALUES (?,?,?,'VERIFY',0,DATE_ADD(NOW(3), INTERVAL 5 MINUTE),NOW(3))")
+        ->execute([newId(), $phone, hash('sha256', $code)]);
+    waEnqueue($phone, "تميم للتوصيل 🚚\nكود تفعيل حسابك: *$code*\nصالح لمدة 5 دقائق.");
+    jsonOk(['sent' => true, 'channel' => 'WHATSAPP']);
+}
+
+if ($method === 'POST' && $path === '/auth/otp/verify') {
+    $b = readJsonBody();
+    $phone = normPhoneEg((string) ($b['phone'] ?? ''));
+    $code = trim((string) ($b['code'] ?? ''));
+    if (!$phone || !preg_match('/^\d{4,6}$/', $code)) jsonErr('كود التحقق غير صحيح', 401, 'UNAUTHORIZED');
+    $st = db()->prepare('SELECT * FROM `OtpCode` WHERE phone = ? AND consumedAt IS NULL AND expiresAt > NOW(3) ORDER BY createdAt DESC LIMIT 1');
+    $st->execute([$phone]);
+    $row = $st->fetch();
+    if (!$row) jsonErr('كود التحقق منتهي أو غير موجود', 401, 'UNAUTHORIZED');
+    if ((int) $row['attempts'] >= 5) jsonErr('تم تجاوز عدد المحاولات — اطلب كوداً جديداً', 401, 'UNAUTHORIZED');
+    if (!hash_equals((string) $row['codeHash'], hash('sha256', $code))) {
+        db()->prepare('UPDATE `OtpCode` SET attempts = attempts + 1 WHERE id = ?')->execute([$row['id']]);
+        jsonErr('كود التحقق غير صحيح', 401, 'UNAUTHORIZED');
+    }
+    db()->prepare('UPDATE `OtpCode` SET consumedAt = NOW(3) WHERE id = ?')->execute([$row['id']]);
+    $st = db()->prepare('SELECT id, name, phone, role FROM `User` WHERE phone = ? LIMIT 1');
+    $st->execute([$phone]);
+    $u = $st->fetch();
+    if (!$u) jsonErr('المستخدم غير موجود', 401, 'UNAUTHORIZED');
+    db()->prepare('UPDATE `User` SET isPhoneVerified = 1, updatedAt = NOW(3) WHERE id = ?')->execute([$u['id']]);
+    // Node returns {id,name,phone} with no role here — but the mobile store
+    // persists this object as the session user and RootNavigator switches on
+    // user.role, so omitting it would strand a fresh signup on a blank stack.
+    jsonOk(['user' => ['id' => $u['id'], 'name' => $u['name'], 'phone' => $u['phone'], 'role' => $u['role']], 'tokens' => issueTokens($u['id'], (string) $u['role'])]);
+}
+
+if ($method === 'POST' && $path === '/auth/forgot-password') {
+    $b = readJsonBody();
+    $phone = normPhoneEg((string) ($b['phone'] ?? '')) ?? trim((string) ($b['phone'] ?? ''));
+    $st = db()->prepare('SELECT id FROM `User` WHERE phone = ? LIMIT 1');
+    $st->execute([$phone]);
+    $u = $st->fetch();
+    if ($u) {
+        $code = str_pad((string) random_int(0, 999999), 6, '0', STR_PAD_LEFT);
+        db()->prepare('UPDATE `User` SET passwordResetHash = ?, passwordResetExpiresAt = DATE_ADD(NOW(3), INTERVAL 10 MINUTE), updatedAt = NOW(3) WHERE id = ?')
+            ->execute([hash('sha256', $code), $u['id']]);
+        waEnqueue($phone, "تميم للتوصيل 🚚\nكود إعادة تعيين كلمة السر: *$code*\nصالح لمدة 10 دقائق.");
+    }
+    jsonOk(['sent' => true]); // anti-enumeration: same body for unknown phones
+}
+
+if ($method === 'POST' && $path === '/auth/reset-password') {
+    $b = readJsonBody();
+    $phone = normPhoneEg((string) ($b['phone'] ?? '')) ?? trim((string) ($b['phone'] ?? ''));
+    $code = trim((string) ($b['code'] ?? ''));
+    $new = (string) ($b['newPassword'] ?? '');
+    if (!preg_match('/^\d{6}$/', $code)) jsonErr('كود التحقق غير صحيح', 401, 'UNAUTHORIZED');
+    if (strlen($new) < 8) jsonErr('كلمة السر 8 أحرف على الأقل', 422, 'VALIDATION_ERROR');
+    // Expiry compared in SQL (NOW(3)) — see the OTP cooldown note above.
+    $st = db()->prepare('SELECT id, name, phone, role, passwordResetHash, (passwordResetExpiresAt IS NOT NULL AND passwordResetExpiresAt < NOW(3)) AS isExpired FROM `User` WHERE phone = ? LIMIT 1');
+    $st->execute([$phone]);
+    $u = $st->fetch();
+    if (!$u || !$u['passwordResetHash']) jsonErr('كود التحقق غير صحيح أو منتهي', 401, 'UNAUTHORIZED');
+    if ((int) $u['isExpired']) jsonErr('انتهت صلاحية كود التحقق — اطلب كوداً جديداً', 401, 'UNAUTHORIZED');
+    if (!hash_equals((string) $u['passwordResetHash'], hash('sha256', $code))) jsonErr('كود التحقق غير صحيح', 401, 'UNAUTHORIZED');
+    db()->prepare('UPDATE `User` SET passwordHash = ?, passwordResetHash = NULL, passwordResetExpiresAt = NULL, updatedAt = NOW(3) WHERE id = ?')
+        ->execute([password_hash($new, PASSWORD_BCRYPT), $u['id']]);
+    jsonOk(['user' => ['id' => $u['id'], 'name' => $u['name'], 'phone' => $u['phone'], 'role' => $u['role']], 'tokens' => issueTokens($u['id'], (string) $u['role'])]);
+}
+
+if ($method === 'POST' && $path === '/auth/google') {
+    $b = readJsonBody();
+    $idToken = (string) ($b['idToken'] ?? '');
+    if (strlen($idToken) < 10) jsonErr('Google token غير صالح', 401, 'UNAUTHORIZED');
+    $clientId = env('GOOGLE_CLIENT_ID');
+    if (!$clientId) jsonErr('Google login غير مفعّل على السيرفر', 401, 'UNAUTHORIZED');
+    // Verify via Google's tokeninfo endpoint (no google-auth-library in PHP).
+    $ch = curl_init('https://oauth2.googleapis.com/tokeninfo?id_token=' . urlencode($idToken));
+    curl_setopt_array($ch, [CURLOPT_RETURNTRANSFER => true, CURLOPT_TIMEOUT => 10]);
+    $resp = curl_exec($ch); $httpCode = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE); curl_close($ch);
+    $tk = $resp ? (json_decode((string) $resp, true) ?: []) : [];
+    if ($httpCode !== 200 || empty($tk['sub']) || empty($tk['email'])) jsonErr('Google token غير صالح', 401, 'UNAUTHORIZED');
+    // aud must be one of our client IDs, else anyone's token would log in.
+    $auds = array_filter(array_map('trim', explode(',', $clientId . ',' . (env('GOOGLE_CLIENT_ID_ANDROID', '') ?: '') . ',' . (env('GOOGLE_CLIENT_ID_IOS', '') ?: ''))));
+    if ($auds && !in_array((string) ($tk['aud'] ?? ''), $auds, true)) jsonErr('Google token غير صالح', 401, 'UNAUTHORIZED');
+    $sub = (string) $tk['sub']; $email = strtolower((string) $tk['email']);
+    $st = db()->prepare('SELECT id, name, phone, email, role FROM `User` WHERE googleId = ? LIMIT 1');
+    $st->execute([$sub]);
+    $u = $st->fetch();
+    if (!$u) {
+        $st = db()->prepare('SELECT id, name, phone, email, role FROM `User` WHERE email = ? LIMIT 1');
+        $st->execute([$email]);
+        $u = $st->fetch();
+        if ($u) {
+            db()->prepare('UPDATE `User` SET googleId = ?, isPhoneVerified = 1, updatedAt = NOW(3) WHERE id = ?')->execute([$sub, $u['id']]);
+        } else {
+            $role = ((string) ($b['role'] ?? '')) === 'MERCHANT' ? 'MERCHANT' : 'CUSTOMER';
+            $id = newId();
+            // Placeholder phone; CollectPhoneScreen makes them set a real one.
+            db()->prepare('INSERT INTO `User` (id, phone, name, email, googleId, role, avatarUrl, isPhoneVerified, isActive, createdAt, updatedAt) VALUES (?,?,?,?,?,?,?,0,1,NOW(3),NOW(3))')
+                ->execute([$id, 'g_' . $sub, (string) ($tk['name'] ?? $email), $email, $sub, $role, ($tk['picture'] ?? null) ?: null]);
+            $u = ['id' => $id, 'name' => (string) ($tk['name'] ?? $email), 'phone' => 'g_' . $sub, 'email' => $email, 'role' => $role];
+        }
+    }
+    jsonOk(['user' => ['id' => $u['id'], 'name' => $u['name'], 'phone' => $u['phone'], 'email' => $u['email'], 'role' => $u['role']], 'tokens' => issueTokens($u['id'], (string) $u['role'])]);
+}
+
+// ═══ /me ═══════════════════════════════════════════════════════════════
+if ($method === 'GET' && $path === '/me') {
     $u = authUser();
-    $st = db()->prepare('SELECT * FROM `CustomerAddress` WHERE userId = ? ORDER BY isDefault DESC, createdAt DESC');
-    $st->execute([$u['sub'] ?? '']);
-    jsonOk($st->fetchAll());
+    $p = profileById((string) ($u['sub'] ?? ''));
+    if (!$p) jsonErr('المستخدم غير موجود', 404, 'NOT_FOUND');
+    jsonOk($p);
+}
+
+if ($method === 'PATCH' && $path === '/me') {
+    $u = authUser();
+    $uid = (string) ($u['sub'] ?? '');
+    $b = readJsonBody();
+    $sets = []; $args = [];
+    foreach (['name', 'email', 'city', 'governorate', 'defaultAddress', 'avatarUrl'] as $k) {
+        if (array_key_exists($k, $b)) { $sets[] = "`$k` = ?"; $args[] = $b[$k] === '' ? null : $b[$k]; }
+    }
+    if (array_key_exists('phone', $b)) {
+        $ph = normPhoneEg((string) $b['phone']) ?? trim((string) $b['phone']);
+        $st = db()->prepare('SELECT id FROM `User` WHERE phone = ? AND id <> ? LIMIT 1');
+        $st->execute([$ph, $uid]);
+        if ($st->fetch()) {
+            http_response_code(409);
+            echo json_encode(['error' => ['code' => 'CONFLICT', 'message' => 'Phone already used', 'messageAr' => 'هذا الرقم مستخدم بحساب آخر']], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+        $sets[] = '`phone` = ?'; $args[] = $ph;
+    }
+    if ($sets) {
+        $args[] = $uid;
+        db()->prepare('UPDATE `User` SET ' . implode(', ', $sets) . ', updatedAt = NOW(3) WHERE id = ?')->execute($args);
+    }
+    $p = profileById($uid);
+    if (!$p) jsonErr('المستخدم غير موجود', 404, 'NOT_FOUND');
+    jsonOk($p); // must be the FULL user — the app writes this back over its session
+}
+
+if ($method === 'DELETE' && $path === '/me') {
+    $u = authUser();
+    $uid = (string) ($u['sub'] ?? '');
+    db()->prepare("UPDATE `User` SET isActive = 0, phone = CONCAT('deleted_', SUBSTRING(id,1,8), '_', DATE_FORMAT(NOW(),'%Y%m%d')), email = NULL, googleId = NULL, passwordHash = NULL, fcmToken = NULL, updatedAt = NOW(3) WHERE id = ?")
+        ->execute([$uid]);
+    jsonOk(['deleted' => true]);
+}
+
+if ($method === 'POST' && $path === '/me/change-password') {
+    $u = authUser();
+    $uid = (string) ($u['sub'] ?? '');
+    $b = readJsonBody();
+    $cur = (string) ($b['currentPassword'] ?? '');
+    $new = (string) ($b['newPassword'] ?? '');
+    if (strlen($new) < 8 || strlen($new) > 72) jsonErr('كلمة السر الجديدة 8 أحرف على الأقل', 422, 'VALIDATION_ERROR');
+    $st = db()->prepare('SELECT passwordHash FROM `User` WHERE id = ? LIMIT 1');
+    $st->execute([$uid]);
+    $row = $st->fetch();
+    if (!$row) jsonErr('المستخدم غير موجود', 404, 'NOT_FOUND');
+    if (!$row['passwordHash']) jsonErr('حسابك ليس عليه كلمة سر — استخدم إعادة تعيين بدلاً', 422, 'VALIDATION_ERROR');
+    if (!password_verify($cur, (string) $row['passwordHash'])) jsonErr('كلمة السر الحالية غير صحيحة', 401, 'UNAUTHORIZED');
+    db()->prepare('UPDATE `User` SET passwordHash = ?, updatedAt = NOW(3) WHERE id = ?')->execute([password_hash($new, PASSWORD_BCRYPT), $uid]);
+    jsonOk(['changed' => true]);
+}
+
+if ($method === 'POST' && $path === '/me/fcm-token') {
+    $u = authUser();
+    $b = readJsonBody();
+    db()->prepare('UPDATE `User` SET fcmToken = ?, updatedAt = NOW(3) WHERE id = ?')
+        ->execute([($b['fcmToken'] ?? null) ?: null, (string) ($u['sub'] ?? '')]);
+    jsonOk(['saved' => true]);
 }
 
 if ($method === 'GET' && $path === '/me/wallet') {
     $u = authUser();
-    $st = db()->prepare('SELECT balance, currency, updatedAt FROM `Wallet` WHERE userId = ? LIMIT 1');
-    $st->execute([$u['sub'] ?? '']);
-    $w = $st->fetch() ?: ['balance' => 0, 'currency' => 'EGP'];
-    jsonOk($w);
+    $uid = (string) ($u['sub'] ?? '');
+    $st = db()->prepare('SELECT * FROM `Wallet` WHERE userId = ? LIMIT 1');
+    $st->execute([$uid]);
+    $w = $st->fetch();
+    if (!$w) { // lazily created on first read, like ensureWallet()
+        $wid = newId();
+        db()->prepare('INSERT INTO `Wallet` (id, userId, balance, totalEarned, totalSpent, createdAt, updatedAt) VALUES (?,?,0,0,0,NOW(3),NOW(3))')->execute([$wid, $uid]);
+        $st->execute([$uid]);
+        $w = $st->fetch();
+    }
+    $tx = db()->prepare('SELECT * FROM `WalletTransaction` WHERE walletId = ? ORDER BY createdAt DESC LIMIT 20');
+    $tx->execute([$w['id']]);
+    // WalletScreen .map()s transactions with no ?? [] guard — must be an array.
+    jsonOk(['wallet' => $w, 'transactions' => $tx->fetchAll()]);
 }
 
+// ═══ /me/addresses ═════════════════════════════════════════════════════
+if ($method === 'GET' && $path === '/me/addresses') {
+    $u = authUser();
+    $st = db()->prepare('SELECT * FROM `CustomerAddress` WHERE userId = ? ORDER BY isDefault DESC, createdAt DESC');
+    $st->execute([(string) ($u['sub'] ?? '')]);
+    jsonOk(array_map(fn($r) => boolCast($r, ['isDefault']), $st->fetchAll()));
+}
+
+if ($method === 'POST' && $path === '/me/addresses') {
+    $u = authUser();
+    $uid = (string) ($u['sub'] ?? '');
+    $b = readJsonBody();
+    $label = trim((string) ($b['label'] ?? ''));
+    $address = trim((string) ($b['address'] ?? ''));
+    if ($label === '' || mb_strlen($address) < 2) jsonErr('العنوان والاسم مطلوبان', 422, 'VALIDATION_ERROR');
+    $cnt = db()->prepare('SELECT COUNT(*) n FROM `CustomerAddress` WHERE userId = ?');
+    $cnt->execute([$uid]);
+    $shouldDefault = !empty($b['isDefault']) || (int) $cnt->fetch()['n'] === 0; // first address always default
+    if ($shouldDefault) db()->prepare('UPDATE `CustomerAddress` SET isDefault = 0 WHERE userId = ?')->execute([$uid]);
+    $id = newId();
+    db()->prepare('INSERT INTO `CustomerAddress` (id, userId, label, address, lat, lng, notes, isDefault, cityId, villageId, areaId, createdAt, updatedAt) VALUES (?,?,?,?,?,?,?,?,?,?,?,NOW(3),NOW(3))')
+        ->execute([$id, $uid, $label, $address,
+            isset($b['lat']) && $b['lat'] !== null ? (float) $b['lat'] : null,
+            isset($b['lng']) && $b['lng'] !== null ? (float) $b['lng'] : null,
+            ($b['notes'] ?? null) ?: null, $shouldDefault ? 1 : 0,
+            ($b['cityId'] ?? null) ?: null, ($b['villageId'] ?? null) ?: null, ($b['areaId'] ?? null) ?: null]);
+    $st = db()->prepare('SELECT * FROM `CustomerAddress` WHERE id = ?');
+    $st->execute([$id]);
+    jsonOk(boolCast($st->fetch(), ['isDefault']), 201);
+}
+
+if (preg_match('#^/me/addresses/([^/]+)/set-default$#', $path, $mm) && $method === 'POST') {
+    $u = authUser();
+    $uid = (string) ($u['sub'] ?? '');
+    $st = db()->prepare('SELECT * FROM `CustomerAddress` WHERE id = ? AND userId = ? LIMIT 1');
+    $st->execute([$mm[1], $uid]);
+    $a = $st->fetch();
+    if (!$a) jsonErr('العنوان غير موجود', 404, 'NOT_FOUND');
+    db()->prepare('UPDATE `CustomerAddress` SET isDefault = 0 WHERE userId = ?')->execute([$uid]);
+    db()->prepare('UPDATE `CustomerAddress` SET isDefault = 1, updatedAt = NOW(3) WHERE id = ?')->execute([$mm[1]]);
+    $st->execute([$mm[1], $uid]);
+    jsonOk(boolCast($st->fetch(), ['isDefault']));
+}
+
+if (preg_match('#^/me/addresses/([^/]+)$#', $path, $mm) && in_array($method, ['PATCH', 'DELETE'], true)) {
+    $u = authUser();
+    $uid = (string) ($u['sub'] ?? '');
+    $st = db()->prepare('SELECT * FROM `CustomerAddress` WHERE id = ? AND userId = ? LIMIT 1');
+    $st->execute([$mm[1], $uid]);
+    $a = $st->fetch();
+    if (!$a) jsonErr('العنوان غير موجود', 404, 'NOT_FOUND'); // ownership → 404, not 403
+    if ($method === 'DELETE') {
+        db()->prepare('DELETE FROM `CustomerAddress` WHERE id = ?')->execute([$mm[1]]);
+        if ((int) $a['isDefault']) { // promote the most recent survivor
+            $n = db()->prepare('SELECT id FROM `CustomerAddress` WHERE userId = ? ORDER BY createdAt DESC LIMIT 1');
+            $n->execute([$uid]);
+            $next = $n->fetch();
+            if ($next) db()->prepare('UPDATE `CustomerAddress` SET isDefault = 1 WHERE id = ?')->execute([$next['id']]);
+        }
+        noContent();
+    }
+    $b = readJsonBody();
+    $sets = []; $args = [];
+    foreach (['label', 'address', 'notes'] as $k) if (array_key_exists($k, $b)) { $sets[] = "`$k` = ?"; $args[] = $b[$k]; }
+    foreach (['lat', 'lng'] as $k) if (array_key_exists($k, $b)) { $sets[] = "`$k` = ?"; $args[] = $b[$k] === null ? null : (float) $b[$k]; }
+    foreach (['cityId', 'villageId', 'areaId'] as $k) if (array_key_exists($k, $b)) { $sets[] = "`$k` = ?"; $args[] = $b[$k] ?: null; }
+    if (array_key_exists('isDefault', $b) && $b['isDefault']) {
+        db()->prepare('UPDATE `CustomerAddress` SET isDefault = 0 WHERE userId = ?')->execute([$uid]);
+        $sets[] = '`isDefault` = 1';
+    }
+    if ($sets) { $args[] = $mm[1]; db()->prepare('UPDATE `CustomerAddress` SET ' . implode(', ', $sets) . ', updatedAt = NOW(3) WHERE id = ?')->execute($args); }
+    $st->execute([$mm[1], $uid]);
+    jsonOk(boolCast($st->fetch(), ['isDefault']));
+}
+
+// ═══ CATALOG (public) ══════════════════════════════════════════════════
 if ($method === 'GET' && $path === '/categories') {
-    // Public — no auth required.  Empty categories list still renders the
-    // catalog page cleanly.
-    try {
-        $rows = db()->query('SELECT * FROM `Category` WHERE isActive = 1 ORDER BY sortOrder ASC, nameAr ASC')->fetchAll();
-    } catch (Throwable $e) {
-        $rows = db()->query('SELECT * FROM `Category` ORDER BY id ASC')->fetchAll();
-    }
-    jsonOk($rows);
+    $rows = db()->query('SELECT * FROM `Category` WHERE isActive = 1 ORDER BY sortOrder ASC, nameAr ASC')->fetchAll();
+    jsonOk(array_map(fn($r) => boolCast($r, ['isActive']), $rows));
 }
 
+if ($method === 'GET' && $path === '/offers') {
+    $rows = db()->query('SELECT * FROM `Offer` WHERE isActive = 1 AND (startsAt IS NULL OR startsAt <= NOW(3)) AND (endsAt IS NULL OR endsAt >= NOW(3)) ORDER BY sortOrder ASC')->fetchAll();
+    jsonOk(array_map(fn($r) => boolCast($r, ['isActive']), $rows));
+}
+
+if ($method === 'GET' && $path === '/merchants') {
+    $page = max(1, (int) ($_GET['page'] ?? 1));
+    $pageSize = min(100, max(1, (int) ($_GET['pageSize'] ?? 20)));
+    $where = '1=1'; $args = [];
+    if (!empty($_GET['categoryId'])) { $where .= ' AND m.categoryId = ?'; $args[] = $_GET['categoryId']; }
+    if (!empty($_GET['governorate'])) { $where .= ' AND m.governorate = ?'; $args[] = $_GET['governorate']; }
+    if (!empty($_GET['city'])) { $where .= ' AND m.city = ?'; $args[] = $_GET['city']; }
+    $q = trim((string) ($_GET['q'] ?? $_GET['search'] ?? ''));
+    if ($q !== '') { $where .= ' AND (m.storeName LIKE ? OR m.storeNameAr LIKE ?)'; $args[] = "%$q%"; $args[] = "%$q%"; }
+    $hasGeo = isset($_GET['lat'], $_GET['lng']) && $_GET['lat'] !== '' && $_GET['lng'] !== '';
+    $sql = 'SELECT ' . MERCHANT_SEL . ' FROM `MerchantProfile` m LEFT JOIN `Category` c ON c.id = m.categoryId WHERE ' . $where;
+
+    if ($hasGeo) {
+        // Geo branch loads all, computes Haversine in memory, then slices —
+        // and each row gains a real numeric distanceKm (catalog.controller).
+        $st = db()->prepare($sql);
+        $st->execute($args);
+        $all = $st->fetchAll();
+        $lat = (float) $_GET['lat']; $lng = (float) $_GET['lng'];
+        $radius = min(100, (float) ($_GET['radiusKm'] ?? 100));
+        $out = [];
+        foreach ($all as $r) {
+            $dLat = deg2rad(((float) $r['lat']) - $lat); $dLng = deg2rad(((float) $r['lng']) - $lng);
+            $a = sin($dLat / 2) ** 2 + cos(deg2rad($lat)) * cos(deg2rad((float) $r['lat'])) * sin($dLng / 2) ** 2;
+            $d = 6371 * 2 * atan2(sqrt($a), sqrt(1 - $a));
+            if ($d <= $radius) { $r['_d'] = $d; $out[] = $r; }
+        }
+        usort($out, fn($x, $y) => $x['_d'] <=> $y['_d']);
+        $total = count($out);
+        $slice = array_slice($out, ($page - 1) * $pageSize, $pageSize);
+        $hrs = hoursFor(array_column($slice, 'id'));
+        $rows = [];
+        foreach ($slice as $r) {
+            $d = $r['_d']; unset($r['_d']);
+            $m = merchantShape($r, $hrs[$r['id']] ?? []);
+            $m['distanceKm'] = round($d, 2);
+            $rows[] = $m;
+        }
+        jsonList($rows, $page, $pageSize, $total);
+    }
+
+    $cst = db()->prepare('SELECT COUNT(*) n FROM `MerchantProfile` m WHERE ' . $where);
+    $cst->execute($args);
+    $total = (int) $cst->fetch()['n'];
+    $st = db()->prepare($sql . ' ORDER BY m.rating DESC, m.storeNameAr ASC LIMIT ' . $pageSize . ' OFFSET ' . (($page - 1) * $pageSize));
+    $st->execute($args);
+    $slice = $st->fetchAll();
+    $hrs = hoursFor(array_column($slice, 'id'));
+    jsonList(array_map(fn($r) => merchantShape($r, $hrs[$r['id']] ?? []), $slice), $page, $pageSize, $total);
+}
+
+if ($method === 'POST' && $path === '/merchants/openness') {
+    $b = readJsonBody();
+    $ids = array_values(array_filter((array) ($b['ids'] ?? [])));
+    if (!$ids) jsonOk([]);
+    $ids = array_slice($ids, 0, 50);
+    $in = implode(',', array_fill(0, count($ids), '?'));
+    $st = db()->prepare("SELECT id, manualStatus, timezone FROM `MerchantProfile` WHERE id IN ($in)");
+    $st->execute($ids);
+    $rows = $st->fetchAll();
+    $hrs = hoursFor(array_column($rows, 'id'));
+    $out = [];
+    foreach ($rows as $r) $out[$r['id']] = merchantOpenness($r, $hrs[$r['id']] ?? []);
+    // Keyed MAP, not an array — CartScreen does Object.values(openness).
+    header('Content-Type: application/json; charset=utf-8');
+    http_response_code(200);
+    echo json_encode(['data' => (object) $out], JSON_UNESCAPED_UNICODE);
+    exit;
+}
+
+if (preg_match('#^/merchants/([^/]+)/products$#', $path, $mm) && $method === 'GET') {
+    $st = db()->prepare('SELECT * FROM `Product` WHERE merchantId = ? AND isAvailable = 1 AND isHidden = 0 ORDER BY sortOrder ASC');
+    $st->execute([$mm[1]]);
+    jsonOk(array_map('productShape', $st->fetchAll()));
+}
+
+if (preg_match('#^/merchants/([^/]+)$#', $path, $mm) && $method === 'GET') {
+    $st = db()->prepare('SELECT ' . MERCHANT_SEL . ', m.openHours FROM `MerchantProfile` m LEFT JOIN `Category` c ON c.id = m.categoryId WHERE m.id = ? LIMIT 1');
+    $st->execute([$mm[1]]);
+    $r = $st->fetch();
+    if (!$r) jsonErr('المتجر غير موجود', 404, 'NOT_FOUND');
+    $hrs = hoursFor([$mm[1]]);
+    $m = merchantShape($r, $hrs[$mm[1]] ?? []);
+    $m['openHours'] = is_string($r['openHours'] ?? null) ? json_decode((string) $r['openHours'], true) : ($r['openHours'] ?? null);
+    $ps = db()->prepare('SELECT * FROM `Product` WHERE merchantId = ? ORDER BY sortOrder ASC');
+    $ps->execute([$mm[1]]);
+    $m['products'] = array_map('productShape', $ps->fetchAll());
+    jsonOk($m);
+}
+
+if ($method === 'GET' && $path === '/products') {
+    $page = max(1, (int) ($_GET['page'] ?? 1));
+    $pageSize = min(100, max(1, (int) ($_GET['pageSize'] ?? 20)));
+    $where = 'p.isAvailable = 1'; $args = [];
+    if (!empty($_GET['merchantId'])) { $where .= ' AND p.merchantId = ?'; $args[] = $_GET['merchantId']; }
+    $q = trim((string) ($_GET['q'] ?? $_GET['search'] ?? ''));
+    if ($q !== '') { $where .= ' AND (p.name LIKE ? OR p.nameAr LIKE ?)'; $args[] = "%$q%"; $args[] = "%$q%"; }
+    $cst = db()->prepare('SELECT COUNT(*) n FROM `Product` p WHERE ' . $where);
+    $cst->execute($args);
+    $total = (int) $cst->fetch()['n'];
+    $st = db()->prepare('SELECT p.*, m.storeNameAr AS m_storeNameAr, m.isOpen AS m_isOpen FROM `Product` p LEFT JOIN `MerchantProfile` m ON m.id = p.merchantId WHERE ' . $where . ' ORDER BY p.sortOrder ASC, p.nameAr ASC LIMIT ' . $pageSize . ' OFFSET ' . (($page - 1) * $pageSize));
+    $st->execute($args);
+    $rows = [];
+    foreach ($st->fetchAll() as $r) {
+        $p = productShape($r);
+        $p['merchant'] = ['id' => $r['merchantId'], 'storeNameAr' => $r['m_storeNameAr'], 'isOpen' => (bool) (int) $r['m_isOpen']];
+        unset($p['m_storeNameAr'], $p['m_isOpen']);
+        $rows[] = $p;
+    }
+    jsonList($rows, $page, $pageSize, $total);
+}
+
+if (preg_match('#^/products/([^/]+)$#', $path, $mm) && $method === 'GET') {
+    $st = db()->prepare('SELECT p.*, m.id AS m_id, m.storeNameAr AS m_storeNameAr, m.logoUrl AS m_logoUrl, m.rating AS m_rating, m.manualStatus AS m_manualStatus, m.timezone AS m_timezone FROM `Product` p LEFT JOIN `MerchantProfile` m ON m.id = p.merchantId WHERE p.id = ? LIMIT 1');
+    $st->execute([$mm[1]]);
+    $r = $st->fetch();
+    if (!$r) jsonErr('المنتج غير موجود', 404, 'NOT_FOUND');
+    $p = productShape($r);
+    $hrs = hoursFor([$r['merchantId']]);
+    // ProductDetailScreen types `merchant` as required — never omit it.
+    $p['merchant'] = [
+        'id' => $r['m_id'], 'storeNameAr' => $r['m_storeNameAr'], 'logoUrl' => $r['m_logoUrl'],
+        'rating' => $r['m_rating'], 'manualStatus' => $r['m_manualStatus'], 'timezone' => $r['m_timezone'],
+        'openness' => merchantOpenness(['manualStatus' => $r['m_manualStatus'], 'timezone' => $r['m_timezone']], $hrs[$r['merchantId']] ?? []),
+    ];
+    foreach (['m_id', 'm_storeNameAr', 'm_logoUrl', 'm_rating', 'm_manualStatus', 'm_timezone'] as $k) unset($p[$k]);
+    jsonOk($p);
+}
+
+// ═══ SERVICES (public) ═════════════════════════════════════════════════
 if ($method === 'GET' && $path === '/services') {
-    try {
-        $rows = db()->query('SELECT * FROM `Service` WHERE isActive = 1 ORDER BY sortOrder ASC, nameAr ASC')->fetchAll();
-    } catch (Throwable $e) {
-        $rows = db()->query('SELECT * FROM `Service` ORDER BY id ASC')->fetchAll();
-    }
-    jsonOk($rows);
+    $rows = db()->query('SELECT * FROM `Service` WHERE isActive = 1 ORDER BY sortOrder ASC')->fetchAll();
+    jsonOk(array_map(fn($r) => boolCast(jsonizeRow($r), ['isActive', 'requiresPickupLocation', 'requiresDeliveryLocation', 'requiresImageUpload', 'allowsTextNote', 'supportsMultiplePickups', 'supportsMultipleDeliveries']), $rows));
 }
 
+if (preg_match('#^/services/([^/]+)$#', $path, $mm) && $method === 'GET') {
+    $st = db()->prepare('SELECT * FROM `Service` WHERE id = ? LIMIT 1');
+    $st->execute([$mm[1]]);
+    $s = $st->fetch();
+    if (!$s || !(int) $s['isActive']) jsonErr('الخدمة غير موجودة', 404, 'NOT_FOUND');
+    $s = boolCast(jsonizeRow($s), ['isActive', 'requiresPickupLocation', 'requiresDeliveryLocation', 'requiresImageUpload', 'allowsTextNote', 'supportsMultiplePickups', 'supportsMultipleDeliveries']);
+    $fs = db()->prepare('SELECT * FROM `ServiceField` WHERE serviceId = ? ORDER BY sortOrder ASC');
+    $fs->execute([$mm[1]]);
+    $s['fields'] = array_map(fn($f) => boolCast(jsonizeRow($f), ['isRequired']), $fs->fetchAll());
+    jsonOk($s);
+}
+
+// ═══ ZONES (public) ════════════════════════════════════════════════════
+if ($method === 'GET' && $path === '/zones/cities') {
+    $rows = db()->query('SELECT id, nameAr, nameEn FROM `City` WHERE isActive = 1 ORDER BY nameAr')->fetchAll();
+    jsonOk($rows);
+}
+if (preg_match('#^/zones/cities/([^/]+)/villages$#', $path, $mm) && $method === 'GET') {
+    $st = db()->prepare('SELECT id, nameAr, nameEn, baseDeliveryPrice FROM `Village` WHERE cityId = ? AND isActive = 1 ORDER BY nameAr');
+    $st->execute([$mm[1]]);
+    jsonOk($st->fetchAll());
+}
+if (preg_match('#^/zones/villages/([^/]+)/areas$#', $path, $mm) && $method === 'GET') {
+    $st = db()->prepare('SELECT id, nameAr, nameEn, deliveryPrice FROM `Area` WHERE villageId = ? AND isActive = 1 ORDER BY nameAr');
+    $st->execute([$mm[1]]);
+    jsonOk($st->fetchAll());
+}
+/** Area price → Village base price → refuse. Returns [price, source] or null. */
+function zoneQuote(?string $cityId, ?string $villageId, ?string $areaId): ?array {
+    if (!$cityId || !$villageId || !$areaId) return null;
+    $st = db()->prepare('SELECT a.deliveryPrice AS aPrice, a.nameAr AS aName, a.isActive AS aActive,
+        v.baseDeliveryPrice AS vPrice, v.nameAr AS vName, v.isActive AS vActive,
+        c.nameAr AS cName, c.isActive AS cActive
+        FROM `Area` a JOIN `Village` v ON v.id = a.villageId JOIN `City` c ON c.id = v.cityId
+        WHERE a.id = ? AND v.id = ? AND c.id = ? LIMIT 1');
+    $st->execute([$areaId, $villageId, $cityId]);
+    $r = $st->fetch();
+    if (!$r) return null;
+    if (!(int) $r['aActive'] || !(int) $r['vActive'] || !(int) $r['cActive']) return ['INACTIVE', null, null];
+    $price = $r['aPrice'] !== null ? $r['aPrice'] : $r['vPrice'];
+    if ($price === null) return ['NO_PRICE', null, null];
+    return ['OK', $price, ['source' => $r['aPrice'] !== null ? 'AREA' : 'VILLAGE', 'cityName' => $r['cName'], 'villageName' => $r['vName'], 'areaName' => $r['aName']]];
+}
+if ($method === 'POST' && $path === '/zones/quote-delivery') {
+    $b = readJsonBody();
+    $q = zoneQuote($b['cityId'] ?? null, $b['villageId'] ?? null, $b['areaId'] ?? null);
+    if (!$q) jsonErr('اختيارات العنوان غير صحيحة', 400, 'INVALID_ZONE');
+    if ($q[0] === 'INACTIVE') jsonErr('هذه المنطقة غير مفعّلة حالياً. اختر منطقة أخرى.', 400, 'INACTIVE_ZONE');
+    if ($q[0] === 'NO_PRICE') jsonErr('لا يوجد سعر توصيل لهذه المنطقة، تواصل مع الدعم', 400, 'NO_DELIVERY_PRICE');
+    jsonOk(array_merge(['price' => $q[1]], $q[2]));
+}
+
+// ═══ COUPONS ═══════════════════════════════════════════════════════════
+/** Returns [valid, discountOrReason, coupon]. Mirrors coupons.controller. */
+function couponCheck(string $code, float $amount, string $userId): array {
+    // validFrom/validTo evaluated in SQL against NOW(3) — comparing a DB
+    // timestamp to PHP's time() skews by any PHP/MySQL timezone mismatch,
+    // which would honour an expired coupon (or reject a live one).
+    $st = db()->prepare('SELECT c.*, (c.validFrom IS NOT NULL AND c.validFrom > NOW(3)) AS notYet, (c.validTo IS NOT NULL AND c.validTo < NOW(3)) AS expired FROM `Coupon` c WHERE c.code = ? AND c.isActive = 1 LIMIT 1');
+    $st->execute([strtoupper(trim($code))]);
+    $c = $st->fetch();
+    if (!$c) return [false, 'الكود غير موجود أو غير نشط', null];
+    if ((int) $c['notYet']) return [false, 'الكود لم يبدأ بعد', null];
+    if ((int) $c['expired']) return [false, 'انتهت صلاحية الكود', null];
+    if ($c['usageLimit'] !== null) {
+        $n = db()->prepare('SELECT COUNT(*) n FROM `CouponRedemption` WHERE couponId = ?');
+        $n->execute([$c['id']]);
+        if ((int) $n->fetch()['n'] >= (int) $c['usageLimit']) return [false, 'استُنفذ الكود', null];
+    }
+    $perUser = $c['usagePerUser'] === null ? 1 : (int) $c['usagePerUser'];
+    $n = db()->prepare('SELECT COUNT(*) n FROM `CouponRedemption` WHERE couponId = ? AND userId = ?');
+    $n->execute([$c['id'], $userId]);
+    if ((int) $n->fetch()['n'] >= $perUser) return [false, 'استخدمت هذا الكود من قبل', null];
+    if ($c['minOrderAmount'] !== null && $amount < (float) $c['minOrderAmount']) {
+        return [false, 'الحد الأدنى للطلب ' . rtrim(rtrim((string) $c['minOrderAmount'], '0'), '.') . ' ج.م', null];
+    }
+    $d = $c['type'] === 'PERCENTAGE' ? $amount * ((float) $c['value']) / 100 : (float) $c['value'];
+    if ($c['maxDiscount'] !== null) $d = min($d, (float) $c['maxDiscount']);
+    $d = round(min($d, $amount), 2);
+    return [true, $d, $c];
+}
+if ($method === 'POST' && $path === '/coupons/validate') {
+    $u = authUser();
+    $b = readJsonBody();
+    $amount = (float) ($b['orderAmount'] ?? 0);
+    [$valid, $res, $c] = couponCheck((string) ($b['code'] ?? ''), $amount, (string) ($u['sub'] ?? ''));
+    // Always 200 — an invalid coupon is not an error. discount MUST be a
+    // number: CouponInput checks `typeof discount === 'number'`.
+    if (!$valid) jsonOk(['valid' => false, 'reason' => $res]);
+    jsonOk(['valid' => true, 'discount' => (float) $res, 'type' => $c['type'], 'value' => (float) $c['value'], 'finalAmount' => max(0, round($amount - (float) $res, 2))]);
+}
+if ($method === 'GET' && $path === '/coupons/available') {
+    $u = authUser();
+    $uid = (string) ($u['sub'] ?? '');
+    $rows = db()->query('SELECT * FROM `Coupon` WHERE isActive = 1 AND (validFrom IS NULL OR validFrom <= NOW(3)) AND (validTo IS NULL OR validTo >= NOW(3)) ORDER BY createdAt DESC')->fetchAll();
+    $out = [];
+    foreach ($rows as $c) {
+        $perUser = $c['usagePerUser'] === null ? 1 : (int) $c['usagePerUser'];
+        $n = db()->prepare('SELECT COUNT(*) n FROM `CouponRedemption` WHERE couponId = ? AND userId = ?');
+        $n->execute([$c['id'], $uid]);
+        if ((int) $n->fetch()['n'] >= $perUser) continue;
+        $out[] = ['id' => $c['id'], 'code' => $c['code'], 'type' => $c['type'], 'value' => (float) $c['value'],
+            'minOrderAmount' => $c['minOrderAmount'] === null ? null : (float) $c['minOrderAmount'],
+            'maxDiscount' => $c['maxDiscount'] === null ? null : (float) $c['maxDiscount'],
+            'validTo' => $c['validTo'], 'description' => $c['description']];
+    }
+    jsonOk($out);
+}
+
+// ═══ NOTIFICATIONS ═════════════════════════════════════════════════════
+if ($method === 'GET' && $path === '/notifications/unread-count') {
+    $u = authUser();
+    $st = db()->prepare('SELECT COUNT(*) n FROM `Notification` WHERE userId = ? AND isRead = 0');
+    $st->execute([(string) ($u['sub'] ?? '')]);
+    jsonOk(['count' => (int) $st->fetch()['n']]);
+}
+if ($method === 'GET' && $path === '/notifications') {
+    $u = authUser();
+    $uid = (string) ($u['sub'] ?? '');
+    $page = max(1, (int) ($_GET['page'] ?? 1));
+    $pageSize = min(100, max(1, (int) ($_GET['pageSize'] ?? 30))); // default 30 here, not 20
+    $c = db()->prepare('SELECT COUNT(*) n FROM `Notification` WHERE userId = ?');
+    $c->execute([$uid]);
+    $total = (int) $c->fetch()['n'];
+    $st = db()->prepare('SELECT * FROM `Notification` WHERE userId = ? ORDER BY sentAt DESC LIMIT ' . $pageSize . ' OFFSET ' . (($page - 1) * $pageSize));
+    $st->execute([$uid]);
+    jsonList(array_map(fn($r) => boolCast(jsonizeRow($r), ['isRead']), $st->fetchAll()), $page, $pageSize, $total);
+}
+if ($method === 'PATCH' && $path === '/notifications/read-all') {
+    $u = authUser();
+    $st = db()->prepare('UPDATE `Notification` SET isRead = 1, readAt = NOW(3) WHERE userId = ? AND isRead = 0');
+    $st->execute([(string) ($u['sub'] ?? '')]);
+    jsonOk(['updated' => $st->rowCount()]);
+}
+if (preg_match('#^/notifications/([^/]+)/read$#', $path, $mm) && $method === 'PATCH') {
+    $u = authUser();
+    $st = db()->prepare('UPDATE `Notification` SET isRead = 1, readAt = NOW(3) WHERE id = ? AND userId = ?');
+    $st->execute([$mm[1], (string) ($u['sub'] ?? '')]);
+    jsonOk(['updated' => $st->rowCount()]);
+}
+
+// ═══ ORDERS ════════════════════════════════════════════════════════════
+const ORDER_MONEY = ['quotedPrice', 'finalPrice', 'discountAmount', 'walletUsed', 'merchantSubtotal', 'deliveryFee', 'platformCommission', 'merchantPayout'];
+function orderRow(array $r): array { return boolCast(jsonizeRow($r), ['isFragile']); }
+function newOrderNumber(string $id): string { return 'TMM' . strtoupper(substr($id, 1, 9)); }
+/** ConflictError smuggles the machine code in `message`, not `code`. */
+function conflictErr(string $code, string $messageAr): void {
+    http_response_code(409);
+    echo json_encode(['error' => ['code' => 'CONFLICT', 'message' => $code, 'messageAr' => $messageAr]], JSON_UNESCAPED_UNICODE);
+    exit;
+}
+function orderHistory(string $orderId, ?string $from, string $to, string $by, string $role, ?string $reason = null): void {
+    db()->prepare('INSERT INTO `OrderStatusHistory` (id, orderId, fromStatus, toStatus, changedById, changedByRole, reason, createdAt) VALUES (?,?,?,?,?,?,?,NOW(3))')
+        ->execute([newId(), $orderId, $from, $to, $by, $role, $reason]);
+}
+function notifyUser(string $userId, string $type, string $title, string $titleAr, string $body, string $bodyAr, ?array $data = null): void {
+    try {
+        db()->prepare('INSERT INTO `Notification` (id, userId, type, title, titleAr, body, bodyAr, data, channel, isRead, sentAt) VALUES (?,?,?,?,?,?,?,?,?,0,NOW(3))')
+            ->execute([newId(), $userId, $type, $title, $titleAr, $body, $bodyAr, $data ? json_encode($data, JSON_UNESCAPED_UNICODE) : null, 'IN_APP']);
+    } catch (Throwable $e) { error_log('[api.php] notify failed: ' . $e->getMessage()); }
+}
+
+if ($method === 'GET' && $path === '/orders/mine') {
+    $u = authUser();
+    $uid = (string) ($u['sub'] ?? '');
+    $page = max(1, (int) ($_GET['page'] ?? 1));
+    $pageSize = min(50, max(1, (int) ($_GET['pageSize'] ?? 20))); // caps at 50 here
+    $where = 'o.customerId = ? AND o.parentOrderId IS NULL'; $args = [$uid];
+    if (!empty($_GET['status'])) { $where .= ' AND o.status = ?'; $args[] = $_GET['status']; }
+    $c = db()->prepare('SELECT COUNT(*) n FROM `Order` o WHERE ' . $where);
+    $c->execute($args);
+    $total = (int) $c->fetch()['n'];
+    $st = db()->prepare('SELECT o.*, s.nameAr AS s_nameAr, s.category AS s_category,
+        (SELECT COUNT(*) FROM `Order` so WHERE so.parentOrderId = o.id) AS subCount
+        FROM `Order` o LEFT JOIN `Service` s ON s.id = o.serviceId WHERE ' . $where . '
+        ORDER BY o.createdAt DESC LIMIT ' . $pageSize . ' OFFSET ' . (($page - 1) * $pageSize));
+    $st->execute($args);
+    $rows = [];
+    foreach ($st->fetchAll() as $r) {
+        $o = orderRow($r);
+        $o['service'] = ['id' => $r['serviceId'], 'nameAr' => $r['s_nameAr'], 'category' => $r['s_category']];
+        $o['_count'] = ['subOrders' => (int) $r['subCount']];
+        foreach (['s_nameAr', 's_category', 'subCount'] as $k) unset($o[$k]);
+        $rows[] = $o;
+    }
+    jsonList($rows, $page, $pageSize, $total);
+}
+
+if ($method === 'POST' && $path === '/orders/cart') {
+    $u = authUser();
+    $uid = (string) ($u['sub'] ?? '');
+    $b = readJsonBody();
+    $merchants = (array) ($b['merchants'] ?? []);
+    if (!$merchants) jsonErr('السلة فارغة', 422, 'VALIDATION_ERROR');
+    $addr = trim((string) ($b['deliveryAddress'] ?? ''));
+    if ($addr === '' || !isset($b['deliveryLat'], $b['deliveryLng'])) jsonErr('حدد عنوان التوصيل على الخريطة', 422, 'VALIDATION_ERROR');
+    $svc = db()->query("SELECT * FROM `Service` WHERE category = 'MERCHANT' AND isActive = 1 ORDER BY sortOrder ASC LIMIT 1")->fetch();
+    if (!$svc) jsonErr('الخدمة غير متاحة', 404, 'NOT_FOUND');
+
+    // Refuse the whole cart if any merchant is closed — matches orders.customer.
+    $ids = array_values(array_filter(array_map(fn($m) => $m['merchantId'] ?? null, $merchants)));
+    $hrs = hoursFor($ids);
+    foreach ($ids as $mid) {
+        $ms = db()->prepare('SELECT id, storeNameAr, manualStatus, timezone FROM `MerchantProfile` WHERE id = ? LIMIT 1');
+        $ms->execute([$mid]);
+        $m = $ms->fetch();
+        if (!$m) jsonErr('المتجر غير موجود', 404, 'NOT_FOUND');
+        $op = merchantOpenness($m, $hrs[$mid] ?? []);
+        if (!$op['isOpenNow']) {
+            conflictErr($op['reason'] === 'OUT_OF_HOURS' ? 'MERCHANT_OUT_OF_HOURS' : 'MERCHANT_CLOSED',
+                'المتجر ' . $m['storeNameAr'] . ' مغلق حالياً');
+        }
+    }
+    // Delivery fee is ALWAYS recomputed server-side (anti-tamper).
+    $fee = null;
+    if (!empty($b['cityId']) || !empty($b['villageId']) || !empty($b['areaId'])) {
+        $q = zoneQuote($b['cityId'] ?? null, $b['villageId'] ?? null, $b['areaId'] ?? null);
+        if (!$q) jsonErr('اختيارات العنوان غير صحيحة', 400, 'INVALID_ZONE');
+        if ($q[0] === 'INACTIVE') jsonErr('هذه المنطقة غير مفعّلة حالياً. اختر منطقة أخرى.', 400, 'INACTIVE_ZONE');
+        if ($q[0] === 'NO_PRICE') jsonErr('لا يوجد سعر توصيل لهذه المنطقة، تواصل مع الدعم', 400, 'NO_DELIVERY_PRICE');
+        $fee = (float) $q[1];
+    }
+    $pm = (string) ($b['paymentMethod'] ?? 'CASH');
+    if (!in_array($pm, ['CASH', 'VODAFONE_CASH', 'INSTAPAY'], true)) $pm = 'CASH';
+
+    // Price every line from the DB — never trust client-sent prices.
+    $subtotals = []; $lines = [];
+    foreach ($merchants as $mi => $m) {
+        $sum = 0.0; $lines[$mi] = [];
+        foreach ((array) ($m['items'] ?? []) as $it) {
+            $ps = db()->prepare('SELECT id, merchantId, nameAr, price, salePrice, isAvailable, isHidden, stock FROM `Product` WHERE id = ? LIMIT 1');
+            $ps->execute([$it['productId'] ?? '']);
+            $p = $ps->fetch();
+            if (!$p) conflictErr('PRODUCT_UNAVAILABLE', 'أحد المنتجات لم يعد متاحاً');
+            // The product must actually belong to the merchant block it was sent
+            // under — otherwise a crafted cart bills merchant A for merchant B's
+            // item and dispatches a store something it doesn't sell.
+            if (($m['merchantId'] ?? null) !== null && $p['merchantId'] !== $m['merchantId']) {
+                conflictErr('PRODUCT_UNAVAILABLE', 'المنتج ' . $p['nameAr'] . ' لا يتبع هذا المتجر');
+            }
+            // isHidden = soft-deleted / dropped by the merchant's sync feed. It is
+            // independent of isAvailable, so both must be checked (as Node does).
+            if (!(int) $p['isAvailable'] || (int) $p['isHidden']) conflictErr('PRODUCT_UNAVAILABLE', 'المنتج ' . $p['nameAr'] . ' غير متاح حالياً');
+            $qty = max(1, (int) ($it['quantity'] ?? 1));
+            if ($p['stock'] !== null && (int) $p['stock'] < $qty) conflictErr('INSUFFICIENT_STOCK', 'الكمية المطلوبة من ' . $p['nameAr'] . ' غير متوفرة');
+            // salePrice ?? price — deliberately NOT compounding Product.discount:
+            // the app derives its badge from (price - salePrice), so applying
+            // `discount` here would charge less than the customer was shown.
+            $unit = round($p['salePrice'] !== null ? (float) $p['salePrice'] : (float) $p['price'], 2);
+            $sum += $unit * $qty;
+            $lines[$mi][] = ['productId' => $p['id'], 'name' => $p['nameAr'], 'qty' => $qty, 'unit' => $unit, 'notes' => $it['notes'] ?? null];
+        }
+        $subtotals[$mi] = round($sum, 2);
+    }
+    $grandSub = round(array_sum($subtotals), 2);
+
+    $discount = 0.0; $coupon = null;
+    if (!empty($b['couponCode'])) {
+        [$ok, $res, $c] = couponCheck((string) $b['couponCode'], $grandSub, $uid);
+        if (!$ok) jsonErr((string) $res, 422, 'VALIDATION_ERROR');
+        $discount = (float) $res; $coupon = $c;
+    }
+    $final = round($grandSub + ($fee ?? 0) - $discount, 2);
+
+    $parentId = newId();
+    $parentNo = newOrderNumber($parentId);
+    $multi = count($merchants) > 1;
+    db()->prepare('INSERT INTO `Order` (id, orderNumber, serviceId, customerId, category, status, merchantId, deliveryAddress, deliveryLat, deliveryLng, cityId, villageId, areaId, paymentMethod, paymentStatus, currency, couponCode, discountAmount, merchantSubtotal, deliveryFee, quotedPrice, finalPrice, scheduledFor, createdAt, updatedAt)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NOW(3),NOW(3))')
+        ->execute([$parentId, $parentNo, $svc['id'], $uid, 'MERCHANT', 'NEW',
+            $multi ? null : ($merchants[0]['merchantId'] ?? null),
+            $addr, (float) $b['deliveryLat'], (float) $b['deliveryLng'],
+            ($b['cityId'] ?? null) ?: null, ($b['villageId'] ?? null) ?: null, ($b['areaId'] ?? null) ?: null,
+            $pm, 'PENDING', 'EGP', $coupon ? $coupon['code'] : null, $discount ?: null,
+            $grandSub, $fee, $final, null, ($b['scheduledFor'] ?? null) ?: null]);
+    orderHistory($parentId, null, 'NEW', $uid, 'CUSTOMER', 'Order placed from cart');
+
+    foreach ($merchants as $mi => $m) {
+        $childId = $multi ? newId() : $parentId;
+        if ($multi) {
+            db()->prepare('INSERT INTO `Order` (id, orderNumber, serviceId, customerId, category, status, merchantId, parentOrderId, deliveryAddress, deliveryLat, deliveryLng, paymentMethod, paymentStatus, currency, merchantSubtotal, notes, imageUrls, createdAt, updatedAt)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NOW(3),NOW(3))')
+                ->execute([$childId, newOrderNumber($childId), $svc['id'], $uid, 'MERCHANT', 'NEW',
+                    $m['merchantId'] ?? null, $parentId, $addr, (float) $b['deliveryLat'], (float) $b['deliveryLng'],
+                    $pm, 'PENDING', 'EGP', $subtotals[$mi], ($m['notes'] ?? null) ?: null,
+                    !empty($m['imageUrls']) ? json_encode($m['imageUrls'], JSON_UNESCAPED_UNICODE) : null]);
+            orderHistory($childId, null, 'NEW', $uid, 'CUSTOMER', 'Sub-order of ' . $parentNo);
+        } elseif (!empty($m['notes']) || !empty($m['imageUrls'])) {
+            db()->prepare('UPDATE `Order` SET notes = ?, imageUrls = ? WHERE id = ?')
+                ->execute([($m['notes'] ?? null) ?: null, !empty($m['imageUrls']) ? json_encode($m['imageUrls'], JSON_UNESCAPED_UNICODE) : null, $parentId]);
+        }
+        foreach ($lines[$mi] as $l) {
+            db()->prepare('INSERT INTO `OrderItem` (id, orderId, productId, productNameSnapshot, unitPriceSnapshot, quantity, merchantId, notes) VALUES (?,?,?,?,?,?,?,?)')
+                ->execute([newId(), $childId, $l['productId'], $l['name'], $l['unit'], $l['qty'], $m['merchantId'] ?? null, $l['notes']]);
+        }
+    }
+    if ($coupon) {
+        try {
+            db()->prepare('INSERT INTO `CouponRedemption` (id, couponId, userId, orderId, discount, createdAt) VALUES (?,?,?,?,?,NOW(3))')
+                ->execute([newId(), $coupon['id'], $uid, $parentId, $discount]);
+        } catch (Throwable $e) { error_log('[api.php] coupon redeem failed: ' . $e->getMessage()); }
+    }
+    notifyUser($uid, 'ORDER_STATUS', 'Order received', 'تم استلام طلبك', "Order $parentNo received", "طلبك رقم $parentNo تم استلامه وجاري مراجعته", ['orderId' => $parentId, 'orderNumber' => $parentNo]);
+    // Best-effort side channels — never fail the order.
+    try {
+        $ph = db()->prepare('SELECT phone FROM `User` WHERE id = ?');
+        $ph->execute([$uid]);
+        $cu = $ph->fetch();
+        if ($cu) waEnqueue($cu['phone'], "تميم للتوصيل 🚚\nتم استلام طلبك رقم *#$parentNo*\nجاري المراجعة والتسعير، هنبعتلك التفاصيل حالاً.");
+        [$dow, $mins] = nowCairo();
+        foreach (db()->query('SELECT * FROM `Supervisor` WHERE isActive = 1')->fetchAll() as $sup) {
+            foreach (shiftsForSupervisor($sup['id']) as $sh) {
+                if (shiftCoversNow($sh, $dow, $mins)) { waEnqueue($sup['whatsappPhone'] ?? null, "🆕 طلب جديد *#$parentNo*\nالعنوان: $addr"); break; }
+            }
+        }
+    } catch (Throwable $e) { error_log('[api.php] order notify failed: ' . $e->getMessage()); }
+
+    $st = db()->prepare('SELECT * FROM `Order` WHERE id = ?');
+    $st->execute([$parentId]);
+    jsonOk(orderRow($st->fetch()), 201);
+}
+
+if (preg_match('#^/orders/from/([^/]+)$#', $path, $mm) && $method === 'POST') {
+    $u = authUser();
+    $uid = (string) ($u['sub'] ?? '');
+    $st = db()->prepare('SELECT * FROM `Order` WHERE id = ? LIMIT 1');
+    $st->execute([$mm[1]]);
+    $src = $st->fetch();
+    if (!$src) jsonErr('الطلب الأصلي غير موجود', 404, 'NOT_FOUND');
+    if ($src['customerId'] !== $uid) jsonErr('ممنوع', 403, 'FORBIDDEN');
+    $id = newId();
+    $no = newOrderNumber($id);
+    db()->prepare('INSERT INTO `Order` (id, orderNumber, serviceId, customerId, category, status, merchantId, notes, imageUrls, customData, pickupAddress, pickupLat, pickupLng, deliveryAddress, deliveryLat, deliveryLng, weightKg, sizeCategory, isFragile, speedTier, paymentMethod, paymentStatus, currency, createdAt, updatedAt)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NOW(3),NOW(3))')
+        ->execute([$id, $no, $src['serviceId'], $uid, $src['category'], 'NEW', $src['merchantId'], $src['notes'], $src['imageUrls'], $src['customData'],
+            $src['pickupAddress'], $src['pickupLat'], $src['pickupLng'], $src['deliveryAddress'], $src['deliveryLat'], $src['deliveryLng'],
+            $src['weightKg'], $src['sizeCategory'], $src['isFragile'], $src['speedTier'], $src['paymentMethod'], 'PENDING', 'EGP']);
+    $its = db()->prepare('SELECT * FROM `OrderItem` WHERE orderId = ?');
+    $its->execute([$mm[1]]);
+    foreach ($its->fetchAll() as $it) {
+        db()->prepare('INSERT INTO `OrderItem` (id, orderId, productId, productNameSnapshot, unitPriceSnapshot, quantity, merchantId, notes) VALUES (?,?,?,?,?,?,?,?)')
+            ->execute([newId(), $id, $it['productId'], $it['productNameSnapshot'], $it['unitPriceSnapshot'], $it['quantity'], $it['merchantId'], $it['notes']]);
+    }
+    orderHistory($id, null, 'NEW', $uid, 'CUSTOMER', 'Reorder from ' . $src['orderNumber']);
+    $st->execute([$id]);
+    jsonOk(orderRow($st->fetch()), 201); // OrdersScreen toasts newOrder.orderNumber
+}
+
+if ($method === 'POST' && $path === '/orders') {
+    $u = authUser();
+    $uid = (string) ($u['sub'] ?? '');
+    $b = readJsonBody();
+    $cat = (string) ($b['category'] ?? '');
+    if (!in_array($cat, ['DELIVERY', 'SHIPPING', 'MERCHANT'], true)) jsonErr('نوع الطلب غير صحيح', 422, 'VALIDATION_ERROR');
+    $ss = db()->prepare('SELECT * FROM `Service` WHERE id = ? LIMIT 1');
+    $ss->execute([$b['serviceId'] ?? '']);
+    $svc = $ss->fetch();
+    if (!$svc || !(int) $svc['isActive']) jsonErr('الخدمة غير متاحة', 404, 'NOT_FOUND');
+
+    if (!empty($b['merchantId'])) {
+        $ms = db()->prepare('SELECT id, storeNameAr, manualStatus, timezone FROM `MerchantProfile` WHERE id = ? LIMIT 1');
+        $ms->execute([$b['merchantId']]);
+        $m = $ms->fetch();
+        if ($m) {
+            $op = merchantOpenness($m, hoursFor([$m['id']])[$m['id']] ?? []);
+            if (!$op['isOpenNow']) conflictErr($op['reason'] === 'OUT_OF_HOURS' ? 'MERCHANT_OUT_OF_HOURS' : 'MERCHANT_CLOSED', 'المتجر ' . $m['storeNameAr'] . ' مغلق حالياً');
+        }
+    }
+    $deliveryAddress = trim((string) ($b['deliveryAddress'] ?? ''));
+    $dLat = isset($b['deliveryLat']) ? (float) $b['deliveryLat'] : null;
+    $dLng = isset($b['deliveryLng']) ? (float) $b['deliveryLng'] : null;
+    $cityId = ($b['cityId'] ?? null) ?: null;
+    $villageId = ($b['villageId'] ?? null) ?: null;
+    $areaId = ($b['areaId'] ?? null) ?: null;
+    if ($deliveryAddress === '') { // fall back to the default address
+        $as = db()->prepare('SELECT * FROM `CustomerAddress` WHERE userId = ? ORDER BY isDefault DESC, createdAt DESC LIMIT 1');
+        $as->execute([$uid]);
+        $a = $as->fetch();
+        if (!$a) conflictErr('NO_DEFAULT_ADDRESS', 'سجّل عنوان للتوصيل قبل ما تطلب أول مرة');
+        if ($a['lat'] === null || $a['lng'] === null) conflictErr('DEFAULT_ADDRESS_MISSING_PIN', 'العنوان الافتراضي يحتاج تحديد موقع على الخريطة');
+        $deliveryAddress = (string) $a['address']; $dLat = (float) $a['lat']; $dLng = (float) $a['lng'];
+        // Inherit the address's saved zone too, else the fee below never resolves
+        // and the order is created with deliveryFee = NULL.
+        if (!$cityId && !$villageId && !$areaId) {
+            $cityId = $a['cityId'] ?: null; $villageId = $a['villageId'] ?: null; $areaId = $a['areaId'] ?: null;
+        }
+    }
+    $fee = null;
+    if ($cityId || $villageId || $areaId) {
+        $q = zoneQuote($cityId, $villageId, $areaId);
+        if (!$q) jsonErr('اختيارات العنوان غير صحيحة', 400, 'INVALID_ZONE');
+        if ($q[0] === 'INACTIVE') jsonErr('هذه المنطقة غير مفعّلة حالياً. اختر منطقة أخرى.', 400, 'INACTIVE_ZONE');
+        if ($q[0] === 'NO_PRICE') jsonErr('لا يوجد سعر توصيل لهذه المنطقة، تواصل مع الدعم', 400, 'NO_DELIVERY_PRICE');
+        $fee = (float) $q[1];
+    }
+    $pm = (string) ($b['paymentMethod'] ?? 'CASH');
+    if (!in_array($pm, ['CASH', 'VODAFONE_CASH', 'INSTAPAY'], true)) $pm = 'CASH';
+
+    // Coupon: validate + price it, don't just echo the string back into the row.
+    // Node prices it against service.basePrice as a proxy (the admin sets the
+    // real total later) and skips the maths entirely for QUOTE/zero-base
+    // services — where the code is still stored so the admin can honour it.
+    $couponCode = !empty($b['couponCode']) ? strtoupper(trim((string) $b['couponCode'])) : null;
+    $discount = 0.0; $coupon = null;
+    $estimatedAmount = $svc['basePrice'] !== null ? (float) $svc['basePrice'] : 0.0;
+    if ($couponCode !== null && $estimatedAmount > 0) {
+        [$okC, $resC, $cC] = couponCheck($couponCode, $estimatedAmount, $uid);
+        if (!$okC) jsonErr((string) $resC, 422, 'VALIDATION_ERROR');
+        $discount = (float) $resC; $coupon = $cC;
+    }
+
+    $id = newId();
+    $no = newOrderNumber($id);
+    db()->prepare('INSERT INTO `Order` (id, orderNumber, serviceId, customerId, category, status, merchantId, notes, imageUrls, customData, pickupAddress, pickupLat, pickupLng, deliveryAddress, deliveryLat, deliveryLng, cityId, villageId, areaId, weightKg, sizeCategory, isFragile, speedTier, deliveryFee, couponCode, discountAmount, paymentMethod, paymentStatus, currency, scheduledFor, createdAt, updatedAt)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NOW(3),NOW(3))')
+        ->execute([$id, $no, $svc['id'], $uid, $cat, 'NEW', ($b['merchantId'] ?? null) ?: null,
+            ($b['notes'] ?? null) ?: null,
+            !empty($b['imageUrls']) ? json_encode($b['imageUrls'], JSON_UNESCAPED_UNICODE) : null,
+            !empty($b['customData']) ? json_encode($b['customData'], JSON_UNESCAPED_UNICODE) : null,
+            ($b['pickupAddress'] ?? null) ?: null,
+            isset($b['pickupLat']) ? (float) $b['pickupLat'] : null, isset($b['pickupLng']) ? (float) $b['pickupLng'] : null,
+            $deliveryAddress ?: null, $dLat, $dLng,
+            $cityId, $villageId, $areaId,
+            isset($b['weightKg']) ? (float) $b['weightKg'] : null, ($b['sizeCategory'] ?? null) ?: null,
+            !empty($b['isFragile']) ? 1 : 0, ($b['speedTier'] ?? null) ?: 'STANDARD', $fee,
+            $couponCode, $discount > 0 ? $discount : null,
+            $pm, 'PENDING', 'EGP', ($b['scheduledFor'] ?? null) ?: null]);
+
+    // Record the redemption so usageLimit/usagePerUser actually bind — without
+    // this row couponCheck counts zero and the code can be reused forever.
+    if ($coupon) {
+        try {
+            db()->prepare('INSERT INTO `CouponRedemption` (id, couponId, userId, orderId, discount, createdAt) VALUES (?,?,?,?,?,NOW(3))')
+                ->execute([newId(), $coupon['id'], $uid, $id, $discount]);
+        } catch (Throwable $e) { error_log('[api.php] coupon redeem failed: ' . $e->getMessage()); }
+    }
+
+    foreach ((array) ($b['items'] ?? []) as $it) {
+        db()->prepare('INSERT INTO `OrderItem` (id, orderId, productId, productNameSnapshot, quantity, merchantId, notes) VALUES (?,?,?,?,?,?,?)')
+            ->execute([newId(), $id, ($it['productId'] ?? null) ?: null, (string) ($it['productNameSnapshot'] ?? '—'), max(1, (int) ($it['quantity'] ?? 1)), ($it['merchantId'] ?? null) ?: null, ($it['notes'] ?? null) ?: null]);
+    }
+    foreach ((array) ($b['pickupPoints'] ?? []) as $i => $p) {
+        if (!isset($p['lat'], $p['lng'])) continue; // lat/lng are NOT NULL
+        db()->prepare('INSERT INTO `OrderPickupPoint` (id, orderId, sortOrder, merchantId, label, address, lat, lng, contactName, contactPhone, notes) VALUES (?,?,?,?,?,?,?,?,?,?,?)')
+            ->execute([newId(), $id, $i, ($p['merchantId'] ?? null) ?: null, ($p['label'] ?? null) ?: null, (string) ($p['address'] ?? ''), (float) $p['lat'], (float) $p['lng'], ($p['contactName'] ?? null) ?: null, ($p['contactPhone'] ?? null) ?: null, ($p['notes'] ?? null) ?: null]);
+    }
+    foreach ((array) ($b['deliveryPoints'] ?? []) as $i => $p) {
+        if (!isset($p['lat'], $p['lng'])) continue;
+        db()->prepare('INSERT INTO `OrderDeliveryPoint` (id, orderId, sortOrder, recipientName, recipientPhone, address, lat, lng, notes) VALUES (?,?,?,?,?,?,?,?,?)')
+            ->execute([newId(), $id, $i, (string) ($p['recipientName'] ?? ''), (string) ($p['recipientPhone'] ?? ''), (string) ($p['address'] ?? ''), (float) $p['lat'], (float) $p['lng'], ($p['notes'] ?? null) ?: null]);
+    }
+    orderHistory($id, null, 'NEW', $uid, 'CUSTOMER', 'Order placed');
+    notifyUser($uid, 'ORDER_STATUS', 'Order received', 'تم استلام طلبك', "Order $no received", "طلبك رقم $no تم استلامه وجاري مراجعته", ['orderId' => $id, 'orderNumber' => $no]);
+    try {
+        $ph = db()->prepare('SELECT phone FROM `User` WHERE id = ?');
+        $ph->execute([$uid]);
+        $cu = $ph->fetch();
+        if ($cu) waEnqueue($cu['phone'], "تميم للتوصيل 🚚\nتم استلام طلبك رقم *#$no*\nجاري المراجعة والتسعير.");
+        [$dow, $mins] = nowCairo();
+        foreach (db()->query('SELECT * FROM `Supervisor` WHERE isActive = 1')->fetchAll() as $sup) {
+            foreach (shiftsForSupervisor($sup['id']) as $sh) {
+                if (shiftCoversNow($sh, $dow, $mins)) { waEnqueue($sup['whatsappPhone'] ?? null, "🆕 طلب جديد *#$no*"); break; }
+            }
+        }
+    } catch (Throwable $e) { error_log('[api.php] order notify failed: ' . $e->getMessage()); }
+    $st = db()->prepare('SELECT * FROM `Order` WHERE id = ?');
+    $st->execute([$id]);
+    jsonOk(orderRow($st->fetch()), 201);
+}
+
+if (preg_match('#^/orders/([^/]+)/cancel$#', $path, $mm) && $method === 'POST') {
+    $u = authUser();
+    $uid = (string) ($u['sub'] ?? '');
+    $b = readJsonBody();
+    $st = db()->prepare('SELECT * FROM `Order` WHERE id = ? LIMIT 1');
+    $st->execute([$mm[1]]);
+    $o = $st->fetch();
+    if (!$o) jsonErr('الطلب غير موجود', 404, 'NOT_FOUND');
+    if ($o['customerId'] !== $uid) jsonErr('لا تستطيع إلغاء هذا الطلب', 403, 'FORBIDDEN');
+    if (in_array($o['status'], ['CANCELLED', 'COMPLETED', 'DELIVERED'], true)) jsonErr('لا يمكن إلغاء الطلب في هذه الحالة', 422, 'INVALID_STATE_TRANSITION');
+    $reason = trim((string) ($b['reason'] ?? '')) ?: 'لا يوجد سبب محدد';
+    db()->prepare("UPDATE `Order` SET status = 'CANCELLED', cancelledAt = NOW(3), cancellationReason = ?, updatedAt = NOW(3) WHERE id = ? OR parentOrderId = ?")
+        ->execute([$reason, $mm[1], $mm[1]]);
+    orderHistory($mm[1], (string) $o['status'], 'CANCELLED', $uid, 'CUSTOMER', $reason);
+    $st->execute([$mm[1]]);
+    jsonOk(orderRow($st->fetch()));
+}
+
+if (preg_match('#^/orders/([^/]+)/review$#', $path, $mm) && in_array($method, ['POST', 'GET'], true)) {
+    $u = authUser();
+    $uid = (string) ($u['sub'] ?? '');
+    $st = db()->prepare('SELECT * FROM `Order` WHERE id = ? LIMIT 1');
+    $st->execute([$mm[1]]);
+    $o = $st->fetch();
+    if (!$o) jsonErr('الطلب غير موجود', 404, 'NOT_FOUND');
+    if ($o['customerId'] !== $uid && !in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('ممنوع', 403, 'FORBIDDEN');
+    $rs = db()->prepare('SELECT * FROM `OrderReview` WHERE orderId = ? LIMIT 1');
+    $rs->execute([$mm[1]]);
+    $existing = $rs->fetch();
+    if ($method === 'GET') { jsonOk($existing ?: null); }
+    if ($existing) {
+        http_response_code(409);
+        echo json_encode(['error' => ['code' => 'CONFLICT', 'message' => 'Already reviewed', 'messageAr' => 'تم تقييم هذا الطلب من قبل']], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+    if (!in_array($o['status'], ['DELIVERED', 'COMPLETED'], true)) jsonErr('لا يمكن تقييم الطلب قبل تسليمه', 422, 'VALIDATION_ERROR');
+    $b = readJsonBody();
+    $rating = (int) ($b['rating'] ?? 0);
+    if ($rating < 1 || $rating > 5) jsonErr('التقييم من 1 إلى 5', 422, 'VALIDATION_ERROR');
+    $id = newId();
+    db()->prepare('INSERT INTO `OrderReview` (id, orderId, customerId, driverId, merchantId, rating, driverRating, merchantRating, comment, createdAt) VALUES (?,?,?,?,?,?,?,?,?,NOW(3))')
+        ->execute([$id, $mm[1], $uid, $o['assignedDriverId'], $o['merchantId'], $rating,
+            isset($b['driverRating']) ? (int) $b['driverRating'] : null,
+            isset($b['merchantRating']) ? (int) $b['merchantRating'] : null,
+            ($b['comment'] ?? null) ?: null]);
+    // Recompute the driver's running average (fire-and-forget in Node too).
+    try {
+        if ($o['assignedDriverId']) {
+            db()->prepare('UPDATE `DriverProfile` SET rating = (SELECT AVG(driverRating) FROM `OrderReview` WHERE driverId = ? AND driverRating IS NOT NULL), updatedAt = NOW(3) WHERE userId = ?')
+                ->execute([$o['assignedDriverId'], $o['assignedDriverId']]);
+        }
+        if ($o['merchantId']) {
+            db()->prepare('UPDATE `MerchantProfile` SET rating = (SELECT AVG(merchantRating) FROM `OrderReview` WHERE merchantId = ? AND merchantRating IS NOT NULL), updatedAt = NOW(3) WHERE id = ?')
+                ->execute([$o['merchantId'], $o['merchantId']]);
+        }
+    } catch (Throwable $e) { error_log('[api.php] rating recompute failed: ' . $e->getMessage()); }
+    $rs->execute([$mm[1]]);
+    jsonOk($rs->fetch(), 201);
+}
+
+if (preg_match('#^/orders/([^/]+)$#', $path, $mm) && $method === 'GET') {
+    $u = authUser();
+    $uid = (string) ($u['sub'] ?? '');
+    $st = db()->prepare('SELECT * FROM `Order` WHERE id = ? LIMIT 1');
+    $st->execute([$mm[1]]);
+    $o = $st->fetch();
+    if (!$o) jsonErr('الطلب غير موجود', 404, 'NOT_FOUND');
+    if ($o['customerId'] !== $uid && !in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('لا تستطيع عرض هذا الطلب', 403, 'FORBIDDEN');
+    $out = orderRow($o);
+    $q = fn(string $sql, array $a) => (function () use ($sql, $a) { $s = db()->prepare($sql); $s->execute($a); return $s->fetchAll(); })();
+    $ss = db()->prepare('SELECT * FROM `Service` WHERE id = ? LIMIT 1');
+    $ss->execute([$o['serviceId']]);
+    $out['service'] = jsonizeRow($ss->fetch() ?: null);
+    $out['items'] = $q('SELECT * FROM `OrderItem` WHERE orderId = ?', [$mm[1]]);
+    $out['pickupPoints'] = $q('SELECT * FROM `OrderPickupPoint` WHERE orderId = ? ORDER BY sortOrder ASC', [$mm[1]]);
+    $out['deliveryPoints'] = $q('SELECT * FROM `OrderDeliveryPoint` WHERE orderId = ? ORDER BY sortOrder ASC', [$mm[1]]);
+    // OrderTrackingScreen .map()s statusHistory with no guard.
+    $out['statusHistory'] = $q('SELECT * FROM `OrderStatusHistory` WHERE orderId = ? ORDER BY createdAt ASC', [$mm[1]]);
+    $out['assignedDriver'] = null;
+    if ($o['assignedDriverId']) {
+        $ds = db()->prepare('SELECT id, name, phone FROM `User` WHERE id = ? LIMIT 1');
+        $ds->execute([$o['assignedDriverId']]);
+        $out['assignedDriver'] = $ds->fetch() ?: null;
+    }
+    $rs = db()->prepare('SELECT * FROM `OrderReview` WHERE orderId = ? LIMIT 1');
+    $rs->execute([$mm[1]]);
+    $out['review'] = $rs->fetch() ?: null;
+    $subs = $q('SELECT * FROM `Order` WHERE parentOrderId = ? ORDER BY createdAt ASC', [$mm[1]]);
+    $out['subOrders'] = array_map(function ($s) {
+        $so = orderRow($s);
+        $i = db()->prepare('SELECT * FROM `OrderItem` WHERE orderId = ?');
+        $i->execute([$s['id']]);
+        $so['items'] = $i->fetchAll();
+        $h = db()->prepare('SELECT * FROM `OrderStatusHistory` WHERE orderId = ? ORDER BY createdAt ASC');
+        $h->execute([$s['id']]);
+        $so['statusHistory'] = $h->fetchAll();
+        $so['assignedDriver'] = null;
+        if ($s['assignedDriverId']) {
+            $d = db()->prepare('SELECT id, name, phone FROM `User` WHERE id = ? LIMIT 1');
+            $d->execute([$s['assignedDriverId']]);
+            $so['assignedDriver'] = $d->fetch() ?: null;
+        }
+        return $so;
+    }, $subs);
+    jsonOk($out);
+}
+
+// ═══ RECURRING ORDERS ══════════════════════════════════════════════════
+if ($method === 'GET' && $path === '/me/recurring-orders') {
+    $u = authUser();
+    $st = db()->prepare('SELECT r.*, s.nameAr AS s_nameAr, s.key AS s_key FROM `RecurringOrder` r LEFT JOIN `Service` s ON s.id = r.serviceId WHERE r.customerId = ? ORDER BY r.createdAt DESC');
+    $st->execute([(string) ($u['sub'] ?? '')]);
+    $out = [];
+    foreach ($st->fetchAll() as $r) {
+        $x = boolCast(jsonizeRow($r), ['isActive']);
+        $x['service'] = ['id' => $r['serviceId'], 'nameAr' => $r['s_nameAr'], 'key' => $r['s_key']];
+        unset($x['s_nameAr'], $x['s_key']);
+        $out[] = $x;
+    }
+    jsonOk($out);
+}
+if (preg_match('#^/me/recurring-orders/([^/]+)$#', $path, $mm) && in_array($method, ['PATCH', 'DELETE'], true)) {
+    $u = authUser();
+    $uid = (string) ($u['sub'] ?? '');
+    $st = db()->prepare('SELECT * FROM `RecurringOrder` WHERE id = ? AND customerId = ? LIMIT 1');
+    $st->execute([$mm[1], $uid]);
+    if (!$st->fetch()) jsonErr('غير موجود', 404, 'NOT_FOUND');
+    if ($method === 'DELETE') { db()->prepare('DELETE FROM `RecurringOrder` WHERE id = ?')->execute([$mm[1]]); noContent(); }
+    $b = readJsonBody();
+    if (array_key_exists('isActive', $b)) {
+        db()->prepare('UPDATE `RecurringOrder` SET isActive = ?, updatedAt = NOW(3) WHERE id = ?')->execute([!empty($b['isActive']) ? 1 : 0, $mm[1]]);
+    }
+    $st->execute([$mm[1], $uid]);
+    jsonOk(boolCast(jsonizeRow($st->fetch()), ['isActive']));
+}
+
+// ═══ PRICING ═══════════════════════════════════════════════════════════
+if ($method === 'POST' && $path === '/pricing/estimate') {
+    $b = readJsonBody();
+    $ss = db()->prepare('SELECT * FROM `Service` WHERE id = ? LIMIT 1');
+    $ss->execute([$b['serviceId'] ?? '']);
+    $s = $ss->fetch();
+    if (!$s) jsonErr('الخدمة غير متاحة', 404, 'NOT_FOUND');
+    if ($s['pricingMethod'] === 'QUOTE') jsonOk(['estimate' => null, 'method' => 'QUOTE', 'note' => 'سيتم تسعيره يدوياً من الإدارة']);
+    $base = (float) ($s['basePrice'] ?? 0);
+    $km = 0.0;
+    if (isset($b['pickupLat'], $b['pickupLng'], $b['deliveryLat'], $b['deliveryLng'])) {
+        $dLat = deg2rad(((float) $b['deliveryLat']) - ((float) $b['pickupLat']));
+        $dLng = deg2rad(((float) $b['deliveryLng']) - ((float) $b['pickupLng']));
+        $a = sin($dLat / 2) ** 2 + cos(deg2rad((float) $b['pickupLat'])) * cos(deg2rad((float) $b['deliveryLat'])) * sin($dLng / 2) ** 2;
+        $km = 6371 * 2 * atan2(sqrt($a), sqrt(1 - $a));
+    }
+    $perKm = (float) ($s['pricePerKm'] ?? 0) * $km;
+    $perKg = (float) ($s['pricePerKg'] ?? 0) * (float) ($b['weightKg'] ?? 0);
+    $total = $base + $perKm + $perKg;
+    if (!empty($b['isFragile'])) $total += 10;
+    if (($b['speedTier'] ?? '') === 'EXPRESS') $total *= 1.25;
+    jsonOk(['estimate' => round($total), 'method' => $s['pricingMethod'],
+        'breakdown' => ['base' => $base, 'distance' => round($km, 2), 'perKm' => round($perKm, 2), 'perKg' => round($perKg, 2)]]);
+}
+
+// ═══ UPLOADS ═══════════════════════════════════════════════════════════
+if ($method === 'POST' && $path === '/uploads') {
+    authUser();
+    if (empty($_FILES['file']) || ($_FILES['file']['error'] ?? 1) !== UPLOAD_ERR_OK) jsonErr('لم يتم رفع أي ملف', 422, 'VALIDATION_ERROR');
+    $f = $_FILES['file'];
+    $max = (int) env('UPLOAD_MAX_BYTES', '10485760');
+    if ((int) $f['size'] > $max) jsonErr('حجم الملف كبير جداً', 422, 'FILE_TOO_LARGE');
+    $ext = strtolower(pathinfo((string) $f['name'], PATHINFO_EXTENSION));
+    if (!preg_match('/^[a-z0-9]{1,5}$/', $ext)) $ext = 'bin';
+    if (!in_array($ext, ['jpg', 'jpeg', 'png', 'webp', 'gif', 'heic', 'm4a', 'mp3', 'wav', 'aac', 'pdf'], true)) jsonErr('نوع الملف غير مدعوم', 422, 'BAD_FILE_TYPE');
+    $dir = __DIR__ . '/uploads';
+    if (!is_dir($dir)) @mkdir($dir, 0755, true);
+    $name = date('Ymd') . '_' . bin2hex(random_bytes(8)) . '.' . $ext;
+    if (!@move_uploaded_file($f['tmp_name'], "$dir/$name")) jsonErr('تعذّر حفظ الملف', 500, 'UPLOAD_FAILED');
+    jsonOk(['url' => rtrim((string) env('API_BASE_URL', ''), '/') . '/uploads/' . $name]);
+}
+
+// ═══ HOME / SITE CONFIG (public) ═══════════════════════════════════════
 if ($method === 'GET' && $path === '/home-config') {
     $rows = db()->query('SELECT * FROM `HomeConfig` ORDER BY id ASC LIMIT 1')->fetchAll();
-    jsonOk($rows[0] ?? new stdClass());
+    $cfg = $rows[0] ?? null;
+    if (!$cfg) { // upsert-on-first-read, like loadConfig()
+        db()->prepare("INSERT INTO `HomeConfig` (id, updatedAt) VALUES ('singleton', NOW(3))")->execute();
+        $cfg = db()->query('SELECT * FROM `HomeConfig` LIMIT 1')->fetch() ?: [];
+    }
+    $cfg = boolCast(jsonizeRow($cfg), ['showPromoBanner', 'showTrustStrip']);
+    // heroGradient / visibleServiceKeys / featuredMerchantIds / featuredOfferIds
+    // are spread + .includes()-ed client-side — must be arrays or null, never {}.
+    foreach (['heroGradient', 'visibleServiceKeys', 'featuredMerchantIds', 'featuredOfferIds'] as $k) {
+        if (!array_key_exists($k, $cfg) || !is_array($cfg[$k] ?? null)) $cfg[$k] = $cfg[$k] ?? null;
+    }
+    $cfg['promoCoupon'] = null;
+    if (!empty($cfg['promoBannerCouponId'])) {
+        // validTo checked in SQL — see the couponCheck() timezone note.
+        $st = db()->prepare('SELECT *, (validTo IS NULL OR validTo >= NOW(3)) AS stillValid FROM `Coupon` WHERE id = ? LIMIT 1');
+        $st->execute([$cfg['promoBannerCouponId']]);
+        $c = $st->fetch();
+        if ($c && (int) $c['isActive'] && (int) $c['stillValid']) {
+            $cfg['promoCoupon'] = ['id' => $c['id'], 'code' => $c['code'], 'type' => $c['type'], 'value' => (string) $c['value'], 'description' => $c['description']];
+        }
+    }
+    jsonOk($cfg);
 }
 
 if ($method === 'GET' && $path === '/site-config') {
