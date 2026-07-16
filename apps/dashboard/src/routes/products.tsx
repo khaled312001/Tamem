@@ -1,24 +1,81 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
+  ArrowDown,
+  ArrowUp,
+  ArrowUpDown,
   Box,
+  CheckCircle2,
+  Copy,
+  Download,
   GripVertical,
   Image as ImageIcon,
+  ImageOff,
   ImagePlus,
   Loader2,
+  MoreVertical,
+  Package,
+  PackageX,
   Pencil,
   Plus,
+  Search,
   Trash2,
+  X,
+  XCircle,
 } from 'lucide-react';
 import { useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
 
 import { Badge } from '../components/ui/Badge.js';
 import { Button } from '../components/ui/Button.js';
+import { ConfirmDialog } from '../components/ui/ConfirmDialog.js';
 import { Dialog } from '../components/ui/Dialog.js';
 import { Field, Input, Textarea } from '../components/ui/Input.js';
+import { PageHeader } from '../components/ui/PageHeader.js';
 import { EmptyState, TableSkeleton } from '../components/ui/Skeleton.js';
+import { StatCard } from '../components/ui/StatCard.js';
+import { ErrorState } from '../components/ui/States.js';
 import { api } from '../lib/api.js';
+import { formatCount, formatMoney } from '../lib/format.js';
+import type { Tone } from '../lib/statusRegistry.js';
+import { TONE } from '../lib/statusRegistry.js';
 import { uploadFile } from '../lib/uploadFile.js';
+
+const LOW_STOCK = 5;
+
+type StockState = 'in' | 'low' | 'out' | 'unknown';
+
+function firstImage(p: Row): string | null {
+  if (typeof p.imageUrl === 'string' && p.imageUrl) return p.imageUrl;
+  const list = toImageList(p.imageUrls);
+  return list[0] ?? null;
+}
+
+function stockState(p: Row): StockState {
+  if (p.stock === null || p.stock === undefined) return 'unknown';
+  const s = Number(p.stock);
+  if (!Number.isFinite(s)) return 'unknown';
+  if (s <= 0) return 'out';
+  if (s <= LOW_STOCK) return 'low';
+  return 'in';
+}
+
+const STOCK_META: Record<StockState, { label: string; tone: Tone }> = {
+  in: { label: 'متوفر', tone: 'green' },
+  low: { label: 'منخفض', tone: 'amber' },
+  out: { label: 'نفد', tone: 'red' },
+  unknown: { label: '—', tone: 'zinc' },
+};
+
+/** Soft pill for stock / status (reuses the design-system TONE map). */
+function TonePill({ tone, children }: { tone: Tone; children: React.ReactNode }) {
+  return (
+    <span
+      className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-bold whitespace-nowrap ${TONE[tone].badge}`}
+    >
+      {children}
+    </span>
+  );
+}
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Row = any;
@@ -37,65 +94,135 @@ function toImageList(value: unknown): string[] {
     .slice(0, MAX_IMAGES);
 }
 
+type StatusFilter = 'all' | 'available' | 'disabled';
+type StockFilter = 'all' | 'in' | 'low' | 'out';
+type ImageFilter = 'all' | 'with' | 'without';
+type SortKey = 'name' | 'price' | 'stock' | null;
+
 export function ProductsPage() {
   const qc = useQueryClient();
+  // ── filters ──
   const [merchantFilter, setMerchantFilter] = useState('');
   const [search, setSearch] = useState('');
+  const [statusF, setStatusF] = useState<StatusFilter>('all');
+  const [stockF, setStockF] = useState<StockFilter>('all');
+  const [imageF, setImageF] = useState<ImageFilter>('all');
+  // ── table ──
+  const [sortBy, setSortBy] = useState<SortKey>(null);
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(50);
+  const [dense, setDense] = useState(false);
+  // ── selection + dialogs ──
+  const [selected, setSelected] = useState<Set<string>>(new Set());
   const [createOpen, setCreateOpen] = useState(false);
   const [editing, setEditing] = useState<Row | null>(null);
-  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [confirmDel, setConfirmDel] = useState<Row | null>(null);
+  const [confirmBulkDel, setConfirmBulkDel] = useState(false);
+  const [preview, setPreview] = useState<string | null>(null);
 
   const { data: merchants } = useQuery({
     queryKey: ['admin', 'merchants', 'all'],
     queryFn: () => api.adminListMerchants({ pageSize: 100 }),
   });
-
-  // The merchant currently selected in the filter — when set, the admin can
-  // manage that merchant's menu-image mode (upload a menu photo instead of
-  // entering products one by one) right here on the products page.
   const selectedMerchant = (merchants?.items as Row[] | undefined)?.find(
     (m) => m.id === merchantFilter,
   );
 
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, isError, refetch, isFetching } = useQuery({
     queryKey: ['admin', 'products', merchantFilter, search],
     queryFn: () =>
       api.adminListProducts({
-        pageSize: 100,
+        pageSize: 200,
         ...(merchantFilter ? { merchantId: merchantFilter } : {}),
         ...(search.trim() ? { search: search.trim() } : {}),
       }),
   });
 
+  const all = (data?.items as Row[] | undefined) ?? [];
+
+  const stats = useMemo(
+    () => ({
+      total: all.length,
+      available: all.filter((p) => p.isAvailable).length,
+      disabled: all.filter((p) => !p.isAvailable).length,
+      out: all.filter((p) => stockState(p) === 'out').length,
+      low: all.filter((p) => stockState(p) === 'low').length,
+      noImage: all.filter((p) => !firstImage(p)).length,
+    }),
+    [all],
+  );
+
+  const filtered = useMemo(() => {
+    let r = all;
+    if (statusF !== 'all')
+      r = r.filter((p) => (statusF === 'available' ? p.isAvailable : !p.isAvailable));
+    if (stockF !== 'all') r = r.filter((p) => stockState(p) === stockF);
+    if (imageF !== 'all')
+      r = r.filter((p) => (imageF === 'with' ? !!firstImage(p) : !firstImage(p)));
+    if (sortBy) {
+      const dir = sortDir === 'asc' ? 1 : -1;
+      r = [...r].sort((a, b) => {
+        if (sortBy === 'name')
+          return dir * String(a.nameAr ?? '').localeCompare(String(b.nameAr ?? ''), 'ar');
+        if (sortBy === 'price') return dir * (Number(a.price || 0) - Number(b.price || 0));
+        return dir * (Number(a.stock ?? -1) - Number(b.stock ?? -1));
+      });
+    }
+    return r;
+  }, [all, statusF, stockF, imageF, sortBy, sortDir]);
+
+  const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
+  const pageClamped = Math.min(page, totalPages);
+  const pageItems = filtered.slice((pageClamped - 1) * pageSize, pageClamped * pageSize);
+  const from = filtered.length === 0 ? 0 : (pageClamped - 1) * pageSize + 1;
+  const to = Math.min(pageClamped * pageSize, filtered.length);
+
+  const anyFilter =
+    statusF !== 'all' ||
+    stockF !== 'all' ||
+    imageF !== 'all' ||
+    !!merchantFilter ||
+    !!search.trim();
+  const clearFilters = () => {
+    setStatusF('all');
+    setStockF('all');
+    setImageF('all');
+    setMerchantFilter('');
+    setSearch('');
+    setPage(1);
+  };
+  const resetPage = () => setPage(1);
+
+  // ── mutations ──
   const updateMut = useMutation({
     mutationFn: ({ id, data: d }: { id: string; data: unknown }) => api.adminUpdateProduct(id, d),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['admin', 'products'] });
-    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['admin', 'products'] }),
     onError: (err: Error) => toast.error(err.message),
   });
-
+  const toggleAvail = (p: Row) => {
+    updateMut.mutate({ id: p.id, data: { isAvailable: !p.isAvailable } });
+    toast.success(!p.isAvailable ? 'تم تفعيل المنتج' : 'تم تعطيل المنتج');
+  };
   const bulkMut = useMutation({
     mutationFn: ({ ids, isAvailable }: { ids: string[]; isAvailable: boolean }) =>
       api.adminBulkProductAvailability(ids, isAvailable),
-    onSuccess: () => {
-      toast.success('تم التحديث');
+    onSuccess: (_r, v) => {
+      toast.success(v.isAvailable ? 'تم تفعيل المنتجات' : 'تم تعطيل المنتجات');
       setSelected(new Set());
       qc.invalidateQueries({ queryKey: ['admin', 'products'] });
     },
     onError: (err: Error) => toast.error(err.message),
   });
-
   const deleteMut = useMutation({
     mutationFn: (id: string) => api.adminDeleteProduct(id),
     onSuccess: () => {
       toast.success('تم حذف المنتج');
-      setSelected(new Set());
+      setConfirmDel(null);
       qc.invalidateQueries({ queryKey: ['admin', 'products'] });
     },
     onError: (err: Error) => toast.error(err.message),
   });
-
   const bulkDeleteMut = useMutation({
     mutationFn: async (ids: string[]) => {
       for (const id of ids) await api.adminDeleteProduct(id);
@@ -103,185 +230,593 @@ export function ProductsPage() {
     onSuccess: () => {
       toast.success('تم حذف المنتجات المحددة');
       setSelected(new Set());
+      setConfirmBulkDel(false);
+      qc.invalidateQueries({ queryKey: ['admin', 'products'] });
+    },
+    onError: (err: Error) => toast.error(err.message),
+  });
+  const duplicateMut = useMutation({
+    mutationFn: (p: Row) =>
+      api.adminCreateProduct({
+        merchantId: p.merchantId ?? p.merchant?.id,
+        name: `${p.name ?? ''} (نسخة)`.trim(),
+        nameAr: `${p.nameAr ?? ''} (نسخة)`.trim(),
+        description: p.description ?? '',
+        price: Number(p.price) || 0,
+        imageUrls: toImageList(p.imageUrls),
+        imageUrl: firstImage(p) ?? undefined,
+        stock: p.stock ?? undefined,
+        unit: p.unit ?? undefined,
+      }),
+    onSuccess: () => {
+      toast.success('تم نسخ المنتج');
       qc.invalidateQueries({ queryKey: ['admin', 'products'] });
     },
     onError: (err: Error) => toast.error(err.message),
   });
 
+  // ── selection ──
+  const pageIds = pageItems.map((p) => p.id);
+  const allPageSelected = pageIds.length > 0 && pageIds.every((id) => selected.has(id));
+  const someSelected = selected.size > 0;
   const toggleSel = (id: string) => {
     const next = new Set(selected);
     if (next.has(id)) next.delete(id);
     else next.add(id);
     setSelected(next);
   };
+  const toggleAllPage = () => {
+    const next = new Set(selected);
+    if (allPageSelected) pageIds.forEach((id) => next.delete(id));
+    else pageIds.forEach((id) => next.add(id));
+    setSelected(next);
+  };
+
+  const exportCsv = (rows: Row[]) => {
+    const head = ['الاسم', 'English', 'SKU', 'التاجر', 'السعر', 'المخزون', 'متاح'];
+    const esc = (v: unknown) => `"${String(v ?? '').replace(/"/g, '""')}"`;
+    const lines = rows.map((p) =>
+      [
+        p.nameAr,
+        p.name,
+        p.sku,
+        p.merchant?.storeNameAr,
+        p.price,
+        p.stock,
+        p.isAvailable ? 'نعم' : 'لا',
+      ]
+        .map(esc)
+        .join(','),
+    );
+    const csv = '﻿' + [head.map(esc).join(','), ...lines].join('\n');
+    const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `products-${rows.length}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const setSort = (key: Exclude<SortKey, null>) => {
+    if (sortBy === key) setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
+    else {
+      setSortBy(key);
+      setSortDir('asc');
+    }
+  };
+
+  const cellPad = dense ? 'px-3 py-1.5' : 'px-3 py-3';
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-black text-brand-dark">المنتجات</h1>
-          <p className="text-sm text-muted-foreground mt-1">{data?.pagination.total ?? 0} منتج</p>
-        </div>
-        <Button onClick={() => setCreateOpen(true)}>
-          <Plus className="w-4 h-4" />
-          منتج
-        </Button>
+      <PageHeader
+        title="إدارة المنتجات"
+        subtitle={`${formatCount(all.length)} منتج${merchantFilter ? ' لهذا التاجر' : ''}`}
+        icon={Package}
+        actions={
+          <>
+            <Button
+              variant="outline"
+              size="md"
+              onClick={() => exportCsv(filtered)}
+              disabled={!filtered.length}
+            >
+              <Download className="w-4 h-4" />
+              تصدير
+            </Button>
+            <Button size="md" onClick={() => setCreateOpen(true)}>
+              <Plus className="w-4 h-4" />
+              إضافة منتج
+            </Button>
+          </>
+        }
+      />
+
+      {/* ── Stat cards (clickable → filter) ── */}
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
+        <StatCard label="إجمالي المنتجات" value={formatCount(stats.total)} icon={Box} tone="zinc" />
+        <button
+          type="button"
+          onClick={() => {
+            setStatusF('available');
+            setStockF('all');
+            setImageF('all');
+            resetPage();
+          }}
+          className="text-start"
+        >
+          <StatCard
+            label="متاح"
+            value={formatCount(stats.available)}
+            icon={CheckCircle2}
+            tone="green"
+          />
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            setStatusF('disabled');
+            setStockF('all');
+            setImageF('all');
+            resetPage();
+          }}
+          className="text-start"
+        >
+          <StatCard label="معطّل" value={formatCount(stats.disabled)} icon={XCircle} tone="zinc" />
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            setStockF('out');
+            setStatusF('all');
+            setImageF('all');
+            resetPage();
+          }}
+          className="text-start"
+        >
+          <StatCard
+            label="نفد المخزون"
+            value={formatCount(stats.out)}
+            icon={PackageX}
+            tone="red"
+            emphasis={stats.out > 0}
+          />
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            setStockF('low');
+            setStatusF('all');
+            setImageF('all');
+            resetPage();
+          }}
+          className="text-start"
+        >
+          <StatCard
+            label="مخزون منخفض"
+            value={formatCount(stats.low)}
+            icon={Package}
+            tone="amber"
+            emphasis={stats.low > 0}
+          />
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            setImageF('without');
+            setStatusF('all');
+            setStockF('all');
+            resetPage();
+          }}
+          className="text-start"
+        >
+          <StatCard
+            label="بدون صور"
+            value={formatCount(stats.noImage)}
+            icon={ImageOff}
+            tone="purple"
+          />
+        </button>
       </div>
 
-      <div className="bg-white rounded-xl border border-border p-4 flex flex-wrap items-center gap-3">
-        <label className="text-sm font-bold">التاجر:</label>
-        <select
-          value={merchantFilter}
-          onChange={(e) => setMerchantFilter(e.target.value)}
-          className="px-3 py-2 rounded-lg border border-input bg-white text-sm min-w-[180px]"
-        >
-          <option value="">جميع التجار</option>
-          {(merchants?.items as Row[] | undefined)?.map((m) => (
-            <option key={m.id} value={m.id}>
-              {m.storeNameAr}
-            </option>
-          ))}
-        </select>
-        <input
-          type="search"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          placeholder="ابحث باسم المنتج…"
-          className="px-3 py-2 rounded-lg border border-input bg-white text-sm flex-1 min-w-[160px]"
-        />
-        {selected.size > 0 && (
-          <div className="ms-auto flex gap-2">
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() => bulkMut.mutate({ ids: Array.from(selected), isAvailable: true })}
-            >
-              تفعيل ({selected.size})
-            </Button>
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() => bulkMut.mutate({ ids: Array.from(selected), isAvailable: false })}
-            >
-              تعطيل ({selected.size})
-            </Button>
-            <Button
-              size="sm"
-              variant="outline"
-              className="text-destructive border-destructive/40 hover:bg-destructive/10"
-              disabled={bulkDeleteMut.isPending}
-              onClick={() => {
-                if (window.confirm(`حذف ${selected.size} منتج نهائياً؟`))
-                  bulkDeleteMut.mutate(Array.from(selected));
+      {/* ── Toolbar: search + filters ── */}
+      <div className="bg-card rounded-xl border border-border p-3 md:p-4 space-y-3">
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="relative flex-1 min-w-[180px]">
+            <Search className="w-4 h-4 absolute top-1/2 -translate-y-1/2 start-3 text-muted-foreground" />
+            <input
+              type="search"
+              value={search}
+              onChange={(e) => {
+                setSearch(e.target.value);
+                resetPage();
               }}
-            >
-              <Trash2 className="w-3.5 h-3.5" />
-              حذف ({selected.size})
-            </Button>
+              placeholder="ابحث بالاسم أو الكود (SKU)…"
+              className="w-full ps-9 pe-3 py-2 rounded-lg border border-input bg-popover text-sm outline-none focus:ring-2 focus:ring-brand-red/30"
+            />
           </div>
-        )}
+          <select
+            value={merchantFilter}
+            onChange={(e) => {
+              setMerchantFilter(e.target.value);
+              resetPage();
+            }}
+            className="px-3 py-2 rounded-lg border border-input bg-popover text-sm min-w-[160px]"
+          >
+            <option value="">جميع التجار</option>
+            {(merchants?.items as Row[] | undefined)?.map((m) => (
+              <option key={m.id} value={m.id}>
+                {m.storeNameAr}
+              </option>
+            ))}
+          </select>
+          <Button variant="outline" size="md" onClick={() => refetch()} disabled={isFetching}>
+            {isFetching ? (
+              <Loader2 className="w-4 h-4 animate-spin" />
+            ) : (
+              <ArrowUpDown className="w-4 h-4" />
+            )}
+            تحديث
+          </Button>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <FilterGroup
+            label="الحالة"
+            value={statusF}
+            onChange={(v) => {
+              setStatusF(v as StatusFilter);
+              resetPage();
+            }}
+            options={[
+              ['all', 'الكل'],
+              ['available', 'متاح'],
+              ['disabled', 'معطّل'],
+            ]}
+          />
+          <FilterGroup
+            label="المخزون"
+            value={stockF}
+            onChange={(v) => {
+              setStockF(v as StockFilter);
+              resetPage();
+            }}
+            options={[
+              ['all', 'الكل'],
+              ['in', 'متوفر'],
+              ['low', 'منخفض'],
+              ['out', 'نفد'],
+            ]}
+          />
+          <FilterGroup
+            label="الصورة"
+            value={imageF}
+            onChange={(v) => {
+              setImageF(v as ImageFilter);
+              resetPage();
+            }}
+            options={[
+              ['all', 'الكل'],
+              ['with', 'بصورة'],
+              ['without', 'بدون'],
+            ]}
+          />
+          {anyFilter && (
+            <button
+              type="button"
+              onClick={clearFilters}
+              className="ms-auto inline-flex items-center gap-1 text-xs font-bold text-brand-red hover:underline"
+            >
+              <X className="w-3.5 h-3.5" /> مسح الفلاتر
+            </button>
+          )}
+        </div>
       </div>
 
       {selectedMerchant && (
         <MerchantMenuPanel key={selectedMerchant.id} merchant={selectedMerchant} />
       )}
 
-      <div className="bg-white rounded-xl border border-border overflow-hidden">
-        {isLoading ? (
-          <div className="p-6">
-            <TableSkeleton rows={6} cols={5} />
-          </div>
-        ) : !data?.items.length ? (
-          <EmptyState icon={<Box className="w-10 h-10" />} title="لا توجد منتجات" />
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead className="bg-muted/50 border-b border-border">
-                <tr className="text-right">
-                  <th className="px-3 py-3 w-8" />
-                  <th className="px-3 py-3 font-bold">المنتج</th>
-                  <th className="px-3 py-3 font-bold">التاجر</th>
-                  <th className="px-3 py-3 font-bold">السعر</th>
-                  <th className="px-3 py-3 font-bold">متاح</th>
-                  <th className="px-3 py-3 font-bold">المخزون</th>
-                  <th className="px-3 py-3 w-12" />
-                </tr>
-              </thead>
-              <tbody>
-                {(data.items as Row[]).map((p) => (
-                  <tr key={p.id} className="border-b border-border/50 hover:bg-muted/30">
-                    <td className="px-3 py-2">
+      {/* ── Bulk actions bar (sticky) ── */}
+      {someSelected && (
+        <div className="sticky top-16 z-20 bg-brand-dark text-white rounded-xl shadow-lg px-4 py-2.5 flex flex-wrap items-center gap-2">
+          <span className="font-bold text-sm">{formatCount(selected.size)} محدد</span>
+          <div className="h-4 w-px bg-white/20 mx-1" />
+          <button
+            onClick={() => bulkMut.mutate({ ids: [...selected], isAvailable: true })}
+            className="text-xs font-bold px-2 py-1 rounded hover:bg-white/10"
+          >
+            تفعيل
+          </button>
+          <button
+            onClick={() => bulkMut.mutate({ ids: [...selected], isAvailable: false })}
+            className="text-xs font-bold px-2 py-1 rounded hover:bg-white/10"
+          >
+            تعطيل
+          </button>
+          <button
+            onClick={() => exportCsv(filtered.filter((p) => selected.has(p.id)))}
+            className="text-xs font-bold px-2 py-1 rounded hover:bg-white/10 inline-flex items-center gap-1"
+          >
+            <Download className="w-3.5 h-3.5" />
+            تصدير
+          </button>
+          <button
+            onClick={() => setConfirmBulkDel(true)}
+            className="text-xs font-bold px-2 py-1 rounded hover:bg-red-500/30 text-red-200 inline-flex items-center gap-1"
+          >
+            <Trash2 className="w-3.5 h-3.5" />
+            حذف
+          </button>
+          <button
+            onClick={() => setSelected(new Set())}
+            className="ms-auto text-xs px-2 py-1 rounded hover:bg-white/10"
+          >
+            إلغاء التحديد
+          </button>
+        </div>
+      )}
+
+      {/* ── Content ── */}
+      {isLoading ? (
+        <div className="bg-card rounded-xl border border-border p-6">
+          <TableSkeleton rows={8} cols={6} />
+        </div>
+      ) : isError ? (
+        <div className="bg-card rounded-xl border border-border">
+          <ErrorState onRetry={() => refetch()} />
+        </div>
+      ) : all.length === 0 ? (
+        <div className="bg-card rounded-xl border border-border">
+          <EmptyState
+            icon={<Box className="w-10 h-10" />}
+            title="لا توجد منتجات"
+            description="ابدأ بإضافة أول منتج لهذا التاجر."
+            action={
+              <Button onClick={() => setCreateOpen(true)}>
+                <Plus className="w-4 h-4" />
+                إضافة منتج
+              </Button>
+            }
+          />
+        </div>
+      ) : filtered.length === 0 ? (
+        <div className="bg-card rounded-xl border border-border">
+          <EmptyState
+            icon={<Search className="w-10 h-10" />}
+            title="لا توجد نتائج مطابقة"
+            description="جرّب تعديل البحث أو الفلاتر."
+            action={
+              <Button variant="outline" onClick={clearFilters}>
+                مسح الفلاتر
+              </Button>
+            }
+          />
+        </div>
+      ) : (
+        <>
+          {/* Desktop table */}
+          <div className="hidden md:block bg-card rounded-xl border border-border overflow-hidden">
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="bg-muted/50 border-b border-border text-muted-foreground">
+                  <tr className="text-right">
+                    <th className={cellPad + ' w-8'}>
                       <input
                         type="checkbox"
-                        checked={selected.has(p.id)}
-                        onChange={() => toggleSel(p.id)}
+                        className="accent-brand-red w-4 h-4"
+                        checked={allPageSelected}
+                        onChange={toggleAllPage}
+                        aria-label="تحديد الكل"
                       />
-                    </td>
-                    <td className="px-3 py-2">
-                      <div className="font-medium">{p.nameAr}</div>
-                      <div className="text-xs text-muted-foreground">{p.name}</div>
-                    </td>
-                    <td className="px-3 py-2 text-xs">{p.merchant?.storeNameAr ?? '—'}</td>
-                    <td className="px-3 py-2">
-                      <input
-                        type="number"
-                        defaultValue={Number(p.price)}
-                        onBlur={(e) => {
-                          const v = Number(e.target.value);
-                          if (v !== Number(p.price))
-                            updateMut.mutate({ id: p.id, data: { price: v } });
-                        }}
-                        className="w-24 px-2 py-1 rounded border border-input bg-white text-sm"
-                      />
-                    </td>
-                    <td className="px-3 py-2">
-                      <label className="inline-flex items-center gap-1">
-                        <input
-                          type="checkbox"
-                          checked={p.isAvailable}
-                          onChange={(e) =>
-                            updateMut.mutate({
-                              id: p.id,
-                              data: { isAvailable: e.target.checked },
-                            })
-                          }
-                        />
-                      </label>
-                    </td>
-                    <td className="px-3 py-2">
-                      {p.stock !== null ? <Badge>{p.stock}</Badge> : '—'}
-                    </td>
-                    <td className="px-3 py-2">
-                      <div className="flex items-center gap-1">
-                        <button
-                          type="button"
-                          onClick={() => setEditing(p)}
-                          className="p-1.5 rounded-md hover:bg-muted text-muted-foreground hover:text-foreground"
-                          aria-label="تعديل"
-                        >
-                          <Pencil className="w-4 h-4" />
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            if (window.confirm(`حذف المنتج "${p.nameAr}"؟`)) deleteMut.mutate(p.id);
-                          }}
-                          disabled={deleteMut.isPending}
-                          className="p-1.5 rounded-md hover:bg-destructive/10 text-muted-foreground hover:text-destructive disabled:opacity-50"
-                          aria-label="حذف"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
-                      </div>
-                    </td>
+                    </th>
+                    <th className={cellPad + ' w-14'} />
+                    <SortableTh
+                      label="المنتج"
+                      active={sortBy === 'name'}
+                      dir={sortDir}
+                      onClick={() => setSort('name')}
+                      className={cellPad}
+                    />
+                    <th className={cellPad + ' font-bold'}>التاجر</th>
+                    <SortableTh
+                      label="السعر"
+                      active={sortBy === 'price'}
+                      dir={sortDir}
+                      onClick={() => setSort('price')}
+                      className={cellPad}
+                    />
+                    <SortableTh
+                      label="المخزون"
+                      active={sortBy === 'stock'}
+                      dir={sortDir}
+                      onClick={() => setSort('stock')}
+                      className={cellPad}
+                    />
+                    <th className={cellPad + ' font-bold'}>الحالة</th>
+                    <th className={cellPad + ' w-24'} />
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {pageItems.map((p) => {
+                    const img = firstImage(p);
+                    const ss = stockState(p);
+                    return (
+                      <tr
+                        key={p.id}
+                        className={`border-b border-border/50 hover:bg-muted/30 ${selected.has(p.id) ? 'bg-brand-red/5' : ''}`}
+                      >
+                        <td className={cellPad}>
+                          <input
+                            type="checkbox"
+                            className="accent-brand-red w-4 h-4"
+                            checked={selected.has(p.id)}
+                            onChange={() => toggleSel(p.id)}
+                          />
+                        </td>
+                        <td className={cellPad}>
+                          <ProductThumb src={img} onClick={() => img && setPreview(img)} />
+                        </td>
+                        <td className={cellPad}>
+                          <div className="font-bold text-foreground">{p.nameAr}</div>
+                          <div className="text-xs text-muted-foreground" dir="ltr">
+                            {p.name}
+                          </div>
+                          {p.sku && (
+                            <div className="text-[10px] text-muted-foreground/70 font-mono">
+                              SKU: {p.sku}
+                            </div>
+                          )}
+                        </td>
+                        <td className={cellPad + ' text-xs'}>{p.merchant?.storeNameAr ?? '—'}</td>
+                        <td className={cellPad}>
+                          <PriceEdit
+                            value={Number(p.price) || 0}
+                            onSave={(v) => updateMut.mutate({ id: p.id, data: { price: v } })}
+                          />
+                        </td>
+                        <td className={cellPad}>
+                          <StockEdit
+                            value={p.stock}
+                            state={ss}
+                            onSave={(v) => updateMut.mutate({ id: p.id, data: { stock: v } })}
+                          />
+                        </td>
+                        <td className={cellPad}>
+                          <StatusToggle on={!!p.isAvailable} onChange={() => toggleAvail(p)} />
+                        </td>
+                        <td className={cellPad}>
+                          <div className="flex items-center gap-1 justify-end">
+                            <button
+                              type="button"
+                              onClick={() => setEditing(p)}
+                              className="p-1.5 rounded-md hover:bg-muted text-muted-foreground hover:text-foreground"
+                              aria-label="تعديل"
+                              title="تعديل"
+                            >
+                              <Pencil className="w-4 h-4" />
+                            </button>
+                            <RowMenu
+                              onDuplicate={() => duplicateMut.mutate(p)}
+                              onDelete={() => setConfirmDel(p)}
+                            />
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
           </div>
-        )}
-      </div>
 
+          {/* Mobile cards */}
+          <div className="md:hidden space-y-2">
+            {pageItems.map((p) => {
+              const img = firstImage(p);
+              return (
+                <div
+                  key={p.id}
+                  className={`bg-card rounded-xl border p-3 flex gap-3 ${selected.has(p.id) ? 'border-brand-red/40 bg-brand-red/5' : 'border-border'}`}
+                >
+                  <input
+                    type="checkbox"
+                    className="accent-brand-red w-4 h-4 mt-1"
+                    checked={selected.has(p.id)}
+                    onChange={() => toggleSel(p.id)}
+                  />
+                  <ProductThumb src={img} onClick={() => img && setPreview(img)} />
+                  <div className="flex-1 min-w-0">
+                    <div className="font-bold text-sm truncate">{p.nameAr}</div>
+                    <div className="text-xs text-muted-foreground truncate" dir="ltr">
+                      {p.name}
+                    </div>
+                    <div className="mt-1 flex flex-wrap items-center gap-1.5">
+                      <span className="font-black text-sm">{formatMoney(p.price)}</span>
+                      <TonePill tone={STOCK_META[stockState(p)].tone}>
+                        {stockState(p) === 'unknown'
+                          ? '—'
+                          : `${STOCK_META[stockState(p)].label}${p.stock != null ? ` (${formatCount(p.stock)})` : ''}`}
+                      </TonePill>
+                    </div>
+                    <div className="text-[11px] text-muted-foreground mt-0.5">
+                      {p.merchant?.storeNameAr ?? '—'}
+                    </div>
+                  </div>
+                  <div className="flex flex-col items-end gap-2">
+                    <StatusToggle on={!!p.isAvailable} onChange={() => toggleAvail(p)} />
+                    <div className="flex gap-1">
+                      <button
+                        onClick={() => setEditing(p)}
+                        className="p-1.5 rounded-md hover:bg-muted text-muted-foreground"
+                      >
+                        <Pencil className="w-4 h-4" />
+                      </button>
+                      <button
+                        onClick={() => setConfirmDel(p)}
+                        className="p-1.5 rounded-md hover:bg-destructive/10 text-destructive"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          {/* ── Pagination + density ── */}
+          <div className="flex flex-wrap items-center justify-between gap-3 text-sm">
+            <div className="flex items-center gap-2 text-muted-foreground">
+              <span>
+                عرض {formatCount(from)}–{formatCount(to)} من {formatCount(filtered.length)}
+              </span>
+              <select
+                value={pageSize}
+                onChange={(e) => {
+                  setPageSize(Number(e.target.value));
+                  resetPage();
+                }}
+                className="px-2 py-1 rounded border border-input bg-popover text-xs"
+              >
+                {[20, 50, 100].map((n) => (
+                  <option key={n} value={n}>
+                    {n}/صفحة
+                  </option>
+                ))}
+              </select>
+              <button
+                onClick={() => setDense((d) => !d)}
+                className="text-xs px-2 py-1 rounded border border-input hover:bg-muted"
+              >
+                {dense ? 'كثافة مريحة' : 'كثافة مضغوطة'}
+              </button>
+            </div>
+            {totalPages > 1 && (
+              <div className="flex items-center gap-1">
+                <button
+                  disabled={pageClamped <= 1}
+                  onClick={() => setPage(pageClamped - 1)}
+                  className="px-3 py-1.5 rounded-lg border border-input disabled:opacity-40 hover:bg-muted"
+                >
+                  السابق
+                </button>
+                <span className="px-2 text-muted-foreground">
+                  {formatCount(pageClamped)} / {formatCount(totalPages)}
+                </span>
+                <button
+                  disabled={pageClamped >= totalPages}
+                  onClick={() => setPage(pageClamped + 1)}
+                  className="px-3 py-1.5 rounded-lg border border-input disabled:opacity-40 hover:bg-muted"
+                >
+                  التالي
+                </button>
+              </div>
+            )}
+          </div>
+        </>
+      )}
+
+      {/* ── Dialogs ── */}
       {createOpen && (
         <ProductFormDialog
           mode="create"
@@ -296,6 +831,220 @@ export function ProductsPage() {
           merchants={(merchants?.items as Row[]) ?? []}
           onClose={() => setEditing(null)}
         />
+      )}
+      <ConfirmDialog
+        open={!!confirmDel}
+        onOpenChange={(o) => !o && setConfirmDel(null)}
+        title="حذف المنتج"
+        message={confirmDel ? `سيتم حذف "${confirmDel.nameAr}" نهائياً. لا يمكن التراجع.` : ''}
+        loading={deleteMut.isPending}
+        onConfirm={() => confirmDel && deleteMut.mutate(confirmDel.id)}
+      />
+      <ConfirmDialog
+        open={confirmBulkDel}
+        onOpenChange={(o) => !o && setConfirmBulkDel(false)}
+        title="حذف المنتجات المحددة"
+        message={`سيتم حذف ${formatCount(selected.size)} منتج نهائياً. لا يمكن التراجع.`}
+        loading={bulkDeleteMut.isPending}
+        onConfirm={() => bulkDeleteMut.mutate([...selected])}
+      />
+      {preview && (
+        <Dialog open onOpenChange={(o) => !o && setPreview(null)} size="lg">
+          <img src={preview} alt="" className="w-full max-h-[75vh] object-contain rounded-lg" />
+        </Dialog>
+      )}
+    </div>
+  );
+}
+
+// ── Small building blocks ──
+
+function FilterGroup({
+  label,
+  value,
+  onChange,
+  options,
+}: {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+  options: [string, string][];
+}) {
+  return (
+    <div className="inline-flex items-center gap-1.5">
+      <span className="text-xs font-bold text-muted-foreground">{label}:</span>
+      <div className="inline-flex rounded-lg border border-border overflow-hidden">
+        {options.map(([v, l]) => (
+          <button
+            key={v}
+            type="button"
+            onClick={() => onChange(v)}
+            className={`px-2.5 py-1 text-xs font-bold transition ${value === v ? 'bg-brand-red text-white' : 'bg-card text-muted-foreground hover:bg-muted'}`}
+          >
+            {l}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function SortableTh({
+  label,
+  active,
+  dir,
+  onClick,
+  className,
+}: {
+  label: string;
+  active: boolean;
+  dir: 'asc' | 'desc';
+  onClick: () => void;
+  className?: string;
+}) {
+  return (
+    <th className={`${className} font-bold`}>
+      <button
+        type="button"
+        onClick={onClick}
+        className="inline-flex items-center gap-1 hover:text-foreground"
+      >
+        {label}
+        {active ? (
+          dir === 'asc' ? (
+            <ArrowUp className="w-3.5 h-3.5" />
+          ) : (
+            <ArrowDown className="w-3.5 h-3.5" />
+          )
+        ) : (
+          <ArrowUpDown className="w-3.5 h-3.5 opacity-40" />
+        )}
+      </button>
+    </th>
+  );
+}
+
+function ProductThumb({ src, onClick }: { src: string | null; onClick?: () => void }) {
+  if (!src) {
+    return (
+      <div className="w-11 h-11 rounded-lg bg-muted grid place-items-center text-muted-foreground/50 shrink-0">
+        <ImageOff className="w-4 h-4" />
+      </div>
+    );
+  }
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="w-11 h-11 rounded-lg overflow-hidden border border-border shrink-0 hover:ring-2 hover:ring-brand-red/40"
+    >
+      <img src={src} alt="" className="w-full h-full object-cover" />
+    </button>
+  );
+}
+
+function StatusToggle({ on, onChange }: { on: boolean; onChange: () => void }) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={on}
+      onClick={onChange}
+      title={on ? 'متاح — اضغط للتعطيل' : 'معطّل — اضغط للتفعيل'}
+      className={`relative inline-flex h-6 w-11 items-center rounded-full transition ${on ? 'bg-green-500' : 'bg-zinc-300'}`}
+    >
+      <span
+        className={`inline-block h-4 w-4 transform rounded-full bg-white shadow transition ${on ? 'translate-x-1' : 'translate-x-6'}`}
+      />
+    </button>
+  );
+}
+
+function PriceEdit({ value, onSave }: { value: number; onSave: (v: number) => void }) {
+  return (
+    <div className="inline-flex items-center gap-1">
+      <input
+        type="number"
+        defaultValue={value}
+        onBlur={(e) => {
+          const v = Number(e.target.value);
+          if (v !== value) onSave(v);
+        }}
+        className="w-20 px-2 py-1 rounded border border-input bg-popover text-sm text-left"
+        dir="ltr"
+      />
+      <span className="text-[10px] text-muted-foreground">ج.م</span>
+    </div>
+  );
+}
+
+function StockEdit({
+  value,
+  state,
+  onSave,
+}: {
+  value: unknown;
+  state: StockState;
+  onSave: (v: number) => void;
+}) {
+  return (
+    <div className="inline-flex items-center gap-1.5">
+      <input
+        type="number"
+        defaultValue={value == null ? '' : Number(value)}
+        placeholder="—"
+        onBlur={(e) => {
+          const raw = e.target.value.trim();
+          if (raw === '') return;
+          const v = Number(raw);
+          if (v !== Number(value)) onSave(v);
+        }}
+        className="w-16 px-2 py-1 rounded border border-input bg-popover text-sm text-center"
+        dir="ltr"
+      />
+      {state !== 'unknown' && (
+        <TonePill tone={STOCK_META[state].tone}>{STOCK_META[state].label}</TonePill>
+      )}
+    </div>
+  );
+}
+
+function RowMenu({ onDuplicate, onDelete }: { onDuplicate: () => void; onDelete: () => void }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        className="p-1.5 rounded-md hover:bg-muted text-muted-foreground"
+        aria-label="المزيد"
+      >
+        <MoreVertical className="w-4 h-4" />
+      </button>
+      {open && (
+        <>
+          <div className="fixed inset-0 z-30" onClick={() => setOpen(false)} />
+          <div className="absolute end-0 mt-1 z-40 w-40 bg-popover rounded-lg border border-border shadow-lg py-1 text-sm">
+            <button
+              onClick={() => {
+                setOpen(false);
+                onDuplicate();
+              }}
+              className="w-full text-start px-3 py-2 hover:bg-muted inline-flex items-center gap-2"
+            >
+              <Copy className="w-4 h-4" /> نسخ المنتج
+            </button>
+            <button
+              onClick={() => {
+                setOpen(false);
+                onDelete();
+              }}
+              className="w-full text-start px-3 py-2 hover:bg-destructive/10 text-destructive inline-flex items-center gap-2"
+            >
+              <Trash2 className="w-4 h-4" /> حذف
+            </button>
+          </div>
+        </>
       )}
     </div>
   );
