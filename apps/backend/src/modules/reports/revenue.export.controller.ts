@@ -12,6 +12,8 @@
 import type { RequestHandler } from 'express';
 import { z } from 'zod';
 
+import { queryBoolDefault } from '../../utils/zodBool.js';
+
 import { loadReport } from './revenue.controller.js';
 
 const querySchema = z.object({
@@ -21,7 +23,7 @@ const querySchema = z.object({
   merchantId: z.string().optional(),
   paymentMethod: z.enum(['CASH', 'VODAFONE_CASH', 'INSTAPAY']).optional(),
   status: z.enum(['COMPLETED', 'DELIVERED', 'ALL_REVENUE']).default('COMPLETED'),
-  includeCommission: z.coerce.boolean().default(true),
+  includeCommission: queryBoolDefault(false),
   commissionPctOverride: z.coerce.number().min(0).max(100).optional(),
 });
 

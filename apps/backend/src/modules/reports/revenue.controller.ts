@@ -45,8 +45,15 @@ const querySchema = z.object({
    *
    *  Defaults OFF: Tamem isn't charging a percentage today, so defaulting it on
    *  reported commission nobody collected and shrank every merchant payout by
-   *  15%. The admin opts in from the report's own toggle. */
-  includeCommission: z.coerce.boolean().default(false),
+   *  15%. The admin opts in from the report's own toggle.
+   *
+   *  NOT z.coerce.boolean(): that is Boolean(value), and Boolean("false") is
+   *  true — so the query string ?includeCommission=false switched commission
+   *  ON. The toggle looked wired up while every report charged 15% regardless. */
+  includeCommission: z
+    .enum(['true', 'false', '1', '0'])
+    .default('false')
+    .transform((v) => v === 'true' || v === '1'),
   /** Override the per-merchant default commission %. Null = use each
    *  merchant's own setting (or the platform fallback). */
   commissionPctOverride: z.coerce.number().min(0).max(100).optional(),

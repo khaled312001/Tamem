@@ -14,8 +14,11 @@
 import { useQuery } from '@tanstack/react-query';
 import { Calendar, FileSpreadsheet, Loader2, Printer } from 'lucide-react';
 import { useMemo, useState } from 'react';
-import { useAuth } from '../lib/auth.js';
+import { toast } from 'sonner';
+
 import { api } from '../lib/api.js';
+import { downloadBlob } from '../lib/productsSheet.js';
+import { buildRevenueWorkbook } from '../lib/revenueSheet.js';
 
 type Preset = 'today' | 'week' | 'month' | 'custom';
 
@@ -126,7 +129,6 @@ function fmtDate(iso: string): string {
 }
 
 export function RevenueReportPage() {
-  const tokens = useAuth((s) => s.tokens);
   const [preset, setPreset] = useState<Preset>('month');
   const [from, setFrom] = useState('');
   const [to, setTo] = useState('');
@@ -170,27 +172,36 @@ export function RevenueReportPage() {
 
   const [downloading, setDownloading] = useState(false);
 
-  // Use fetch+blob (instead of window.open) so the access token can travel
-  // in the Authorization header — the CSV endpoint refuses anonymous calls.
-  const downloadCsv = async () => {
-    if (!tokens?.accessToken) return;
+  /** Human-readable filter labels — the workbook carries its own context so a
+   *  file that gets emailed on still says what it covers. */
+  const exportMeta = useMemo(
+    () => ({
+      periodLabel: PRESET_LABELS[preset],
+      merchantName: merchantId
+        ? (merchantsPage?.items.find((m) => m.id === merchantId)?.storeNameAr ?? undefined)
+        : undefined,
+      paymentLabel: paymentMethod ? (PAYMENT_AR[paymentMethod] ?? paymentMethod) : undefined,
+      commissionMode: !includeCommission
+        ? 'غير محتسبة'
+        : commissionPct
+          ? `نسبة موحدة ${commissionPct}%`
+          : 'نسبة كل تاجر',
+    }),
+    [preset, merchantId, merchantsPage, paymentMethod, includeCommission, commissionPct],
+  );
+
+  // Built in the browser from the data already rendered: the old button hit a
+  // CSV endpoint the live backend never implemented (404), and a workbook beats
+  // a flat CSV for an accountant anyway.
+  const downloadExcel = async () => {
+    if (!data) return;
     setDownloading(true);
     try {
-      const baseUrl = (import.meta.env.VITE_API_URL as string) || 'http://localhost:4000';
-      const search = new URLSearchParams(params);
-      const res = await fetch(`${baseUrl}/api/v1/admin/reports/revenue.csv?${search.toString()}`, {
-        headers: { Authorization: `Bearer ${tokens.accessToken}` },
-      });
-      if (!res.ok) throw new Error('فشل تحميل التقرير');
-      const blob = await res.blob();
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `tamem-revenue-${(params.from ?? '').slice(0, 10) || params.preset}.csv`;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      URL.revokeObjectURL(url);
+      const blob = await buildRevenueWorkbook({ data, meta: exportMeta });
+      const stamp = (data.range?.from ?? '').slice(0, 10) || preset;
+      downloadBlob(blob, `تميم-تقرير-الإيرادات-${stamp}.xlsx`);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'تعذّر تجهيز الملف');
     } finally {
       setDownloading(false);
     }
@@ -198,6 +209,45 @@ export function RevenueReportPage() {
 
   return (
     <div className="space-y-4">
+      {/* Letterhead — print only. On screen the page header covers this; on
+          paper the report needs to identify itself. */}
+      <div className="hidden print:block mb-4">
+        <div className="flex items-start justify-between border-b-2 border-brand-red pb-3">
+          <div className="flex items-center gap-3">
+            <img src="/logo.png" alt="" className="h-14 w-auto" />
+            <div>
+              <div className="text-xl font-black text-brand-dark">تَميم للتوصيل</div>
+              <div className="text-xs text-muted-foreground">التقرير المحاسبي للإيرادات</div>
+            </div>
+          </div>
+          <div className="text-left text-[11px] leading-5">
+            <div>
+              <span className="text-muted-foreground">الفترة: </span>
+              <b>{PRESET_LABELS[preset]}</b>
+            </div>
+            {data?.range?.from && (
+              <div>
+                <span className="text-muted-foreground">من </span>
+                {fmtDate(data.range.from)}
+                <span className="text-muted-foreground"> إلى </span>
+                {fmtDate(data.range.to)}
+              </div>
+            )}
+            <div>
+              <span className="text-muted-foreground">التاجر: </span>
+              {exportMeta.merchantName ?? 'كل التجار'}
+            </div>
+            <div>
+              <span className="text-muted-foreground">العمولة: </span>
+              {exportMeta.commissionMode}
+            </div>
+            {data?.generatedAt && (
+              <div className="text-muted-foreground">صدر في {fmtDate(data.generatedAt)}</div>
+            )}
+          </div>
+        </div>
+      </div>
+
       {/* Header — hidden on print */}
       <div className="print:hidden space-y-4">
         <div className="flex items-center justify-between flex-wrap gap-3">
@@ -217,7 +267,7 @@ export function RevenueReportPage() {
               تحديث
             </button>
             <button
-              onClick={downloadCsv}
+              onClick={() => void downloadExcel()}
               disabled={downloading}
               className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-green-600 text-white text-sm font-bold hover:bg-green-700 disabled:opacity-60"
             >

@@ -6,6 +6,8 @@
 import type { RequestHandler } from 'express';
 import { z } from 'zod';
 
+import { queryBool } from '../../utils/zodBool.js';
+
 import { phoneSchema } from '@tamem/validators';
 
 import { prisma } from '../../db/prisma.js';
@@ -21,7 +23,7 @@ const listQuerySchema = z.object({
   search: z.string().optional(),
   governorate: z.string().optional(),
   city: z.string().optional(),
-  isActive: z.coerce.boolean().optional(),
+  isActive: queryBool.optional(),
   page: z.coerce.number().int().positive().default(1),
   pageSize: z.coerce.number().int().positive().max(100).default(50),
 });
