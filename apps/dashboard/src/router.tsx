@@ -31,6 +31,7 @@ import { SiteSettingsPage } from './routes/site-settings.js';
 import { CouponsPage } from './routes/coupons.js';
 import { SettingsPage } from './routes/settings.js';
 import { SupervisorsPage } from './routes/supervisors.js';
+import { NotificationTemplatesPage } from './routes/notification-templates.js';
 import { WhatsAppPage } from './routes/whatsapp.js';
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
@@ -72,6 +73,7 @@ const routes: RouteObject[] = [
       { path: 'reviews', element: <ReviewsPage /> },
       { path: 'alerts', element: <AlertsPage /> },
       { path: 'whatsapp', element: <WhatsAppPage /> },
+      { path: 'whatsapp/templates', element: <NotificationTemplatesPage /> },
       { path: 'broadcast', element: <BroadcastPage /> },
       { path: 'supervisors', element: <SupervisorsPage /> },
       { path: 'admins', element: <AdminsPage /> },
