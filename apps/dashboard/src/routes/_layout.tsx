@@ -1,5 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import {
+  Bell,
   AlertTriangle,
   BarChart3,
   Box,
@@ -111,6 +112,7 @@ const NAV_SECTIONS: NavSection[] = [
     items: [
       { to: '/broadcast', icon: Megaphone, label: 'إشعار جماعي', perm: 'broadcast' },
       { to: '/whatsapp', icon: MessageCircle, label: 'ربط واتساب', perm: 'whatsapp' },
+      { to: '/whatsapp/templates', icon: Bell, label: 'قوالب الرسائل' },
       { to: '/reviews', icon: Star, label: 'التقييمات', perm: 'reviews' },
     ],
   },

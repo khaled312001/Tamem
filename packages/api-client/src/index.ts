@@ -775,6 +775,31 @@ export class TamemClient {
   }): Promise<{ enabled: boolean; groupId: string | null; groupName: string | null }> {
     return this.request({ method: 'PUT', url: '/admin/whatsapp/group-config', data });
   }
+  // ===== Notification templates =====
+  async adminNotificationTemplates(): Promise<{
+    templates: Array<{
+      key: string;
+      event: string;
+      recipient: string;
+      label: string;
+      default: string;
+      text: string;
+      enabled: boolean;
+      customized: boolean;
+    }>;
+    variables: Record<string, string>;
+  }> {
+    return this.request({ method: 'GET', url: '/admin/notification-templates' });
+  }
+  async adminSaveNotificationTemplates(
+    templates: Array<{ key: string; enabled: boolean; text: string }>,
+  ): Promise<{ saved: number }> {
+    return this.request({
+      method: 'PUT',
+      url: '/admin/notification-templates',
+      data: { templates },
+    });
+  }
 
   // ===== Admin Payment Gateway (EasyKash) =====
   async adminGatewayStatus(): Promise<{
