@@ -653,7 +653,9 @@ if ($method === 'GET' && $path === '/admin/alerts') {
     if (!empty($_GET['category'])) { $where[] = 'category = ?'; $args[] = $_GET['category']; }
     $sql = 'SELECT * FROM `Alert`' . ($where ? ' WHERE ' . implode(' AND ', $where) : '') . ' ORDER BY createdAt DESC LIMIT 100';
     $st = db()->prepare($sql); $st->execute($args);
-    $items = $st->fetchAll();
+    // jsonizeRow stamps the Z on createdAt/resolvedAt so the alerts page shows
+    // Cairo time, not a raw UTC string parsed as local (3 hours early).
+    $items = array_map('jsonizeRow', $st->fetchAll());
     // Stats by severity — that's what the api-client's `adminListAlerts`
     // pulls out of `meta.stats`.
     // "Active" = OPEN | ACKNOWLEDGED | ESCALATED, matching the Node backend.
@@ -1028,9 +1030,34 @@ function waDir(): string { $d = __DIR__ . '/uploads/.wa'; if (!is_dir($d)) @mkdi
 function waEnqueue(?string $to, string $text): void {
     $to = trim((string)$to);
     if ($to === '' || $text === '') return;
-    @mkdir(waDir() . '/queue', 0755, true);
-    @file_put_contents(waDir() . '/queue/' . bin2hex(random_bytes(8)) . '.json',
-        json_encode(['to' => $to, 'text' => $text], JSON_UNESCAPED_UNICODE));
+    $dir = waDir();
+    @mkdir($dir . '/queue', 0755, true);
+    @mkdir($dir . '/dedupe', 0755, true);
+    // Idempotency. The same (recipient, text) within a short window is a
+    // DUPLICATE TRIGGER — a double-clicked button, a status change whose handler
+    // also fires notifyOrderParties, a client retry — not a second real message.
+    // Order-stage messages for one transition are byte-identical, and no genuine
+    // flow re-sends identical text to the same number within seconds (OTPs embed
+    // a unique code, so they never collide). Drop the repeat.
+    $key = hash('sha256', $to . '|' . $text);
+    $marker = $dir . '/dedupe/' . $key . '.txt';
+    $now = time();
+    $TTL = 180; // 3 minutes
+    $last = @file_get_contents($marker);
+    if ($last !== false && is_numeric($last) && ($now - (int) $last) < $TTL) {
+        return; // identical message already enqueued moments ago — skip
+    }
+    @file_put_contents($marker, (string) $now);
+    // Occasional cheap GC so markers don't accumulate forever.
+    if (random_int(1, 50) === 1) {
+        foreach (glob($dir . '/dedupe/*.txt') ?: [] as $f) {
+            if (($now - (int) @filemtime($f)) > $TTL) @unlink($f);
+        }
+    }
+    // The bridge also honours this key as a second line of defence against a
+    // send that delivered but threw (timeout) and would otherwise be retried.
+    @file_put_contents($dir . '/queue/' . bin2hex(random_bytes(8)) . '.json',
+        json_encode(['to' => $to, 'text' => $text, 'dedupe' => $key], JSON_UNESCAPED_UNICODE));
 }
 function orderStatusLabelAr(string $s): string {
     return [
@@ -1157,6 +1184,31 @@ function notifyOrderParties(string $orderId, string $status, ?string $reason = n
         $drvName = trim((string) ($o['drv_name'] ?? ''));
         $sent = false;
 
+        // Admin-editable overrides. The rich messages below stay the DEFAULT;
+        // an admin can disable a (event,recipient) send, replace its text, add
+        // extra recipients, or route the oversight copy to a WhatsApp group —
+        // all without losing the detailed default when they leave it untouched.
+        $event = notifStatusToEvent($status);
+        $ctx = [
+            'orderNumber' => $no, 'customerName' => $custName,
+            'customerPhone' => (string) ($o['cust_phone'] ?? ''),
+            'driverName' => $drvName, 'driverPhone' => (string) ($o['drv_phone'] ?? ''),
+            'price' => (string) ($d['total'] ?? ''), 'serviceName' => $svc,
+            'pickupAddress' => (string) ($o['pickupAddress'] ?? ''),
+            'deliveryAddress' => (string) ($o['deliveryAddress'] ?? ''),
+            'paymentMethod' => waPayMethodAr($o['paymentMethod'] ?? null),
+            'reason' => (string) ($reason ?? ''),
+        ];
+        // Resolve default-or-override text for a recipient, or null to SKIP
+        // (disabled). $default is the rich hardcoded message.
+        $resolve = function (string $recipient, ?string $default) use ($event, $ctx): ?string {
+            if ($default === null && $event === null) return null;
+            $rule = $event ? notifRule($event, $recipient) : ['enabled' => true, 'override' => null];
+            if (!$rule['enabled']) return null;
+            if ($rule['override'] !== null) { $r = notifRender($rule['override'], $ctx); return $r !== '' ? $r : null; }
+            return $default;
+        };
+
         // Header + the customer's own order summary, reused across their messages.
         $custSummary = "🧾 الطلب رقم *#{$no}*\nالخدمة: {$svc}"
             . ($d['items'] ? "\n\n🛒 التفاصيل:\n{$d['items']}" : '')
@@ -1193,6 +1245,7 @@ function notifyOrderParties(string $orderId, string $status, ?string $reason = n
                 $custMsg = "تميم للتوصيل\nنأسف، تم إلغاء طلبك *#{$no}*." . ($reason ? "\nالسبب: {$reason}" : '') . "\n\n{$custSummary}";
                 break;
         }
+        $custMsg = $resolve('CUSTOMER', $custMsg);
         if ($custMsg && !empty($o['cust_phone'])) { waEnqueue($o['cust_phone'], $custMsg); $sent = true; }
 
         // ── DRIVER ── full operational packet (only the stages they act on)
@@ -1214,6 +1267,7 @@ function notifyOrderParties(string $orderId, string $status, ?string $reason = n
                 $drvMsg = "⛔ *أُلغي الطلب #{$no}* — لا حاجة للتوصيل." . ($reason ? "\nالسبب: {$reason}" : '');
             }
         }
+        $drvMsg = $resolve('DRIVER', $drvMsg);
         if ($drvMsg && !empty($o['drv_phone'])) { waEnqueue($o['drv_phone'], $drvMsg); $sent = true; }
 
         // ── ADMIN ── full internal summary incl. financials
@@ -1237,8 +1291,32 @@ function notifyOrderParties(string $orderId, string $status, ?string $reason = n
                 . ($fin ? "\n" . implode("\n", $fin) : '')
                 . ($status === 'CANCELLED' && $reason ? "\nسبب الإلغاء: {$reason}" : '');
         }
+        // The oversight copy is the GROUP recipient. Disabling ORDER_x_GROUP in
+        // the editor silences it; an override replaces its text.
+        $admMsg = $resolve('GROUP', $admMsg);
         $adminNo = waAdminNumber();
         if ($admMsg && $adminNo) { waEnqueue($adminNo, $admMsg); $sent = true; }
+        // Also deliver the oversight copy to a linked WhatsApp GROUP, when the
+        // admin has picked one and enabled it.
+        if ($admMsg) {
+            $grp = notifReadSetting('whatsapp_order_group');
+            if (!empty($grp['enabled']) && !empty($grp['groupId'])) {
+                waEnqueue((string) $grp['groupId'], $admMsg); $sent = true;
+            }
+        }
+
+        // Extra per-event recipients (a second supervisor, the owner, …). Each
+        // enabled row gets its own text, or — when blank — the GROUP/admin copy.
+        if ($event) {
+            $extra = notifReadSetting('notification_recipients');
+            foreach ((array) ($extra[$event] ?? []) as $r) {
+                $phone = trim((string) ($r['phone'] ?? ''));
+                if ($phone === '' || (array_key_exists('enabled', $r) && !$r['enabled'])) continue;
+                $txt = trim((string) ($r['text'] ?? ''));
+                $msg = $txt !== '' ? notifRender($txt, $ctx) : ($admMsg ?: $custMsg);
+                if ($msg) { waEnqueue($phone, $msg); $sent = true; }
+            }
+        }
 
         if ($sent) {
             try { db()->prepare("UPDATE `Order` SET `whatsappSentAt` = NOW(3) WHERE id = ?")->execute([$orderId]); } catch (Throwable $e) {}
@@ -1291,6 +1369,223 @@ if ($method === 'POST' && $path === '/admin/whatsapp/start') {
     // The bridge always runs and shows a QR when unauthenticated, so "start"
     // just returns the current status; the page then polls for the QR.
     jsonOk(waStatus());
+}
+
+// ═══ Notification templates / recipients / WhatsApp groups ══════════════
+// These back Ahmed's dashboard pages. Without them the pages hit the shim's
+// generic fallback: GETs returned an empty stub and PUTs faked a 200 while
+// persisting nothing (dead buttons). Storage is JSON Setting rows — no new
+// tables. The templates the admin toggles/edits are honoured by
+// notifyOrderParties (enable/disable + text override + extra recipients +
+// group routing), while the rich default messages stay intact when untouched.
+function notifReadSetting(string $key): array {
+    try {
+        $st = db()->prepare("SELECT `value` FROM `Setting` WHERE `key` = ? LIMIT 1");
+        $st->execute([$key]);
+        $v = $st->fetchColumn();
+        if (is_string($v) && $v !== '') { $d = json_decode($v, true); if (is_array($d)) return $d; }
+    } catch (Throwable $e) { /* fall through */ }
+    return [];
+}
+function notifWriteSetting(string $key, array $value, ?string $uid): void {
+    db()->prepare('INSERT INTO `Setting` (`key`,`value`,`description`,`updatedAt`,`updatedById`) VALUES (?,?,NULL,NOW(3),?) ON DUPLICATE KEY UPDATE `value`=VALUES(`value`), `updatedAt`=VALUES(`updatedAt`), `updatedById`=VALUES(`updatedById`)')
+        ->execute([$key, json_encode($value, JSON_UNESCAPED_UNICODE), $uid]);
+}
+/** Built-in template catalog: one entry per (event × recipient) the platform
+ *  actually sends. `default` is a readable Arabic summary shown in the editor;
+ *  the rich runtime message lives in notifyOrderParties and is used verbatim
+ *  unless the admin saves an override here. */
+function notifDefaultCatalog(): array {
+    $ev = fn($event, $recipient, $label, $default) => compact('event', 'recipient', 'label', 'default')
+        + ['key' => $event . '_' . $recipient];
+    return [
+        $ev('ORDER_NEW', 'SUPERVISOR', 'المشرف', "🆕 طلب جديد #{{orderNumber}} — {{customerName}}"),
+        $ev('ORDER_NEW', 'GROUP', 'جروب الإدارة', "🆕 طلب جديد #{{orderNumber}}\nالعميل: {{customerName}}\nالخدمة: {{serviceName}}"),
+        $ev('ORDER_PRICED', 'CUSTOMER', 'العميل', "تميم للتوصيل 🚚\nتم تسعير طلبك #{{orderNumber}} — راجع التفاصيل ووافق من التطبيق.\nالإجمالي: {{price}}"),
+        $ev('ORDER_PRICED', 'GROUP', 'جروب الإدارة', "💲 تم تسعير الطلب #{{orderNumber}} — {{price}}"),
+        $ev('ORDER_ACCEPTED', 'CUSTOMER', 'العميل', "تميم للتوصيل ✅\nتم قبول طلبك #{{orderNumber}} وجارٍ تجهيزه."),
+        $ev('DRIVER_ASSIGNED', 'CUSTOMER', 'العميل', "تميم للتوصيل 🚚\nالكابتن {{driverName}} في الطريق لطلبك #{{orderNumber}} — للتواصل: {{driverPhone}}"),
+        $ev('DRIVER_ASSIGNED', 'DRIVER', 'السائق', "🚚 طلب جديد مُسند إليك #{{orderNumber}}\nالعميل: {{customerName}} — {{customerPhone}}\nعنوان التسليم: {{deliveryAddress}}\nالمطلوب تحصيله: {{price}}"),
+        $ev('DRIVER_ASSIGNED', 'GROUP', 'جروب الإدارة', "🚚 تعيين سائق {{driverName}} للطلب #{{orderNumber}}"),
+        $ev('PICKED_UP', 'CUSTOMER', 'العميل', "تميم للتوصيل 🚚\nتم استلام طلبك #{{orderNumber}} وهو في الطريق إليك."),
+        $ev('IN_ROUTE', 'CUSTOMER', 'العميل', "تميم للتوصيل 🚚\nمندوبك على وشك الوصول بطلب #{{orderNumber}}. جهّز استلامك 😊"),
+        $ev('DELIVERED', 'CUSTOMER', 'العميل', "تميم للتوصيل ✅\nتم توصيل طلبك #{{orderNumber}} بنجاح — شكراً لاختيارك تميم 🌟\nقيّم تجربتك من التطبيق."),
+        $ev('DELIVERED', 'GROUP', 'جروب الإدارة', "✅ اكتمل الطلب #{{orderNumber}}"),
+        $ev('CANCELLED', 'CUSTOMER', 'العميل', "تميم للتوصيل\nنأسف، تم إلغاء طلبك #{{orderNumber}}.\nالسبب: {{reason}}"),
+        $ev('CANCELLED', 'DRIVER', 'السائق', "⛔ أُلغي الطلب #{{orderNumber}} — لا حاجة للتوصيل.\nالسبب: {{reason}}"),
+        $ev('CANCELLED', 'GROUP', 'جروب الإدارة', "⛔ أُلغي الطلب #{{orderNumber}}\nالسبب: {{reason}}"),
+    ];
+}
+function notifVariables(): array {
+    return [
+        'orderNumber' => 'رقم الطلب', 'customerName' => 'اسم العميل', 'customerPhone' => 'هاتف العميل',
+        'driverName' => 'اسم المندوب', 'driverPhone' => 'هاتف المندوب', 'price' => 'الإجمالي',
+        'serviceName' => 'الخدمة', 'pickupAddress' => 'عنوان الاستلام', 'deliveryAddress' => 'عنوان التسليم',
+        'paymentMethod' => 'طريقة الدفع', 'reason' => 'سبب الإلغاء',
+    ];
+}
+/** Render a template string against a context: replace {{var}}, drop dangling
+ *  "Label:" lines whose value was empty, collapse blank runs. Mirrors the
+ *  editor's live preview so what the admin sees is what gets sent. */
+function notifRender(string $tpl, array $ctx): string {
+    $out = preg_replace_callback('/\{\{\s*([a-zA-Z]+)\s*\}\}/', function ($m) use ($ctx) {
+        return isset($ctx[$m[1]]) ? (string) $ctx[$m[1]] : '';
+    }, $tpl);
+    $lines = array_filter(explode("\n", $out), function ($ln) {
+        // Drop a line that became just "العنوان: " (label + colon, no value).
+        return !preg_match('/^[^\p{L}\p{N}]*[\p{L}\p{N} ]+:\s*$/u', trim($ln));
+    });
+    $out = implode("\n", $lines);
+    return trim(preg_replace('/\n{3,}/', "\n\n", $out));
+}
+/** Effective templates = defaults with the saved override merged in. */
+function notifEffectiveTemplates(): array {
+    $overrides = notifReadSetting('notification_templates'); // { key: {enabled,text} }
+    $out = [];
+    foreach (notifDefaultCatalog() as $t) {
+        $ov = $overrides[$t['key']] ?? null;
+        $text = (is_array($ov) && isset($ov['text']) && $ov['text'] !== '') ? (string) $ov['text'] : $t['default'];
+        $enabled = is_array($ov) && array_key_exists('enabled', $ov) ? (bool) $ov['enabled'] : true;
+        $out[] = $t + [
+            'text' => $text,
+            'enabled' => $enabled,
+            'customized' => $text !== $t['default'],
+        ];
+    }
+    return $out;
+}
+/** One (event,recipient) pair as [enabled, overrideTextOrNull]. Used by
+ *  notifyOrderParties to decide skip/override without regressing rich defaults. */
+function notifRule(string $event, string $recipient): array {
+    static $map = null;
+    if ($map === null) {
+        $map = [];
+        $overrides = notifReadSetting('notification_templates');
+        foreach (notifDefaultCatalog() as $t) {
+            $ov = $overrides[$t['key']] ?? null;
+            $map[$t['event'] . '|' . $t['recipient']] = [
+                'enabled' => is_array($ov) && array_key_exists('enabled', $ov) ? (bool) $ov['enabled'] : true,
+                'override' => (is_array($ov) && isset($ov['text']) && $ov['text'] !== '') ? (string) $ov['text'] : null,
+            ];
+        }
+    }
+    return $map[$event . '|' . $recipient] ?? ['enabled' => true, 'override' => null];
+}
+function notifStatusToEvent(string $status): ?string {
+    return [
+        'NEW' => 'ORDER_NEW', 'PRICED' => 'ORDER_PRICED', 'ACCEPTED' => 'ORDER_ACCEPTED',
+        'DRIVER_ASSIGNED' => 'DRIVER_ASSIGNED', 'PICKED_UP' => 'PICKED_UP', 'IN_ROUTE' => 'IN_ROUTE',
+        'DELIVERED' => 'DELIVERED', 'COMPLETED' => 'DELIVERED', 'CANCELLED' => 'CANCELLED',
+    ][$status] ?? null;
+}
+
+if ($method === 'GET' && $path === '/admin/notification-templates') {
+    $u = authUser(); if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
+    jsonOk(['templates' => notifEffectiveTemplates(), 'variables' => notifVariables()]);
+}
+if (in_array($method, ['PUT', 'POST'], true) && $path === '/admin/notification-templates') {
+    $u = authUser(); if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
+    $b = readJsonBody();
+    $defaults = [];
+    foreach (notifDefaultCatalog() as $t) $defaults[$t['key']] = $t['default'];
+    // Store overrides only — a template equal to its default AND enabled is
+    // dropped, so "reset to default" is just saving the default back.
+    $overrides = [];
+    foreach ((array) ($b['templates'] ?? []) as $t) {
+        $key = (string) ($t['key'] ?? '');
+        if ($key === '' || !isset($defaults[$key])) continue;
+        $text = (string) ($t['text'] ?? '');
+        $enabled = array_key_exists('enabled', $t) ? (bool) $t['enabled'] : true;
+        $isDefaultText = ($text === '' || $text === $defaults[$key]);
+        if ($isDefaultText && $enabled) continue; // identical to built-in → no override
+        $entry = [];
+        if (!$isDefaultText) $entry['text'] = $text;
+        if (!$enabled) $entry['enabled'] = false;
+        if ($entry) $overrides[$key] = $entry;
+    }
+    notifWriteSetting('notification_templates', $overrides, $u['sub'] ?? null);
+    jsonOk(['saved' => count($overrides)]);
+}
+if ($method === 'GET' && $path === '/admin/notification-recipients') {
+    $u = authUser(); if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
+    $recipients = notifReadSetting('notification_recipients');
+    $events = [];
+    foreach (notifDefaultCatalog() as $t) $events[$t['event']] = true;
+    jsonOk([
+        'events' => array_map(fn($e) => ['event' => $e], array_keys($events)),
+        'recipients' => (object) $recipients,
+    ]);
+}
+if (in_array($method, ['PUT', 'POST'], true) && $path === '/admin/notification-recipients') {
+    $u = authUser(); if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
+    $b = readJsonBody();
+    $clean = [];
+    $count = 0;
+    foreach ((array) ($b['recipients'] ?? []) as $event => $rows) {
+        $list = [];
+        foreach ((array) $rows as $r) {
+            $phone = trim((string) ($r['phone'] ?? ''));
+            if ($phone === '') continue; // a row with no number does nothing
+            $list[] = [
+                'id' => (string) ($r['id'] ?? ('r' . bin2hex(random_bytes(5)))),
+                'name' => (string) ($r['name'] ?? ''),
+                'phone' => $phone,
+                'enabled' => array_key_exists('enabled', $r) ? (bool) $r['enabled'] : true,
+                'text' => (string) ($r['text'] ?? ''),
+            ];
+            $count++;
+        }
+        if ($list) $clean[(string) $event] = $list;
+    }
+    notifWriteSetting('notification_recipients', $clean, $u['sub'] ?? null);
+    jsonOk(['saved' => $count]);
+}
+// WhatsApp groups — `groups`/`refreshedAt` are read from the bridge's
+// groups.json (it enumerates the account's groups); `config` is the shim's
+// saved selection of which group receives order notifications.
+if ($method === 'GET' && $path === '/admin/whatsapp/groups') {
+    $u = authUser(); if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
+    $groups = []; $refreshedAt = null;
+    $gf = waDir() . '/groups.json';
+    if (is_file($gf)) {
+        $j = json_decode((string) @file_get_contents($gf), true);
+        if (is_array($j)) { $groups = $j['groups'] ?? []; $refreshedAt = $j['ts'] ?? null; }
+    }
+    $cfg = notifReadSetting('whatsapp_order_group');
+    jsonOk([
+        'groups' => $groups,
+        'refreshedAt' => $refreshedAt,
+        'config' => [
+            'enabled' => (bool) ($cfg['enabled'] ?? false),
+            'groupId' => $cfg['groupId'] ?? null,
+            'groupName' => $cfg['groupName'] ?? null,
+        ],
+    ]);
+}
+if ($method === 'POST' && $path === '/admin/whatsapp/groups/refresh') {
+    $u = authUser(); if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
+    @mkdir(waDir() . '/control', 0755, true);
+    @file_put_contents(waDir() . '/control/' . bin2hex(random_bytes(8)) . '.json', json_encode(['action' => 'refresh-groups']));
+    jsonOk(['queued' => true]);
+}
+if (in_array($method, ['PUT', 'POST'], true) && $path === '/admin/whatsapp/group-config') {
+    $u = authUser(); if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
+    $b = readJsonBody();
+    $groupId = ($b['groupId'] ?? null) ?: null;
+    $enabled = !empty($b['enabled']);
+    // Resolve the human name from the bridge's group list so the toast can say
+    // "تم الربط بجروب X".
+    $groupName = null;
+    if ($groupId) {
+        $gf = waDir() . '/groups.json';
+        if (is_file($gf)) {
+            $j = json_decode((string) @file_get_contents($gf), true);
+            foreach (($j['groups'] ?? []) as $g) if (($g['id'] ?? null) === $groupId) { $groupName = $g['name'] ?? null; break; }
+        }
+    }
+    $cfg = ['enabled' => $enabled, 'groupId' => $groupId, 'groupName' => $groupName];
+    notifWriteSetting('whatsapp_order_group', $cfg, $u['sub'] ?? null);
+    jsonOk($cfg);
 }
 
 // Payment gateway config — the page expects a fixed shape with `keys` and
@@ -2253,6 +2548,132 @@ if ($method === 'DELETE' && preg_match('#^/admin/import-jobs/([^/]+)$#', $path, 
     jsonOk(['deleted' => true]);
 }
 
+// ─── Reviews — dedicated handlers with the linked order / customer / driver /
+// merchant nested in. Without these, /admin/reviews fell to the generic $RES
+// list (bare `SELECT *`), so the page received raw driverId/merchantId cuids
+// with no names and showed "غير معروف" everywhere. The DB always had the links;
+// the API simply never joined them.
+function reviewSelectSql(): string {
+    return "SELECT r.id, r.orderId, r.customerId, r.driverId, r.merchantId,
+                   r.rating, r.driverRating, r.merchantRating, r.comment, r.createdAt,
+                   o.orderNumber, o.status AS orderStatus,
+                   cu.name AS cuName, cu.phone AS cuPhone, cu.avatarUrl AS cuAvatar,
+                   dr.name AS drName, dr.phone AS drPhone, dr.avatarUrl AS drAvatar,
+                   mp.storeNameAr AS mpName, mp.logoUrl AS mpLogo
+            FROM `OrderReview` r
+            LEFT JOIN `Order` o ON o.id = r.orderId
+            LEFT JOIN `User` cu ON cu.id = r.customerId
+            LEFT JOIN `User` dr ON dr.id = r.driverId
+            LEFT JOIN `MerchantProfile` mp ON mp.id = r.merchantId";
+}
+function reviewNest(array $r): array {
+    // A driver WAS linked but the User row is gone (deleted account): say so
+    // explicitly rather than showing a blank or a fabricated name, and log it.
+    $driver = null;
+    if ($r['driverId']) {
+        if ($r['drName'] === null) {
+            error_log('[api.php] review ' . $r['id'] . ': driverId ' . $r['driverId'] . ' has no User row (deleted?)');
+            $driver = ['id' => $r['driverId'], 'name' => null, 'phone' => null, 'avatarUrl' => null, 'missing' => true];
+        } else {
+            $driver = ['id' => $r['driverId'], 'name' => $r['drName'], 'phone' => $r['drPhone'], 'avatarUrl' => $r['drAvatar']];
+        }
+    }
+    $merchant = $r['merchantId']
+        ? ['id' => $r['merchantId'], 'storeNameAr' => $r['mpName'] ?: null, 'logoUrl' => $r['mpLogo'] ?? null]
+        : null;
+    return [
+        'id' => $r['id'],
+        'orderId' => $r['orderId'], 'customerId' => $r['customerId'],
+        'driverId' => $r['driverId'], 'merchantId' => $r['merchantId'],
+        'rating' => (int) $r['rating'],
+        'driverRating' => $r['driverRating'] !== null ? (int) $r['driverRating'] : null,
+        'merchantRating' => $r['merchantRating'] !== null ? (int) $r['merchantRating'] : null,
+        'comment' => $r['comment'],
+        'createdAt' => isoZ($r['createdAt']),
+        'order' => $r['orderId'] ? ['id' => $r['orderId'], 'orderNumber' => $r['orderNumber'], 'status' => $r['orderStatus']] : null,
+        'customer' => ['id' => $r['customerId'], 'name' => $r['cuName'] ?: 'عميل', 'phone' => $r['cuPhone'], 'avatarUrl' => $r['cuAvatar']],
+        'driver' => $driver,
+        'merchant' => $merchant,
+    ];
+}
+// GET /admin/reviews/stats — real aggregates (was computed client-side from
+// the last page only; this is the whole table).
+if ($method === 'GET' && $path === '/admin/reviews/stats') {
+    $u = authUser(); if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
+    $row = db()->query(
+        "SELECT COUNT(*) AS total,
+                ROUND(AVG(rating), 2) AS avgRating,
+                ROUND(AVG(driverRating), 2) AS avgDriver,
+                ROUND(AVG(merchantRating), 2) AS avgMerchant,
+                SUM(rating <= 2) AS negatives,
+                SUM(rating = 5) AS s5, SUM(rating = 4) AS s4, SUM(rating = 3) AS s3,
+                SUM(rating = 2) AS s2, SUM(rating = 1) AS s1
+         FROM `OrderReview`"
+    )->fetch() ?: [];
+    jsonOk([
+        'total' => (int) ($row['total'] ?? 0),
+        'averageRating' => $row['avgRating'] !== null ? (float) $row['avgRating'] : null,
+        'averageDriver' => $row['avgDriver'] !== null ? (float) $row['avgDriver'] : null,
+        'averageMerchant' => $row['avgMerchant'] !== null ? (float) $row['avgMerchant'] : null,
+        'negatives' => (int) ($row['negatives'] ?? 0),
+        'distribution' => [
+            '5' => (int) ($row['s5'] ?? 0), '4' => (int) ($row['s4'] ?? 0),
+            '3' => (int) ($row['s3'] ?? 0), '2' => (int) ($row['s2'] ?? 0), '1' => (int) ($row['s1'] ?? 0),
+        ],
+    ]);
+}
+// GET /admin/reviews/:id — single review, fully linked (the detail page).
+if ($method === 'GET' && preg_match('#^/admin/reviews/([^/]+)$#', $path, $m)) {
+    $u = authUser(); if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
+    $st = db()->prepare(reviewSelectSql() . ' WHERE r.id = ? LIMIT 1');
+    $st->execute([$m[1]]);
+    $row = $st->fetch();
+    if (!$row) jsonErr('التقييم غير موجود', 404, 'NOT_FOUND');
+    jsonOk(reviewNest($row));
+}
+// GET /admin/reviews — nested list + server-side filters.
+if ($method === 'GET' && $path === '/admin/reviews') {
+    $u = authUser(); if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
+    $page = max(1, (int) ($_GET['page'] ?? 1));
+    $size = min(200, max(1, (int) ($_GET['pageSize'] ?? 20)));
+    $off = ($page - 1) * $size;
+    $where = []; $args = [];
+    $minR = (int) ($_GET['minRating'] ?? 0);
+    if ($minR > 0) { $where[] = 'r.rating >= ?'; $args[] = $minR; }
+    if (($_GET['minDriverRating'] ?? '') !== '') { $where[] = 'r.driverRating >= ?'; $args[] = (int) $_GET['minDriverRating']; }
+    if (($_GET['minMerchantRating'] ?? '') !== '') { $where[] = 'r.merchantRating >= ?'; $args[] = (int) $_GET['minMerchantRating']; }
+    if (($_GET['driverId'] ?? '') !== '') { $where[] = 'r.driverId = ?'; $args[] = (string) $_GET['driverId']; }
+    if (($_GET['merchantId'] ?? '') !== '') { $where[] = 'r.merchantId = ?'; $args[] = (string) $_GET['merchantId']; }
+    if (($_GET['customerId'] ?? '') !== '') { $where[] = 'r.customerId = ?'; $args[] = (string) $_GET['customerId']; }
+    $q = trim((string) ($_GET['q'] ?? $_GET['search'] ?? ''));
+    if ($q !== '') {
+        $where[] = '(o.orderNumber LIKE ? OR r.comment LIKE ? OR cu.name LIKE ? OR dr.name LIKE ? OR mp.storeNameAr LIKE ?)';
+        for ($i = 0; $i < 5; $i++) $args[] = "%$q%";
+    }
+    if (($_GET['from'] ?? '') !== '') { $where[] = 'r.createdAt >= ?'; $args[] = gmdate('Y-m-d H:i:s', strtotime((string) $_GET['from'])); }
+    if (($_GET['to'] ?? '') !== '')   { $where[] = 'r.createdAt <= ?'; $args[] = gmdate('Y-m-d H:i:s', strtotime((string) $_GET['to'])); }
+    $wsql = $where ? (' WHERE ' . implode(' AND ', $where)) : '';
+    $ct = db()->prepare("SELECT COUNT(*) FROM `OrderReview` r
+        LEFT JOIN `Order` o ON o.id = r.orderId
+        LEFT JOIN `User` cu ON cu.id = r.customerId
+        LEFT JOIN `User` dr ON dr.id = r.driverId
+        LEFT JOIN `MerchantProfile` mp ON mp.id = r.merchantId" . $wsql);
+    $ct->execute($args);
+    $total = (int) $ct->fetchColumn();
+    $st = db()->prepare(reviewSelectSql() . $wsql . " ORDER BY r.createdAt DESC LIMIT $size OFFSET $off");
+    $st->execute($args);
+    $rows = array_map('reviewNest', $st->fetchAll());
+    http_response_code(200);
+    echo json_encode([
+        'data' => $rows,
+        'meta' => ['pagination' => [
+            'page' => $page, 'pageSize' => $size, 'total' => $total,
+            'totalPages' => (int) ceil($total / $size),
+        ]],
+    ], JSON_UNESCAPED_UNICODE);
+    exit;
+}
+
 if ($method === 'GET' && preg_match('#^/admin/([a-z][a-z0-9-]*)/([^/]+)$#', $path, $m)
         && isset($RES[$m[1]])) {
     authUser();
@@ -2471,6 +2892,60 @@ if ($method === 'GET' && $path === '/admin/drivers') {
     http_response_code(200);
     echo json_encode(['data' => $rows, 'meta' => ['pagination' => ['page' => $page, 'pageSize' => $size, 'total' => $total, 'totalPages' => (int) ceil($total / max(1, $size))]]], JSON_UNESCAPED_UNICODE);
     exit;
+}
+
+// GET /admin/drivers/:id — driver + their reviews + rating stats. This handler
+// did not exist, so the profile's adminGetDriver() fell through to the stub
+// fallback and every driver showed "0 تقييمات" even when reviews existed. The
+// distribution is computed from OrderReview.driverRating (the driver-specific
+// score), not the overall order rating which mixes driver + merchant.
+if ($method === 'GET' && preg_match('#^/admin/drivers/([^/]+)$#', $path, $m)) {
+    $u = authUser(); if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
+    $did = $m[1];
+    $ds = db()->prepare(
+        "SELECT u.id, u.name, u.phone, u.email, u.avatarUrl, u.isActive, u.city, u.governorate, u.createdAt,
+                dp.id AS dp_id, dp.status AS dp_status, dp.vehicleType AS dp_vehicleType, dp.vehiclePlate AS dp_vehiclePlate,
+                dp.nationalId AS dp_nationalId, dp.governorate AS dp_governorate, dp.totalDeliveries AS dp_totalDeliveries,
+                dp.totalEarnings AS dp_totalEarnings, dp.cashOnHand AS dp_cashOnHand, dp.rating AS dp_rating
+         FROM `User` u LEFT JOIN `DriverProfile` dp ON dp.userId = u.id
+         WHERE u.id = ? AND u.role = 'DRIVER' LIMIT 1"
+    );
+    $ds->execute([$did]);
+    $r = $ds->fetch();
+    if (!$r) jsonErr('السائق غير موجود', 404, 'NOT_FOUND');
+    $out = [
+        'id' => $r['id'], 'name' => $r['name'], 'phone' => $r['phone'], 'email' => $r['email'],
+        'avatarUrl' => $r['avatarUrl'], 'isActive' => (bool) (int) $r['isActive'],
+        'city' => $r['city'], 'governorate' => $r['governorate'], 'createdAt' => isoZ($r['createdAt']),
+        'driverProfile' => $r['dp_id'] !== null ? [
+            'id' => $r['dp_id'], 'status' => $r['dp_status'], 'vehicleType' => $r['dp_vehicleType'],
+            'vehiclePlate' => $r['dp_vehiclePlate'], 'nationalId' => $r['dp_nationalId'],
+            'governorate' => $r['dp_governorate'], 'totalDeliveries' => (int) $r['dp_totalDeliveries'],
+            'totalEarnings' => $r['dp_totalEarnings'], 'cashOnHand' => $r['dp_cashOnHand'], 'rating' => $r['dp_rating'],
+        ] : null,
+    ];
+    // Reviews for this driver, newest first, with the order number.
+    $rv = db()->prepare(reviewSelectSql() . ' WHERE r.driverId = ? ORDER BY r.createdAt DESC LIMIT 100');
+    $rv->execute([$did]);
+    $out['reviews'] = array_map('reviewNest', $rv->fetchAll());
+    // Stats from the driver-specific score.
+    $sr = db()->prepare(
+        "SELECT COUNT(driverRating) AS c, ROUND(AVG(driverRating), 2) AS a,
+                SUM(driverRating = 5) AS s5, SUM(driverRating = 4) AS s4, SUM(driverRating = 3) AS s3,
+                SUM(driverRating = 2) AS s2, SUM(driverRating = 1) AS s1
+         FROM `OrderReview` WHERE driverId = ? AND driverRating IS NOT NULL"
+    );
+    $sr->execute([$did]);
+    $s = $sr->fetch() ?: [];
+    $out['stats'] = [
+        'reviewCount' => (int) ($s['c'] ?? 0),
+        'averageRating' => $s['a'] !== null ? (float) $s['a'] : null,
+        'distribution' => [
+            '5' => (int) ($s['s5'] ?? 0), '4' => (int) ($s['s4'] ?? 0), '3' => (int) ($s['s3'] ?? 0),
+            '2' => (int) ($s['s2'] ?? 0), '1' => (int) ($s['s1'] ?? 0),
+        ],
+    ];
+    jsonOk($out);
 }
 
 // ─── Merchant detail + sub-pages (hours, status, product-API config) ───
@@ -4747,11 +5222,26 @@ if (preg_match('#^/orders/([^/]+)/review$#', $path, $mm) && in_array($method, ['
     $b = readJsonBody();
     $rating = (int) ($b['rating'] ?? 0);
     if ($rating < 1 || $rating > 5) jsonErr('التقييم من 1 إلى 5', 422, 'VALIDATION_ERROR');
+    // Persist the links from the ORDER itself — never trust IDs from the client.
+    // A driverRating with no driver on the order, or a merchantRating with no
+    // merchant, would create a review that can never resolve a name later; log
+    // it loudly at write time so the gap is visible where it's created, not
+    // discovered months later as "غير معروف" in the admin panel.
+    $driverId = $o['assignedDriverId'] ?: null;
+    $merchantId = $o['merchantId'] ?: null;
+    if (isset($b['driverRating']) && !$driverId) {
+        error_log('[api.php] review on order ' . $mm[1] . ': driverRating given but order has no assignedDriverId');
+    }
+    if (isset($b['merchantRating']) && !$merchantId) {
+        error_log('[api.php] review on order ' . $mm[1] . ': merchantRating given but order has no merchantId');
+    }
     $id = newId();
     db()->prepare('INSERT INTO `OrderReview` (id, orderId, customerId, driverId, merchantId, rating, driverRating, merchantRating, comment, createdAt) VALUES (?,?,?,?,?,?,?,?,?,NOW(3))')
-        ->execute([$id, $mm[1], $uid, $o['assignedDriverId'], $o['merchantId'], $rating,
-            isset($b['driverRating']) ? (int) $b['driverRating'] : null,
-            isset($b['merchantRating']) ? (int) $b['merchantRating'] : null,
+        ->execute([$id, $mm[1], $uid, $driverId, $merchantId, $rating,
+            // Only keep a per-target score when that target actually exists on
+            // the order — otherwise the score is meaningless and unattributable.
+            (isset($b['driverRating']) && $driverId) ? (int) $b['driverRating'] : null,
+            (isset($b['merchantRating']) && $merchantId) ? (int) $b['merchantRating'] : null,
             ($b['comment'] ?? null) ?: null]);
     // Recompute the driver's running average (fire-and-forget in Node too).
     try {

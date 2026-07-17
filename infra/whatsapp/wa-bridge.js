@@ -68,6 +68,35 @@ for (const d of [BASE, AUTH_DIR, IPC, QUEUE_DIR, CONTROL_DIR, DEAD_DIR])
 // silently dropped, so it can be inspected/re-queued instead of lost.
 const MAX_ATTEMPTS = 6;
 
+// Recently-delivered dedupe keys → expiry timestamp. Guards against re-sending a
+// message that delivered but whose sendMessage() threw (so it was requeued).
+// In-memory is enough: it only needs to span the retry backoff window, and the
+// enqueue side (dedupe/ marker files) already covers cross-restart duplicates.
+const recentlySent = new Map();
+const DEDUPE_TTL = 15 * 60 * 1000; // 15 minutes
+function rememberSent(key) {
+  const now = Date.now();
+  recentlySent.set(key, now + DEDUPE_TTL);
+  if (recentlySent.size > 500) {
+    for (const [k, exp] of recentlySent) if (exp < now) recentlySent.delete(k);
+  }
+}
+// Wrap Map.has with expiry so stale keys don't block a genuinely new message
+// that happens to be byte-identical much later.
+{
+  const rawHas = recentlySent.has.bind(recentlySent);
+  recentlySent.has = (key) => {
+    const exp = recentlySent.get(key);
+    if (exp === undefined) return false;
+    if (exp < Date.now()) {
+      recentlySent.delete(key);
+      return false;
+    }
+    return true;
+  };
+  void rawHas;
+}
+
 function readStatus() {
   try {
     return JSON.parse(fs.readFileSync(STATUS_FILE, 'utf8'));
@@ -293,6 +322,18 @@ setInterval(async () => {
         park(f, full, { ...(msg || {}), reason: 'missing to/text' });
         continue;
       }
+      // Second line of defence against duplicates: if this exact message was
+      // already delivered in this session, drop the file without re-sending.
+      // Covers the nasty case where sock.sendMessage() actually delivered but
+      // threw a timeout, so the message got requeued for retry — the recipient
+      // would otherwise receive it twice. (The enqueue side already de-dupes
+      // repeat triggers; this catches the deliver-but-throw path.)
+      if (msg.dedupe && recentlySent.has(msg.dedupe)) {
+        try {
+          fs.unlinkSync(full);
+        } catch {}
+        continue;
+      }
       // per-message backoff: skip until its retry time is due
       if (msg.nextAt && Date.now() < msg.nextAt) continue;
       // A group send before the metadata cache is warm fails at the Baileys
@@ -301,6 +342,7 @@ setInterval(async () => {
       if (String(msg.to).includes('@g.us') && !groupsReady) continue;
       try {
         await sock.sendMessage(toJid(msg.to), { text: String(msg.text) });
+        if (msg.dedupe) rememberSent(msg.dedupe);
         try {
           fs.unlinkSync(full);
         } catch {} // delivered
