@@ -37,63 +37,78 @@ interface SiteConfig {
 
 type TabKey = 'hero' | 'services' | 'stats' | 'contact' | 'general';
 
-const TABS: { key: TabKey; label: string }[] = [
-  { key: 'hero', label: 'الرأس' },
-  { key: 'services', label: 'الخدمات' },
-  { key: 'stats', label: 'الأرقام' },
-  { key: 'contact', label: 'جهات الاتصال' },
-  { key: 'general', label: 'العنوان والساعات' },
+// Tab labels describe what the shop owner SEES on the site, not layout jargon.
+// (Old labels like "الرأس" meant nothing to a non-technical admin.)
+const TABS: { key: TabKey; label: string; icon: string }[] = [
+  { key: 'hero', label: 'أعلى الصفحة', icon: '🏠' },
+  { key: 'services', label: 'الخدمات', icon: '🚚' },
+  { key: 'stats', label: 'الأرقام', icon: '📊' },
+  { key: 'contact', label: 'أرقام التواصل', icon: '📞' },
+  { key: 'general', label: 'العنوان والمواعيد', icon: '🕒' },
 ];
 
 type FieldDef = { key: string; label: string; hint?: string; multiline?: boolean; ltr?: boolean };
+// A group renders as ONE card: a titled box holding related fields, so "الخدمة
+// الأولى" reads as a single thing on the site instead of five loose inputs
+// labelled "نقطة ١..٣" with no idea which card they belong to.
+type Group = { title: string; subtitle?: string; fields: FieldDef[] };
 
-/** Text fields per tab. Each `key` must match a `data-site` attr on the landing. */
-const TEXT_FIELDS: Record<Exclude<TabKey, 'contact'>, FieldDef[]> = {
+/** Section groups per tab. Each `key` must match a `data-site` attr on the landing. */
+const SECTIONS: Record<Exclude<TabKey, 'contact'>, Group[]> = {
   hero: [
-    { key: 'heroTitleLine1', label: 'العنوان — السطر الأول' },
     {
-      key: 'heroTitleLine2',
-      label: 'العنوان — السطر الثاني',
-      hint: 'سيب مسافة في الآخر قبل الكلمات المميّزة',
+      title: 'العنوان الرئيسي',
+      subtitle: 'أكبر جملة في أول الصفحة',
+      fields: [
+        { key: 'heroTitleLine1', label: 'السطر الأول' },
+        {
+          key: 'heroTitleLine2',
+          label: 'السطر الثاني',
+          hint: 'سيب مسافة في الآخر قبل الكلمات المميّزة',
+        },
+        {
+          key: 'heroTitleHighlight',
+          label: 'الكلمات الملوّنة',
+          hint: 'دي اللي بتظهر بالتدرّج الذهبي',
+        },
+      ],
     },
-    { key: 'heroTitleHighlight', label: 'الكلمات المميّزة', hint: 'دي اللي بتظهر بالتدرّج الذهبي' },
-    { key: 'heroSubtitle', label: 'الوصف تحت العنوان', multiline: true },
-    { key: 'heroCtaText', label: 'نص زر الدعوة للإجراء' },
+    {
+      title: 'الوصف والزر',
+      fields: [
+        { key: 'heroSubtitle', label: 'الوصف تحت العنوان', multiline: true },
+        { key: 'heroCtaText', label: 'نص الزر الكبير' },
+      ],
+    },
   ],
-  services: [
-    { key: 'service1Title', label: 'الخدمة ١ — العنوان' },
-    { key: 'service1Desc', label: 'الخدمة ١ — الوصف', multiline: true },
-    { key: 'service1Bullet1', label: 'الخدمة ١ — نقطة ١' },
-    { key: 'service1Bullet2', label: 'الخدمة ١ — نقطة ٢' },
-    { key: 'service1Bullet3', label: 'الخدمة ١ — نقطة ٣' },
-    { key: 'service2Title', label: 'الخدمة ٢ — العنوان' },
-    { key: 'service2Desc', label: 'الخدمة ٢ — الوصف', multiline: true },
-    { key: 'service2Bullet1', label: 'الخدمة ٢ — نقطة ١' },
-    { key: 'service2Bullet2', label: 'الخدمة ٢ — نقطة ٢' },
-    { key: 'service3Title', label: 'الخدمة ٣ — العنوان' },
-    { key: 'service3Desc', label: 'الخدمة ٣ — الوصف', multiline: true },
-    { key: 'service3Bullet1', label: 'الخدمة ٣ — نقطة ١' },
-    { key: 'service3Bullet2', label: 'الخدمة ٣ — نقطة ٢' },
-    { key: 'service3Bullet3', label: 'الخدمة ٣ — نقطة ٣' },
-  ],
-  stats: [
-    { key: 'stat1Value', label: 'الرقم ١ — القيمة' },
-    { key: 'stat1Suffix', label: 'الرقم ١ — الوحدة' },
-    { key: 'stat1Label', label: 'الرقم ١ — الوصف' },
-    { key: 'stat2Value', label: 'الرقم ٢ — القيمة' },
-    { key: 'stat2Suffix', label: 'الرقم ٢ — الوحدة' },
-    { key: 'stat2Label', label: 'الرقم ٢ — الوصف' },
-    { key: 'stat3Value', label: 'الرقم ٣ — القيمة' },
-    { key: 'stat3Suffix', label: 'الرقم ٣ — الوحدة' },
-    { key: 'stat3Label', label: 'الرقم ٣ — الوصف' },
-    { key: 'stat4Value', label: 'الرقم ٤ — القيمة' },
-    { key: 'stat4Suffix', label: 'الرقم ٤ — الوحدة' },
-    { key: 'stat4Label', label: 'الرقم ٤ — الوصف' },
-  ],
+  services: [1, 2, 3].map((n) => ({
+    title: `الخدمة ${['الأولى', 'الثانية', 'الثالثة'][n - 1]}`,
+    subtitle: 'كارت خدمة كامل كما يظهر على الموقع',
+    fields: [
+      { key: `service${n}Title`, label: 'اسم الخدمة' },
+      { key: `service${n}Desc`, label: 'الوصف', multiline: true },
+      { key: `service${n}Bullet1`, label: 'ميزة ١' },
+      { key: `service${n}Bullet2`, label: 'ميزة ٢' },
+      ...(n !== 2 ? [{ key: `service${n}Bullet3`, label: 'ميزة ٣' }] : []),
+    ],
+  })),
+  stats: [1, 2, 3, 4].map((n) => ({
+    title: `الرقم ${['الأول', 'الثاني', 'الثالث', 'الرابع'][n - 1]}`,
+    fields: [
+      { key: `stat${n}Value`, label: 'الرقم' },
+      { key: `stat${n}Suffix`, label: 'الوحدة', hint: 'مثال: دقيقة · منطقة' },
+      { key: `stat${n}Label`, label: 'الوصف تحته' },
+    ],
+  })),
   general: [
-    { key: 'addressAr', label: 'العنوان' },
-    { key: 'email', label: 'البريد الإلكتروني', ltr: true },
-    { key: 'workingHoursAr', label: 'ساعات العمل' },
+    {
+      title: 'بيانات التواصل والمواعيد',
+      fields: [
+        { key: 'addressAr', label: 'العنوان' },
+        { key: 'email', label: 'البريد الإلكتروني', ltr: true },
+        { key: 'workingHoursAr', label: 'ساعات العمل' },
+      ],
+    },
   ],
 };
 
@@ -134,12 +149,16 @@ const DEFAULTS: Record<string, string> = {
   stat4Label: 'كاش · فودافون كاش · إنستاباي',
 };
 
-const ALL_TEXT_KEYS = Object.values(TEXT_FIELDS).flatMap((fs) => fs.map((f) => f.key));
+const ALL_TEXT_KEYS = Object.values(SECTIONS).flatMap((groups) =>
+  groups.flatMap((g) => g.fields.map((f) => f.key)),
+);
 
 export function SiteSettingsPage() {
   const qc = useQueryClient();
   const [tab, setTab] = useState<TabKey>('hero');
   const [form, setForm] = useState<SiteConfig | null>(null);
+  // A snapshot of the loaded values, so we can show what changed and offer undo.
+  const [initial, setInitial] = useState<Record<string, string>>({});
 
   const { data: cfg, isLoading } = useQuery({
     queryKey: ['admin', 'site-config'],
@@ -165,13 +184,29 @@ export function SiteSettingsPage() {
       // Pre-fill each field with the SAVED override if there is one, else the
       // text currently live on the site (DEFAULTS). Admins edit real text, never
       // a blank box — and saving an untouched field just re-writes the same text.
+      const snap: Record<string, string> = {};
       for (const k of ALL_TEXT_KEYS) {
         const saved = raw[k];
         next[k] = typeof saved === 'string' && saved !== '' ? saved : (DEFAULTS[k] ?? '');
+        snap[k] = next[k] as string;
       }
       setForm(next);
+      setInitial(snap);
     }
   }, [cfg, form]);
+
+  // Warn before navigating away with unsaved edits — losing site copy to an
+  // accidental back-button is exactly the "afraid of breaking it" case.
+  const dirtyKeys = form ? ALL_TEXT_KEYS.filter((k) => (form[k] as string) !== initial[k]) : [];
+  useEffect(() => {
+    if (dirtyKeys.length === 0) return;
+    const warn = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = '';
+    };
+    window.addEventListener('beforeunload', warn);
+    return () => window.removeEventListener('beforeunload', warn);
+  }, [dirtyKeys.length]);
 
   const mutation = useMutation({
     mutationFn: (data: SiteConfig) => api.adminUpdateSiteConfig(data),
@@ -211,32 +246,71 @@ export function SiteSettingsPage() {
   const removeContact = (idx: number) =>
     setForm((p) => (p ? { ...p, contacts: p.contacts.filter((_, i) => i !== idx) } : p));
 
-  const renderFields = (fields: FieldDef[]) => (
-    <div className="bg-white rounded-xl border border-border p-5 space-y-4">
-      {fields.map((f) => (
-        <Field key={f.key} label={f.label} hint={f.hint}>
-          {f.multiline ? (
-            <Textarea
-              rows={3}
-              value={(form[f.key] as string) ?? ''}
-              placeholder={DEFAULTS[f.key] ?? ''}
-              onChange={(e) => update(f.key, e.target.value)}
-            />
-          ) : (
-            <Input
-              dir={f.ltr ? 'ltr' : undefined}
-              value={(form[f.key] as string) ?? ''}
-              placeholder={DEFAULTS[f.key] ?? ''}
-              onChange={(e) => update(f.key, e.target.value)}
-            />
-          )}
-        </Field>
+  const renderField = (f: FieldDef) => {
+    const val = (form[f.key] as string) ?? '';
+    const changed = val !== (initial[f.key] ?? '');
+    const canReset = (DEFAULTS[f.key] ?? '') !== '' && val !== (DEFAULTS[f.key] ?? '');
+    return (
+      <Field
+        key={f.key}
+        label={
+          (
+            <span className="inline-flex items-center gap-1.5">
+              {f.label}
+              {changed && (
+                <span className="text-[10px] font-bold text-amber-600 bg-amber-100 dark:bg-amber-900/40 rounded px-1.5 py-0.5">
+                  غير محفوظ
+                </span>
+              )}
+              {canReset && (
+                <button
+                  type="button"
+                  onClick={() => update(f.key, DEFAULTS[f.key] ?? '')}
+                  className="text-[10px] text-brand-red hover:underline"
+                >
+                  رجّع الأصلي
+                </button>
+              )}
+            </span>
+          ) as unknown as string
+        }
+        hint={f.hint}
+      >
+        {f.multiline ? (
+          <Textarea
+            rows={3}
+            value={val}
+            placeholder={DEFAULTS[f.key] ?? ''}
+            onChange={(e) => update(f.key, e.target.value)}
+          />
+        ) : (
+          <Input
+            dir={f.ltr ? 'ltr' : undefined}
+            value={val}
+            placeholder={DEFAULTS[f.key] ?? ''}
+            onChange={(e) => update(f.key, e.target.value)}
+          />
+        )}
+      </Field>
+    );
+  };
+
+  const renderGroups = (groups: Group[]) => (
+    <div className="space-y-4">
+      {groups.map((g) => (
+        <div key={g.title} className="bg-white rounded-xl border border-border overflow-hidden">
+          <div className="px-5 py-3 border-b border-border bg-muted/30">
+            <div className="font-bold text-brand-dark">{g.title}</div>
+            {g.subtitle && <div className="text-xs text-muted-foreground mt-0.5">{g.subtitle}</div>}
+          </div>
+          <div className="p-5 space-y-4">{g.fields.map(renderField)}</div>
+        </div>
       ))}
-      <div className="mt-2 p-3 rounded-lg bg-brand-red/5 border border-brand-red/15 text-sm text-brand-dark inline-flex items-start gap-2">
+      <div className="p-3 rounded-lg bg-brand-red/5 border border-brand-red/15 text-sm text-brand-dark flex items-start gap-2">
         <MessageCircle className="w-4 h-4 mt-0.5 text-brand-red shrink-0" />
         <span>
-          اترك الحقل فاضي عشان تسيب النص الأصلي زي ما هو — النص الرمادي هو اللي ظاهر دلوقتي على
-          الموقع.
+          الحقول مملوءة بالنص الظاهر حالياً على الموقع — عدّل أي حقل مباشرةً، و«رجّع الأصلي» يعيده
+          للنص الافتراضي.
         </span>
       </div>
     </div>
@@ -251,38 +325,60 @@ export function SiteSettingsPage() {
             صفحة الموقع
           </h1>
           <p className="text-sm text-muted-foreground mt-1">
-            تحكّم في نصوص وأرقام صفحة الهبوط — الموقع بيتحدث تلقائياً بعد الحفظ
+            عدّل نصوص وأرقام الموقع — التغييرات تظهر مباشرةً بعد الحفظ.{' '}
+            <a
+              href="https://deliverytamem.com/"
+              target="_blank"
+              rel="noreferrer"
+              className="text-brand-red font-bold hover:underline"
+            >
+              شاهد الموقع ↗
+            </a>
           </p>
         </div>
-        <Button size="md" disabled={mutation.isPending} onClick={() => mutation.mutate(form)}>
+        <Button
+          size="md"
+          disabled={mutation.isPending || dirtyKeys.length === 0}
+          onClick={() => mutation.mutate(form)}
+        >
           {mutation.isPending ? (
             <Loader2 className="w-4 h-4 animate-spin" />
           ) : (
             <Save className="w-4 h-4" />
           )}
-          حفظ
+          {dirtyKeys.length > 0 ? `حفظ ${dirtyKeys.length} تغيير` : 'محفوظ'}
         </Button>
       </div>
 
-      {/* Tabs */}
+      {/* Tabs — labelled by what the admin sees on the site, with a per-tab
+          unsaved-changes dot so it's obvious where pending edits live. */}
       <div className="bg-white rounded-xl border border-border p-1 inline-flex flex-wrap gap-1">
         {TABS.map((t) => {
           const active = tab === t.key;
+          const tabKeys =
+            t.key === 'contact' ? [] : SECTIONS[t.key].flatMap((g) => g.fields.map((f) => f.key));
+          const tabDirty = tabKeys.some((k) => (form[k] as string) !== initial[k]);
           return (
             <button
               key={t.key}
               onClick={() => setTab(t.key)}
-              className={`px-4 py-2 rounded-lg text-sm font-bold transition ${
+              className={`px-4 py-2 rounded-lg text-sm font-bold transition inline-flex items-center gap-1.5 ${
                 active ? 'bg-brand-red text-white' : 'text-brand-dark hover:bg-muted'
               }`}
             >
+              <span>{t.icon}</span>
               {t.label}
+              {tabDirty && (
+                <span
+                  className={`w-1.5 h-1.5 rounded-full ${active ? 'bg-white' : 'bg-amber-500'}`}
+                />
+              )}
             </button>
           );
         })}
       </div>
 
-      {tab !== 'contact' && renderFields(TEXT_FIELDS[tab])}
+      {tab !== 'contact' && renderGroups(SECTIONS[tab])}
 
       {tab === 'contact' && (
         <div className="space-y-3">
