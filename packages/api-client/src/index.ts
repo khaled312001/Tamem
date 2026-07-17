@@ -396,7 +396,13 @@ export class TamemClient {
   async adminSetPrice(
     orderId: string,
     quotedPrice: number,
-    split?: { merchantSubtotal?: number; deliveryFee?: number },
+    /** `merchants` attributes the goods value to the stores it was bought
+     *  from — the revenue report credits them from this. */
+    split?: {
+      merchantSubtotal?: number;
+      deliveryFee?: number;
+      merchants?: { merchantId: string; amount: number }[];
+    },
     note?: string,
   ): Promise<Order> {
     return this.request({
