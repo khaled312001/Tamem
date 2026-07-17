@@ -37,6 +37,13 @@ interface SavedAddress {
   lng?: number | null;
   notes?: string | null;
   isDefault: boolean;
+  /** The zone the customer picked in the app — this is what the delivery fee is
+   *  quoted from, so an address without it can't be priced. */
+  cityName?: string | null;
+  villageName?: string | null;
+  areaName?: string | null;
+  /** Server-joined "مدينة › قرية › منطقة" so every screen prints it the same. */
+  zoneLabel?: string | null;
 }
 
 // ── Avatar: customer photo with an initial-letter fallback + stable tint ──
@@ -860,9 +867,28 @@ function CustomerAddressesPane({
                     </span>
                   )}
                 </div>
-                <div className="text-xs text-muted-foreground mt-0.5 truncate">{a.address}</div>
+                {/* Zone first — "تاني بيت بعد المسجد" only means something once
+                    you know which village's mosque. */}
+                {a.zoneLabel ? (
+                  <div className="text-xs font-medium text-foreground/80 mt-1">{a.zoneLabel}</div>
+                ) : (
+                  <div className="text-xs text-amber-600 dark:text-amber-500 mt-1">
+                    بدون منطقة — لا يمكن حساب سعر التوصيل
+                  </div>
+                )}
+                <div className="text-xs text-muted-foreground mt-0.5">{a.address}</div>
                 {a.notes && (
                   <div className="text-xs text-muted-foreground mt-0.5 italic">{a.notes}</div>
+                )}
+                {a.lat != null && a.lng != null && (
+                  <a
+                    href={`https://www.google.com/maps?q=${a.lat},${a.lng}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-xs text-brand-red hover:underline mt-0.5 inline-block"
+                  >
+                    فتح الموقع على الخريطة ↗
+                  </a>
                 )}
               </div>
               <div className="flex gap-1 shrink-0">

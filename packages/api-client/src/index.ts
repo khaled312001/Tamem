@@ -387,11 +387,22 @@ export class TamemClient {
     });
   }
 
-  async adminSetPrice(orderId: string, quotedPrice: number, note?: string): Promise<Order> {
+  /**
+   * `split` records what the total is made of — goods vs delivery. Send it
+   * whenever it is known: the backend derives the merchant payout and Tamem's
+   * commission from it, and an order priced without it can only be reported as
+   * "غير مفصّلة" since a total cannot be un-mixed afterwards.
+   */
+  async adminSetPrice(
+    orderId: string,
+    quotedPrice: number,
+    split?: { merchantSubtotal?: number; deliveryFee?: number },
+    note?: string,
+  ): Promise<Order> {
     return this.request({
       method: 'PATCH',
       url: `/admin/orders/${orderId}/price`,
-      data: { quotedPrice, note },
+      data: { quotedPrice, note, ...split },
     });
   }
 

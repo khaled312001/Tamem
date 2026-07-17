@@ -925,6 +925,8 @@ export function OrderDetailPage() {
         <PriceDialog
           orderId={id!}
           initialPrice={order.quotedPrice ?? order.finalPrice}
+          initialGoods={order.merchantSubtotal}
+          initialFee={order.deliveryFee}
           currentStatus={status}
           onSaved={() => {
             const next = dialog.after;
@@ -1535,12 +1537,19 @@ function CustomDataRender({ data }: { data: Record<string, unknown> }) {
 function PriceDialog({
   orderId,
   initialPrice,
+  initialGoods,
+  initialFee,
   currentStatus,
   onSaved,
   onClose,
 }: {
   orderId: string;
   initialPrice?: number | string | null;
+  /** Goods value and delivery fee are priced separately — the total alone can't
+   *  be un-mixed later, and every merchant payout / commission figure in the
+   *  reports is derived from this split. */
+  initialGoods?: number | string | null;
+  initialFee?: number | string | null;
   /** When provided and the order is NEW, we promote it to UNDER_REVIEW first
    *  so the backend's set-price endpoint can then auto-transition to PRICED.
    *  This is what makes the "بدء المراجعة + تسعير" button a single click. */
@@ -1550,8 +1559,13 @@ function PriceDialog({
   onSaved?: () => void;
   onClose: () => void;
 }) {
-  const [price, setPrice] = useState(initialPrice != null ? String(initialPrice) : '');
+  const [goods, setGoods] = useState(
+    initialGoods != null && Number(initialGoods) > 0 ? String(initialGoods) : '',
+  );
+  // Prefilled from the zone quote the order was created with, when it had one.
+  const [fee, setFee] = useState(initialFee != null ? String(initialFee) : '');
   const [note, setNote] = useState('');
+  const price = (Number(goods) || 0) + (Number(fee) || 0);
   const mut = useMutation({
     mutationFn: async () => {
       // Phase-1 entry: if we're still on NEW, walk through UNDER_REVIEW first.
@@ -1559,7 +1573,12 @@ function PriceDialog({
       if (currentStatus === 'NEW') {
         await api.adminUpdateOrderStatus(orderId, 'UNDER_REVIEW');
       }
-      return api.adminSetPrice(orderId, Number(price), note.trim() || undefined);
+      return api.adminSetPrice(
+        orderId,
+        price,
+        { merchantSubtotal: Number(goods) || 0, deliveryFee: Number(fee) || 0 },
+        note.trim() || undefined,
+      );
     },
     onSuccess: () => {
       toast.success('تم حفظ السعر');
@@ -1570,16 +1589,40 @@ function PriceDialog({
   });
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()} title="تسعير الطلب">
-      <Field label="السعر بالجنيه" required>
-        <Input
-          type="number"
-          inputMode="numeric"
-          min={1}
-          value={price}
-          onChange={(e) => setPrice(e.target.value)}
-          autoFocus
-        />
-      </Field>
+      <div className="grid grid-cols-2 gap-3">
+        <Field label="قيمة الطلب (البضاعة)" required>
+          <Input
+            type="number"
+            inputMode="decimal"
+            min={0}
+            value={goods}
+            onChange={(e) => setGoods(e.target.value)}
+            autoFocus
+          />
+        </Field>
+        <Field label="رسوم التوصيل" required>
+          <Input
+            type="number"
+            inputMode="decimal"
+            min={0}
+            value={fee}
+            onChange={(e) => setFee(e.target.value)}
+          />
+        </Field>
+      </div>
+      <div className="my-3 flex items-center justify-between rounded-lg bg-muted/40 px-3 py-2">
+        <span className="text-sm text-muted-foreground">الإجمالي على العميل</span>
+        <span className="text-lg font-bold tabular-nums">{price.toLocaleString('ar-EG')} ج.م</span>
+      </div>
+      {/* Shown, never auto-split: back-solving goods = total − fee would just
+          re-record a guess as fact. The admin who knows the real breakdown
+          enters it; the old total is only here as their anchor. */}
+      {initialPrice != null && initialGoods == null && (
+        <p className="-mt-1 mb-3 text-xs text-muted-foreground">
+          السعر المسجّل سابقاً: {Number(initialPrice).toLocaleString('ar-EG')} ج.م — من فضلك وزّعه
+          على البضاعة والتوصيل.
+        </p>
+      )}
       <Field label="ملاحظات (اختياري)">
         <Textarea
           value={note}
@@ -1592,7 +1635,10 @@ function PriceDialog({
         <Button variant="outline" onClick={onClose}>
           إلغاء
         </Button>
-        <Button onClick={() => mut.mutate()} disabled={!price || mut.isPending}>
+        <Button
+          onClick={() => mut.mutate()}
+          disabled={price <= 0 || goods === '' || fee === '' || mut.isPending}
+        >
           {mut.isPending ? (
             <Loader2 className="w-4 h-4 animate-spin" />
           ) : (

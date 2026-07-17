@@ -383,6 +383,121 @@ if ($method === 'GET' && $path === '/admin/realtime') {
         'now' => $nowMs,
     ]);
 }
+// ─── Order money model ───────────────────────────────────────────────────
+// One definition of who gets what, applied on EVERY order path (app cart,
+// reorder, admin/manual) so the numbers can't disagree between them:
+//
+//   customer pays  = merchantSubtotal (goods) + deliveryFee − discount
+//   merchant gets  = merchantSubtotal − platformCommission
+//   Tamem gets     = platformCommission + deliveryFee − discount
+//
+// Whether an order has goods at all is decided by its SERVICE CATEGORY, never
+// inferred from the row's own numbers:
+//   SHIPPING  (شحن طرود) — carrying the customer's own parcel. No goods: the
+//             whole charge IS the delivery, so goods/commission/payout are 0.
+//   DELIVERY  (دليفري / اطلب أي حاجة) and MERCHANT (طلب تاجر) — we buy goods on
+//             the customer's behalf. Goods always exist; the only question is
+//             whether the split was recorded.
+//
+// Anything unknown is written as NULL — never as 0 and never back-solved from a
+// guess. An earlier version of this function inferred "no merchant ⇒ pure
+// delivery" and wrote deliveryFee = quotedPrice, which booked a 600 EGP pharmacy
+// order as 600 EGP of delivery revenue that never existed. NULL costs a report
+// line ("غير مفصّلة"); a guess costs the books.
+// Before this existed, platformCommission/merchantPayout were NULL on all 19
+// live orders and the revenue report hardcoded them to 0 while reporting every
+// pound of sales as Tamem profit.
+//
+// INVARIANT: this function NEVER writes deliveryFee. That column is owned by the
+// zone quote at order creation (and by an admin pricing it explicitly). A
+// derived figure must not overwrite a recorded one.
+function defaultCommissionPct(): float {
+    try {
+        $st = db()->prepare("SELECT `value` FROM `Setting` WHERE `key` = 'default_commission_pct' LIMIT 1");
+        $st->execute();
+        $v = $st->fetchColumn();
+        if ($v !== false && $v !== null) {
+            $d = json_decode((string) $v, true);
+            if (is_numeric($d)) return (float) $d;
+            if (is_numeric($v)) return (float) $v;
+        }
+    } catch (Throwable $e) { /* fall through */ }
+    return 0.0;
+}
+function computeOrderFinancials(string $orderId): void {
+    try {
+        $q = db()->prepare(
+            "SELECT o.id, o.merchantId, o.merchantSubtotal, o.deliveryFee,
+                    o.quotedPrice, o.finalPrice, s.category AS svcCategory, mp.commissionPct
+             FROM `Order` o
+             LEFT JOIN `Service` s ON s.id = o.serviceId
+             LEFT JOIN `MerchantProfile` mp ON mp.id = o.merchantId
+             WHERE o.id = ? LIMIT 1"
+        );
+        $q->execute([$orderId]);
+        $o = $q->fetch();
+        if (!$o) return;
+
+        $setMoney = function (?float $sub, ?float $comm, ?float $payout) use ($orderId) {
+            db()->prepare('UPDATE `Order` SET merchantSubtotal = ?, platformCommission = ?, merchantPayout = ?, updatedAt = NOW(3) WHERE id = ?')
+                ->execute([$sub, $comm, $payout, $orderId]);
+        };
+
+        // Carrying the customer's own parcel — there are no goods to split, so
+        // zero here is a fact about the service, not a guess about the row.
+        if (($o['svcCategory'] ?? '') === 'SHIPPING') { $setMoney(0.0, 0.0, 0.0); return; }
+
+        $price = $o['finalPrice'] !== null ? (float) $o['finalPrice']
+               : ($o['quotedPrice'] !== null ? (float) $o['quotedPrice'] : null);
+        $fee = $o['deliveryFee'] !== null ? (float) $o['deliveryFee'] : null;
+
+        // Goods value, best evidence first: the recorded subtotal, then the
+        // order's own line items, then what's left of the price once a KNOWN
+        // delivery fee is removed. If the fee was never recorded there is no
+        // third option — the split is genuinely unknown.
+        $sub = $o['merchantSubtotal'] !== null ? (float) $o['merchantSubtotal'] : null;
+        if ($sub === null || $sub <= 0) {
+            $sub = null;
+            $it = db()->prepare('SELECT COALESCE(SUM(unitPriceSnapshot * quantity), 0) FROM `OrderItem` WHERE orderId = ?');
+            $it->execute([$orderId]);
+            $s = (float) $it->fetchColumn();
+            if ($s > 0) $sub = $s;
+        }
+        if ($sub === null && $price !== null && $fee !== null) {
+            $rest = $price - $fee;
+            if ($rest > 0.009) $sub = $rest;
+        }
+
+        if ($sub === null) {
+            // A goods order whose split was never captured (legacy quick order:
+            // admin quoted one total, no zone fee, no items). Leave it NULL and
+            // let the report count it under "غير مفصّلة" — inventing a number
+            // here is exactly the bug this replaced.
+            $setMoney(null, null, null);
+            return;
+        }
+
+        $pct = $o['commissionPct'] !== null ? (float) $o['commissionPct'] : defaultCommissionPct();
+        $commission = round($sub * $pct / 100, 2);
+        $setMoney(round($sub, 2), $commission, round($sub - $commission, 2));
+    } catch (Throwable $e) {
+        error_log('[api.php] computeOrderFinancials: ' . $e->getMessage());
+    }
+}
+
+// POST /admin/orders/recompute-financials — re-derive goods/commission/payout
+// for existing orders using the ONE money model above. Needed after a
+// commission change, and to backfill orders created before the model existed.
+// SUPER_ADMIN only: it rewrites money columns across the table.
+if ($method === 'POST' && $path === '/admin/orders/recompute-financials') {
+    $u = authUser();
+    if (($u['role'] ?? '') !== 'SUPER_ADMIN') jsonErr('فقط مدير النظام', 403, 'FORBIDDEN');
+    $ids = db()->query('SELECT id FROM `Order` ORDER BY createdAt DESC')->fetchAll();
+    $n = 0;
+    foreach ($ids as $r) { computeOrderFinancials($r['id']); $n++; }
+    jsonOk(['recomputed' => $n]);
+}
+
 // ─── Reports: services / drivers / customers ────────────────────────────
 // These three had NO handler, so they fell through to the empty-list fallback:
 // the report tabs rendered as "no data" forever while returning a cheerful 200.
@@ -1239,7 +1354,9 @@ if ($method === 'GET' && str_starts_with($path, '/admin/reports/revenue')) {
     $u = authUser();
     if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
     $isDetailed = ($path === '/admin/reports/revenue/detailed');
-    $range = $_GET['range'] ?? 'month';
+    // revenue-report.tsx sends `preset`; reports.tsx sends `range`. Same meaning.
+    $range = $_GET['range'] ?? ($_GET['preset'] ?? 'month');
+    if ($range === 'custom') $range = 'month';   // from/to below take over
     $now = time();
     if ($range === 'today')      $fromTs = strtotime('today');
     elseif ($range === 'week')   $fromTs = $now - 7 * 86400;
@@ -1275,26 +1392,152 @@ if ($method === 'GET' && str_starts_with($path, '/admin/reports/revenue')) {
     }
 
     if ($isDetailed) {
-        // The revenue-report page reads: range.from, range.to, generatedAt,
-        // summary.{ordersCount, totalSales, totalCommission, totalDeliveryFees,
-        // totalDiscounts, totalWalletUsed, totalMerchantPayouts, totalTamemNet},
-        // byMerchant[], byPaymentMethod[], rows[].
+        // REAL money, per the order money model: every figure below is summed
+        // from the order rows, not invented. (This block used to hardcode
+        // commission/fees/payouts to 0 and report ALL sales as Tamem net, with
+        // an empty byMerchant — so the business could not see what it earned or
+        // what it owed each merchant.)
+        // Filters the report page actually sends.
+        $fPay      = trim((string) ($_GET['paymentMethod'] ?? ''));
+        $fMerchant = trim((string) ($_GET['merchantId'] ?? ''));
+        // The admin can switch Tamem's cut off (free-period merchants) or force a
+        // flat % across every row, so the report recomputes commission on read
+        // instead of only echoing what was stored at order time.
+        $inclComm  = (($_GET['includeCommission'] ?? 'true') !== 'false');
+        $pctOvr    = isset($_GET['commissionPctOverride']) && is_numeric($_GET['commissionPctOverride'])
+                   ? (float) $_GET['commissionPctOverride'] : null;
+
+        $sql = "SELECT o.id, o.orderNumber, o.category, o.status, o.paymentMethod, o.createdAt,
+                    o.completedAt, o.deliveredAt,
+                    o.merchantSubtotal, o.deliveryFee, o.discountAmount, o.walletUsed,
+                    o.platformCommission, o.merchantPayout, o.quotedPrice, o.finalPrice,
+                    o.merchantId, o.createdByAdminId,
+                    mp.storeNameAr AS merchantName, mp.commissionPct,
+                    s.nameAr AS serviceNameAr,
+                    cu.name AS customerName, cu.phone AS customerPhone
+             FROM `Order` o
+             LEFT JOIN `MerchantProfile` mp ON mp.id = o.merchantId
+             LEFT JOIN `Service` s ON s.id = o.serviceId
+             LEFT JOIN `User` cu ON cu.id = o.customerId
+             WHERE o.status IN ('COMPLETED','DELIVERED')
+               AND (o.completedAt BETWEEN ? AND ? OR o.deliveredAt BETWEEN ? AND ? OR o.createdAt BETWEEN ? AND ?)";
+        $dsArgs = [$fromSql, $toSql, $fromSql, $toSql, $fromSql, $toSql];
+        if ($fPay !== '')      { $sql .= ' AND o.paymentMethod = ?'; $dsArgs[] = $fPay; }
+        if ($fMerchant !== '') { $sql .= ' AND o.merchantId = ?';    $dsArgs[] = $fMerchant; }
+        $sql .= ' ORDER BY o.createdAt DESC';
+        $ds = db()->prepare($sql);
+        $ds->execute($dsArgs);
+
+        $sum = ['sales' => 0.0, 'goods' => 0.0, 'fees' => 0.0, 'disc' => 0.0, 'wallet' => 0.0, 'comm' => 0.0, 'payout' => 0.0, 'unattributed' => 0.0];
+        $unattributedCount = 0;
+        $byMerchant = []; $byPay = []; $rowsOut = [];
+        foreach ($ds->fetchAll() as $r) {
+            $sale   = (float) ($r['finalPrice'] ?? $r['quotedPrice'] ?? 0);
+            $disc   = (float) ($r['discountAmount'] ?? 0);
+            $wallet = (float) ($r['walletUsed'] ?? 0);
+            // NULL means "never recorded", NOT zero. Treating an unrecorded fee
+            // as 0 would silently reclassify it as goods, and an unrecorded
+            // subtotal as 0 would report the whole sale as delivery income.
+            // Each side is summed only where it is actually known.
+            $goodsKnown = $r['merchantSubtotal'] !== null;
+            $feeKnown   = $r['deliveryFee'] !== null;
+            $goods  = $goodsKnown ? (float) $r['merchantSubtotal'] : 0.0;
+            $fee    = $feeKnown   ? (float) $r['deliveryFee'] : 0.0;
+            $comm   = $r['platformCommission'] !== null ? (float) $r['platformCommission'] : 0.0;
+            $payout = $r['merchantPayout'] !== null ? (float) $r['merchantPayout'] : 0.0;
+            // Honour the page's commission switches — recompute rather than echo.
+            if ($goodsKnown) {
+                if (!$inclComm)            { $comm = 0.0; $payout = round($goods, 2); }
+                elseif ($pctOvr !== null)  { $comm = round($goods * $pctOvr / 100, 2); $payout = round($goods - $comm, 2); }
+            }
+            $known  = $goodsKnown && $feeKnown;          // the split is fully on record
+            $net    = round($comm + $fee - $disc, 2);    // what Tamem actually keeps
+
+            // Whatever the customer paid that we cannot point at either bucket.
+            // customer pays = goods + fee − discount, so goods + fee = sale + disc.
+            $gap = round(($sale + $disc) - ($goods + $fee), 2);
+            if ($gap > 0.01) { $unattributedCount++; $sum['unattributed'] += $gap; }
+
+            $sum['sales'] += $sale; $sum['goods'] += $goods; $sum['fees'] += $fee;
+            $sum['disc'] += $disc; $sum['wallet'] += $wallet; $sum['comm'] += $comm; $sum['payout'] += $payout;
+
+            $mid = $r['merchantId'] ?: '_none';
+            if (!isset($byMerchant[$mid])) {
+                $byMerchant[$mid] = ['merchantId' => $r['merchantId'],
+                                     'merchantName' => $r['merchantName'] ?: 'بدون تاجر',
+                                     'ordersCount' => 0, 'sales' => 0.0, 'goods' => 0.0,
+                                     'commission' => 0.0, 'payout' => 0.0];
+            }
+            $byMerchant[$mid]['ordersCount']++;
+            $byMerchant[$mid]['sales'] += $sale;
+            $byMerchant[$mid]['goods'] += $goods;
+            $byMerchant[$mid]['commission'] += $comm;
+            $byMerchant[$mid]['payout'] += $payout;
+
+            $pm = $r['paymentMethod'] ?: 'UNKNOWN';
+            if (!isset($byPay[$pm])) $byPay[$pm] = ['paymentMethod' => $pm, 'ordersCount' => 0, 'sales' => 0.0];
+            $byPay[$pm]['ordersCount']++; $byPay[$pm]['sales'] += $sale;
+
+            $rowsOut[] = [
+                'orderId' => $r['id'], 'orderNumber' => $r['orderNumber'],
+                'customerName' => $r['customerName'] ?: '—',
+                'customerPhone' => $r['customerPhone'] ?: '',
+                'merchantId' => $r['merchantId'], 'merchantName' => $r['merchantName'],
+                'category' => $r['category'], 'serviceNameAr' => $r['serviceNameAr'] ?: '—',
+                'completedAt' => isoZ($r['completedAt'] ?? $r['deliveredAt'] ?? $r['createdAt']),
+                'createdAt' => isoZ($r['createdAt']),
+                'status' => $r['status'], 'paymentMethod' => $r['paymentMethod'] ?: 'UNKNOWN',
+                'source' => $r['createdByAdminId'] ? 'ADMIN' : 'APP',
+                // ↓ null = never recorded. The page prints "—" for these instead
+                //   of a 0 that would read as a real, measured zero.
+                'merchantSubtotal' => $goodsKnown ? round($goods, 2) : null,  // الطلب بكام
+                'deliveryFee' => $feeKnown ? round($fee, 2) : null,           // التوصيل بكام
+                'platformCommission' => $goodsKnown ? round($comm, 2) : null, // عمولة تميم
+                'merchantPayout' => $goodsKnown ? round($payout, 2) : null,   // التاجر لُه كام
+                'tamemNet' => $known ? $net : null,                           // صافي ربح تميم
+                'netRevenue' => $known ? $net : null,
+                'discountAmount' => round($disc, 2),
+                'walletUsed' => round($wallet, 2),
+                'finalPrice' => round($sale, 2),                              // العميل دفع كام
+                'splitRecorded' => $known,
+                'estimated' => !$known,
+                'unattributed' => $gap > 0.01 ? $gap : 0.0,
+            ];
+        }
+        foreach ($byMerchant as &$m) {
+            foreach (['sales', 'goods', 'commission', 'payout'] as $f) $m[$f] = round($m[$f], 2);
+        }
+        unset($m);
+        foreach ($byPay as &$pmv) { $pmv['sales'] = round($pmv['sales'], 2); }
+        unset($pmv);
+        usort($rowsOut, static fn ($a, $b) => strcmp((string) $b['createdAt'], (string) $a['createdAt']));
+        $byMerchantOut = array_values($byMerchant);
+        usort($byMerchantOut, static fn ($a, $b) => $b['sales'] <=> $a['sales']);
+
         jsonOk([
             'range' => ['from' => $from, 'to' => $to],
             'generatedAt' => gmdate('Y-m-d\TH:i:s.000\Z'),
             'summary' => [
-                'ordersCount' => $count,
-                'totalSales' => $total,
-                'totalCommission' => 0.0,
-                'totalDeliveryFees' => 0.0,
-                'totalDiscounts' => 0.0,
-                'totalWalletUsed' => 0.0,
-                'totalMerchantPayouts' => 0.0,
-                'totalTamemNet' => $total,
+                'ordersCount' => count($rowsOut),
+                'totalSales' => round($sum['sales'], 2),
+                'totalOrderValue' => round($sum['goods'], 2),
+                'totalCommission' => round($sum['comm'], 2),
+                'totalDeliveryFees' => round($sum['fees'], 2),
+                'totalDiscounts' => round($sum['disc'], 2),
+                'totalWalletUsed' => round($sum['wallet'], 2),
+                'totalMerchantPayouts' => round($sum['payout'], 2),
+                'totalTamemNet' => round($sum['comm'] + $sum['fees'] - $sum['disc'], 2),
+                'totalNetRevenue' => round($sum['comm'] + $sum['fees'] - $sum['disc'], 2),
+                // Money the books cannot attribute: orders priced as one lump sum
+                // with no goods/delivery split on record. Surfaced instead of
+                // silently counted as zero, so the totals above are honest about
+                // what they do NOT cover.
+                'unattributedOrders' => $unattributedCount,
+                'unattributedAmount' => round($sum['unattributed'], 2),
             ],
-            'byMerchant' => [],
-            'byPaymentMethod' => [],
-            'rows' => [],
+            'byMerchant' => $byMerchantOut,
+            'byPaymentMethod' => array_values($byPay),
+            'rows' => $rowsOut,
         ]);
     }
 
@@ -1480,13 +1723,39 @@ $RES = [
     'settings'         => 'Setting',
 ];
 
+/**
+ * MySQL DATETIME → ISO-8601 UTC ("2026-07-17T10:39:54.997Z").
+ *
+ * Timestamps are STORED in UTC (the DB session is UTC: NOW() == UTC_TIMESTAMP()).
+ * Handing the client a bare "2026-07-17 10:39:54" makes `new Date(...)` read it
+ * as LOCAL time, so a Cairo admin saw every order stamped 3 hours early. The Z
+ * suffix is what lets the browser convert to the viewer's zone correctly — the
+ * fix belongs here, not in a display-side offset, which would break the moment
+ * the server, the DB, or the viewer moved zone (or DST flipped).
+ */
+function isoZ($v): ?string {
+    if ($v === null || $v === '') return null;
+    if (!is_string($v)) return $v;
+    // Already ISO (has T/Z/offset)? Leave it alone.
+    if (preg_match('/[TZ]|[+-]\d{2}:\d{2}$/', $v)) return $v;
+    if (!preg_match('/^(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2})(\.\d+)?$/', $v, $m)) return $v;
+    $frac = isset($m[3]) ? substr(str_pad(ltrim($m[3], '.'), 3, '0'), 0, 3) : '000';
+    return $m[1] . 'T' . $m[2] . '.' . $frac . 'Z';
+}
 function jsonizeRow(?array $row): ?array {
     if (!$row) return $row;
     // Decode obvious JSON strings + coerce tinyint booleans.
     foreach ($row as $k => $v) {
         if (is_string($v) && strlen($v) >= 2 && ($v[0] === '[' || $v[0] === '{')) {
             $d = json_decode($v, true);
-            if ($d !== null) $row[$k] = $d;
+            if ($d !== null) { $row[$k] = $d; continue; }
+        }
+        // Stamp UTC on datetimes. Date-only columns are left as-is: they carry no
+        // time to be shifted, and giving them a midnight-Z would let a westward
+        // viewer render them as the previous day.
+        if (is_string($v)) {
+            $iso = isoZ($v);
+            if ($iso !== $v) $row[$k] = $iso;
         }
     }
     return $row;
@@ -1575,6 +1844,10 @@ if ($method === 'POST' && $path === '/admin/orders') {
     try {
         db()->prepare("INSERT INTO `Order` ($colStr) VALUES (" . implode(',', $ph) . ")")->execute($args);
     } catch (PDOException $e) { error_log('[api.php] manual order: ' . $e->getMessage()); jsonErr('تعذّر إنشاء الطلب، راجع البيانات', 422, 'CREATE_FAILED'); }
+    // Same money model as the app + reorder paths, so a manual order reports
+    // its goods / delivery / commission / payout identically.
+    computeOrderFinancials($id);
+    alertNewOrder($id, (string) $orderNumber);
     // WhatsApp the on-shift supervisor about the new order (+ record dispatch).
     try {
         [$dow, $mins] = nowCairo();
@@ -2158,15 +2431,28 @@ if ($method === 'GET' && $path === '/admin/drivers') {
     $page = max(1, (int)($_GET['page'] ?? 1));
     $size = min(100, max(1, (int)($_GET['pageSize'] ?? 20)));
     $off = ($page - 1) * $size;
-    $total = (int) db()->query("SELECT COUNT(*) FROM `User` WHERE role='DRIVER'")->fetchColumn();
+    // ?status=AVAILABLE is what the assign-driver dialogs send. This used to be
+    // ignored, so BUSY and OFFLINE drivers were offered as assignable — the
+    // dialog asked for a filtered list and silently got everyone.
+    $dWhere = "u.role='DRIVER'"; $dArgs = [];
+    $dStatus = strtoupper(trim((string) ($_GET['status'] ?? '')));
+    if ($dStatus !== '' && $dStatus !== 'ALL' && in_array($dStatus, ['AVAILABLE', 'BUSY', 'OFFLINE'], true)) {
+        // An inactive account can't take work regardless of its profile status.
+        $dWhere .= ' AND dp.status = ? AND u.isActive = 1'; $dArgs[] = $dStatus;
+    }
+    $q = trim((string) ($_GET['q'] ?? $_GET['search'] ?? ''));
+    if ($q !== '') { $dWhere .= ' AND (u.name LIKE ? OR u.phone LIKE ?)'; $dArgs[] = "%$q%"; $dArgs[] = "%$q%"; }
+    $ct = db()->prepare("SELECT COUNT(*) FROM `User` u LEFT JOIN `DriverProfile` dp ON dp.userId = u.id WHERE $dWhere");
+    $ct->execute($dArgs);
+    $total = (int) $ct->fetchColumn();
     $st = db()->prepare(
         "SELECT u.*, dp.id AS dp_id, dp.status AS dp_status, dp.vehicleType AS dp_vehicleType, dp.vehiclePlate AS dp_vehiclePlate,
                 dp.nationalId AS dp_nationalId, dp.governorate AS dp_governorate, dp.totalDeliveries AS dp_totalDeliveries,
                 dp.totalEarnings AS dp_totalEarnings, dp.cashOnHand AS dp_cashOnHand, dp.rating AS dp_rating
          FROM `User` u LEFT JOIN `DriverProfile` dp ON dp.userId = u.id
-         WHERE u.role='DRIVER' ORDER BY u.createdAt DESC LIMIT $size OFFSET $off"
+         WHERE $dWhere ORDER BY u.createdAt DESC LIMIT $size OFFSET $off"
     );
-    $st->execute();
+    $st->execute($dArgs);
     $rows = [];
     foreach ($st->fetchAll() as $r) {
         $row = jsonizeRow([
@@ -2483,9 +2769,27 @@ if ($method === 'GET' && preg_match('#^/admin/customers/([^/]+)$#', $path, $m)) 
     $os->execute([$cid]);
     $cust['customerOrders'] = array_map('jsonizeRow', $os->fetchAll());
 
-    $as = db()->prepare("SELECT id, label, address, lat, lng, notes, isDefault, createdAt FROM `CustomerAddress` WHERE userId = ? ORDER BY isDefault DESC, createdAt DESC");
+    // The zone (city / village / area) is the address — it's what the app makes
+    // the customer pick and what the delivery fee is quoted from. Selecting only
+    // the free-text line showed "تاني بيت بعد المسجد" with no idea where.
+    $as = db()->prepare(
+        "SELECT ca.id, ca.label, ca.address, ca.lat, ca.lng, ca.notes, ca.isDefault, ca.createdAt,
+                ca.cityId, ca.villageId, ca.areaId,
+                c.nameAr AS cityName, v.nameAr AS villageName, a.nameAr AS areaName
+         FROM `CustomerAddress` ca
+         LEFT JOIN `City` c ON c.id = ca.cityId
+         LEFT JOIN `Village` v ON v.id = ca.villageId
+         LEFT JOIN `Area` a ON a.id = ca.areaId
+         WHERE ca.userId = ? ORDER BY ca.isDefault DESC, ca.createdAt DESC"
+    );
     $as->execute([$cid]);
-    $cust['savedAddresses'] = array_map(static fn ($a) => boolCast(jsonizeRow($a), ['isDefault']), $as->fetchAll());
+    $cust['savedAddresses'] = array_map(static function ($a) {
+        $a = boolCast(jsonizeRow($a), ['isDefault']);
+        // Pre-joined, city → village → area, so every consumer prints the same
+        // thing instead of each inventing its own ordering.
+        $a['zoneLabel'] = implode(' › ', array_filter([$a['cityName'] ?? null, $a['villageName'] ?? null, $a['areaName'] ?? null]));
+        return $a;
+    }, $as->fetchAll());
 
     $cust['_count'] = ['customerOrders' => count($cust['customerOrders'])];
     jsonOk($cust);
@@ -3080,6 +3384,26 @@ if ($method === 'PATCH' && preg_match('#^/admin/orders/([^/]+)/status$#', $path,
     $args[] = $m[1];
     try { db()->prepare('UPDATE `Order` SET ' . implode(',', $sets) . ' WHERE id = ?')->execute($args); }
     catch (PDOException $e) { error_log('[api.php] order status: ' . $e->getMessage()); jsonErr('تعذّر تحديث الحالة', 422, 'FAILED'); }
+    // The order is over — hand the driver back to the available pool, unless
+    // they're still carrying another one. Without this, assigning once would
+    // mark a driver BUSY for good and quietly drain the assignable list.
+    if (in_array($status, ['DELIVERED', 'COMPLETED', 'CANCELLED'], true)) {
+        try {
+            $dv = db()->prepare('SELECT assignedDriverId FROM `Order` WHERE id = ?');
+            $dv->execute([$m[1]]);
+            $did = $dv->fetchColumn();
+            if ($did) {
+                $bz = db()->prepare("SELECT COUNT(*) FROM `Order`
+                                     WHERE assignedDriverId = ?
+                                       AND status IN ('DRIVER_ASSIGNED','PICKED_UP','IN_ROUTE')");
+                $bz->execute([$did]);
+                if ((int) $bz->fetchColumn() === 0) {
+                    db()->prepare("UPDATE `DriverProfile` SET `status` = 'AVAILABLE', `updatedAt` = NOW(3)
+                                   WHERE userId = ? AND `status` = 'BUSY'")->execute([$did]);
+                }
+            }
+        } catch (Throwable $e) { error_log('[api.php] driver release: ' . $e->getMessage()); }
+    }
     // Fan out role-specific WhatsApp updates (customer / driver / admin).
     notifyOrderParties($m[1], $status, !empty($b['reason']) ? (string) $b['reason'] : null);
     $r = db()->prepare('SELECT * FROM `Order` WHERE id = ?'); $r->execute([$m[1]]);
@@ -3088,16 +3412,47 @@ if ($method === 'PATCH' && preg_match('#^/admin/orders/([^/]+)/status$#', $path,
 if ($method === 'PATCH' && preg_match('#^/admin/orders/([^/]+)/price$#', $path, $m)) {
     $u = authUser(); if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
     $b = readJsonBody();
-    db()->prepare("UPDATE `Order` SET `quotedPrice` = ?, `status` = CASE WHEN `status` = 'NEW' THEN 'PRICED' ELSE `status` END, `updatedAt` = NOW(3) WHERE id = ?")
-        ->execute([(float)($b['quotedPrice'] ?? 0), $m[1]]);
+    // An admin may price the goods and the delivery separately; both feed the
+    // money model. deliveryFee is only overwritten when explicitly supplied.
+    $sets = ['`quotedPrice` = ?', "`status` = CASE WHEN `status` = 'NEW' THEN 'PRICED' ELSE `status` END", '`updatedAt` = NOW(3)'];
+    $args = [(float) ($b['quotedPrice'] ?? 0)];
+    if (isset($b['deliveryFee']) && $b['deliveryFee'] !== '') { $sets[] = '`deliveryFee` = ?'; $args[] = (float) $b['deliveryFee']; }
+    if (isset($b['merchantSubtotal']) && $b['merchantSubtotal'] !== '') { $sets[] = '`merchantSubtotal` = ?'; $args[] = (float) $b['merchantSubtotal']; }
+    $args[] = $m[1];
+    db()->prepare('UPDATE `Order` SET ' . implode(', ', $sets) . ' WHERE id = ?')->execute($args);
+    // Re-derive commission/payout from the new price.
+    computeOrderFinancials($m[1]);
+    notifyOrderParties($m[1], 'PRICED');
     $r = db()->prepare('SELECT * FROM `Order` WHERE id = ?'); $r->execute([$m[1]]);
     jsonOk(jsonizeRow($r->fetch()) ?: []);
 }
 if ($method === 'PATCH' && preg_match('#^/admin/orders/([^/]+)/assign-driver$#', $path, $m)) {
     $u = authUser(); if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
     $b = readJsonBody();
+    $driverId = (string) ($b['driverId'] ?? '');
+    if ($driverId === '') jsonErr('اختر السائق', 422, 'MISSING');
+    // Enforced here, not only in the dropdown: a stale page, a direct API call,
+    // or a driver who went offline while the dialog sat open would otherwise
+    // still get the order. Being offered a driver and being allowed to send them
+    // work are the same rule, so it lives on the write path.
+    $dq = db()->prepare("SELECT u.isActive, u.name, dp.status FROM `User` u
+                         LEFT JOIN `DriverProfile` dp ON dp.userId = u.id
+                         WHERE u.id = ? AND u.role = 'DRIVER' LIMIT 1");
+    $dq->execute([$driverId]);
+    $dRow = $dq->fetch();
+    if (!$dRow) jsonErr('السائق غير موجود', 422, 'DRIVER_NOT_FOUND');
+    if (!(int) $dRow['isActive']) jsonErr('حساب السائق موقوف', 409, 'DRIVER_INACTIVE');
+    if (($dRow['status'] ?? '') !== 'AVAILABLE') {
+        jsonErr(($dRow['status'] ?? '') === 'BUSY'
+            ? 'السائق مشغول بطلب حالياً — اختر سائق متاح'
+            : 'السائق غير متصل — اختر سائق متاح', 409, 'DRIVER_UNAVAILABLE');
+    }
     db()->prepare("UPDATE `Order` SET `assignedDriverId` = ?, `status` = 'DRIVER_ASSIGNED', `updatedAt` = NOW(3) WHERE id = ?")
-        ->execute([(string)($b['driverId'] ?? ''), $m[1]]);
+        ->execute([$driverId, $m[1]]);
+    // Taking an order is what makes a driver busy — otherwise they'd stay
+    // "available" and collect a second order.
+    db()->prepare("UPDATE `DriverProfile` SET `status` = 'BUSY', `updatedAt` = NOW(3) WHERE userId = ?")
+        ->execute([$driverId]);
     // Notifies the driver (new assignment + pickup/delivery) AND the customer.
     notifyOrderParties($m[1], 'DRIVER_ASSIGNED');
     $r = db()->prepare('SELECT * FROM `Order` WHERE id = ?'); $r->execute([$m[1]]);
@@ -4180,6 +4535,9 @@ if ($method === 'POST' && $path === '/orders/cart') {
     }
     notifyUser($uid, 'ORDER_STATUS', 'Order received', 'تم استلام طلبك', "Order $parentNo received", "طلبك رقم $parentNo تم استلامه وجاري مراجعته", ['orderId' => $parentId, 'orderNumber' => $parentNo]);
     // Surface the new order in the alerts centre + realtime feed immediately.
+    // Money model: goods / delivery / commission / payout, computed once here
+    // so app, dashboard and manual orders can never disagree.
+    computeOrderFinancials($parentId);
     alertNewOrder($parentId, $parentNo);
     // Best-effort side channels — never fail the order.
     try {
@@ -4222,6 +4580,7 @@ if (preg_match('#^/orders/from/([^/]+)$#', $path, $mm) && $method === 'POST') {
             ->execute([newId(), $id, $it['productId'], $it['productNameSnapshot'], $it['unitPriceSnapshot'], $it['quantity'], $it['merchantId'], $it['notes']]);
     }
     orderHistory($id, null, 'NEW', $uid, 'CUSTOMER', 'Reorder from ' . $src['orderNumber']);
+    computeOrderFinancials($id);
     alertNewOrder($id, $no);
     $st->execute([$id]);
     jsonOk(orderRow($st->fetch()), 201); // OrdersScreen toasts newOrder.orderNumber

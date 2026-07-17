@@ -31,15 +31,19 @@ interface ReportRow {
   completedAt: string;
   status: string;
   paymentMethod: string;
-  merchantSubtotal: number;
-  deliveryFee: number;
-  platformCommission: number;
+  /** null = the order never recorded this figure. Distinct from 0, which is a
+   *  real measured zero — see `estimated` / the "غير مفصّلة" summary card. */
+  merchantSubtotal: number | null;
+  deliveryFee: number | null;
+  platformCommission: number | null;
   discountAmount: number;
   walletUsed: number;
   finalPrice: number;
-  merchantPayout: number;
-  tamemNet: number;
-  netRevenue: number;
+  merchantPayout: number | null;
+  tamemNet: number | null;
+  netRevenue: number | null;
+  /** true when the goods/delivery split is missing, so this row's money can't
+   *  be attributed to a merchant or to Tamem. */
   estimated: boolean;
 }
 
@@ -53,6 +57,13 @@ interface ReportSummary {
   totalMerchantPayouts: number;
   totalTamemNet: number;
   totalNetRevenue: number;
+  /** Goods value across the period — sums only the rows that recorded one. */
+  totalOrderValue?: number;
+  /** Orders whose goods/delivery split was never recorded. The totals above
+   *  exclude their money entirely, so this is what the report can't account
+   *  for — shown rather than absorbed silently into a bucket. */
+  unattributedOrders?: number;
+  unattributedAmount?: number;
 }
 
 interface ReportPayload {
@@ -93,7 +104,10 @@ const STATUS_AR: Record<string, string> = {
   DELIVERED: 'تم التوصيل',
 };
 
-function fmtMoney(v: number): string {
+/** null/undefined renders as "—": the figure was never recorded, which is not
+ *  the same claim as 0.00. */
+function fmtMoney(v: number | null | undefined): string {
+  if (v == null) return '—';
   return v.toLocaleString('ar-EG', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
@@ -385,6 +399,23 @@ function PrintableReport({
         <p className="text-xs text-muted-foreground">تم الإنشاء: {fmtDate(data.generatedAt)}</p>
       </div>
 
+      {/* Money the report cannot attribute — stated up front, because every
+          figure below silently excludes it and a reader would otherwise take
+          the totals as covering the whole period. */}
+      {(data.summary.unattributedOrders ?? 0) > 0 && (
+        <div className="rounded-xl border border-amber-300 bg-amber-50 p-4 text-sm dark:border-amber-800/60 dark:bg-amber-950/30">
+          <p className="font-bold text-amber-900 dark:text-amber-300">
+            {data.summary.unattributedOrders} طلب بمبلغ {fmtMoney(data.summary.unattributedAmount)}{' '}
+            ج.م غير مفصّلة
+          </p>
+          <p className="mt-1 text-amber-800 dark:text-amber-400/90">
+            دي طلبات اتسعّرت بمبلغ إجمالي واحد من غير ما يتسجّل قيمة البضاعة ورسوم التوصيل كل واحدة
+            لوحدها، فمش محسوبة في العمولة ولا في مستحقات التجار ولا في صافي أرباح تميم تحت.
+            لتصحيحها: افتح الطلب واضغط «تسعير» وأدخل القيمتين.
+          </p>
+        </div>
+      )}
+
       {/* Summary cards */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3 print:grid-cols-4">
         <SummaryCard label="عدد الطلبات" value={data.summary.ordersCount.toString()} />
@@ -559,9 +590,7 @@ function PrintableReport({
                 <td colSpan={7} className="px-2 py-2 text-left">
                   الإجمالي:
                 </td>
-                <td className="px-2 py-2">
-                  {fmtMoney(data.rows.reduce((s, r) => s + r.merchantSubtotal, 0))}
-                </td>
+                <td className="px-2 py-2">{fmtMoney(data.summary.totalOrderValue ?? 0)}</td>
                 <td className="px-2 py-2">{fmtMoney(data.summary.totalDeliveryFees)}</td>
                 {showCommission && (
                   <td className="px-2 py-2">{fmtMoney(data.summary.totalCommission)}</td>
