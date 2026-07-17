@@ -383,6 +383,64 @@ if ($method === 'GET' && $path === '/admin/realtime') {
         'now' => $nowMs,
     ]);
 }
+// ─── Reports: services / drivers / customers ────────────────────────────
+// These three had NO handler, so they fell through to the empty-list fallback:
+// the report tabs rendered as "no data" forever while returning a cheerful 200.
+// Shapes below match exactly what reports.tsx destructures per table.
+if ($method === 'GET' && $path === '/admin/reports/services') {
+    authUser();
+    $rows = db()->query(
+        "SELECT s.id AS serviceId, s.nameAr, s.category,
+                COUNT(o.id) AS orders,
+                COALESCE(SUM(COALESCE(o.finalPrice, o.quotedPrice, 0)), 0) AS revenue
+         FROM `Service` s
+         LEFT JOIN `Order` o ON o.serviceId = s.id
+         GROUP BY s.id, s.nameAr, s.category
+         ORDER BY orders DESC"
+    )->fetchAll();
+    jsonOk(array_map(static fn ($r) => [
+        'serviceId' => $r['serviceId'], 'nameAr' => $r['nameAr'], 'category' => $r['category'],
+        'orders' => (int) $r['orders'], 'revenue' => (float) $r['revenue'],
+    ], $rows));
+}
+if ($method === 'GET' && $path === '/admin/reports/drivers') {
+    authUser();
+    $rows = db()->query(
+        "SELECT u.id AS driverId, u.name, u.phone, dp.rating,
+                COUNT(o.id) AS deliveries,
+                COALESCE(SUM(COALESCE(o.finalPrice, o.quotedPrice, 0)), 0) AS totalRevenue
+         FROM `User` u
+         LEFT JOIN `DriverProfile` dp ON dp.userId = u.id
+         LEFT JOIN `Order` o ON o.assignedDriverId = u.id AND o.status IN ('DELIVERED','COMPLETED')
+         WHERE u.role = 'DRIVER'
+         GROUP BY u.id, u.name, u.phone, dp.rating
+         ORDER BY deliveries DESC"
+    )->fetchAll();
+    jsonOk(array_map(static fn ($r) => [
+        'driverId' => $r['driverId'], 'name' => $r['name'], 'phone' => $r['phone'],
+        'deliveries' => (int) $r['deliveries'], 'totalRevenue' => (float) $r['totalRevenue'],
+        'rating' => $r['rating'] !== null ? (float) $r['rating'] : null,
+    ], $rows));
+}
+if ($method === 'GET' && $path === '/admin/reports/customers') {
+    authUser();
+    $rows = db()->query(
+        "SELECT u.id AS customerId, u.name, u.city,
+                COUNT(o.id) AS orders,
+                COALESCE(SUM(COALESCE(o.finalPrice, o.quotedPrice, 0)), 0) AS totalSpend
+         FROM `User` u
+         LEFT JOIN `Order` o ON o.customerId = u.id
+         WHERE u.role = 'CUSTOMER'
+         GROUP BY u.id, u.name, u.city
+         ORDER BY orders DESC, totalSpend DESC
+         LIMIT 100"
+    )->fetchAll();
+    jsonOk(array_map(static fn ($r) => [
+        'customerId' => $r['customerId'], 'name' => $r['name'], 'city' => $r['city'],
+        'orders' => (int) $r['orders'], 'totalSpend' => (float) $r['totalSpend'],
+    ], $rows));
+}
+
 if ($method === 'GET' && $path === '/admin/overview') {
     $u = authUser();
     if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
