@@ -92,3 +92,7 @@ apps/backend/tokens/
 
 # Local uploads (multer-served customer/order images & audio)
 apps/backend/uploads/
+
+# dist-bundle runtime (WhatsApp bridge IPC + customer/order uploads) — never version.
+# These held live customer phone numbers + order text on the public repo.
+apps/backend/dist-bundle/uploads/
