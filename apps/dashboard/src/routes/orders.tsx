@@ -834,6 +834,8 @@ export function OrdersPage() {
       {quickPriceFor && (
         <PriceDialog
           orderId={quickPriceFor.id}
+          goods={quickPriceFor.merchantSubtotal}
+          fee={quickPriceFor.deliveryFee}
           onClose={() => {
             setQuickPriceFor(null);
             qc.invalidateQueries({ queryKey: ['admin', 'orders'] });
@@ -1010,6 +1012,18 @@ function OrderDetailDrawer({ orderId, onClose }: { orderId: string; onClose: () 
           <Section title="التسعير">
             <div className="grid grid-cols-2 gap-3 text-sm">
               <div>
+                <div className="text-muted-foreground">قيمة الطلب (البضاعة)</div>
+                <div className="font-bold">
+                  {order.merchantSubtotal != null ? formatMoney(order.merchantSubtotal) : '—'}
+                </div>
+              </div>
+              <div>
+                <div className="text-muted-foreground">رسوم التوصيل</div>
+                <div className="font-bold">
+                  {order.deliveryFee != null ? formatMoney(order.deliveryFee) : '—'}
+                </div>
+              </div>
+              <div>
                 <div className="text-muted-foreground">السعر المعروض</div>
                 <div className="font-bold">
                   {order.quotedPrice ? formatMoney(order.quotedPrice) : '—'}
@@ -1021,7 +1035,25 @@ function OrderDetailDrawer({ orderId, onClose }: { orderId: string; onClose: () 
                   {order.finalPrice ? formatMoney(order.finalPrice) : '—'}
                 </div>
               </div>
+              <div>
+                <div className="text-muted-foreground">مستحق التاجر</div>
+                <div className="font-bold">
+                  {order.merchantPayout != null ? formatMoney(order.merchantPayout) : '—'}
+                </div>
+              </div>
+              <div>
+                <div className="text-muted-foreground">عمولة تميم</div>
+                <div className="font-bold">
+                  {order.platformCommission != null ? formatMoney(order.platformCommission) : '—'}
+                </div>
+              </div>
             </div>
+            {order.merchantSubtotal == null && (
+              <p className="mt-3 text-xs text-amber-600 dark:text-amber-500">
+                هذا الطلب لم يُسجَّل فيه تفصيل البضاعة والتوصيل، فلا يظهر في أرباح التجار. اضغط
+                «تسعير» وأدخل القيمتين لتصحيحه.
+              </p>
+            )}
           </Section>
 
           {order.assignedDriver && (
@@ -1105,6 +1137,8 @@ function OrderDetailDrawer({ orderId, onClose }: { orderId: string; onClose: () 
       {priceOpen && order && (
         <PriceDialog
           orderId={order.id}
+          goods={order.merchantSubtotal}
+          fee={order.deliveryFee}
           onClose={() => {
             setPriceOpen(false);
             invalidate();
@@ -1153,10 +1187,34 @@ function Section({ title, children }: { title: string; children: React.ReactNode
   );
 }
 
-function PriceDialog({ orderId, onClose }: { orderId: string; onClose: () => void }) {
-  const [price, setPrice] = useState('');
+/**
+ * Prices an order as two separate figures — the goods and the delivery — rather
+ * than one total. The split is what every downstream number is built from: the
+ * merchant's payout, Tamem's commission, and the revenue report's "الطلب بكام /
+ * التوصيل بكام". A total alone cannot be un-mixed later, which is why the
+ * legacy orders show "غير مفصّلة" in the report and can only be corrected by an
+ * admin who knows the real answer re-pricing them here.
+ */
+function PriceDialog({
+  orderId,
+  goods: goods0,
+  fee: fee0,
+  onClose,
+}: {
+  orderId: string;
+  goods?: number | string | null;
+  fee?: number | string | null;
+  onClose: () => void;
+}) {
+  const [goods, setGoods] = useState(goods0 != null && Number(goods0) > 0 ? String(goods0) : '');
+  // The zone fee the order was created with — prefilled so the admin confirms it
+  // rather than retypes it.
+  const [fee, setFee] = useState(fee0 != null ? String(fee0) : '');
+  const g = Number(goods) || 0;
+  const f = Number(fee) || 0;
+  const total = g + f;
   const mut = useMutation({
-    mutationFn: () => api.adminSetPrice(orderId, Number(price)),
+    mutationFn: () => api.adminSetPrice(orderId, total, { merchantSubtotal: g, deliveryFee: f }),
     onSuccess: () => {
       toast.success('تم تسعير الطلب');
       onClose();
@@ -1165,21 +1223,43 @@ function PriceDialog({ orderId, onClose }: { orderId: string; onClose: () => voi
   });
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()} title="تسعير الطلب">
-      <Field label="السعر بالجنيه" htmlFor="price" required>
-        <Input
-          id="price"
-          type="number"
-          inputMode="numeric"
-          min={1}
-          value={price}
-          onChange={(e) => setPrice(e.target.value)}
-        />
-      </Field>
+      <div className="grid grid-cols-2 gap-3">
+        <Field label="قيمة الطلب (البضاعة)" htmlFor="goods" required>
+          <Input
+            id="goods"
+            type="number"
+            inputMode="decimal"
+            min={0}
+            value={goods}
+            onChange={(e) => setGoods(e.target.value)}
+          />
+        </Field>
+        <Field label="رسوم التوصيل" htmlFor="fee" required>
+          <Input
+            id="fee"
+            type="number"
+            inputMode="decimal"
+            min={0}
+            value={fee}
+            onChange={(e) => setFee(e.target.value)}
+          />
+        </Field>
+      </div>
+      <div className="mt-3 flex items-center justify-between rounded-lg bg-muted/40 px-3 py-2">
+        <span className="text-sm text-muted-foreground">الإجمالي على العميل</span>
+        <span className="text-lg font-bold tabular-nums">{formatMoney(total)}</span>
+      </div>
+      <p className="mt-2 text-xs text-muted-foreground">
+        عمولة تميم تُحسب من قيمة البضاعة، ورسوم التوصيل تُحسب كاملة لتميم.
+      </p>
       <div className="flex justify-end gap-2 mt-4">
         <Button variant="outline" size="md" onClick={onClose}>
           إلغاء
         </Button>
-        <Button onClick={() => mut.mutate()} disabled={!price || mut.isPending}>
+        <Button
+          onClick={() => mut.mutate()}
+          disabled={total <= 0 || goods === '' || fee === '' || mut.isPending}
+        >
           {mut.isPending && <Loader2 className="w-3 h-3 animate-spin" />}
           حفظ السعر
         </Button>
