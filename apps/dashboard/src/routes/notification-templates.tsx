@@ -3,8 +3,10 @@ import {
   Bell,
   Loader2,
   MessageSquare,
+  Plus,
   RotateCcw,
   Save,
+  Trash2,
   Store,
   Truck,
   User,
@@ -289,6 +291,164 @@ export function NotificationTemplatesPage() {
                   );
                 })}
               </div>
+              <ExtraRecipients event={event} />
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+interface Recipient {
+  id: string;
+  name: string;
+  phone: string;
+  enabled: boolean;
+  text: string;
+}
+
+/**
+ * Per-event custom recipients: any phone number (another supervisor, an owner,
+ * anyone) that also receives this event's message. Loads/saves the whole
+ * recipients map but only renders + edits its own event's slice.
+ */
+function ExtraRecipients({ event }: { event: string }) {
+  const qc = useQueryClient();
+  const [list, setList] = useState<Recipient[] | null>(null);
+  const [openEditor, setOpenEditor] = useState<string | null>(null);
+
+  const { data } = useQuery({
+    queryKey: ['admin', 'notification-recipients'],
+    queryFn: () => api.adminNotificationRecipients(),
+    staleTime: 60_000,
+  });
+
+  // Seed local state from the server slice once.
+  const serverList = useMemo<Recipient[]>(
+    () => ((data?.recipients?.[event] as Recipient[] | undefined) ?? []).map((r) => ({ ...r })),
+    [data, event],
+  );
+  const rows = list ?? serverList;
+  const dirty = list !== null;
+
+  const save = useMutation({
+    mutationFn: () => {
+      // Merge our event's edits into the full map so other events are preserved.
+      const full: Record<string, Recipient[]> = { ...(data?.recipients ?? {}) };
+      full[event] = rows.filter((r) => r.phone.trim());
+      return api.adminSaveNotificationRecipients(full);
+    },
+    onSuccess: () => {
+      toast.success('تم حفظ المستقبِلين');
+      setList(null);
+      qc.invalidateQueries({ queryKey: ['admin', 'notification-recipients'] });
+    },
+    onError: (e: Error) => toast.error(e.message),
+  });
+
+  const patch = (id: string, p: Partial<Recipient>) =>
+    setList(rows.map((r) => (r.id === id ? { ...r, ...p } : r)));
+  const add = () =>
+    setList([...rows, { id: `new-${Date.now()}`, name: '', phone: '', enabled: true, text: '' }]);
+  const remove = (id: string) => setList(rows.filter((r) => r.id !== id));
+
+  return (
+    <div className="border-t border-border bg-muted/20 px-3 py-2.5">
+      <div className="flex items-center justify-between">
+        <span className="text-xs font-bold text-muted-foreground inline-flex items-center gap-1.5">
+          <Plus className="w-3.5 h-3.5" />
+          أرقام إضافية تستقبل هذا الإشعار{rows.length ? ` (${rows.length})` : ''}
+        </span>
+        <div className="flex items-center gap-2">
+          {dirty && (
+            <button
+              onClick={() => save.mutate()}
+              disabled={save.isPending}
+              className="text-xs font-bold text-white bg-brand-red px-2.5 py-1 rounded-md hover:bg-brand-red/90 disabled:opacity-50 inline-flex items-center gap-1"
+            >
+              {save.isPending ? (
+                <Loader2 className="w-3 h-3 animate-spin" />
+              ) : (
+                <Save className="w-3 h-3" />
+              )}
+              حفظ
+            </button>
+          )}
+          <button
+            onClick={add}
+            className="text-xs font-bold text-brand-red hover:underline inline-flex items-center gap-1"
+          >
+            <Plus className="w-3.5 h-3.5" />
+            إضافة رقم
+          </button>
+        </div>
+      </div>
+
+      {rows.length > 0 && (
+        <div className="mt-2 space-y-2">
+          {rows.map((r) => (
+            <div key={r.id} className="rounded-lg border border-border bg-card p-2">
+              <div className="flex items-center gap-2">
+                <input
+                  value={r.name}
+                  onChange={(e) => patch(r.id, { name: e.target.value })}
+                  placeholder="الاسم (اختياري)"
+                  className="w-32 shrink-0 px-2 py-1.5 rounded border border-input bg-popover text-xs"
+                />
+                <input
+                  value={r.phone}
+                  onChange={(e) => patch(r.id, { phone: e.target.value })}
+                  placeholder="رقم الواتساب — 01xxxxxxxxx"
+                  dir="ltr"
+                  className="flex-1 min-w-0 px-2 py-1.5 rounded border border-input bg-popover text-xs font-mono text-right"
+                />
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={r.enabled}
+                  onClick={() => patch(r.id, { enabled: !r.enabled })}
+                  title={r.enabled ? 'مفعّل' : 'موقوف'}
+                  className={`relative inline-flex h-5 w-9 shrink-0 rounded-full transition-colors ${
+                    r.enabled ? 'bg-green-500' : 'bg-zinc-300'
+                  }`}
+                >
+                  <span
+                    className={`absolute top-1/2 -translate-y-1/2 h-4 w-4 rounded-full bg-white shadow transition-[inset-inline-start] ${
+                      r.enabled ? 'start-[18px]' : 'start-0.5'
+                    }`}
+                  />
+                </button>
+                <button
+                  onClick={() => setOpenEditor(openEditor === r.id ? null : r.id)}
+                  className="text-xs font-bold text-muted-foreground hover:text-foreground px-1.5"
+                  title="تخصيص النص"
+                >
+                  ✎
+                </button>
+                <button
+                  onClick={() => remove(r.id)}
+                  aria-label="حذف"
+                  className="p-1 rounded hover:bg-destructive/10 text-destructive shrink-0"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                </button>
+              </div>
+              {openEditor === r.id && (
+                <div className="mt-2">
+                  <textarea
+                    value={r.text}
+                    onChange={(e) => patch(r.id, { text: e.target.value })}
+                    rows={3}
+                    dir="rtl"
+                    placeholder="اتركه فاضياً ليستقبل نفس رسالة المشرف، أو اكتب نصاً خاصاً بهذا الرقم…"
+                    className="w-full px-2 py-1.5 rounded border border-input bg-popover text-xs font-mono leading-6"
+                  />
+                  <div className="text-[10px] text-muted-foreground mt-0.5">
+                    فاضي = نفس رسالة المشرف لهذا الحدث. تقدر تستخدم نفس المتغيرات.
+                  </div>
+                </div>
+              )}
             </div>
           ))}
         </div>
