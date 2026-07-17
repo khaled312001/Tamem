@@ -315,6 +315,7 @@ function DriverReviewsDialog({ driver, onClose }: { driver: Row; onClose: () => 
   const reviews: Row[] = data?.reviews ?? [];
   const avg = data?.stats?.averageRating;
   const count = data?.stats?.reviewCount ?? 0;
+  const dist: Record<string, number> = data?.stats?.distribution ?? {};
 
   return (
     <Dialog
@@ -345,6 +346,31 @@ function DriverReviewsDialog({ driver, onClose }: { driver: Row; onClose: () => 
               <div className="text-2xl font-black text-blue-900 mt-1">{count}</div>
             </div>
           </div>
+
+          {/* Star distribution — 5 → 1 */}
+          {count > 0 && (
+            <div className="bg-white border border-border rounded-xl p-4 space-y-1.5">
+              <div className="text-xs font-bold uppercase tracking-wider text-muted-foreground mb-1">
+                توزيع التقييمات
+              </div>
+              {[5, 4, 3, 2, 1].map((star) => {
+                const n = dist[String(star)] ?? 0;
+                const pct = count > 0 ? Math.round((n / count) * 100) : 0;
+                return (
+                  <div key={star} className="flex items-center gap-2 text-xs">
+                    <span className="w-8 text-muted-foreground shrink-0">{star} ★</span>
+                    <div className="flex-1 h-2.5 rounded-full bg-muted overflow-hidden">
+                      <div
+                        className="h-full rounded-full bg-amber-400 transition-all"
+                        style={{ width: `${pct}%` }}
+                      />
+                    </div>
+                    <span className="w-8 text-end font-bold shrink-0">{n}</span>
+                  </div>
+                );
+              })}
+            </div>
+          )}
 
           {/* Reviews list */}
           {reviews.length === 0 ? (

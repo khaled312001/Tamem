@@ -202,7 +202,15 @@ export function ReviewsPage() {
                         {r.driverRating != null && (
                           <div className="inline-flex items-center gap-1.5 bg-blue-50 border border-blue-100 rounded-lg px-2 py-1">
                             <span className="text-muted-foreground">🚚 السائق:</span>
-                            <span className="font-bold">{r.driver?.name ?? '—'}</span>
+                            {/* driver.missing === true means the linked driver
+                                account is gone — say so rather than "—", which
+                                would read like there was never a driver. */}
+                            <span
+                              className={`font-bold ${r.driver?.missing ? 'text-amber-600 dark:text-amber-500' : ''}`}
+                            >
+                              {r.driver?.name ??
+                                (r.driver?.missing ? 'بيانات السائق غير متوفرة' : '—')}
+                            </span>
                             <Stars rating={Number(r.driverRating)} size={11} />
                             <span className="font-bold">{r.driverRating}</span>
                           </div>
