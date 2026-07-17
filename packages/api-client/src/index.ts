@@ -350,6 +350,26 @@ export class TamemClient {
     return this.request({ method: 'GET', url: '/admin/overview', params: { range } });
   }
 
+  /** One lightweight poll for the live notifier: new orders/alerts since `since`
+   *  (the `now` from the previous response) + current counts. */
+  async adminRealtime(since?: number): Promise<{
+    orders: { id: string; orderNumber?: string; status?: string; category?: string }[];
+    alerts: { id: string; titleAr?: string; title?: string; severity?: string }[];
+    counts: { openOrders: number; alerts: number };
+    now: number;
+  }> {
+    return this.request({
+      method: 'GET',
+      url: '/admin/realtime',
+      params: since ? { since } : undefined,
+    }) as Promise<{
+      orders: { id: string; orderNumber?: string; status?: string; category?: string }[];
+      alerts: { id: string; titleAr?: string; title?: string; severity?: string }[];
+      counts: { openOrders: number; alerts: number };
+      now: number;
+    }>;
+  }
+
   // ===== Admin Orders =====
   async adminListOrders(params?: Record<string, unknown>): Promise<Paginated<Order>> {
     return this.requestPaginated({ method: 'GET', url: '/admin/orders', params });

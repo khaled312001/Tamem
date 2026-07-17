@@ -73,13 +73,14 @@ const waLink = `https://wa.me/${WHATSAPP.replace(/[^\d]/g, '')}?text=${encodeURI
         >
       </h1>
 
+      {/* Leaf node (no inline <strong>) so the dashboard site-editor can actually
+          replace this text — the hydration refuses to overwrite an element that
+          has child elements, to protect styled headings. */}
       <p
         class="reveal reveal-delay-2 text-lg md:text-xl text-white/85 mb-8 max-w-xl lg:mx-0 mx-auto leading-relaxed"
         data-site="heroSubtitle"
       >
-        اطلب من <strong class="text-white">السوبر ماركت أو الصيدلية أو المطعم</strong> في قفط،
-        اشحن طرودك لأي محافظة، أو شغّل تجارتك مع مندوبين ثقة — كله من تطبيق واحد.
-        مقرنا الرئيسي في <strong class="text-white">مركز قفط، محافظة قنا</strong>.
+        اطلب من السوبر ماركت أو الصيدلية أو المطعم في قفط، اشحن طرودك لأي محافظة، أو شغّل تجارتك مع مندوبين ثقة — كله من تطبيق واحد. مقرنا الرئيسي في مركز قفط، محافظة قنا.
       </p>
 
       <!-- Tagline pill (from splash) -->
