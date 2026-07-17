@@ -213,8 +213,11 @@ export function AlertsPage() {
       };
       return res;
     },
-    // Long stale time — sockets push invalidations, polling would waste cycles.
-    staleTime: 60_000,
+    // The realtime notifier invalidates this on new alerts, but poll while the
+    // page is open too so the centre self-updates even if a tick is missed. Only
+    // fires when this page is mounted, so the connection cost is bounded.
+    staleTime: 20_000,
+    refetchInterval: 30_000,
   });
 
   // Realtime: invalidate the list on new/updated alerts.

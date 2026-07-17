@@ -21,6 +21,13 @@
 
 declare(strict_types=1);
 
+// Server runs on Cairo time: date()/strtotime()/DateTime('now') and report day
+// boundaries are Egypt-local. Timestamps are still STORED as UTC in the DB (the
+// universal standard) and internal comparisons use gmdate()/microtime() (both
+// UTC/epoch), so this is display-only and can't skew the realtime/alert logic —
+// changing the DB's stored timezone would reinterpret every existing row by 2-3h.
+date_default_timezone_set('Africa/Cairo');
+
 // ─── 1. Load .env from the same directory ───────────────────────────────
 $ENV = [];
 $envPath = __DIR__ . '/.env';
@@ -612,6 +619,31 @@ function upsertAlert(array $a): bool {
     }
 }
 
+// Raise an alert the INSTANT an order is created, so the alerts centre grows in
+// real time instead of only after the 15-min "pending" sweep. Same Alert table
+// the centre reads + the realtime poll watches, so it surfaces everywhere at
+// once. Distinct triggerKey from the sweep's PENDING_ORDER so they don't fight.
+function alertNewOrder(string $orderId, string $orderNumber): void {
+    upsertAlert([
+        'type' => 'NEW_ORDER', 'category' => 'ORDER', 'severity' => 'MEDIUM',
+        'title' => 'New order received', 'titleAr' => 'طلب جديد وصل',
+        'description' => "Order {$orderNumber} just arrived and needs review",
+        'descriptionAr' => "طلب جديد *{$orderNumber}* وصل — بانتظار المراجعة والتسعير",
+        'relatedOrderId' => $orderId,
+        'triggerKey' => 'NEW_ORDER:' . $orderId,
+        'triggerReason' => 'order created',
+    ]);
+}
+// Once an order is actually being handled, clear its "new order" alert so the
+// centre reflects reality instead of piling up stale entries.
+function resolveOrderAlerts(string $orderId): void {
+    try {
+        db()->prepare("UPDATE `Alert` SET status = 'RESOLVED', isResolved = 1, resolvedAt = NOW(3), updatedAt = NOW(3)
+                       WHERE relatedOrderId = ? AND triggerKey = ? AND status IN ('OPEN','ACKNOWLEDGED','ESCALATED')")
+            ->execute([$orderId, 'NEW_ORDER:' . $orderId]);
+    } catch (Throwable $e) { /* best-effort */ }
+}
+
 function runAlertSweep(): array {
     $created = 0;
     $now = time();
@@ -928,6 +960,8 @@ function orderDetailBlocks(array $o): array {
     return $b;
 }
 function notifyOrderParties(string $orderId, string $status, ?string $reason = null): void {
+    // The order is being handled now → clear its "new order" alert from the centre.
+    resolveOrderAlerts($orderId);
     try {
         $q = db()->prepare(
             "SELECT o.*,
@@ -4087,6 +4121,8 @@ if ($method === 'POST' && $path === '/orders/cart') {
         } catch (Throwable $e) { error_log('[api.php] coupon redeem failed: ' . $e->getMessage()); }
     }
     notifyUser($uid, 'ORDER_STATUS', 'Order received', 'تم استلام طلبك', "Order $parentNo received", "طلبك رقم $parentNo تم استلامه وجاري مراجعته", ['orderId' => $parentId, 'orderNumber' => $parentNo]);
+    // Surface the new order in the alerts centre + realtime feed immediately.
+    alertNewOrder($parentId, $parentNo);
     // Best-effort side channels — never fail the order.
     try {
         $ph = db()->prepare('SELECT phone FROM `User` WHERE id = ?');
@@ -4128,6 +4164,7 @@ if (preg_match('#^/orders/from/([^/]+)$#', $path, $mm) && $method === 'POST') {
             ->execute([newId(), $id, $it['productId'], $it['productNameSnapshot'], $it['unitPriceSnapshot'], $it['quantity'], $it['merchantId'], $it['notes']]);
     }
     orderHistory($id, null, 'NEW', $uid, 'CUSTOMER', 'Reorder from ' . $src['orderNumber']);
+    alertNewOrder($id, $no);
     $st->execute([$id]);
     jsonOk(orderRow($st->fetch()), 201); // OrdersScreen toasts newOrder.orderNumber
 }
