@@ -2371,16 +2371,75 @@ if ($method === 'GET' && preg_match('#^/admin/customers/([^/]+)$#', $path, $m)) 
 // Customers (and any other User-by-role) — bare User rows are enough.
 if ($method === 'GET' && preg_match('#^/admin/(customers)$#', $path, $m)) {
     authUser();
-    $role = 'CUSTOMER';
     $page = max(1, (int)($_GET['page'] ?? 1));
     $size = min(100, max(1, (int)($_GET['pageSize'] ?? 20)));
     $off = ($page - 1) * $size;
-    $total = (int) db()->query("SELECT COUNT(*) FROM `User` WHERE role = '$role'")->fetchColumn();
-    // Explicit columns, never SELECT * — `User` carries passwordHash /
-    // passwordResetHash / googleId / fcmToken, none of which may ever ship.
-    $st = db()->prepare("SELECT id, name, phone, email, avatarUrl, role, isActive, isPhoneVerified, city, governorate, defaultAddress, secondaryPhones, createdAt, updatedAt FROM `User` WHERE role = ? ORDER BY createdAt DESC LIMIT $size OFFSET $off");
-    $st->execute([$role]);
-    $rows = array_map('jsonizeRow', $st->fetchAll());
+
+    // Filters run in SQL — the list pages server-side, so client-side filtering
+    // could only ever see the current page. The order count + last-activity are
+    // correlated subqueries so a customer with orders never shows a blank/0.
+    $where = "u.role = 'CUSTOMER'";
+    $args = [];
+    $q = trim((string)($_GET['search'] ?? ''));
+    if ($q !== '') {
+        // Name / phone / email / city / governorate / area / village / exact id.
+        $where .= " AND (u.name LIKE ? OR u.phone LIKE ? OR u.email LIKE ? OR u.city LIKE ? OR u.governorate LIKE ?
+                    OR u.id = ? OR EXISTS (SELECT 1 FROM `CustomerAddress` ca
+                        LEFT JOIN `Area` ar ON ar.id = ca.areaId
+                        LEFT JOIN `Village` vi ON vi.id = ca.villageId
+                        LEFT JOIN `City` ci ON ci.id = ca.cityId
+                        WHERE ca.userId = u.id AND (ca.address LIKE ? OR ar.nameAr LIKE ? OR vi.nameAr LIKE ? OR ci.nameAr LIKE ?)))";
+        $like = '%' . $q . '%';
+        array_push($args, $like, $like, $like, $like, $like, $q, $like, $like, $like, $like);
+    }
+    if (!empty($_GET['city']))        { $where .= ' AND u.city = ?'; $args[] = $_GET['city']; }
+    if (!empty($_GET['governorate'])) { $where .= ' AND u.governorate = ?'; $args[] = $_GET['governorate']; }
+    $status = (string)($_GET['status'] ?? '');
+    if ($status === 'active')   $where .= ' AND u.isActive = 1';
+    elseif ($status === 'inactive') $where .= ' AND (u.isActive = 0 OR u.isActive IS NULL)';
+    if (!empty($_GET['from'])) { $where .= ' AND u.createdAt >= ?'; $args[] = str_replace('T', ' ', substr((string)$_GET['from'], 0, 19)); }
+    if (!empty($_GET['to']))   { $where .= ' AND u.createdAt <= ?'; $args[] = str_replace('T', ' ', substr((string)$_GET['to'], 0, 19)); }
+    $ORDERCOUNT = '(SELECT COUNT(*) FROM `Order` o WHERE o.customerId = u.id)';
+    $hasOrders = (string)($_GET['hasOrders'] ?? '');
+    if ($hasOrders === 'yes')     $where .= " AND {$ORDERCOUNT} > 0";
+    elseif ($hasOrders === 'no')  $where .= " AND {$ORDERCOUNT} = 0";
+    if (isset($_GET['minOrders']) && $_GET['minOrders'] !== '') { $where .= " AND {$ORDERCOUNT} >= ?"; $args[] = (int)$_GET['minOrders']; }
+
+    // Whitelisted sort — the column is interpolated so it can't come from the query string.
+    $sortCol = [
+        'createdAt' => 'u.createdAt', 'name' => 'u.name', 'city' => 'u.city',
+        'orders' => 'orderCount', 'lastActivity' => 'lastOrderAt',
+    ][(string)($_GET['sort'] ?? 'createdAt')] ?? 'u.createdAt';
+    $dir = strtolower((string)($_GET['dir'] ?? 'desc')) === 'asc' ? 'ASC' : 'DESC';
+
+    $cnt = db()->prepare("SELECT COUNT(*) FROM `User` u WHERE {$where}");
+    $cnt->execute($args);
+    $total = (int) $cnt->fetchColumn();
+
+    // Explicit columns, never SELECT * — User carries passwordHash / resetHash /
+    // googleId / fcmToken, none of which may ever ship.
+    $st = db()->prepare(
+        "SELECT u.id, u.name, u.phone, u.email, u.avatarUrl, u.isActive, u.isPhoneVerified,
+                u.city, u.governorate, u.defaultAddress, u.secondaryPhones, u.createdAt, u.updatedAt,
+                {$ORDERCOUNT} AS orderCount,
+                (SELECT MAX(o2.createdAt) FROM `Order` o2 WHERE o2.customerId = u.id) AS lastOrderAt
+         FROM `User` u WHERE {$where}
+         ORDER BY {$sortCol} {$dir} LIMIT {$size} OFFSET {$off}"
+    );
+    $st->execute($args);
+    $rows = [];
+    foreach ($st->fetchAll() as $r) {
+        $row = jsonizeRow($r);
+        $cnt = (int) $r['orderCount'];
+        // Nested _count so the existing UI (c._count.customerOrders) keeps working,
+        // plus flat fields for the redesigned table.
+        $row['_count'] = ['customerOrders' => $cnt];
+        $row['orderCount'] = $cnt;
+        // last activity: last order, else registration — never blank.
+        $row['lastActivityAt'] = $r['lastOrderAt'] ?: $r['createdAt'];
+        unset($row['orderCount']); $row['orderCount'] = $cnt;
+        $rows[] = $row;
+    }
     http_response_code(200);
     echo json_encode([
         'data' => $rows,

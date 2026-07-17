@@ -1,6 +1,21 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { MapPin, Pencil, Phone, Plus, Save, Search, Trash2, Users, X } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import {
+  Ban,
+  CheckCircle2,
+  Filter,
+  Loader2,
+  MapPin,
+  Pencil,
+  Phone,
+  Plus,
+  Save,
+  Search,
+  Trash2,
+  Upload,
+  Users,
+  X,
+} from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
 
 import { StatusBadge } from '../components/ui/Badge.js';
@@ -9,6 +24,7 @@ import { Input } from '../components/ui/Input.js';
 import { PhoneInput } from '../components/ui/PhoneInput.js';
 import { EmptyState, TableSkeleton } from '../components/ui/Skeleton.js';
 import { api } from '../lib/api.js';
+import { uploadFile } from '../lib/uploadFile.js';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Row = any;
@@ -23,117 +39,430 @@ interface SavedAddress {
   isDefault: boolean;
 }
 
+// ── Avatar: customer photo with an initial-letter fallback + stable tint ──
+const TINTS = [
+  'bg-brand-orange',
+  'bg-blue-500',
+  'bg-emerald-500',
+  'bg-purple-500',
+  'bg-rose-500',
+  'bg-amber-500',
+  'bg-teal-500',
+  'bg-indigo-500',
+];
+function tintFor(seed: string): string {
+  let h = 0;
+  for (let i = 0; i < seed.length; i++) h = (h * 31 + seed.charCodeAt(i)) >>> 0;
+  return TINTS[h % TINTS.length] as string;
+}
+function Avatar({
+  name,
+  url,
+  size = 'md',
+}: {
+  name?: string;
+  url?: string | null;
+  size?: 'sm' | 'md' | 'lg' | 'xl';
+}) {
+  const [broken, setBroken] = useState(false);
+  const cls = {
+    sm: 'w-8 h-8 text-xs',
+    md: 'w-10 h-10 text-sm',
+    lg: 'w-14 h-14 text-lg',
+    xl: 'w-24 h-24 text-3xl',
+  }[size];
+  const box = `${cls} rounded-full shrink-0 overflow-hidden grid place-items-center font-black text-white`;
+  const letter = (name || '؟').trim().charAt(0) || '؟';
+  if (url && !broken) {
+    return (
+      <img
+        src={url}
+        alt=""
+        onError={() => setBroken(true)}
+        className={`${box} object-cover border border-border bg-white`}
+      />
+    );
+  }
+  return <span className={`${box} ${tintFor(name || '?')}`}>{letter}</span>;
+}
+
+const fmtDate = (v?: string | null) => (v ? new Date(v).toLocaleDateString('ar-EG') : '—');
+const fmtDateTime = (v?: string | null) =>
+  v ? new Date(v).toLocaleString('ar-EG', { dateStyle: 'medium', timeStyle: 'short' }) : '—';
+
+interface Filters {
+  status: '' | 'active' | 'inactive';
+  hasOrders: '' | 'yes' | 'no';
+  city: string;
+  from: string;
+  to: string;
+}
+const EMPTY_FILTERS: Filters = { status: '', hasOrders: '', city: '', from: '', to: '' };
+
 export function CustomersPage() {
   const qc = useQueryClient();
   const [search, setSearch] = useState('');
   const [debounced, setDebounced] = useState('');
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [checked, setChecked] = useState<Set<string>>(new Set());
+  const [showFilters, setShowFilters] = useState(false);
+  const [filters, setFilters] = useState<Filters>(EMPTY_FILTERS);
 
   useEffect(() => {
     const t = setTimeout(() => setDebounced(search), 300);
     return () => clearTimeout(t);
   }, [search]);
 
-  const { data, isLoading } = useQuery({
-    queryKey: ['admin', 'customers', debounced],
-    queryFn: () => api.adminListCustomers({ search: debounced || undefined, pageSize: 50 }),
+  const params = useMemo(
+    () => ({
+      search: debounced || undefined,
+      status: filters.status || undefined,
+      hasOrders: filters.hasOrders || undefined,
+      city: filters.city || undefined,
+      from: filters.from || undefined,
+      to: filters.to || undefined,
+      pageSize: 100,
+    }),
+    [debounced, filters],
+  );
+
+  const { data, isLoading, isFetching } = useQuery({
+    queryKey: ['admin', 'customers', params],
+    queryFn: () => api.adminListCustomers(params),
   });
+
+  const rows = (data?.items ?? []) as Row[];
+  const activeFilterCount =
+    (filters.status ? 1 : 0) +
+    (filters.hasOrders ? 1 : 0) +
+    (filters.city ? 1 : 0) +
+    (filters.from ? 1 : 0) +
+    (filters.to ? 1 : 0);
+
+  // City options derived from the current page (no extra endpoint needed).
+  const cityOptions = useMemo(
+    () => Array.from(new Set(rows.map((r) => r.city).filter(Boolean))).sort() as string[],
+    [rows],
+  );
+
+  const invalidate = () => qc.invalidateQueries({ queryKey: ['admin', 'customers'] });
 
   const deleteMut = useMutation({
     mutationFn: (id: string) => api.raw.delete(`/admin/customers/${id}`),
     onSuccess: () => {
       toast.success('تم حذف العميل');
-      qc.invalidateQueries({ queryKey: ['admin', 'customers'] });
+      invalidate();
+    },
+    onError: (err: Error) => toast.error(err.message),
+  });
+  const toggleActiveMut = useMutation({
+    mutationFn: ({ id, isActive }: { id: string; isActive: boolean }) =>
+      api.adminUpdateCustomer(id, { isActive }),
+    onSuccess: (_r, v) => {
+      toast.success(v.isActive ? 'تم تفعيل العميل' : 'تم تعطيل العميل');
+      invalidate();
+    },
+    onError: (err: Error) => toast.error(err.message),
+  });
+  const bulkMut = useMutation({
+    mutationFn: async ({
+      ids,
+      action,
+    }: {
+      ids: string[];
+      action: 'delete' | 'activate' | 'deactivate';
+    }) => {
+      for (const id of ids) {
+        if (action === 'delete') await api.raw.delete(`/admin/customers/${id}`);
+        else await api.adminUpdateCustomer(id, { isActive: action === 'activate' });
+      }
+    },
+    onSuccess: (_r, v) => {
+      toast.success(`تم تنفيذ الإجراء على ${v.ids.length} عميل`);
+      setChecked(new Set());
+      invalidate();
     },
     onError: (err: Error) => toast.error(err.message),
   });
 
+  const allChecked = rows.length > 0 && rows.every((r) => checked.has(r.id));
+  const toggleAll = () =>
+    setChecked(allChecked ? new Set() : new Set(rows.map((r) => r.id as string)));
+  const toggleOne = (id: string) =>
+    setChecked((s) => {
+      const n = new Set(s);
+      n.has(id) ? n.delete(id) : n.add(id);
+      return n;
+    });
+
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
-          <h1 className="text-2xl font-black text-brand-dark">العملاء</h1>
+          <h1 className="text-2xl font-black text-brand-dark inline-flex items-center gap-2">
+            <Users className="w-6 h-6" /> العملاء
+          </h1>
           <p className="text-sm text-muted-foreground mt-1">
             {data?.pagination.total ?? 0} عميل مسجّل
+            {isFetching && <Loader2 className="inline w-3 h-3 animate-spin ms-2 align-middle" />}
           </p>
         </div>
       </div>
 
-      <div className="bg-white rounded-xl border border-border p-4">
-        <div className="relative max-w-md">
-          <Search className="absolute top-1/2 -translate-y-1/2 start-3 w-4 h-4 text-muted-foreground" />
-          <Input
-            type="search"
-            placeholder="ابحث بالاسم أو رقم الهاتف..."
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            className="ps-10"
-          />
+      {/* Search + filter toggle */}
+      <div className="bg-white rounded-xl border border-border p-4 space-y-3">
+        <div className="flex items-center gap-2 flex-wrap">
+          <div className="relative flex-1 min-w-[240px]">
+            <Search className="absolute top-1/2 -translate-y-1/2 start-3 w-4 h-4 text-muted-foreground" />
+            <Input
+              type="search"
+              placeholder="بحث بالاسم، الهاتف، المدينة/المنطقة، أو رقم العميل…"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              className="ps-10"
+            />
+          </div>
+          <button
+            onClick={() => setShowFilters((s) => !s)}
+            className={`inline-flex items-center gap-2 px-3 py-2 rounded-lg border text-sm font-bold transition ${
+              showFilters || activeFilterCount
+                ? 'bg-brand-red/10 border-brand-red/30 text-brand-red'
+                : 'border-border text-brand-dark hover:bg-muted'
+            }`}
+          >
+            <Filter className="w-4 h-4" /> فلاتر
+            {activeFilterCount > 0 && (
+              <span className="bg-brand-red text-white rounded-full w-5 h-5 grid place-items-center text-[10px]">
+                {activeFilterCount}
+              </span>
+            )}
+          </button>
         </div>
+
+        {showFilters && (
+          <div className="grid sm:grid-cols-2 lg:grid-cols-5 gap-3 pt-3 border-t border-border">
+            <Select
+              label="الحالة"
+              value={filters.status}
+              onChange={(v) => setFilters((f) => ({ ...f, status: v as Filters['status'] }))}
+              options={[
+                { v: '', l: 'الكل' },
+                { v: 'active', l: 'مفعّل' },
+                { v: 'inactive', l: 'معطّل' },
+              ]}
+            />
+            <Select
+              label="الطلبات"
+              value={filters.hasOrders}
+              onChange={(v) => setFilters((f) => ({ ...f, hasOrders: v as Filters['hasOrders'] }))}
+              options={[
+                { v: '', l: 'الكل' },
+                { v: 'yes', l: 'لديه طلبات' },
+                { v: 'no', l: 'بدون طلبات' },
+              ]}
+            />
+            <Select
+              label="المدينة"
+              value={filters.city}
+              onChange={(v) => setFilters((f) => ({ ...f, city: v }))}
+              options={[{ v: '', l: 'الكل' }, ...cityOptions.map((c) => ({ v: c, l: c }))]}
+            />
+            <div>
+              <div className="text-xs font-bold text-muted-foreground mb-1">التسجيل من</div>
+              <Input
+                type="date"
+                value={filters.from}
+                onChange={(e) => setFilters((f) => ({ ...f, from: e.target.value }))}
+              />
+            </div>
+            <div>
+              <div className="text-xs font-bold text-muted-foreground mb-1">إلى</div>
+              <Input
+                type="date"
+                value={filters.to}
+                onChange={(e) => setFilters((f) => ({ ...f, to: e.target.value }))}
+              />
+            </div>
+            {activeFilterCount > 0 && (
+              <button
+                onClick={() => setFilters(EMPTY_FILTERS)}
+                className="text-xs font-bold text-brand-red hover:underline justify-self-start"
+              >
+                مسح كل الفلاتر
+              </button>
+            )}
+          </div>
+        )}
       </div>
 
+      {/* Bulk action bar */}
+      {checked.size > 0 && (
+        <div className="bg-brand-dark text-white rounded-xl px-4 py-2.5 flex items-center gap-3 flex-wrap">
+          <span className="font-bold text-sm">{checked.size} محدّد</span>
+          <div className="flex-1" />
+          <button
+            onClick={() => bulkMut.mutate({ ids: [...checked], action: 'activate' })}
+            disabled={bulkMut.isPending}
+            className="text-xs font-bold px-3 py-1.5 rounded bg-white/15 hover:bg-white/25 inline-flex items-center gap-1"
+          >
+            <CheckCircle2 className="w-3.5 h-3.5" /> تفعيل
+          </button>
+          <button
+            onClick={() => bulkMut.mutate({ ids: [...checked], action: 'deactivate' })}
+            disabled={bulkMut.isPending}
+            className="text-xs font-bold px-3 py-1.5 rounded bg-white/15 hover:bg-white/25 inline-flex items-center gap-1"
+          >
+            <Ban className="w-3.5 h-3.5" /> تعطيل
+          </button>
+          <button
+            onClick={() => {
+              if (confirm(`حذف ${checked.size} عميل نهائياً؟`))
+                bulkMut.mutate({ ids: [...checked], action: 'delete' });
+            }}
+            disabled={bulkMut.isPending}
+            className="text-xs font-bold px-3 py-1.5 rounded bg-red-500 hover:bg-red-600 inline-flex items-center gap-1"
+          >
+            {bulkMut.isPending ? (
+              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+            ) : (
+              <Trash2 className="w-3.5 h-3.5" />
+            )}{' '}
+            حذف
+          </button>
+          <button onClick={() => setChecked(new Set())} className="p-1 hover:bg-white/15 rounded">
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
+
+      {/* Table */}
       <div className="bg-white rounded-xl border border-border overflow-hidden">
         {isLoading ? (
           <div className="p-6">
-            <TableSkeleton rows={8} cols={5} />
+            <TableSkeleton rows={8} cols={7} />
           </div>
-        ) : !data?.items.length ? (
-          <EmptyState icon={<Users className="w-10 h-10" />} title="لا يوجد عملاء" />
+        ) : !rows.length ? (
+          <EmptyState
+            icon={<Users className="w-10 h-10" />}
+            title={debounced || activeFilterCount ? 'لا توجد نتائج مطابقة' : 'لا يوجد عملاء'}
+            description={
+              debounced || activeFilterCount ? 'جرّب تعديل البحث أو مسح الفلاتر' : undefined
+            }
+          />
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead className="bg-muted/50 border-b border-border">
                 <tr className="text-right">
-                  <th className="px-4 py-3 font-bold">الاسم</th>
-                  <th className="px-4 py-3 font-bold">الهاتف</th>
-                  <th className="px-4 py-3 font-bold">المدينة</th>
-                  <th className="px-4 py-3 font-bold">عدد الطلبات</th>
-                  <th className="px-4 py-3 font-bold">تاريخ التسجيل</th>
-                  <th className="px-4 py-3 w-24" />
+                  <th className="ps-4 py-3 w-10">
+                    <input
+                      type="checkbox"
+                      checked={allChecked}
+                      onChange={toggleAll}
+                      className="cursor-pointer"
+                    />
+                  </th>
+                  <th className="px-3 py-3 font-bold">العميل</th>
+                  <th className="px-3 py-3 font-bold">الهاتف</th>
+                  <th className="px-3 py-3 font-bold">المدينة</th>
+                  <th className="px-3 py-3 font-bold text-center">الطلبات</th>
+                  <th className="px-3 py-3 font-bold">التسجيل</th>
+                  <th className="px-3 py-3 font-bold">آخر نشاط</th>
+                  <th className="px-3 py-3 w-28" />
                 </tr>
               </thead>
               <tbody>
-                {(data.items as Row[]).map((c) => (
-                  <tr
-                    key={c.id}
-                    onClick={() => setSelectedId(c.id)}
-                    className="border-b border-border/50 hover:bg-muted/30 cursor-pointer"
-                  >
-                    <td className="px-4 py-3 font-medium">{c.name}</td>
-                    <td className="px-4 py-3" dir="ltr">
-                      {c.phone}
-                    </td>
-                    <td className="px-4 py-3">{c.city ?? '—'}</td>
-                    <td className="px-4 py-3">{c._count?.customerOrders ?? 0}</td>
-                    <td className="px-4 py-3 text-xs text-muted-foreground">
-                      {new Date(c.createdAt).toLocaleDateString('ar-EG')}
-                    </td>
-                    <td className="px-4 py-3">
-                      <div className="flex items-center gap-1 justify-end">
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setSelectedId(c.id);
-                          }}
-                          title="تعديل"
-                          className="p-1.5 rounded hover:bg-muted text-brand-red"
+                {rows.map((c) => {
+                  const inactive = c.isActive === false;
+                  return (
+                    <tr
+                      key={c.id}
+                      onClick={() => setSelectedId(c.id)}
+                      className={`border-b border-border/50 hover:bg-muted/30 cursor-pointer ${inactive ? 'opacity-60' : ''}`}
+                    >
+                      <td className="ps-4 py-2.5" onClick={(e) => e.stopPropagation()}>
+                        <input
+                          type="checkbox"
+                          checked={checked.has(c.id)}
+                          onChange={() => toggleOne(c.id)}
+                          className="cursor-pointer"
+                        />
+                      </td>
+                      <td className="px-3 py-2.5">
+                        <div className="flex items-center gap-3 min-w-0">
+                          <Avatar name={c.name} url={c.avatarUrl} size="md" />
+                          <div className="min-w-0">
+                            <div className="font-bold truncate flex items-center gap-1.5">
+                              {c.name || '—'}
+                              {inactive && (
+                                <span className="text-[10px] font-bold text-red-600 bg-red-50 px-1.5 rounded">
+                                  معطّل
+                                </span>
+                              )}
+                            </div>
+                            {c.email && (
+                              <div className="text-xs text-muted-foreground truncate">
+                                {c.email}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      </td>
+                      <td className="px-3 py-2.5" dir="ltr">
+                        {c.phone}
+                      </td>
+                      <td className="px-3 py-2.5">{c.city ?? '—'}</td>
+                      <td className="px-3 py-2.5 text-center">
+                        <span
+                          className={`inline-block min-w-[28px] px-2 py-0.5 rounded-full text-xs font-bold ${
+                            (c.orderCount ?? 0) > 0
+                              ? 'bg-brand-red/10 text-brand-red'
+                              : 'bg-muted text-muted-foreground'
+                          }`}
                         >
-                          <Pencil className="w-4 h-4" />
-                        </button>
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            if (confirm(`حذف العميل "${c.name}"؟`)) deleteMut.mutate(c.id);
-                          }}
-                          title="حذف"
-                          className="p-1.5 rounded hover:bg-muted text-destructive"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
+                          {c.orderCount ?? c._count?.customerOrders ?? 0}
+                        </span>
+                      </td>
+                      <td className="px-3 py-2.5 text-xs text-muted-foreground">
+                        {fmtDate(c.createdAt)}
+                      </td>
+                      <td className="px-3 py-2.5 text-xs text-muted-foreground">
+                        {fmtDate(c.lastActivityAt)}
+                      </td>
+                      <td className="px-3 py-2.5" onClick={(e) => e.stopPropagation()}>
+                        <div className="flex items-center gap-0.5 justify-end">
+                          <IconBtn
+                            title="عرض / تعديل"
+                            onClick={() => setSelectedId(c.id)}
+                            className="text-brand-red"
+                          >
+                            <Pencil className="w-4 h-4" />
+                          </IconBtn>
+                          <IconBtn
+                            title={inactive ? 'تفعيل' : 'تعطيل'}
+                            onClick={() => toggleActiveMut.mutate({ id: c.id, isActive: inactive })}
+                            className={inactive ? 'text-emerald-600' : 'text-amber-600'}
+                          >
+                            {inactive ? (
+                              <CheckCircle2 className="w-4 h-4" />
+                            ) : (
+                              <Ban className="w-4 h-4" />
+                            )}
+                          </IconBtn>
+                          <IconBtn
+                            title="حذف"
+                            onClick={() => {
+                              if (confirm(`حذف العميل "${c.name}"؟`)) deleteMut.mutate(c.id);
+                            }}
+                            className="text-destructive"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </IconBtn>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -143,6 +472,57 @@ export function CustomersPage() {
       {selectedId && (
         <CustomerDetailDialog customerId={selectedId} onClose={() => setSelectedId(null)} />
       )}
+    </div>
+  );
+}
+
+function IconBtn({
+  children,
+  title,
+  onClick,
+  className = '',
+}: {
+  children: React.ReactNode;
+  title: string;
+  onClick: () => void;
+  className?: string;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      title={title}
+      className={`p-1.5 rounded hover:bg-muted transition ${className}`}
+    >
+      {children}
+    </button>
+  );
+}
+
+function Select({
+  label,
+  value,
+  onChange,
+  options,
+}: {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+  options: { v: string; l: string }[];
+}) {
+  return (
+    <div>
+      <div className="text-xs font-bold text-muted-foreground mb-1">{label}</div>
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="w-full px-3 py-2 border border-border rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-brand-red/30"
+      >
+        {options.map((o) => (
+          <option key={o.v} value={o.v}>
+            {o.l}
+          </option>
+        ))}
+      </select>
     </div>
   );
 }
@@ -162,19 +542,44 @@ function CustomerDetailDialog({
     queryFn: () => api.adminGetCustomer(customerId) as Promise<Row>,
   });
 
+  const orders = (data?.customerOrders ?? []) as Row[];
+  const lastOrder = orders[0];
+
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()} title={data?.name ?? '...'} size="lg">
       {isLoading || !data ? (
         <TableSkeleton rows={6} cols={1} />
       ) : (
         <div className="space-y-4">
+          {/* Header card: avatar + quick stats */}
+          <div className="flex items-center gap-4 p-4 rounded-xl bg-muted/40 border border-border">
+            <Avatar name={data.name} url={data.avatarUrl} size="lg" />
+            <div className="min-w-0 flex-1">
+              <div className="font-black text-lg flex items-center gap-2">
+                {data.name}
+                {data.isActive === false && (
+                  <span className="text-[10px] font-bold text-red-600 bg-red-50 px-1.5 py-0.5 rounded">
+                    معطّل
+                  </span>
+                )}
+              </div>
+              <div className="text-sm text-muted-foreground" dir="ltr">
+                {data.phone}
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-3 text-center shrink-0">
+              <Stat value={data._count?.customerOrders ?? orders.length} label="طلب" />
+              <Stat value={fmtDate(lastOrder?.createdAt)} label="آخر طلب" small />
+            </div>
+          </div>
+
           {/* Tabs */}
           <div className="flex border-b border-border">
             {(
               [
-                { key: 'info', label: 'البيانات الأساسية' },
+                { key: 'info', label: 'البيانات' },
                 { key: 'addresses', label: `العناوين (${data.savedAddresses?.length ?? 0})` },
-                { key: 'orders', label: 'آخر الطلبات' },
+                { key: 'orders', label: `الطلبات (${orders.length})` },
               ] as { key: Tab; label: string }[]
             ).map((t) => (
               <button
@@ -200,25 +605,25 @@ function CustomerDetailDialog({
           )}
           {tab === 'orders' && (
             <div>
-              {data.customerOrders?.length === 0 ? (
-                <div className="text-sm text-muted-foreground py-4 text-center">
+              {orders.length === 0 ? (
+                <div className="text-sm text-muted-foreground py-8 text-center">
                   لا توجد طلبات بعد
                 </div>
               ) : (
-                <div className="space-y-1">
-                  {(data.customerOrders ?? []).map((o: Row) => (
+                <div className="space-y-1 max-h-[45vh] overflow-y-auto">
+                  {orders.map((o: Row) => (
                     <div
                       key={o.id}
-                      className="flex items-center justify-between p-2 border-b border-border/50 text-sm"
+                      className="flex items-center justify-between gap-3 p-2.5 border-b border-border/50 text-sm"
                     >
-                      <div>
+                      <div className="min-w-0">
                         <div className="font-mono text-xs">{o.orderNumber}</div>
                         <div className="text-xs text-muted-foreground">
-                          {new Date(o.createdAt).toLocaleDateString('ar-EG')}
+                          {fmtDateTime(o.createdAt)}
                         </div>
                       </div>
                       <StatusBadge status={o.status} />
-                      <div className="font-bold">
+                      <div className="font-bold whitespace-nowrap">
                         {(o.finalPrice ?? o.quotedPrice)
                           ? `${Number(o.finalPrice ?? o.quotedPrice).toLocaleString('ar-EG')} ج.م`
                           : '—'}
@@ -235,6 +640,15 @@ function CustomerDetailDialog({
   );
 }
 
+function Stat({ value, label, small }: { value: React.ReactNode; label: string; small?: boolean }) {
+  return (
+    <div>
+      <div className={`font-black text-brand-red ${small ? 'text-xs' : 'text-xl'}`}>{value}</div>
+      <div className="text-[10px] text-muted-foreground">{label}</div>
+    </div>
+  );
+}
+
 function CustomerInfoForm({ customer, customerId }: { customer: Row; customerId: string }) {
   const qc = useQueryClient();
   const [name, setName] = useState<string>(customer.name ?? '');
@@ -242,6 +656,8 @@ function CustomerInfoForm({ customer, customerId }: { customer: Row; customerId:
   const [email, setEmail] = useState<string>(customer.email ?? '');
   const [city, setCity] = useState<string>(customer.city ?? '');
   const [governorate, setGovernorate] = useState<string>(customer.governorate ?? '');
+  const [avatarUrl, setAvatarUrl] = useState<string>(customer.avatarUrl ?? '');
+  const [uploading, setUploading] = useState(false);
   const [secondaryPhones, setSecondaryPhones] = useState<string[]>(
     Array.isArray(customer.secondaryPhones) ? (customer.secondaryPhones as string[]) : [],
   );
@@ -256,20 +672,62 @@ function CustomerInfoForm({ customer, customerId }: { customer: Row; customerId:
     onError: (err: Error) => toast.error(err.message),
   });
 
-  const onSave = () => {
-    const cleaned = secondaryPhones.map((p) => p.trim()).filter(Boolean);
+  const pickAvatar = async (file: File | null) => {
+    if (!file) return;
+    setUploading(true);
+    try {
+      const { url } = await uploadFile(file);
+      setAvatarUrl(url);
+      toast.success('تم رفع الصورة — اضغط حفظ للتأكيد');
+    } catch (e) {
+      toast.error((e as Error).message || 'تعذّر رفع الصورة');
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const onSave = () =>
     mut.mutate({
       name: name.trim(),
       phone: phone.trim() || undefined,
       email: email.trim() || null,
       city: city.trim() || null,
       governorate: governorate.trim() || null,
-      secondaryPhones: cleaned,
+      avatarUrl: avatarUrl || null,
+      secondaryPhones: secondaryPhones.map((p) => p.trim()).filter(Boolean),
     });
-  };
 
   return (
     <div className="space-y-3">
+      {/* Avatar upload */}
+      <div className="flex items-center gap-4">
+        <Avatar name={name} url={avatarUrl} size="xl" />
+        <div className="space-y-1">
+          <label className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border border-border text-sm font-bold cursor-pointer hover:bg-muted">
+            {uploading ? (
+              <Loader2 className="w-4 h-4 animate-spin" />
+            ) : (
+              <Upload className="w-4 h-4" />
+            )}
+            {avatarUrl ? 'تغيير الصورة' : 'رفع صورة'}
+            <input
+              type="file"
+              accept="image/*"
+              className="hidden"
+              onChange={(e) => pickAvatar(e.target.files?.[0] ?? null)}
+            />
+          </label>
+          {avatarUrl && (
+            <button
+              onClick={() => setAvatarUrl('')}
+              className="block text-xs text-red-600 hover:underline"
+            >
+              إزالة الصورة
+            </button>
+          )}
+        </div>
+      </div>
+
       <Field label="الاسم">
         <Input value={name} onChange={(e) => setName(e.target.value)} />
       </Field>
@@ -277,7 +735,7 @@ function CustomerInfoForm({ customer, customerId }: { customer: Row; customerId:
         <PhoneInput value={phone} onChange={setPhone} />
       </Field>
       <Field label="الإيميل">
-        <Input value={email} onChange={(e) => setEmail(e.target.value)} type="email" />
+        <Input value={email} onChange={(e) => setEmail(e.target.value)} type="email" dir="ltr" />
       </Field>
       <div className="grid grid-cols-2 gap-3">
         <Field label="المحافظة">
@@ -335,7 +793,7 @@ function CustomerInfoForm({ customer, customerId }: { customer: Row; customerId:
       <div className="flex justify-end pt-2 border-t border-border">
         <button
           onClick={onSave}
-          disabled={mut.isPending}
+          disabled={mut.isPending || uploading}
           className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-brand-red text-white font-bold disabled:opacity-60"
         >
           <Save className="w-4 h-4" />
@@ -356,9 +814,7 @@ function CustomerAddressesPane({
   const qc = useQueryClient();
   const [editing, setEditing] = useState<SavedAddress | 'new' | null>(null);
 
-  const refresh = () => {
-    qc.invalidateQueries({ queryKey: ['admin', 'customer', customerId] });
-  };
+  const refresh = () => qc.invalidateQueries({ queryKey: ['admin', 'customer', customerId] });
 
   const deleteMut = useMutation({
     mutationFn: (addressId: string) => api.adminDeleteCustomerAddress(customerId, addressId),
