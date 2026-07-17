@@ -757,6 +757,24 @@ export class TamemClient {
       data: { phone, message },
     });
   }
+  // ===== WhatsApp order-group notifications =====
+  async adminWhatsAppGroups(): Promise<{
+    groups: { id: string; name: string; size: number }[];
+    refreshedAt: number | null;
+    config: { enabled: boolean; groupId: string | null; groupName: string | null };
+  }> {
+    return this.request({ method: 'GET', url: '/admin/whatsapp/groups' });
+  }
+  /** Ask the bridge to re-scan the account's groups. */
+  async adminWhatsAppRefreshGroups(): Promise<{ queued: boolean }> {
+    return this.request({ method: 'POST', url: '/admin/whatsapp/groups/refresh' });
+  }
+  async adminWhatsAppSaveGroup(data: {
+    enabled: boolean;
+    groupId: string | null;
+  }): Promise<{ enabled: boolean; groupId: string | null; groupName: string | null }> {
+    return this.request({ method: 'PUT', url: '/admin/whatsapp/group-config', data });
+  }
 
   // ===== Admin Payment Gateway (EasyKash) =====
   async adminGatewayStatus(): Promise<{

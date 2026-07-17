@@ -6,7 +6,10 @@ import {
   Phone,
   PowerOff,
   QrCode,
+  RefreshCw,
+  Save,
   Send,
+  Users,
   XCircle,
 } from 'lucide-react';
 import { useEffect, useState } from 'react';
@@ -103,9 +106,148 @@ export function WhatsAppPage() {
         />
       )}
 
+      {data?.status === 'connected' && <OrderGroupCard />}
       {data?.status === 'connected' && <SendTestCard />}
 
       <InfoCard />
+    </div>
+  );
+}
+
+/**
+ * Pick a WhatsApp group to receive a message whenever a new order lands in the
+ * dashboard. The group list comes from the connected account itself (the bridge
+ * publishes it), so only groups this number is actually in can be chosen.
+ */
+function OrderGroupCard() {
+  const qc = useQueryClient();
+  const [selected, setSelected] = useState<string>('');
+  const [enabled, setEnabled] = useState(false);
+  const [seeded, setSeeded] = useState(false);
+
+  const { data, isLoading, refetch, isFetching } = useQuery({
+    queryKey: ['admin', 'whatsapp', 'groups'],
+    queryFn: () => api.adminWhatsAppGroups(),
+  });
+
+  // Seed the controls from the saved config once, then let the admin drive.
+  if (data && !seeded) {
+    setSelected(data.config.groupId ?? '');
+    setEnabled(data.config.enabled);
+    setSeeded(true);
+  }
+
+  const refresh = useMutation({
+    mutationFn: () => api.adminWhatsAppRefreshGroups(),
+    onSuccess: async () => {
+      toast.info('يتم تحديث قائمة الجروبات…');
+      // The bridge re-scans asynchronously; give it a moment then reload.
+      setTimeout(() => refetch(), 6000);
+    },
+  });
+
+  const save = useMutation({
+    mutationFn: () => api.adminWhatsAppSaveGroup({ enabled, groupId: selected || null }),
+    onSuccess: (cfg) => {
+      toast.success(
+        cfg.enabled ? `تم الربط بجروب «${cfg.groupName ?? ''}»` : 'تم إيقاف تنبيه الجروب',
+      );
+      qc.invalidateQueries({ queryKey: ['admin', 'whatsapp', 'groups'] });
+    },
+    onError: (e: Error) => toast.error(e.message),
+  });
+
+  const groups = data?.groups ?? [];
+  const invalid = enabled && !selected;
+
+  return (
+    <div className="bg-card rounded-xl border border-border p-5 space-y-4">
+      <div className="flex items-start gap-3">
+        <span className="grid place-items-center w-10 h-10 rounded-xl bg-green-500/10 text-green-600 shrink-0">
+          <Users className="w-5 h-5" />
+        </span>
+        <div className="flex-1 min-w-0">
+          <div className="font-bold text-brand-dark">تنبيه الطلبات على جروب واتساب</div>
+          <p className="text-xs text-muted-foreground mt-0.5 leading-5">
+            اختَر جروباً من جروباتك، وأول ما يوصل طلب جديد للوحة التحكم هيتبعت له رسالة تلقائياً.
+          </p>
+        </div>
+      </div>
+
+      {/* Enable toggle */}
+      <label className="flex items-center justify-between rounded-lg border border-border p-3 cursor-pointer">
+        <div>
+          <div className="font-bold text-sm">تفعيل التنبيه</div>
+          <div className="text-xs text-muted-foreground">
+            {enabled ? 'مفعّل — الطلبات الجديدة تُرسل للجروب' : 'موقوف'}
+          </div>
+        </div>
+        <button
+          type="button"
+          role="switch"
+          aria-checked={enabled}
+          onClick={() => setEnabled((v) => !v)}
+          className={`relative inline-flex h-6 w-11 shrink-0 rounded-full transition-colors ${
+            enabled ? 'bg-green-500' : 'bg-zinc-300'
+          }`}
+        >
+          <span
+            className={`absolute top-1/2 -translate-y-1/2 h-5 w-5 rounded-full bg-white shadow transition-[inset-inline-start] ${
+              enabled ? 'start-[22px]' : 'start-0.5'
+            }`}
+          />
+        </button>
+      </label>
+
+      {/* Group picker */}
+      <div>
+        <div className="flex items-center justify-between mb-1.5">
+          <span className="text-sm font-bold">الجروب</span>
+          <button
+            type="button"
+            onClick={() => refresh.mutate()}
+            disabled={refresh.isPending || isFetching}
+            className="text-xs font-bold text-brand-red hover:underline inline-flex items-center gap-1 disabled:opacity-50"
+          >
+            <RefreshCw
+              className={`w-3.5 h-3.5 ${refresh.isPending || isFetching ? 'animate-spin' : ''}`}
+            />
+            تحديث القائمة
+          </button>
+        </div>
+        {isLoading ? (
+          <div className="h-10 rounded-lg bg-muted/40 animate-pulse" />
+        ) : groups.length === 0 ? (
+          <p className="rounded-lg bg-muted/40 p-3 text-xs text-muted-foreground leading-5">
+            مفيش جروبات ظهرت لسه. اتأكد إن الرقم المربوط عضو في الجروب، وبعدين اضغط «تحديث القائمة».
+          </p>
+        ) : (
+          <select
+            value={selected}
+            onChange={(e) => setSelected(e.target.value)}
+            className="w-full px-3 py-2 rounded-lg border border-input bg-popover text-sm"
+          >
+            <option value="">— اختر جروباً —</option>
+            {groups.map((g) => (
+              <option key={g.id} value={g.id}>
+                {g.name} ({g.size} عضو)
+              </option>
+            ))}
+          </select>
+        )}
+      </div>
+
+      <div className="flex items-center gap-2">
+        <Button onClick={() => save.mutate()} disabled={invalid || save.isPending}>
+          {save.isPending ? (
+            <Loader2 className="w-4 h-4 animate-spin" />
+          ) : (
+            <Save className="w-4 h-4" />
+          )}
+          حفظ
+        </Button>
+        {invalid && <span className="text-xs text-destructive">اختر جروباً أولاً.</span>}
+      </div>
     </div>
   );
 }
