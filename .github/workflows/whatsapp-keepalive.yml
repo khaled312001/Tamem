@@ -1,0 +1,54 @@
+name: WhatsApp bridge keepalive
+
+# Keeps the WhatsApp (Baileys) bridge alive with ZERO paid server subscription.
+#
+# Why this exists: the production host is Hostinger shared hosting. PHP cannot
+# spawn processes (exec/shell_exec/proc_open are all in disable_functions) and
+# there is no crontab CLI, so nothing on the server can autonomously restart a
+# long-running Node process — and the host periodically reaps background
+# processes. Recovery therefore has to be driven from OUTSIDE the box.
+#
+# Two layers keep the service up:
+#   Layer 1 (on the server): run-forever.sh supervises the node bridge in a
+#           restart loop, so a crash / WhatsApp drop / node reap recovers in a
+#           few seconds on its own.
+#   Layer 2 (this workflow): a free scheduled Action SSHes in every few minutes
+#           and runs keepalive.sh, which relaunches the SUPERVISOR itself if the
+#           host reaped it. GitHub Actions is free and unlimited on public repos.
+#
+# GitHub only schedules cron on a best-effort basis (a "*/5" job can be delayed
+# 10-30 min under load), but that is fine: Layer 1 handles the frequent, fast
+# failures; this workflow only has to catch the rare full-supervisor reap.
+#
+# One-time setup — add these repository secrets (Settings → Secrets and
+# variables → Actions):
+#   HOSTINGER_SSH_HOST  (e.g. 77.37.37.207)
+#   HOSTINGER_SSH_PORT  (e.g. 65002)
+#   HOSTINGER_SSH_USER  (e.g. u748721963)
+#   HOSTINGER_SSH_PASS  (the SSH password)
+# You can also trigger it manually from the Actions tab (Run workflow).
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_dispatch: {}
+
+# If a run is still going when the next fires, skip rather than pile up.
+concurrency:
+  group: whatsapp-keepalive
+  cancel-in-progress: false
+
+jobs:
+  keepalive:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Ensure the bridge supervisor is running
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.HOSTINGER_SSH_HOST }}
+          port: ${{ secrets.HOSTINGER_SSH_PORT }}
+          username: ${{ secrets.HOSTINGER_SSH_USER }}
+          password: ${{ secrets.HOSTINGER_SSH_PASS }}
+          command_timeout: 2m
+          script: bash /home/u748721963/whatsapp/keepalive.sh
