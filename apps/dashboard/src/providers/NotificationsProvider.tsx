@@ -146,11 +146,16 @@ export function NotificationsProvider({ children }: { children: React.ReactNode 
   return <>{children}</>;
 }
 /**
- * Socket-free notifications. Watches for alerts and new orders and fires the
- * same notify() the socket would have.
+ * Socket-free notifications. Since production has no WebSocket, this is the ONLY
+ * source of live updates — so it must actually fire while the admin is on
+ * another tab, and fast enough to feel live.
  *
- * Deliberately seeded on first load rather than notifying: without this, every
- * page refresh would replay every open alert as if it had just happened.
+ * One /admin/realtime poll every 15s returns just what's new since the last
+ * tick (orders + alerts + counts), so it stays under the shared-hosting
+ * connection cap even though it runs in the BACKGROUND (the old 60s foreground-
+ * only poll meant a new order raised nothing unless you were staring at the
+ * tab). A per-id seen-set makes a double-poll impossible to double-notify, and
+ * the first tick just seeds the baseline so a refresh never replays old items.
  */
 function usePollingFallback(
   notify: (
@@ -158,58 +163,60 @@ function usePollingFallback(
     payload: { id?: string; orderNumber?: string; status?: string; titleAr?: string },
   ) => void,
 ) {
-  const seenAlerts = useRef<Set<string> | null>(null);
-  const seenOrders = useRef<Set<string> | null>(null);
+  const qc = useQueryClient();
+  const sinceRef = useRef<number | undefined>(undefined);
+  const seededRef = useRef(false);
+  const seen = useRef<Set<string>>(new Set());
 
-  // Same key + fetcher as the sidebar badge, so React Query serves both from
-  // one request instead of doubling the load.
-  const { data: alertsData } = useQuery({
-    queryKey: ['admin', 'alerts-count'],
-    queryFn: () => api.adminListAlerts({ resolved: 'false' }),
+  const { data } = useQuery({
+    queryKey: ['admin', 'realtime'],
+    queryFn: () => api.adminRealtime(sinceRef.current),
     enabled: SOCKET_DISABLED,
-    refetchInterval: 60_000,
-    refetchIntervalInBackground: false,
-  });
-
-  const { data: ordersData } = useQuery({
-    queryKey: ['admin', 'notif-orders'],
-    queryFn: () => api.adminListOrders({ status: 'NEW', pageSize: 10 }),
-    enabled: SOCKET_DISABLED,
-    refetchInterval: 60_000,
-    refetchIntervalInBackground: false,
+    refetchInterval: 15_000,
+    refetchIntervalInBackground: true,
+    gcTime: 60_000,
   });
 
   useEffect(() => {
-    const list = (alertsData as { alerts?: { id: string; titleAr?: string }[] } | undefined)
-      ?.alerts;
-    if (!list) return;
-    const ids = new Set(list.map((a) => String(a.id)));
-    if (seenAlerts.current === null) {
-      seenAlerts.current = ids; // first load = baseline, not news
-      return;
-    }
-    for (const a of list) {
-      if (!seenAlerts.current.has(String(a.id))) {
-        notify('alert:new', { id: String(a.id), titleAr: a.titleAr });
-      }
-    }
-    seenAlerts.current = ids;
-  }, [alertsData, notify]);
+    if (!data) return;
+    sinceRef.current = data.now ?? Date.now();
 
-  useEffect(() => {
-    const list = (ordersData as { items?: { id: string; orderNumber?: string }[] } | undefined)
-      ?.items;
-    if (!list) return;
-    const ids = new Set(list.map((o) => String(o.id)));
-    if (seenOrders.current === null) {
-      seenOrders.current = ids;
+    // First tick = baseline. Record what already exists without notifying.
+    if (!seededRef.current) {
+      seededRef.current = true;
+      for (const o of data.orders ?? []) seen.current.add('o:' + o.id);
+      for (const a of data.alerts ?? []) seen.current.add('a:' + a.id);
       return;
     }
-    for (const o of list) {
-      if (!seenOrders.current.has(String(o.id))) {
-        notify('order:new', { id: String(o.id), orderNumber: o.orderNumber });
+
+    let fired = false;
+    for (const o of data.orders ?? []) {
+      const key = 'o:' + o.id;
+      if (seen.current.has(key)) continue;
+      seen.current.add(key);
+      fired = true;
+      if (o.status === 'NEW' || o.status === 'UNDER_REVIEW') {
+        notify('order:new', { id: o.id, orderNumber: o.orderNumber });
+      } else {
+        notify('order:status', { id: o.id, orderNumber: o.orderNumber, status: o.status });
       }
     }
-    seenOrders.current = ids;
-  }, [ordersData, notify]);
+    for (const a of data.alerts ?? []) {
+      const key = 'a:' + a.id;
+      if (seen.current.has(key)) continue;
+      seen.current.add(key);
+      fired = true;
+      notify('alert:new', { id: a.id, titleAr: a.titleAr });
+    }
+
+    // Keep the sidebar badges in sync without a second request.
+    if (fired) {
+      qc.invalidateQueries({ queryKey: ['admin', 'overview-counts'] });
+      qc.invalidateQueries({ queryKey: ['admin', 'alerts-count'] });
+    }
+    // Bound the seen-set so a long-lived tab can't grow it forever.
+    if (seen.current.size > 500) {
+      seen.current = new Set([...seen.current].slice(-250));
+    }
+  }, [data, notify, qc]);
 }

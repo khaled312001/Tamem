@@ -345,6 +345,37 @@ if (str_starts_with($path, '/admin/')) {
 }
 
 // ─── ADMIN endpoints (require admin JWT) ────────────────────────────────
+
+// GET /admin/realtime?since=<ms> — ONE lightweight poll powering the dashboard's
+// live notifier (new orders / alerts + counts). Replaces two separate 60s polls
+// with a single tiny query, so it can run every ~15s in the background without
+// burning the shared-hosting connection cap. `since` is the `now` value the
+// server returned last tick; the client seeds a baseline on first load so a
+// refresh never replays old items as "new".
+if ($method === 'GET' && $path === '/admin/realtime') {
+    authUser();
+    $sinceMs = (int) ($_GET['since'] ?? 0);
+    $sinceSql = $sinceMs > 0 ? gmdate('Y-m-d H:i:s', (int) ($sinceMs / 1000)) : gmdate('Y-m-d H:i:s', time() - 120);
+    $nowMs = (int) round(microtime(true) * 1000);
+
+    $os = db()->prepare("SELECT id, orderNumber, status, category, createdAt FROM `Order` WHERE createdAt > ? ORDER BY createdAt DESC LIMIT 25");
+    $os->execute([$sinceSql]);
+    $orders = array_map('jsonizeRow', $os->fetchAll());
+
+    $al = db()->prepare("SELECT id, titleAr, title, severity, createdAt FROM `Alert` WHERE isResolved = 0 AND createdAt > ? ORDER BY createdAt DESC LIMIT 25");
+    $al->execute([$sinceSql]);
+    $alerts = array_map('jsonizeRow', $al->fetchAll());
+
+    $openOrders = (int) db()->query("SELECT COUNT(*) FROM `Order` WHERE status IN ('NEW','UNDER_REVIEW','PRICED')")->fetchColumn();
+    $openAlerts = (int) db()->query("SELECT COUNT(*) FROM `Alert` WHERE isResolved = 0")->fetchColumn();
+
+    jsonOk([
+        'orders' => $orders,
+        'alerts' => $alerts,
+        'counts' => ['openOrders' => $openOrders, 'alerts' => $openAlerts],
+        'now' => $nowMs,
+    ]);
+}
 if ($method === 'GET' && $path === '/admin/overview') {
     $u = authUser();
     if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');

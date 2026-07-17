@@ -102,18 +102,21 @@ const DEFAULTS: Record<string, string> = {
   heroTitleLine1: 'أول تطبيق دليفري وشحن',
   heroTitleLine2: 'متكامل في ',
   heroTitleHighlight: 'صعيد مصر',
-  heroSubtitle: 'اطلب من السوبر ماركت أو الصيدلية أو المطعم في قفط…',
+  heroCtaText: 'Google Play',
+  heroSubtitle:
+    'اطلب من السوبر ماركت أو الصيدلية أو المطعم في قفط، اشحن طرودك لأي محافظة، أو شغّل تجارتك مع مندوبين ثقة — كله من تطبيق واحد. مقرنا الرئيسي في مركز قفط، محافظة قنا.',
   service1Title: 'دليفري داخل قفط',
-  service1Desc: 'سوبر ماركت، صيدلية، مطاعم، وتوصيل مستندات…',
+  service1Desc:
+    'سوبر ماركت، صيدلية، مطاعم، وتوصيل مستندات — من مطاعم ومحلات مركز قفط لحد باب بيتك.',
   service1Bullet1: 'متوسط زمن ٣٠-٤٥ دقيقة',
   service1Bullet2: 'المندوب بيتصل بيك قبل ما يوصل',
   service1Bullet3: 'كاش · فودافون كاش · إنستاباي',
   service2Title: 'شحن بين المحافظات',
-  service2Desc: 'شحن طرود وبضائع من قنا للأقصر وأسوان والبحر الأحمر…',
+  service2Desc: 'شحن طرود وبضائع من قنا للأقصر وأسوان والبحر الأحمر — والسعر يوصلك قبل ما نتحرك.',
   service2Bullet1: 'السعر حسب المسافة والوزن',
   service2Bullet2: 'تتبع الشحنة خطوة بخطوة من التطبيق',
   service3Title: 'طلبات التجار والشركات',
-  service3Desc: 'مخصص للشركات والمحلات…',
+  service3Desc: 'مخصص للشركات والمحلات: منتجات متعددة من مخازن مختلفة لعدة فروع.',
   service3Bullet1: 'استلام من عدة نقاط وتوصيل لعدة عناوين',
   service3Bullet2: 'عرض سعر مخصص لكل طلب',
   service3Bullet3: 'حساب تجاري ومتابعة شهرية',
@@ -159,7 +162,13 @@ export function SiteSettingsPage() {
       const next: SiteConfig = {
         contacts: Array.isArray(contacts) ? (contacts as ContactLine[]) : [],
       };
-      for (const k of ALL_TEXT_KEYS) next[k] = typeof raw[k] === 'string' ? raw[k] : '';
+      // Pre-fill each field with the SAVED override if there is one, else the
+      // text currently live on the site (DEFAULTS). Admins edit real text, never
+      // a blank box — and saving an untouched field just re-writes the same text.
+      for (const k of ALL_TEXT_KEYS) {
+        const saved = raw[k];
+        next[k] = typeof saved === 'string' && saved !== '' ? saved : (DEFAULTS[k] ?? '');
+      }
       setForm(next);
     }
   }, [cfg, form]);
