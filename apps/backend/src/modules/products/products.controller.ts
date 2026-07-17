@@ -1,6 +1,8 @@
 import type { RequestHandler } from 'express';
 import { z } from 'zod';
 
+import { queryBool } from '../../utils/zodBool.js';
+
 import { prisma } from '../../db/prisma.js';
 import { diffProduct, productActionFor, recordProductHistory } from '../audit/audit.controller.js';
 import { NotFoundError } from '../../utils/errors.js';
@@ -51,7 +53,7 @@ const updateSchema = createSchema.partial();
 const listQuerySchema = z.object({
   merchantId: z.string().optional(),
   search: z.string().optional(),
-  isAvailable: z.coerce.boolean().optional(),
+  isAvailable: queryBool.optional(),
   page: z.coerce.number().int().positive().default(1),
   pageSize: z.coerce.number().int().positive().max(200).default(50),
 });

@@ -12,6 +12,8 @@
 import type { RequestHandler } from 'express';
 import { z } from 'zod';
 
+import { queryBool } from '../../utils/zodBool.js';
+
 import { OrderStatus, UserRole } from '@tamem/types';
 
 import { prisma } from '../../db/prisma.js';
@@ -292,7 +294,7 @@ const hhmmSchema = z.string().regex(HHMM_RE, 'Expected HH:MM (24h)');
 
 const listProductsQuery = z.object({
   search: z.string().optional(),
-  isAvailable: z.coerce.boolean().optional(),
+  isAvailable: queryBool.optional(),
   page: z.coerce.number().int().positive().default(1),
   pageSize: z.coerce.number().int().positive().max(100).default(20),
 });

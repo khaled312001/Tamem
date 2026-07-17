@@ -2,6 +2,8 @@ import bcrypt from 'bcryptjs';
 import type { RequestHandler } from 'express';
 import { z } from 'zod';
 
+import { queryBool } from '../../utils/zodBool.js';
+
 import { prisma } from '../../db/prisma.js';
 import { ConflictError, NotFoundError } from '../../utils/errors.js';
 import { created, noContent, ok, paginated } from '../../utils/response.js';
@@ -80,7 +82,7 @@ const listQuerySchema = z.object({
   governorate: z.string().optional(),
   city: z.string().optional(),
   search: z.string().optional(),
-  isOpen: z.coerce.boolean().optional(),
+  isOpen: queryBool.optional(),
   /// Account status — MerchantProfile has no flag of its own; it lives on User.
   status: z.enum(['active', 'inactive']).optional(),
   hasProducts: z.enum(['yes', 'no']).optional(),
