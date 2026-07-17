@@ -800,6 +800,28 @@ export class TamemClient {
       data: { templates },
     });
   }
+  // ===== Extra recipients (custom numbers per event) =====
+  async adminNotificationRecipients(): Promise<{
+    events: Array<{ event: string }>;
+    recipients: Record<
+      string,
+      Array<{ id: string; name: string; phone: string; enabled: boolean; text: string }>
+    >;
+  }> {
+    return this.request({ method: 'GET', url: '/admin/notification-recipients' });
+  }
+  async adminSaveNotificationRecipients(
+    recipients: Record<
+      string,
+      Array<{ id?: string; name: string; phone: string; enabled: boolean; text: string }>
+    >,
+  ): Promise<{ saved: number }> {
+    return this.request({
+      method: 'PUT',
+      url: '/admin/notification-recipients',
+      data: { recipients },
+    });
+  }
 
   // ===== Admin Payment Gateway (EasyKash) =====
   async adminGatewayStatus(): Promise<{
