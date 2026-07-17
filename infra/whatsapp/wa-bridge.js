@@ -96,16 +96,61 @@ function park(name, full, payload) {
     fs.unlinkSync(full);
   } catch {}
 }
+const GROUPS_FILE = path.join(IPC, 'groups.json');
 function toJid(num) {
-  let n = String(num).replace(/[^\d]/g, '');
+  const raw = String(num);
+  // A group JID is already a full address (…@g.us) — pass it through untouched.
+  // Only bare phone numbers get normalised to an individual JID.
+  if (raw.includes('@')) return raw;
+  let n = raw.replace(/[^\d]/g, '');
   if (n.startsWith('0')) n = '20' + n.slice(1);
   if (n.length === 10 && n.startsWith('1')) n = '20' + n;
   if (!n.startsWith('20') && n.length === 10) n = '20' + n;
   return n + '@s.whatsapp.net';
 }
 
+// True once group metadata has synced after (re)connect. Sending to a group
+// JID before this is set fails at the Baileys layer with "group metadata not
+// found" — the exact reason a message reaches every phone but NOT the group in
+// the seconds after a reconnect. The send loop waits on this instead of firing
+// blind and burning retries.
+let groupsReady = false;
+
+// Publish the groups this account is a member of, so the dashboard can offer a
+// picker — and, as a side effect, warm Baileys' group-metadata cache so group
+// sends work. Best-effort: a failure here must never take the bridge down.
+async function refreshGroups() {
+  try {
+    if (!sock) return false;
+    const all = await sock.groupFetchAllParticipating();
+    const list = Object.values(all || {})
+      .map((g) => ({ id: g.id, name: g.subject || g.id, size: (g.participants || []).length }))
+      .sort((a, b) => a.name.localeCompare(b.name, 'ar'));
+    fs.writeFileSync(GROUPS_FILE, JSON.stringify({ groups: list, ts: Date.now() }));
+    groupsReady = true; // cache is now warm — group sends will succeed
+    return true;
+  } catch (e) {
+    // leave the previous groups.json in place; log only
+    console.log('refreshGroups failed:', (e && e.message) || e);
+    return false;
+  }
+}
+
+// After connecting, keep trying to warm the group cache until it succeeds, so
+// group sends become available as soon as possible (not on a fixed 4s guess
+// that can miss under load).
+function warmGroups(attempt = 0) {
+  if (attempt > 10) return;
+  refreshGroups().then((ok) => {
+    if (!ok) setTimeout(() => warmGroups(attempt + 1), 3000);
+  });
+}
+
 let sock = null;
 let connecting = false;
+// filename → consecutive parse-failure count, so a file caught mid-write isn't
+// parked as dead on the first miss (see the queue loop).
+const unparseable = new Map();
 
 async function connect() {
   if (connecting) return;
@@ -151,9 +196,15 @@ async function connect() {
           lastError: null,
           startedAt: Date.now(),
         });
+        // Group metadata isn't ready the instant we connect. Warm it (with
+        // retries) before allowing group sends, so a message never lands on
+        // every phone but skips the group during the reconnect window.
+        groupsReady = false;
+        setTimeout(() => warmGroups(0), 1500);
       }
       if (connection === 'close') {
         connecting = false;
+        groupsReady = false;
         const code =
           lastDisconnect && lastDisconnect.error && lastDisconnect.error.output
             ? lastDisconnect.error.output.statusCode
@@ -206,6 +257,11 @@ setInterval(async () => {
       writeStatus({ status: 'connecting', qrDataUrl: null, phone: null });
       setTimeout(connect, 1500);
     }
+    // Let the dashboard force a re-scan of the group list on demand (e.g. after
+    // the admin creates or joins a group).
+    if (body.action === 'refresh-groups') {
+      await refreshGroups();
+    }
   }
   // Outgoing queue — guaranteed delivery. While disconnected, messages simply
   // stay as files in QUEUE_DIR (nothing is lost); the moment we're connected the
@@ -220,15 +276,29 @@ setInterval(async () => {
       try {
         msg = JSON.parse(fs.readFileSync(full, 'utf8'));
       } catch {
-        park(f, full, { reason: 'unparseable' });
+        // Likely caught mid-write. Don't park a good message as dead on the
+        // first miss — give it a few ticks to finish, park only if it stays
+        // broken (a genuinely corrupt file).
+        const n = (unparseable.get(f) || 0) + 1;
+        if (n >= 3) {
+          unparseable.delete(f);
+          park(f, full, { reason: 'unparseable' });
+        } else {
+          unparseable.set(f, n);
+        }
         continue;
       }
+      unparseable.delete(f);
       if (!msg || !msg.to || !msg.text) {
         park(f, full, { ...(msg || {}), reason: 'missing to/text' });
         continue;
       }
       // per-message backoff: skip until its retry time is due
       if (msg.nextAt && Date.now() < msg.nextAt) continue;
+      // A group send before the metadata cache is warm fails at the Baileys
+      // layer. Wait (without burning an attempt) — warmGroups() flips this on
+      // within a few seconds of connecting, then the message goes out cleanly.
+      if (String(msg.to).includes('@g.us') && !groupsReady) continue;
       try {
         await sock.sendMessage(toJid(msg.to), { text: String(msg.text) });
         try {
