@@ -41,9 +41,12 @@ const querySchema = z.object({
   merchantId: z.string().optional(),
   paymentMethod: z.enum(['CASH', 'VODAFONE_CASH', 'INSTAPAY']).optional(),
   status: z.enum(['COMPLETED', 'DELIVERED', 'ALL_REVENUE']).default('COMPLETED'),
-  /** When false, set platformCommission=0 on every row — useful for the
-   *  cases where Tamem isn't charging the merchant a percentage. */
-  includeCommission: z.coerce.boolean().default(true),
+  /** When false, set platformCommission=0 on every row.
+   *
+   *  Defaults OFF: Tamem isn't charging a percentage today, so defaulting it on
+   *  reported commission nobody collected and shrank every merchant payout by
+   *  15%. The admin opts in from the report's own toggle. */
+  includeCommission: z.coerce.boolean().default(false),
   /** Override the per-merchant default commission %. Null = use each
    *  merchant's own setting (or the platform fallback). */
   commissionPctOverride: z.coerce.number().min(0).max(100).optional(),

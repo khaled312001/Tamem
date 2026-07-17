@@ -134,7 +134,10 @@ export function RevenueReportPage() {
   const [merchantId, setMerchantId] = useState<string>('');
   // Commission controls — admin can flip Tamem's cut off entirely (e.g.
   // for free-period merchants) or set a flat override % across all rows.
-  const [includeCommission, setIncludeCommission] = useState(true);
+  // Off by default: Tamem isn't charging a commission today, so defaulting it
+  // on made every report show money the platform never took and understate
+  // what each merchant is actually owed. The admin turns it on deliberately.
+  const [includeCommission, setIncludeCommission] = useState(false);
   const [commissionPct, setCommissionPct] = useState<string>(''); // empty = use per-merchant
 
   const params = useMemo(() => {

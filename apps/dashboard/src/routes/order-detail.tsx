@@ -17,6 +17,8 @@ import {
   Mic,
   Package,
   Phone,
+  Plus,
+  Trash2,
   Truck,
   User,
   UserCheck,
@@ -927,6 +929,7 @@ export function OrderDetailPage() {
           initialPrice={order.quotedPrice ?? order.finalPrice}
           initialGoods={order.merchantSubtotal}
           initialFee={order.deliveryFee}
+          initialItems={order.items}
           currentStatus={status}
           onSaved={() => {
             const next = dialog.after;
@@ -1534,11 +1537,26 @@ function CustomDataRender({ data }: { data: Record<string, unknown> }) {
   );
 }
 
+/** One "bought from this store, for this much" line. */
+interface MerchantLine {
+  key: string;
+  merchantId: string;
+  amount: string;
+}
+
+let lineSeq = 0;
+const newLine = (merchantId = '', amount = ''): MerchantLine => ({
+  key: `l${++lineSeq}`,
+  merchantId,
+  amount,
+});
+
 function PriceDialog({
   orderId,
   initialPrice,
   initialGoods,
   initialFee,
+  initialItems,
   currentStatus,
   onSaved,
   onClose,
@@ -1550,6 +1568,10 @@ function PriceDialog({
    *  reports is derived from this split. */
   initialGoods?: number | string | null;
   initialFee?: number | string | null;
+  /** Existing breakdown lines, so re-pricing edits the split instead of
+   *  starting from a blank one. */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  initialItems?: any[];
   /** When provided and the order is NEW, we promote it to UNDER_REVIEW first
    *  so the backend's set-price endpoint can then auto-transition to PRICED.
    *  This is what makes the "بدء المراجعة + تسعير" button a single click. */
@@ -1559,13 +1581,45 @@ function PriceDialog({
   onSaved?: () => void;
   onClose: () => void;
 }) {
-  const [goods, setGoods] = useState(
-    initialGoods != null && Number(initialGoods) > 0 ? String(initialGoods) : '',
-  );
-  // Prefilled from the zone quote the order was created with, when it had one.
+  const { data: merchants } = useQuery({
+    queryKey: ['admin', 'merchants', 'picker'],
+    queryFn: () => api.adminListMerchants({ pageSize: 100 }),
+    staleTime: 300_000,
+    refetchInterval: false,
+  });
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const merchantList: any[] = (merchants?.items as any[]) ?? [];
+
+  // Seed from whatever the order already recorded. A single-merchant order
+  // priced before this existed has no lines, so it starts with one blank row
+  // the admin has to fill — which is the whole point.
+  const [lines, setLines] = useState<MerchantLine[]>(() => {
+    const seeded = (initialItems ?? [])
+      .filter((it) => it?.merchantId)
+      .map((it) =>
+        newLine(
+          String(it.merchantId),
+          String(Number(it.unitPriceSnapshot ?? 0) * (it.quantity ?? 1)),
+        ),
+      );
+    return seeded.length ? seeded : [newLine()];
+  });
   const [fee, setFee] = useState(initialFee != null ? String(initialFee) : '');
   const [note, setNote] = useState('');
-  const price = (Number(goods) || 0) + (Number(fee) || 0);
+
+  // Goods is the sum of the split, never typed separately: two numbers that
+  // must agree shouldn't be entered twice.
+  const goods = lines.reduce((sum, l) => sum + (Number(l.amount) || 0), 0);
+  const price = goods + (Number(fee) || 0);
+
+  const patchLine = (key: string, p: Partial<MerchantLine>) =>
+    setLines((ls) => ls.map((l) => (l.key === key ? { ...l, ...p } : l)));
+
+  const usedIds = new Set(lines.map((l) => l.merchantId).filter(Boolean));
+  const duplicate = usedIds.size !== lines.filter((l) => l.merchantId).length;
+  const incomplete = lines.some((l) => !l.merchantId || !(Number(l.amount) > 0));
+  const invalid = incomplete || duplicate || fee === '' || price <= 0;
+
   const mut = useMutation({
     mutationFn: async () => {
       // Phase-1 entry: if we're still on NEW, walk through UNDER_REVIEW first.
@@ -1576,7 +1630,14 @@ function PriceDialog({
       return api.adminSetPrice(
         orderId,
         price,
-        { merchantSubtotal: Number(goods) || 0, deliveryFee: Number(fee) || 0 },
+        {
+          merchantSubtotal: goods,
+          deliveryFee: Number(fee) || 0,
+          merchants: lines.map((l) => ({
+            merchantId: l.merchantId,
+            amount: Number(l.amount) || 0,
+          })),
+        },
         note.trim() || undefined,
       );
     },
@@ -1587,57 +1648,140 @@ function PriceDialog({
     },
     onError: (err: Error) => toast.error(err.message),
   });
+
   return (
-    <Dialog open onOpenChange={(o) => !o && onClose()} title="تسعير الطلب">
-      <div className="grid grid-cols-2 gap-3">
-        <Field label="قيمة الطلب (البضاعة)" required>
-          <Input
-            type="number"
-            inputMode="decimal"
-            min={0}
-            value={goods}
-            onChange={(e) => setGoods(e.target.value)}
-            autoFocus
-          />
-        </Field>
-        <Field label="رسوم التوصيل" required>
-          <Input
-            type="number"
-            inputMode="decimal"
-            min={0}
-            value={fee}
-            onChange={(e) => setFee(e.target.value)}
+    <Dialog open onOpenChange={(o) => !o && onClose()} title="تسعير الطلب" size="lg">
+      <div className="space-y-3">
+        <div>
+          <div className="flex items-center justify-between mb-1.5">
+            <span className="text-sm font-bold">
+              اتشرى من <span className="text-destructive">*</span>
+            </span>
+            <button
+              type="button"
+              onClick={() => setLines((ls) => [...ls, newLine()])}
+              className="text-xs font-bold text-brand-red hover:underline inline-flex items-center gap-1"
+            >
+              <Plus className="w-3.5 h-3.5" />
+              إضافة تاجر
+            </button>
+          </div>
+          <p className="text-xs text-muted-foreground mb-2 leading-5">
+            حدّد كل تاجر اتشرى منه وقيمة اللي اتشرى — عشان الإيراد يتسجّل له في التقارير.
+          </p>
+
+          <div className="space-y-2">
+            {lines.map((l, i) => (
+              <div key={l.key} className="flex items-center gap-2">
+                <select
+                  value={l.merchantId}
+                  onChange={(e) => patchLine(l.key, { merchantId: e.target.value })}
+                  className="flex-1 min-w-0 px-3 py-2 rounded-lg border border-input bg-white text-sm"
+                >
+                  <option value="">— اختر التاجر —</option>
+                  {merchantList.map((m) => (
+                    <option
+                      key={m.id}
+                      value={m.id}
+                      // Can't credit the same store twice in one order; the
+                      // amounts would just need adding together anyway.
+                      disabled={usedIds.has(String(m.id)) && l.merchantId !== String(m.id)}
+                    >
+                      {m.storeNameAr}
+                    </option>
+                  ))}
+                </select>
+                <div className="relative w-32 shrink-0">
+                  <Input
+                    type="number"
+                    inputMode="decimal"
+                    min={0}
+                    value={l.amount}
+                    onChange={(e) => patchLine(l.key, { amount: e.target.value })}
+                    placeholder="0"
+                    autoFocus={i === 0}
+                  />
+                </div>
+                {lines.length > 1 && (
+                  <button
+                    type="button"
+                    onClick={() => setLines((ls) => ls.filter((x) => x.key !== l.key))}
+                    aria-label="حذف السطر"
+                    className="p-2 rounded-md hover:bg-destructive/10 text-destructive shrink-0"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                )}
+              </div>
+            ))}
+          </div>
+
+          {duplicate && (
+            <p className="text-xs text-destructive mt-1.5">
+              تاجر مكرر — ادمج القيمتين في سطر واحد.
+            </p>
+          )}
+        </div>
+
+        <div className="grid grid-cols-2 gap-3">
+          <div className="rounded-lg bg-muted/40 px-3 py-2">
+            <div className="text-xs text-muted-foreground">قيمة البضاعة</div>
+            <div className="text-base font-bold tabular-nums">
+              {goods.toLocaleString('ar-EG')} ج.م
+              {lines.length > 1 && (
+                <span className="text-xs font-normal text-muted-foreground">
+                  {' '}
+                  ({lines.length} تجار)
+                </span>
+              )}
+            </div>
+          </div>
+          <Field label="رسوم التوصيل" required>
+            <Input
+              type="number"
+              inputMode="decimal"
+              min={0}
+              value={fee}
+              onChange={(e) => setFee(e.target.value)}
+            />
+          </Field>
+        </div>
+
+        <div className="flex items-center justify-between rounded-lg bg-brand-red/5 border border-brand-red/20 px-3 py-2">
+          <span className="text-sm font-bold">الإجمالي على العميل</span>
+          <span className="text-lg font-black tabular-nums">
+            {price.toLocaleString('ar-EG')} ج.م
+          </span>
+        </div>
+
+        {/* Shown, never auto-split: back-solving goods = total − fee would just
+            re-record a guess as fact. The admin who knows the real breakdown
+            enters it; the old total is only here as their anchor. */}
+        {initialPrice != null && initialGoods == null && (
+          <p className="text-xs text-muted-foreground">
+            السعر المسجّل سابقاً: {Number(initialPrice).toLocaleString('ar-EG')} ج.م — من فضلك وزّعه
+            على التجار والتوصيل.
+          </p>
+        )}
+
+        <Field label="ملاحظات (اختياري)">
+          <Textarea
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+            rows={2}
+            placeholder="مثلاً: السعر يشمل التغليف..."
           />
         </Field>
       </div>
-      <div className="my-3 flex items-center justify-between rounded-lg bg-muted/40 px-3 py-2">
-        <span className="text-sm text-muted-foreground">الإجمالي على العميل</span>
-        <span className="text-lg font-bold tabular-nums">{price.toLocaleString('ar-EG')} ج.م</span>
-      </div>
-      {/* Shown, never auto-split: back-solving goods = total − fee would just
-          re-record a guess as fact. The admin who knows the real breakdown
-          enters it; the old total is only here as their anchor. */}
-      {initialPrice != null && initialGoods == null && (
-        <p className="-mt-1 mb-3 text-xs text-muted-foreground">
-          السعر المسجّل سابقاً: {Number(initialPrice).toLocaleString('ar-EG')} ج.م — من فضلك وزّعه
-          على البضاعة والتوصيل.
-        </p>
-      )}
-      <Field label="ملاحظات (اختياري)">
-        <Textarea
-          value={note}
-          onChange={(e) => setNote(e.target.value)}
-          rows={2}
-          placeholder="مثلاً: السعر يشمل التغليف..."
-        />
-      </Field>
+
       <div className="flex justify-end gap-2 mt-4">
         <Button variant="outline" onClick={onClose}>
           إلغاء
         </Button>
         <Button
           onClick={() => mut.mutate()}
-          disabled={price <= 0 || goods === '' || fee === '' || mut.isPending}
+          disabled={invalid || mut.isPending}
+          title={incomplete ? 'حدّد التاجر وقيمة كل سطر أولاً' : undefined}
         >
           {mut.isPending ? (
             <Loader2 className="w-4 h-4 animate-spin" />
