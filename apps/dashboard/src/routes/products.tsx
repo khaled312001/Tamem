@@ -257,14 +257,12 @@ export function ProductsPage() {
     !!merchantFilter ||
     !!search.trim();
   const clearFilters = () => {
-    setStatusF('all');
-    setStockF('all');
-    setImageF('all');
-    setMerchantFilter('');
+    // Single navigation — calling the setters one by one clobbers each other
+    // (react-router doesn't chain sequential setSearchParams). `reset()` clears
+    // search + every registered filter key + the page in one go.
     setSearch('');
-    setPage(1);
+    ls.reset();
   };
-  const resetPage = () => setPage(1);
 
   // ── mutations ──
   /**
@@ -418,12 +416,7 @@ export function ProductsPage() {
         <StatCard label="إجمالي المنتجات" value={formatCount(stats.total)} icon={Box} tone="zinc" />
         <button
           type="button"
-          onClick={() => {
-            setStatusF('available');
-            setStockF('all');
-            setImageF('all');
-            resetPage();
-          }}
+          onClick={() => ls.setMany({ status: 'available', stock: '', image: '' })}
           className="text-start"
         >
           <StatCard
@@ -435,24 +428,14 @@ export function ProductsPage() {
         </button>
         <button
           type="button"
-          onClick={() => {
-            setStatusF('disabled');
-            setStockF('all');
-            setImageF('all');
-            resetPage();
-          }}
+          onClick={() => ls.setMany({ status: 'disabled', stock: '', image: '' })}
           className="text-start"
         >
           <StatCard label="معطّل" value={formatCount(stats.disabled)} icon={XCircle} tone="zinc" />
         </button>
         <button
           type="button"
-          onClick={() => {
-            setStockF('out');
-            setStatusF('all');
-            setImageF('all');
-            resetPage();
-          }}
+          onClick={() => ls.setMany({ stock: 'out', status: '', image: '' })}
           className="text-start"
         >
           <StatCard
@@ -465,12 +448,7 @@ export function ProductsPage() {
         </button>
         <button
           type="button"
-          onClick={() => {
-            setStockF('low');
-            setStatusF('all');
-            setImageF('all');
-            resetPage();
-          }}
+          onClick={() => ls.setMany({ stock: 'low', status: '', image: '' })}
           className="text-start"
         >
           <StatCard
@@ -483,12 +461,7 @@ export function ProductsPage() {
         </button>
         <button
           type="button"
-          onClick={() => {
-            setImageF('without');
-            setStatusF('all');
-            setStockF('all');
-            resetPage();
-          }}
+          onClick={() => ls.setMany({ image: 'without', status: '', stock: '' })}
           className="text-start"
         >
           <StatCard
@@ -508,20 +481,14 @@ export function ProductsPage() {
             <input
               type="search"
               value={search}
-              onChange={(e) => {
-                setSearch(e.target.value);
-                resetPage();
-              }}
+              onChange={(e) => setSearch(e.target.value)}
               placeholder="ابحث بالاسم أو الكود (SKU)…"
               className="w-full ps-9 pe-3 py-2 rounded-lg border border-input bg-popover text-sm outline-none focus:ring-2 focus:ring-brand-red/30"
             />
           </div>
           <select
             value={merchantFilter}
-            onChange={(e) => {
-              setMerchantFilter(e.target.value);
-              resetPage();
-            }}
+            onChange={(e) => setMerchantFilter(e.target.value)}
             className="px-3 py-2 rounded-lg border border-input bg-popover text-sm min-w-[160px]"
           >
             <option value="">جميع التجار</option>
@@ -564,10 +531,7 @@ export function ProductsPage() {
           <FilterGroup
             label="الحالة"
             value={statusF}
-            onChange={(v) => {
-              setStatusF(v as StatusFilter);
-              resetPage();
-            }}
+            onChange={(v) => setStatusF(v as StatusFilter)}
             options={[
               ['all', 'الكل'],
               ['available', 'متاح'],
@@ -577,10 +541,7 @@ export function ProductsPage() {
           <FilterGroup
             label="المخزون"
             value={stockF}
-            onChange={(v) => {
-              setStockF(v as StockFilter);
-              resetPage();
-            }}
+            onChange={(v) => setStockF(v as StockFilter)}
             options={[
               ['all', 'الكل'],
               ['in', 'متوفر'],
@@ -591,10 +552,7 @@ export function ProductsPage() {
           <FilterGroup
             label="الصورة"
             value={imageF}
-            onChange={(v) => {
-              setImageF(v as ImageFilter);
-              resetPage();
-            }}
+            onChange={(v) => setImageF(v as ImageFilter)}
             options={[
               ['all', 'الكل'],
               ['with', 'بصورة'],
