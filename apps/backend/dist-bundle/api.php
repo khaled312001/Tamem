@@ -424,6 +424,31 @@ function defaultCommissionPct(): float {
     } catch (Throwable $e) { /* fall through */ }
     return 0.0;
 }
+/// Snapshot the assigned driver's delivery-fee share onto the order, freezing
+/// the numbers so a later change to the driver's percentage never rewrites this
+/// order's accounting. Called at driver-assign and again at delivery — delivery
+/// wins, locking the final split against the final deliveryFee. Merchant goods
+/// value is NEVER part of this split; a zero/absent fee yields a zero split.
+function snapshotDriverShare(string $orderId): void {
+    try {
+        $q = db()->prepare(
+            "SELECT o.deliveryFee, o.assignedDriverId, dp.deliverySharePct
+             FROM `Order` o
+             LEFT JOIN `DriverProfile` dp ON dp.userId = o.assignedDriverId
+             WHERE o.id = ? LIMIT 1"
+        );
+        $q->execute([$orderId]);
+        $o = $q->fetch();
+        if (!$o || empty($o['assignedDriverId'])) return;
+        $fee = $o['deliveryFee'] !== null ? (float) $o['deliveryFee'] : 0.0;
+        if ($fee < 0) $fee = 0.0;
+        $pct = $o['deliverySharePct'] !== null ? (float) $o['deliverySharePct'] : 0.0;
+        $driverRev = round($fee * $pct / 100, 2);
+        $companyRev = round($fee - $driverRev, 2);
+        db()->prepare('UPDATE `Order` SET driverSharePct = ?, driverDeliveryRevenue = ?, companyDeliveryRevenue = ?, updatedAt = NOW(3) WHERE id = ?')
+            ->execute([$pct, $driverRev, $companyRev, $orderId]);
+    } catch (Throwable $e) { error_log('[api.php] snapshotDriverShare: ' . $e->getMessage()); }
+}
 function computeOrderFinancials(string $orderId): void {
     try {
         $q = db()->prepare(
@@ -519,23 +544,121 @@ if ($method === 'GET' && $path === '/admin/reports/services') {
     ], $rows));
 }
 if ($method === 'GET' && $path === '/admin/reports/drivers') {
-    authUser();
-    $rows = db()->query(
-        "SELECT u.id AS driverId, u.name, u.phone, dp.rating,
-                COUNT(o.id) AS deliveries,
-                COALESCE(SUM(COALESCE(o.finalPrice, o.quotedPrice, 0)), 0) AS totalRevenue
-         FROM `User` u
-         LEFT JOIN `DriverProfile` dp ON dp.userId = u.id
-         LEFT JOIN `Order` o ON o.assignedDriverId = u.id AND o.status IN ('DELIVERED','COMPLETED')
-         WHERE u.role = 'DRIVER'
-         GROUP BY u.id, u.name, u.phone, dp.rating
-         ORDER BY deliveries DESC"
-    )->fetchAll();
-    jsonOk(array_map(static fn ($r) => [
+    $u = authUser(); if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
+    // Revenue is counted for DELIVERED/COMPLETED orders only — cancelled orders
+    // never enter. Merchant goods value is separated from delivery fees, and the
+    // driver's cut uses the SNAPSHOT saved on each order (falling back to the
+    // driver's current % only for orders that predate the snapshot).
+    // ── order-level filters (live in the JOIN so drivers with no matching
+    //    orders still appear with zeros) ──
+    $onArgs = []; $on = ["o.assignedDriverId = u.id", "o.status IN ('DELIVERED','COMPLETED')"];
+    $from = trim((string) ($_GET['from'] ?? '')); $to = trim((string) ($_GET['to'] ?? ''));
+    if ($from !== '') { $on[] = "COALESCE(o.deliveredAt, o.completedAt, o.updatedAt) >= ?"; $onArgs[] = $from . ' 00:00:00'; }
+    if ($to !== '')   { $on[] = "COALESCE(o.deliveredAt, o.completedAt, o.updatedAt) <= ?"; $onArgs[] = $to . ' 23:59:59'; }
+    $stf = strtoupper(trim((string) ($_GET['status'] ?? '')));
+    if (in_array($stf, ['DELIVERED', 'COMPLETED'], true)) { $on[] = "o.status = ?"; $onArgs[] = $stf; }
+    $settle = strtoupper(trim((string) ($_GET['settlement'] ?? '')));
+    if (in_array($settle, ['PENDING', 'SETTLED'], true)) { $on[] = "o.driverSettlementStatus = ?"; $onArgs[] = $settle; }
+    // ── driver-level filters (WHERE) ──
+    $whArgs = []; $wh = ["u.role = 'DRIVER'"];
+    $drv = trim((string) ($_GET['driverId'] ?? ''));
+    if ($drv !== '') { $wh[] = "u.id = ?"; $whArgs[] = $drv; }
+    $gov = trim((string) ($_GET['governorate'] ?? ''));
+    if ($gov !== '') { $wh[] = "dp.governorate = ?"; $whArgs[] = $gov; }
+    // Driver's delivery cut: the saved snapshot, else live (deliveryFee × current %).
+    $due = "COALESCE(o.driverDeliveryRevenue, ROUND(COALESCE(o.deliveryFee,0) * COALESCE(dp.deliverySharePct,0) / 100, 2))";
+    $sql = "SELECT u.id AS driverId, u.name, u.phone, u.governorate, dp.rating, dp.deliverySharePct,
+                   COUNT(o.id) AS deliveries,
+                   COALESCE(SUM(COALESCE(o.finalPrice, o.quotedPrice, 0)), 0) AS totalCollected,
+                   COALESCE(SUM(COALESCE(o.merchantSubtotal, 0)), 0) AS merchantGoods,
+                   COALESCE(SUM(COALESCE(o.deliveryFee, 0)), 0) AS totalDeliveryFees,
+                   COALESCE(SUM($due), 0) AS driverDue,
+                   COALESCE(SUM(COALESCE(o.deliveryFee, 0)) - SUM($due), 0) AS tamemRevenue,
+                   COALESCE(SUM(CASE WHEN o.driverSettlementStatus = 'SETTLED' THEN $due ELSE 0 END), 0) AS paid,
+                   COALESCE(SUM(CASE WHEN o.id IS NOT NULL AND o.driverSettlementStatus <> 'SETTLED' THEN $due ELSE 0 END), 0) AS remaining,
+                   COALESCE(SUM(CASE WHEN o.id IS NOT NULL AND o.driverSettlementStatus <> 'SETTLED' THEN 1 ELSE 0 END), 0) AS pendingCount
+            FROM `User` u
+            JOIN `DriverProfile` dp ON dp.userId = u.id
+            LEFT JOIN `Order` o ON " . implode(' AND ', $on) . "
+            WHERE " . implode(' AND ', $wh) . "
+            GROUP BY u.id, u.name, u.phone, u.governorate, dp.rating, dp.deliverySharePct
+            ORDER BY driverDue DESC, deliveries DESC";
+    $st = db()->prepare($sql);
+    $st->execute(array_merge($onArgs, $whArgs));
+    $rows = array_map(static fn ($r) => [
         'driverId' => $r['driverId'], 'name' => $r['name'], 'phone' => $r['phone'],
-        'deliveries' => (int) $r['deliveries'], 'totalRevenue' => (float) $r['totalRevenue'],
+        'governorate' => $r['governorate'],
         'rating' => $r['rating'] !== null ? (float) $r['rating'] : null,
-    ], $rows));
+        'deliverySharePct' => (float) $r['deliverySharePct'],
+        'deliveries' => (int) $r['deliveries'],
+        'totalCollected' => (float) $r['totalCollected'],
+        'merchantGoods' => (float) $r['merchantGoods'],
+        'totalDeliveryFees' => (float) $r['totalDeliveryFees'],
+        'driverDue' => (float) $r['driverDue'],
+        'tamemRevenue' => (float) $r['tamemRevenue'],
+        'paid' => (float) $r['paid'],
+        'remaining' => (float) $r['remaining'],
+        'pendingCount' => (int) $r['pendingCount'],
+    ], $st->fetchAll());
+    // Grand totals row.
+    $sum = fn(string $k) => round(array_sum(array_map(fn($r) => $r[$k], $rows)), 2);
+    $totals = [
+        'deliveries' => array_sum(array_map(fn($r) => $r['deliveries'], $rows)),
+        'totalCollected' => $sum('totalCollected'), 'merchantGoods' => $sum('merchantGoods'),
+        'totalDeliveryFees' => $sum('totalDeliveryFees'), 'driverDue' => $sum('driverDue'),
+        'tamemRevenue' => $sum('tamemRevenue'), 'paid' => $sum('paid'), 'remaining' => $sum('remaining'),
+    ];
+    // Distinct governorates for the filter dropdown.
+    $govs = db()->query("SELECT DISTINCT governorate FROM `DriverProfile` WHERE governorate IS NOT NULL AND governorate <> '' ORDER BY governorate")->fetchAll(PDO::FETCH_COLUMN);
+    jsonOk(['drivers' => $rows, 'totals' => $totals, 'governorates' => $govs]);
+}
+// Per-driver detail: every delivered order with its revenue split + a totals row.
+if ($method === 'GET' && preg_match('#^/admin/reports/drivers/([^/]+)$#', $path, $m)) {
+    $u = authUser(); if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
+    $driverId = $m[1];
+    $w = ["o.assignedDriverId = ?", "o.status IN ('DELIVERED','COMPLETED')"]; $a = [$driverId];
+    $from = trim((string) ($_GET['from'] ?? '')); $to = trim((string) ($_GET['to'] ?? ''));
+    if ($from !== '') { $w[] = "COALESCE(o.deliveredAt, o.completedAt, o.updatedAt) >= ?"; $a[] = $from . ' 00:00:00'; }
+    if ($to !== '')   { $w[] = "COALESCE(o.deliveredAt, o.completedAt, o.updatedAt) <= ?"; $a[] = $to . ' 23:59:59'; }
+    $stf = strtoupper(trim((string) ($_GET['status'] ?? '')));
+    if (in_array($stf, ['DELIVERED', 'COMPLETED'], true)) { $w[] = "o.status = ?"; $a[] = $stf; }
+    $settle = strtoupper(trim((string) ($_GET['settlement'] ?? '')));
+    if (in_array($settle, ['PENDING', 'SETTLED'], true)) { $w[] = "o.driverSettlementStatus = ?"; $a[] = $settle; }
+    $due = "COALESCE(o.driverDeliveryRevenue, ROUND(COALESCE(o.deliveryFee,0) * COALESCE(dp.deliverySharePct,0) / 100, 2))";
+    $sql = "SELECT o.id, o.orderNumber, o.status, o.deliveredAt, o.completedAt,
+                   COALESCE(o.merchantSubtotal, 0) AS merchantGoods,
+                   COALESCE(o.deliveryFee, 0) AS deliveryFee,
+                   COALESCE(o.driverSharePct, dp.deliverySharePct, 0) AS sharePct,
+                   $due AS driverDue,
+                   (COALESCE(o.deliveryFee, 0) - $due) AS tamemRevenue,
+                   COALESCE(o.finalPrice, o.quotedPrice, 0) AS totalCollected,
+                   o.driverSettlementStatus AS settlementStatus, o.driverSettledAt
+            FROM `Order` o JOIN `DriverProfile` dp ON dp.userId = o.assignedDriverId
+            WHERE " . implode(' AND ', $w) . "
+            ORDER BY COALESCE(o.deliveredAt, o.completedAt, o.updatedAt) DESC";
+    $st = db()->prepare($sql); $st->execute($a);
+    $orders = array_map(static fn ($r) => [
+        'orderId' => $r['id'], 'orderNumber' => $r['orderNumber'], 'status' => $r['status'],
+        'deliveredAt' => isoZ($r['deliveredAt'] ?? $r['completedAt']),
+        'merchantGoods' => (float) $r['merchantGoods'], 'deliveryFee' => (float) $r['deliveryFee'],
+        'sharePct' => (float) $r['sharePct'], 'driverDue' => (float) $r['driverDue'],
+        'tamemRevenue' => (float) $r['tamemRevenue'], 'totalCollected' => (float) $r['totalCollected'],
+        'settlementStatus' => $r['settlementStatus'], 'settledAt' => isoZ($r['driverSettledAt']),
+    ], $st->fetchAll());
+    $sum = fn(string $k) => round(array_sum(array_map(fn($r) => $r[$k], $orders)), 2);
+    $dh = db()->prepare("SELECT u.name, u.phone, dp.deliverySharePct, dp.rating FROM `User` u JOIN `DriverProfile` dp ON dp.userId = u.id WHERE u.id = ? LIMIT 1");
+    $dh->execute([$driverId]); $d = $dh->fetch() ?: [];
+    jsonOk([
+        'driver' => ['id' => $driverId, 'name' => $d['name'] ?? null, 'phone' => $d['phone'] ?? null,
+            'deliverySharePct' => isset($d['deliverySharePct']) ? (float) $d['deliverySharePct'] : 0,
+            'rating' => isset($d['rating']) && $d['rating'] !== null ? (float) $d['rating'] : null],
+        'orders' => $orders,
+        'totals' => [
+            'deliveries' => count($orders), 'merchantGoods' => $sum('merchantGoods'),
+            'deliveryFees' => $sum('deliveryFee'), 'driverDue' => $sum('driverDue'),
+            'tamemRevenue' => $sum('tamemRevenue'), 'totalCollected' => $sum('totalCollected'),
+        ],
+    ]);
 }
 if ($method === 'GET' && $path === '/admin/reports/customers') {
     authUser();
@@ -1109,8 +1232,14 @@ function waMoney($v): ?string {
 function orderDetailBlocks(array $o): array {
     $b = [];
     // Items — the app writes a ready human-readable bullet list into Order.notes
-    // for product orders; fall back to structured OrderItem rows if present.
+    // for product orders. For free-text delivery orders the customer's typed
+    // request lives in customData.order_text (the "تفاصيل الطلب" field). Fall
+    // back to structured OrderItem rows if neither is present.
     $items = trim((string) ($o['notes'] ?? ''));
+    if ($items === '') {
+        $cd = json_decode((string) ($o['customData'] ?? ''), true);
+        if (is_array($cd) && !empty($cd['order_text'])) $items = trim((string) $cd['order_text']);
+    }
     if ($items === '') {
         try {
             $st = db()->prepare('SELECT quantity, productNameSnapshot, unitPriceSnapshot FROM `OrderItem` WHERE orderId = ? ORDER BY id');
@@ -1184,10 +1313,10 @@ function notifyOrderParties(string $orderId, string $status, ?string $reason = n
         $drvName = trim((string) ($o['drv_name'] ?? ''));
         $sent = false;
 
-        // Admin-editable overrides. The rich messages below stay the DEFAULT;
-        // an admin can disable a (event,recipient) send, replace its text, add
-        // extra recipients, or route the oversight copy to a WhatsApp group —
-        // all without losing the detailed default when they leave it untouched.
+        // Admin-editable: every send is a catalog template (default OR the
+        // admin's saved override). The admin can disable a (event,recipient)
+        // pair, replace its text, add extra recipients, or route the oversight
+        // copy to a WhatsApp group — the editor is the single source of truth.
         $event = notifStatusToEvent($status);
         $ctx = [
             'orderNumber' => $no, 'customerName' => $custName,
@@ -1199,125 +1328,81 @@ function notifyOrderParties(string $orderId, string $status, ?string $reason = n
             'paymentMethod' => waPayMethodAr($o['paymentMethod'] ?? null),
             'reason' => (string) ($reason ?? ''),
         ];
-        // Resolve default-or-override text for a recipient, or null to SKIP
-        // (disabled). $default is the rich hardcoded message.
-        $resolve = function (string $recipient, ?string $default) use ($event, $ctx): ?string {
-            if ($default === null && $event === null) return null;
-            $rule = $event ? notifRule($event, $recipient) : ['enabled' => true, 'override' => null];
-            if (!$rule['enabled']) return null;
-            if ($rule['override'] !== null) { $r = notifRender($rule['override'], $ctx); return $r !== '' ? $r : null; }
-            return $default;
-        };
-
-        // Header + the customer's own order summary, reused across their messages.
-        $custSummary = "🧾 الطلب رقم *#{$no}*\nالخدمة: {$svc}"
+        // ─────────────────────────────────────────────────────────────────
+        // SINGLE SOURCE OF TRUTH: every message is the catalog template for
+        // (event, recipient) — the admin's saved override if present, else the
+        // rich default from notifDefaultCatalog(). No parallel hardcoded copies
+        // anymore: what the editor shows (and previews) is EXACTLY what is sent.
+        // These block variables let one template reproduce the full rich
+        // message; each is self-contained (carries its own icon/label) and is
+        // empty when not applicable, so an absent block leaves no dangling line.
+        // Readable, granular variables — the same names the dashboard editor
+        // samples, so the live preview renders in full. Multi-line composites
+        // (items / locations / price breakdown / customer recap) are single
+        // variables too, each empty when absent so its labelled line drops.
+        $ctx['items']       = (string) $d['items'];       // bullet list / delivery notes
+        $ctx['shipping']    = (string) $d['shipping'];    // شحن specifics
+        $ctx['locations']   = (string) $d['locations'];   // 📍 استلام + 🏁 توصيل + خرائط
+        $ctx['priceBlock']  = (string) $d['price'];       // breakdown ending with الإجمالي
+        $ctx['payment']     = (string) $d['pay'];         // طريقة الدفع — حالة الدفع
+        $ctx['summary']     = "🧾 الطلب رقم *#{$no}*\nالخدمة: {$svc}"
             . ($d['items'] ? "\n\n🛒 التفاصيل:\n{$d['items']}" : '')
             . ($d['shipping'] ? "\n\n📦 {$d['shipping']}" : '')
             . ($d['locations'] ? "\n\n{$d['locations']}" : '')
             . "\n\n💳 الدفع: {$d['pay']}\n{$d['price']}";
+        $ctx['collect']     = ($o['paymentStatus'] ?? '') === 'PAID'
+            ? 'مدفوع — لا تُحصّل شيئاً'
+            : ('حصّل *' . ($d['total'] ?? '') . '* (' . waPayMethodAr($o['paymentMethod'] ?? null) . ')');
 
-        // ── CUSTOMER ── friendly line + full order summary
-        $custMsg = null;
-        switch ($status) {
-            case 'PRICED':
-                $custMsg = "تميم للتوصيل 🚚\nتم تسعير طلبك — راجع التفاصيل ووافق من التطبيق:\n\n{$custSummary}";
-                break;
-            case 'ACCEPTED':
-                $custMsg = "تميم للتوصيل ✅\nتم قبول طلبك وجارٍ تجهيزه:\n\n{$custSummary}";
-                break;
-            case 'DRIVER_ASSIGNED':
-                $custMsg = "تميم للتوصيل 🚚\nالكابتن *" . ($drvName ?: 'المندوب') . "* في الطريق لطلبك"
-                    . (!empty($o['drv_phone']) ? " — للتواصل: {$o['drv_phone']}" : '') . "\n\n{$custSummary}";
-                break;
-            case 'PICKED_UP':
-                $custMsg = "تميم للتوصيل 🚚\nتم استلام طلبك *#{$no}* وهو في الطريق إليك."
-                    . ($d['total'] ? "\nالمطلوب دفعه: *{$d['total']}* ({$d['pay']})" : '');
-                break;
-            case 'IN_ROUTE':
-                $custMsg = "تميم للتوصيل 🚚\nمندوبك على وشك الوصول بطلب *#{$no}*. جهّز استلامك 😊"
-                    . ($d['total'] ? "\nالمطلوب: *{$d['total']}*" : '');
-                break;
-            case 'DELIVERED':
-            case 'COMPLETED':
-                $custMsg = "تميم للتوصيل ✅\nتم توصيل طلبك *#{$no}* بنجاح — شكراً لاختيارك تميم 🌟\nقيّم تجربتك من التطبيق.\n\n{$custSummary}";
-                break;
-            case 'CANCELLED':
-                $custMsg = "تميم للتوصيل\nنأسف، تم إلغاء طلبك *#{$no}*." . ($reason ? "\nالسبب: {$reason}" : '') . "\n\n{$custSummary}";
-                break;
-        }
-        $custMsg = $resolve('CUSTOMER', $custMsg);
+        // Resolve the template for a recipient → rendered text, or null to SKIP
+        // (event unmapped, recipient absent from catalog, disabled, or empty).
+        $render = function (string $recipient) use ($event, $ctx): ?string {
+            if ($event === null) return null;
+            $rule = notifRule($event, $recipient);
+            if (!$rule['enabled']) return null;
+            $tpl = $rule['override'];
+            if ($tpl === null) {
+                foreach (notifDefaultCatalog() as $t) {
+                    if ($t['event'] === $event && $t['recipient'] === $recipient) { $tpl = $t['default']; break; }
+                }
+            }
+            if ($tpl === null || $tpl === '') return null;
+            $r = notifRender($tpl, $ctx);
+            return $r !== '' ? $r : null;
+        };
+
+        // ── CUSTOMER ──
+        $custMsg = $render('CUSTOMER');
         if ($custMsg && !empty($o['cust_phone'])) { waEnqueue($o['cust_phone'], $custMsg); $sent = true; }
 
-        // ── DRIVER ── full operational packet (only the stages they act on)
-        $drvMsg = null;
-        if (in_array($status, ['DRIVER_ASSIGNED', 'CANCELLED'], true)) {
-            if ($status === 'DRIVER_ASSIGNED') {
-                $collect = ($o['paymentStatus'] ?? '') === 'PAID'
-                    ? 'مدفوع — لا تُحصّل شيئاً'
-                    : 'حصّل *' . ($d['total']) . '* (' . waPayMethodAr($o['paymentMethod'] ?? null) . ')';
-                $drvMsg = "🚚 *طلب جديد مُسند إليك* #{$no}\n"
-                    . "الخدمة: {$svc}\n"
-                    . "👤 العميل: {$custName}" . (!empty($o['cust_phone']) ? " — {$o['cust_phone']}" : '') . "\n"
-                    . ($d['locations'] ? "\n{$d['locations']}\n" : '')
-                    . ($d['items'] ? "\n🛒 المطلوب:\n{$d['items']}\n" : '')
-                    . ($d['shipping'] ? "\n📦 {$d['shipping']}\n" : '')
-                    . "\n💰 {$collect}"
-                    . (!empty($o['scheduledFor']) ? "\n🕒 موعد: {$o['scheduledFor']}" : '');
-            } else {
-                $drvMsg = "⛔ *أُلغي الطلب #{$no}* — لا حاجة للتوصيل." . ($reason ? "\nالسبب: {$reason}" : '');
-            }
-        }
-        $drvMsg = $resolve('DRIVER', $drvMsg);
+        // ── DRIVER ──
+        $drvMsg = $render('DRIVER');
         if ($drvMsg && !empty($o['drv_phone'])) { waEnqueue($o['drv_phone'], $drvMsg); $sent = true; }
 
-        // ── ADMIN ── full internal summary incl. financials
-        $admMsg = null;
-        $adminHead = [
-            'NEW' => '🆕 طلب جديد', 'PRICED' => '💲 تم تسعير طلب', 'DRIVER_ASSIGNED' => '🚚 تعيين سائق لطلب',
-            'DELIVERED' => '✅ اكتمل طلب', 'COMPLETED' => '✅ اكتمل طلب', 'CANCELLED' => '⛔ أُلغي طلب',
-        ][$status] ?? null;
-        if ($adminHead !== null) {
-            $fin = [];
-            if ($o['merchantPayout'] !== null && $o['merchantPayout'] !== '')     $fin[] = 'مستحق التاجر: ' . waMoney($o['merchantPayout']);
-            if ($o['platformCommission'] !== null && $o['platformCommission'] !== '') $fin[] = 'عمولة تميم: ' . waMoney($o['platformCommission']);
-            $catAr = waCategoryAr($o['category'] ?? null);
-            $admMsg = "{$adminHead} *#{$no}*\n"
-                . 'الخدمة: ' . $svc . ($catAr && $catAr !== $svc ? " · {$catAr}" : '') . "\n"
-                . "👤 {$custName}" . (!empty($o['cust_phone']) ? " — {$o['cust_phone']}" : '') . "\n"
-                . ($drvName ? "🛵 السائق: {$drvName}" . (!empty($o['drv_phone']) ? " — {$o['drv_phone']}" : '') . "\n" : '')
-                . ($d['items'] ? "\n🛒 {$d['items']}\n" : '')
-                . ($d['locations'] ? "\n{$d['locations']}\n" : '')
-                . "\n💳 {$d['pay']}\n{$d['price']}"
-                . ($fin ? "\n" . implode("\n", $fin) : '')
-                . ($status === 'CANCELLED' && $reason ? "\nسبب الإلغاء: {$reason}" : '');
-        }
-        // The oversight copy is the GROUP recipient. Disabling ORDER_x_GROUP in
-        // the editor silences it; an override replaces its text.
-        $admMsg = $resolve('GROUP', $admMsg);
+        // ── SUPERVISOR ── the business / admin oversight number
+        $supMsg = $render('SUPERVISOR');
         $adminNo = waAdminNumber();
-        if ($admMsg && $adminNo) { waEnqueue($adminNo, $admMsg); $sent = true; }
-        // Also deliver the oversight copy to a linked WhatsApp GROUP, when the
-        // admin has picked one and enabled it.
-        if ($admMsg) {
+        if ($supMsg && $adminNo) { waEnqueue($adminNo, $supMsg); $sent = true; }
+
+        // ── GROUP ── the linked WhatsApp group (when one is picked + enabled)
+        $grpMsg = $render('GROUP');
+        if ($grpMsg) {
             $grp = notifReadSetting('whatsapp_order_group');
-            if (!empty($grp['enabled']) && !empty($grp['groupId'])) {
-                waEnqueue((string) $grp['groupId'], $admMsg); $sent = true;
-            }
+            if (!empty($grp['enabled']) && !empty($grp['groupId'])) { waEnqueue((string) $grp['groupId'], $grpMsg); $sent = true; }
         }
 
-        // Extra per-event recipients (a second supervisor, the owner, …). Each
-        // enabled row gets its own text, or — when blank — the GROUP/admin copy.
+        // ── EXTRA per-event recipients ── each enabled row gets its own text,
+        // or — when left blank — the supervisor / group / customer copy.
         if ($event) {
             $extra = notifReadSetting('notification_recipients');
             foreach ((array) ($extra[$event] ?? []) as $r) {
                 $phone = trim((string) ($r['phone'] ?? ''));
                 if ($phone === '' || (array_key_exists('enabled', $r) && !$r['enabled'])) continue;
                 $txt = trim((string) ($r['text'] ?? ''));
-                $msg = $txt !== '' ? notifRender($txt, $ctx) : ($admMsg ?: $custMsg);
+                $msg = $txt !== '' ? notifRender($txt, $ctx) : ($supMsg ?: ($grpMsg ?: $custMsg));
                 if ($msg) { waEnqueue($phone, $msg); $sent = true; }
             }
         }
-
         if ($sent) {
             try { db()->prepare("UPDATE `Order` SET `whatsappSentAt` = NOW(3) WHERE id = ?")->execute([$orderId]); } catch (Throwable $e) {}
         }
@@ -1392,28 +1477,53 @@ function notifWriteSetting(string $key, array $value, ?string $uid): void {
         ->execute([$key, json_encode($value, JSON_UNESCAPED_UNICODE), $uid]);
 }
 /** Built-in template catalog: one entry per (event × recipient) the platform
- *  actually sends. `default` is a readable Arabic summary shown in the editor;
- *  the rich runtime message lives in notifyOrderParties and is used verbatim
- *  unless the admin saves an override here. */
+ *  sends. `default` IS what goes out (unless the admin saves an override) and
+ *  IS what the editor previews — one source of truth. Uses readable {{vars}};
+ *  any "التسمية: {{var}}" line whose value is empty drops out automatically. */
 function notifDefaultCatalog(): array {
     $ev = fn($event, $recipient, $label, $default) => compact('event', 'recipient', 'label', 'default')
         + ['key' => $event . '_' . $recipient];
+    // Shared oversight body for the supervisor + the group: identical detail for
+    // both, each event supplying its own header. Empty lines fall away, so an
+    // order with no items / no pickup simply omits those lines.
+    $oversight = fn(string $header) => "{$header} *#{{orderNumber}}*\n"
+        . "الخدمة: {{serviceName}}\n"
+        . "👤 العميل: {{customerName}}\n"
+        . "📞 الهاتف: {{customerPhone}}\n"
+        . "🛵 السائق: {{driverName}}\n"
+        . "🛒 المطلوب: {{items}}\n"
+        . "{{locations}}\n"
+        . "💳 الدفع: {{payment}}\n"
+        . "{{priceBlock}}";
     return [
-        $ev('ORDER_NEW', 'SUPERVISOR', 'المشرف', "🆕 طلب جديد #{{orderNumber}} — {{customerName}}"),
-        $ev('ORDER_NEW', 'GROUP', 'جروب الإدارة', "🆕 طلب جديد #{{orderNumber}}\nالعميل: {{customerName}}\nالخدمة: {{serviceName}}"),
-        $ev('ORDER_PRICED', 'CUSTOMER', 'العميل', "تميم للتوصيل 🚚\nتم تسعير طلبك #{{orderNumber}} — راجع التفاصيل ووافق من التطبيق.\nالإجمالي: {{price}}"),
-        $ev('ORDER_PRICED', 'GROUP', 'جروب الإدارة', "💲 تم تسعير الطلب #{{orderNumber}} — {{price}}"),
-        $ev('ORDER_ACCEPTED', 'CUSTOMER', 'العميل', "تميم للتوصيل ✅\nتم قبول طلبك #{{orderNumber}} وجارٍ تجهيزه."),
-        $ev('DRIVER_ASSIGNED', 'CUSTOMER', 'العميل', "تميم للتوصيل 🚚\nالكابتن {{driverName}} في الطريق لطلبك #{{orderNumber}} — للتواصل: {{driverPhone}}"),
-        $ev('DRIVER_ASSIGNED', 'DRIVER', 'السائق', "🚚 طلب جديد مُسند إليك #{{orderNumber}}\nالعميل: {{customerName}} — {{customerPhone}}\nعنوان التسليم: {{deliveryAddress}}\nالمطلوب تحصيله: {{price}}"),
-        $ev('DRIVER_ASSIGNED', 'GROUP', 'جروب الإدارة', "🚚 تعيين سائق {{driverName}} للطلب #{{orderNumber}}"),
-        $ev('PICKED_UP', 'CUSTOMER', 'العميل', "تميم للتوصيل 🚚\nتم استلام طلبك #{{orderNumber}} وهو في الطريق إليك."),
-        $ev('IN_ROUTE', 'CUSTOMER', 'العميل', "تميم للتوصيل 🚚\nمندوبك على وشك الوصول بطلب #{{orderNumber}}. جهّز استلامك 😊"),
-        $ev('DELIVERED', 'CUSTOMER', 'العميل', "تميم للتوصيل ✅\nتم توصيل طلبك #{{orderNumber}} بنجاح — شكراً لاختيارك تميم 🌟\nقيّم تجربتك من التطبيق."),
-        $ev('DELIVERED', 'GROUP', 'جروب الإدارة', "✅ اكتمل الطلب #{{orderNumber}}"),
-        $ev('CANCELLED', 'CUSTOMER', 'العميل', "تميم للتوصيل\nنأسف، تم إلغاء طلبك #{{orderNumber}}.\nالسبب: {{reason}}"),
-        $ev('CANCELLED', 'DRIVER', 'السائق', "⛔ أُلغي الطلب #{{orderNumber}} — لا حاجة للتوصيل.\nالسبب: {{reason}}"),
-        $ev('CANCELLED', 'GROUP', 'جروب الإدارة', "⛔ أُلغي الطلب #{{orderNumber}}\nالسبب: {{reason}}"),
+        // ═══ ORDER_NEW ═══
+        $ev('ORDER_NEW', 'CUSTOMER', 'العميل', "تميم للتوصيل 🚚\nاستلمنا طلبك رقم *#{{orderNumber}}* وجارٍ مراجعته. هنطمنك على كل خطوة 😊"),
+        $ev('ORDER_NEW', 'SUPERVISOR', 'المشرف', $oversight('🆕 طلب جديد')),
+        $ev('ORDER_NEW', 'GROUP', 'جروب الإدارة', $oversight('🆕 طلب جديد')),
+        // ═══ ORDER_PRICED ═══
+        $ev('ORDER_PRICED', 'CUSTOMER', 'العميل', "تميم للتوصيل 🚚\nتم تسعير طلبك — راجع التفاصيل ووافق من التطبيق:\n\n{{summary}}"),
+        $ev('ORDER_PRICED', 'SUPERVISOR', 'المشرف', $oversight('💲 تم تسعير طلب')),
+        $ev('ORDER_PRICED', 'GROUP', 'جروب الإدارة', $oversight('💲 تم تسعير طلب')),
+        // ═══ ORDER_ACCEPTED ═══
+        $ev('ORDER_ACCEPTED', 'CUSTOMER', 'العميل', "تميم للتوصيل ✅\nتم قبول طلبك وجارٍ تجهيزه:\n\n{{summary}}"),
+        // ═══ DRIVER_ASSIGNED ═══
+        $ev('DRIVER_ASSIGNED', 'CUSTOMER', 'العميل', "تميم للتوصيل 🚚\nالكابتن *{{driverName}}* في الطريق لطلبك — للتواصل: {{driverPhone}}\n\n{{summary}}"),
+        $ev('DRIVER_ASSIGNED', 'DRIVER', 'السائق', "🚚 *طلب جديد مُسند إليك* #{{orderNumber}}\nالخدمة: {{serviceName}}\n👤 العميل: {{customerName}}\n📞 الهاتف: {{customerPhone}}\n🛒 المطلوب: {{items}}\n{{locations}}\n💰 التحصيل: {{collect}}"),
+        $ev('DRIVER_ASSIGNED', 'SUPERVISOR', 'المشرف', $oversight('🚚 تعيين سائق لطلب')),
+        $ev('DRIVER_ASSIGNED', 'GROUP', 'جروب الإدارة', $oversight('🚚 تعيين سائق لطلب')),
+        // ═══ PICKED_UP ═══
+        $ev('PICKED_UP', 'CUSTOMER', 'العميل', "تميم للتوصيل 🚚\nتم استلام طلبك *#{{orderNumber}}* وهو في الطريق إليك.\nالمطلوب دفعه: *{{price}}* ({{payment}})"),
+        // ═══ IN_ROUTE ═══
+        $ev('IN_ROUTE', 'CUSTOMER', 'العميل', "تميم للتوصيل 🚚\nمندوبك على وشك الوصول بطلب *#{{orderNumber}}*. جهّز استلامك 😊\nالمطلوب: *{{price}}*"),
+        // ═══ DELIVERED ═══
+        $ev('DELIVERED', 'CUSTOMER', 'العميل', "تميم للتوصيل ✅\nتم توصيل طلبك *#{{orderNumber}}* بنجاح — شكراً لاختيارك تميم 🌟\nقيّم تجربتك من التطبيق."),
+        $ev('DELIVERED', 'SUPERVISOR', 'المشرف', $oversight('✅ اكتمل طلب')),
+        $ev('DELIVERED', 'GROUP', 'جروب الإدارة', $oversight('✅ اكتمل طلب')),
+        // ═══ CANCELLED ═══
+        $ev('CANCELLED', 'CUSTOMER', 'العميل', "تميم للتوصيل\nنأسف، تم إلغاء طلبك *#{{orderNumber}}*.\nالسبب: {{reason}}"),
+        $ev('CANCELLED', 'DRIVER', 'السائق', "⛔ *أُلغي الطلب #{{orderNumber}}* — لا حاجة للتوصيل.\nالسبب: {{reason}}"),
+        $ev('CANCELLED', 'SUPERVISOR', 'المشرف', $oversight('⛔ أُلغي طلب') . "\nسبب الإلغاء: {{reason}}"),
+        $ev('CANCELLED', 'GROUP', 'جروب الإدارة', $oversight('⛔ أُلغي طلب') . "\nسبب الإلغاء: {{reason}}"),
     ];
 }
 function notifVariables(): array {
@@ -1421,7 +1531,11 @@ function notifVariables(): array {
         'orderNumber' => 'رقم الطلب', 'customerName' => 'اسم العميل', 'customerPhone' => 'هاتف العميل',
         'driverName' => 'اسم المندوب', 'driverPhone' => 'هاتف المندوب', 'price' => 'الإجمالي',
         'serviceName' => 'الخدمة', 'pickupAddress' => 'عنوان الاستلام', 'deliveryAddress' => 'عنوان التسليم',
-        'paymentMethod' => 'طريقة الدفع', 'reason' => 'سبب الإلغاء',
+        'paymentMethod' => 'طريقة الدفع', 'payment' => 'الدفع (الطريقة + الحالة)', 'reason' => 'سبب الإلغاء',
+        // Multi-line values (each empty when not applicable, so its line drops):
+        'items' => 'المطلوب / المنتجات', 'locations' => 'عناوين الاستلام والتسليم + الخرائط',
+        'priceBlock' => 'تفاصيل السعر والإجمالي', 'summary' => 'ملخص الطلب الكامل للعميل',
+        'collect' => 'تعليمات التحصيل للسائق', 'shipping' => 'تفاصيل الشحن',
     ];
 }
 /** Render a template string against a context: replace {{var}}, drop dangling
@@ -2194,7 +2308,10 @@ if ($method === 'POST' && $path === '/admin/orders') {
     // its goods / delivery / commission / payout identically.
     computeOrderFinancials($id);
     alertNewOrder($id, (string) $orderNumber);
-    // WhatsApp the on-shift supervisor about the new order (+ record dispatch).
+    // Customer + group + extra recipients via the editable templates.
+    notifyOrderParties($id, 'NEW');
+    // Additionally dispatch to the on-shift supervisor(s) (+ record dispatch) —
+    // the Supervisor-table shift feature, distinct from the business number.
     try {
         [$dow, $mins] = nowCairo();
         foreach (db()->query("SELECT * FROM `Supervisor` WHERE isActive = 1")->fetchAll() as $sup) {
@@ -2920,7 +3037,8 @@ if ($method === 'GET' && $path === '/admin/drivers') {
     $st = db()->prepare(
         "SELECT u.*, dp.id AS dp_id, dp.status AS dp_status, dp.vehicleType AS dp_vehicleType, dp.vehiclePlate AS dp_vehiclePlate,
                 dp.nationalId AS dp_nationalId, dp.governorate AS dp_governorate, dp.totalDeliveries AS dp_totalDeliveries,
-                dp.totalEarnings AS dp_totalEarnings, dp.cashOnHand AS dp_cashOnHand, dp.rating AS dp_rating
+                dp.totalEarnings AS dp_totalEarnings, dp.cashOnHand AS dp_cashOnHand, dp.rating AS dp_rating,
+                dp.deliverySharePct AS dp_deliverySharePct
          FROM `User` u LEFT JOIN `DriverProfile` dp ON dp.userId = u.id
          WHERE $dWhere ORDER BY u.createdAt DESC LIMIT $size OFFSET $off"
     );
@@ -2937,6 +3055,7 @@ if ($method === 'GET' && $path === '/admin/drivers') {
             'vehiclePlate' => $r['dp_vehiclePlate'], 'nationalId' => $r['dp_nationalId'],
             'governorate' => $r['dp_governorate'], 'totalDeliveries' => (int)$r['dp_totalDeliveries'],
             'totalEarnings' => $r['dp_totalEarnings'], 'cashOnHand' => $r['dp_cashOnHand'], 'rating' => $r['dp_rating'],
+            'deliverySharePct' => $r['dp_deliverySharePct'] !== null ? (float)$r['dp_deliverySharePct'] : 0,
         ] : null;
         $rows[] = $row;
     }
@@ -2957,7 +3076,8 @@ if ($method === 'GET' && preg_match('#^/admin/drivers/([^/]+)$#', $path, $m)) {
         "SELECT u.id, u.name, u.phone, u.email, u.avatarUrl, u.isActive, u.city, u.governorate, u.createdAt,
                 dp.id AS dp_id, dp.status AS dp_status, dp.vehicleType AS dp_vehicleType, dp.vehiclePlate AS dp_vehiclePlate,
                 dp.nationalId AS dp_nationalId, dp.governorate AS dp_governorate, dp.totalDeliveries AS dp_totalDeliveries,
-                dp.totalEarnings AS dp_totalEarnings, dp.cashOnHand AS dp_cashOnHand, dp.rating AS dp_rating
+                dp.totalEarnings AS dp_totalEarnings, dp.cashOnHand AS dp_cashOnHand, dp.rating AS dp_rating,
+                dp.deliverySharePct AS dp_deliverySharePct
          FROM `User` u LEFT JOIN `DriverProfile` dp ON dp.userId = u.id
          WHERE u.id = ? AND u.role = 'DRIVER' LIMIT 1"
     );
@@ -2973,6 +3093,7 @@ if ($method === 'GET' && preg_match('#^/admin/drivers/([^/]+)$#', $path, $m)) {
             'vehiclePlate' => $r['dp_vehiclePlate'], 'nationalId' => $r['dp_nationalId'],
             'governorate' => $r['dp_governorate'], 'totalDeliveries' => (int) $r['dp_totalDeliveries'],
             'totalEarnings' => $r['dp_totalEarnings'], 'cashOnHand' => $r['dp_cashOnHand'], 'rating' => $r['dp_rating'],
+            'deliverySharePct' => $r['dp_deliverySharePct'] !== null ? (float) $r['dp_deliverySharePct'] : 0,
         ] : null,
     ];
     // Reviews for this driver, newest first, with the order number.
@@ -3082,6 +3203,30 @@ if ($method === 'GET' && preg_match('#^/admin/merchants/([^/]+)/api-config/logs$
     try { $st->execute([$m[1]]); $rows = array_map('jsonizeRow', $st->fetchAll()); } catch (Throwable $e) { $rows = []; }
     jsonOk($rows);
 }
+/// True for a JSON object (associative array), false for a JSON list or scalar.
+function isAssocArr($a): bool {
+    if (!is_array($a) || $a === []) return false;
+    return array_keys($a) !== range(0, count($a) - 1);
+}
+/// Reduce whatever the API returned (after productsPath) to a flat list of
+/// product OBJECTS. Handles three shapes: a bare list of products; a wrapper
+/// object like {data:[...], meta:{...}} (Laravel-style) → its first
+/// list-of-objects value; or a single product object → a one-item list. This is
+/// what stops the field picker from showing 0,1,2… (array indices) instead of
+/// the real field names.
+function normalizeProductRows($items): array {
+    if (!is_array($items)) return [];
+    if (isAssocArr($items)) {
+        foreach ($items as $v) {
+            if (is_array($v) && !isAssocArr($v)) {
+                $rows = array_values(array_filter($v, 'isAssocArr'));
+                if ($rows) return $rows;
+            }
+        }
+        return [$items]; // a single product object
+    }
+    return array_values(array_filter($items, 'isAssocArr'));
+}
 // Fetch an external merchant API (PHP does this fine — no Node.js needed).
 function fetchMerchantApi(array $cfg): array {
     $url = (string)($cfg['apiUrl'] ?? '');
@@ -3116,28 +3261,55 @@ function fetchMerchantApi(array $cfg): array {
     if (!is_array($json)) return ['ok' => false, 'reason' => 'الرد ليس JSON صالح', 'httpCode' => $httpCode];
     // Drill into productsPath (e.g. "data" or "result.products"); empty = root list.
     $items = $json; $pp = trim((string)($cfg['productsPath'] ?? ''));
-    if ($pp !== '') foreach (explode('.', $pp) as $seg) { $items = is_array($items) && isset($items[$seg]) ? $items[$seg] : []; }
-    if (!is_array($items)) $items = [];
-    // normalise a list (some APIs wrap each row)
-    $items = array_values(array_filter($items, 'is_array'));
+    if ($pp !== '') foreach (explode('.', $pp) as $seg) { $items = is_array($items) && array_key_exists($seg, $items) ? $items[$seg] : []; }
+    // Normalise to a clean list of product objects (handles wrapper objects,
+    // bare lists, and single-object responses).
+    $items = normalizeProductRows($items);
     return ['ok' => true, 'items' => $items, 'httpCode' => $httpCode];
 }
 function mapExternalProduct(array $row, array $mapping): array {
-    $get = function($key) use ($row) {
-        foreach (explode('.', (string)$key) as $seg) { $row = is_array($row) && isset($row[$seg]) ? $row[$seg] : null; if ($row === null) return null; }
-        return $row;
+    // Read a (possibly dotted) key path out of the row.
+    $get = function ($key) use ($row) {
+        $key = (string) $key; if ($key === '') return null;
+        $cur = $row;
+        foreach (explode('.', $key) as $seg) { $cur = is_array($cur) && array_key_exists($seg, $cur) ? $cur[$seg] : null; if ($cur === null) return null; }
+        return $cur;
     };
-    $name = $mapping['name'] ?? 'name';
-    $nameAr = $mapping['nameAr'] ?? $mapping['name'] ?? 'name';
-    $price = $mapping['price'] ?? 'price';
-    $img = $mapping['imageUrl'] ?? $mapping['image'] ?? 'image';
-    $desc = $mapping['description'] ?? 'description';
+    // Resolve an app field from its mapped source key (+ legacy fallbacks).
+    $pick = function ($appKey, array $fallbacks = []) use ($mapping, $get) {
+        foreach (array_merge([$mapping[$appKey] ?? null], $fallbacks) as $k) {
+            if ($k) { $v = $get($k); if ($v !== null && $v !== '') return $v; }
+        }
+        return null;
+    };
+    $num = fn ($v) => ($v === null || $v === '') ? null : (float) $v;
+    $intv = fn ($v) => ($v === null || $v === '') ? null : (int) $v;
+    $boolv = function ($v) {
+        if ($v === null) return null;
+        if (is_bool($v)) return $v;
+        $s = strtolower(trim((string) $v));
+        if (in_array($s, ['1', 'true', 'yes', 'available', 'in_stock', 'instock', 'متاح', 'متوفر'], true)) return true;
+        if (in_array($s, ['0', 'false', 'no', 'unavailable', 'out_of_stock', 'outofstock', 'غير متاح', 'غير متوفر', 'نفذ'], true)) return false;
+        return (bool) $v;
+    };
+    $name = $pick('name', ['name']);
+    $imgs = $pick('imageUrls');
+    $s = fn ($v, $len) => $v !== null ? mb_substr((string) $v, 0, $len) : null;
     return [
-        'name' => (string)($get($name) ?? ''),
-        'nameAr' => (string)($get($nameAr) ?? $get($name) ?? ''),
-        'price' => (float)($get($price) ?? 0),
-        'imageUrl' => $get($img) ? (string)$get($img) : null,
-        'description' => $get($desc) ? (string)$get($desc) : null,
+        'name' => trim((string) ($name ?? '')),
+        'nameAr' => trim((string) ($pick('nameAr', ['name']) ?? $name ?? '')),
+        'description' => ($d = $pick('description')) !== null ? (string) $d : null,
+        'price' => $num($pick('price', ['price'])),        // null = unmapped → keep existing on update
+        'salePrice' => $num($pick('salePrice')),
+        'imageUrl' => ($i = $pick('imageUrl', ['image'])) ? (string) $i : null,
+        'imageUrls' => is_array($imgs) ? array_values(array_filter(array_map('strval', $imgs), fn ($x) => $x !== '')) : null,
+        'categoryName' => $s($pick('categoryName', ['category']), 120),
+        'stock' => $intv($pick('stock')),
+        'isAvailable' => $boolv($pick('isAvailable')),
+        'sku' => $s($pick('sku'), 80),
+        'externalId' => $s($pick('externalId'), 120),
+        'barcode' => $s($pick('barcode'), 80),
+        'weight' => $num($pick('weight')),
     ];
 }
 if ($method === 'POST' && preg_match('#^/admin/merchants/([^/]+)/api-config/test$#', $path, $m)) {
@@ -3148,12 +3320,25 @@ if ($method === 'POST' && preg_match('#^/admin/merchants/([^/]+)/api-config/test
     $res = fetchMerchantApi($cfg);
     if (!$res['ok']) jsonErr($res['reason'] ?? 'فشل الاختبار', 400, 'TEST_FAILED');
     db()->prepare('UPDATE `MerchantApiConfig` SET isConnected = 1, lastError = NULL, updatedAt = NOW(3) WHERE merchantId = ?')->execute([$m[1]]);
-    // Shape MUST match the dashboard TestResult: { ok, fetchedCount, sampleItems, sampleFields }.
+    // Field list = the UNION of keys across sample rows (not array_keys of the
+    // list, which produced 0,1,2…). Also send one example value per field so the
+    // dashboard can preview + auto-match.
+    $fieldSet = []; $sampleValues = [];
+    foreach (array_slice($res['items'], 0, 5) as $row) {
+        if (!is_array($row)) continue;
+        foreach ($row as $k => $v) {
+            $fieldSet[$k] = true;
+            if (!isset($sampleValues[$k]) && !is_array($v) && $v !== null && $v !== '') {
+                $sampleValues[$k] = mb_substr((string) $v, 0, 80);
+            }
+        }
+    }
     jsonOk([
         'ok' => true,
         'fetchedCount' => count($res['items']),
         'sampleItems' => array_slice($res['items'], 0, 3),
-        'sampleFields' => (!empty($res['items']) && is_array($res['items'][0])) ? array_keys($res['items'][0]) : [],
+        'sampleFields' => array_keys($fieldSet),
+        'sampleValues' => (object) $sampleValues,
     ]);
 }
 if ($method === 'POST' && preg_match('#^/admin/merchants/([^/]+)/api-config/sync$#', $path, $m)) {
@@ -3167,27 +3352,86 @@ if ($method === 'POST' && preg_match('#^/admin/merchants/([^/]+)/api-config/sync
         jsonErr($res['reason'] ?? 'فشلت المزامنة', 400, 'SYNC_FAILED');
     }
     $mapping = is_string($cfg['fieldMapping'] ?? null) ? (json_decode($cfg['fieldMapping'], true) ?: []) : ($cfg['fieldMapping'] ?? []);
-    $pdo = db(); $added = 0; $updated = 0;
-    $ins = $pdo->prepare('INSERT INTO `Product` (id, merchantId, name, nameAr, description, imageUrl, price, isAvailable, sortOrder, createdAt, updatedAt) VALUES (?,?,?,?,?,?,?,1,0,NOW(3),NOW(3))');
-    $upd = $pdo->prepare('UPDATE `Product` SET nameAr = ?, description = ?, imageUrl = ?, price = ?, updatedAt = NOW(3) WHERE id = ?');
+    if (!is_array($mapping)) $mapping = [];
+    $pdo = db(); $added = 0; $updated = 0; $failed = 0; $seen = [];
+    // Full-field upsert. imageUrls is stored as JSON; COALESCE(?, col) means an
+    // unmapped (null) field keeps the existing value instead of wiping it.
+    $ins = $pdo->prepare('INSERT INTO `Product`
+        (id, merchantId, name, nameAr, description, imageUrl, imageUrls, price, salePrice, categoryName, stock, isAvailable, sku, externalId, barcode, weight, sortOrder, isHidden, lastSyncedAt, createdAt, updatedAt)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,0,NOW(3),NOW(3),NOW(3))');
+    $upd = $pdo->prepare('UPDATE `Product` SET
+        nameAr = ?, name = ?,
+        description = COALESCE(?, description),
+        imageUrl = COALESCE(?, imageUrl),
+        imageUrls = COALESCE(?, imageUrls),
+        price = COALESCE(?, price),
+        salePrice = COALESCE(?, salePrice),
+        categoryName = COALESCE(?, categoryName),
+        stock = COALESCE(?, stock),
+        isAvailable = COALESCE(?, isAvailable),
+        sku = COALESCE(?, sku),
+        externalId = COALESCE(?, externalId),
+        barcode = COALESCE(?, barcode),
+        weight = COALESCE(?, weight),
+        isHidden = 0, lastSyncedAt = NOW(3), updatedAt = NOW(3)
+        WHERE id = ?');
     foreach ($res['items'] as $row) {
         $p = mapExternalProduct($row, $mapping);
         if ($p['name'] === '' && $p['nameAr'] === '') continue;
-        $find = $pdo->prepare('SELECT id FROM `Product` WHERE merchantId = ? AND name = ? LIMIT 1');
-        $find->execute([$m[1], $p['name']]); $ex = $find->fetch();
+        // De-dup within the merchant, best key first: SKU → externalId → name.
+        $ex = null;
+        if ($p['sku'] !== null) { $q = $pdo->prepare('SELECT id FROM `Product` WHERE merchantId = ? AND sku = ? LIMIT 1'); $q->execute([$m[1], $p['sku']]); $ex = $q->fetch(); }
+        if (!$ex && $p['externalId'] !== null) { $q = $pdo->prepare('SELECT id FROM `Product` WHERE merchantId = ? AND externalId = ? LIMIT 1'); $q->execute([$m[1], $p['externalId']]); $ex = $q->fetch(); }
+        if (!$ex) { $nm = $p['name'] !== '' ? $p['name'] : $p['nameAr']; $q = $pdo->prepare('SELECT id FROM `Product` WHERE merchantId = ? AND name = ? LIMIT 1'); $q->execute([$m[1], $nm]); $ex = $q->fetch(); }
+        $imgsJson = $p['imageUrls'] !== null ? json_encode($p['imageUrls'], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) : null;
+        $avail = $p['isAvailable'];
         try {
-            if ($ex) { $upd->execute([$p['nameAr'], $p['description'], $p['imageUrl'], $p['price'], $ex['id']]); $updated++; }
-            else { $ins->execute([newId(), $m[1], $p['name'] ?: $p['nameAr'], $p['nameAr'] ?: $p['name'], $p['description'], $p['imageUrl'], $p['price']]); $added++; }
-        } catch (PDOException $e) { error_log('[api.php] product upsert: ' . $e->getMessage()); }
+            if ($ex) {
+                $upd->execute([
+                    $p['nameAr'] ?: $p['name'], $p['name'] ?: $p['nameAr'],
+                    $p['description'], $p['imageUrl'], $imgsJson,
+                    $p['price'], $p['salePrice'], $p['categoryName'], $p['stock'],
+                    $avail === null ? null : ($avail ? 1 : 0),
+                    $p['sku'], $p['externalId'], $p['barcode'], $p['weight'], $ex['id'],
+                ]);
+                $seen[] = $ex['id']; $updated++;
+            } else {
+                $nid = newId();
+                $ins->execute([
+                    $nid, $m[1], $p['name'] ?: $p['nameAr'], $p['nameAr'] ?: $p['name'],
+                    $p['description'], $p['imageUrl'], $imgsJson,
+                    $p['price'] ?? 0, $p['salePrice'], $p['categoryName'], $p['stock'],
+                    $avail === null ? 1 : ($avail ? 1 : 0),
+                    $p['sku'], $p['externalId'], $p['barcode'], $p['weight'],
+                ]);
+                $seen[] = $nid; $added++;
+            }
+        } catch (PDOException $e) { $failed++; error_log('[api.php] product upsert: ' . $e->getMessage()); }
     }
+    // Missing-product policy: previously-synced products (lastSyncedAt set) the
+    // API no longer returns. Hand-entered products (lastSyncedAt NULL) untouched.
+    $policy = strtoupper((string) ($cfg['missingPolicy'] ?? 'IGNORE'));
+    $hidden = 0;
+    if ($policy !== 'IGNORE' && $seen) {
+        $ph = implode(',', array_fill(0, count($seen), '?'));
+        $byPolicy = [
+            'DELETE' => "DELETE FROM `Product` WHERE merchantId = ? AND lastSyncedAt IS NOT NULL AND id NOT IN ($ph)",
+            'HIDE' => "UPDATE `Product` SET isHidden = 1, updatedAt = NOW(3) WHERE merchantId = ? AND lastSyncedAt IS NOT NULL AND isHidden = 0 AND id NOT IN ($ph)",
+            'MARK_UNAVAILABLE' => "UPDATE `Product` SET isAvailable = 0, updatedAt = NOW(3) WHERE merchantId = ? AND lastSyncedAt IS NOT NULL AND isAvailable = 1 AND id NOT IN ($ph)",
+        ];
+        if (isset($byPolicy[$policy])) {
+            try { $q = $pdo->prepare($byPolicy[$policy]); $q->execute(array_merge([$m[1]], $seen)); $hidden = $q->rowCount(); }
+            catch (Throwable $e) { error_log('[api.php] missing-policy: ' . $e->getMessage()); }
+        }
+    }
+    $status = $failed > 0 ? 'PARTIAL' : 'SUCCESS';
     $pdo->prepare('UPDATE `MerchantApiConfig` SET isConnected = 1, lastError = NULL, lastSyncedAt = NOW(3), updatedAt = NOW(3) WHERE merchantId = ?')->execute([$m[1]]);
-    // log the sync if the table exists
     try {
         $pdo->prepare('INSERT INTO `ProductSyncLog` (id, merchantId, status, added, updated, message, createdAt) VALUES (?,?,?,?,?,?,NOW(3))')
-            ->execute([newId(), $m[1], 'SUCCESS', $added, $updated, "أُضيف $added، حُدّث $updated"]);
+            ->execute([newId(), $m[1], $status, $added, $updated, "أُضيف $added، حُدّث $updated" . ($failed ? "، فشل $failed" : '') . ($hidden ? "، محذوف/مخفي $hidden" : '')]);
     } catch (Throwable $e) { /* table shape may differ; ignore */ }
     jsonOk(['ok' => true, 'fetchedCount' => count($res['items']), 'createdCount' => $added, 'updatedCount' => $updated,
-        'failedCount' => 0, 'hiddenCount' => 0, 'added' => $added, 'updated' => $updated, 'total' => count($res['items'])]);
+        'failedCount' => $failed, 'hiddenCount' => $hidden, 'added' => $added, 'updated' => $updated, 'total' => count($res['items'])]);
 }
 if ($method === 'DELETE' && preg_match('#^/admin/merchants/([^/]+)/api-config$#', $path, $m)) {
     authUser();
@@ -3737,15 +3981,19 @@ if ($method === 'POST' && $path === '/admin/drivers') {
     $clean = preg_replace('/[\s\-()]/', '', $phone);
     if (preg_match('/^(?:\+?20|0)?(1[0125]\d{8})$/', $clean, $mm)) $phone = '+20' . $mm[1];
     $governorate = trim((string)($b['governorate'] ?? 'قنا')) ?: 'قنا';
+    // Driver's cut of the delivery fee (0–100%). Default 0 — the admin sets it.
+    $share = $b['deliverySharePct'] ?? 0;
+    if (!is_numeric($share) || (float)$share < 0 || (float)$share > 100) jsonErr('نسبة السائق يجب أن تكون بين 0 و100', 422, 'BAD_SHARE');
+    $share = round((float)$share, 2);
     $pdo = db();
     try {
         $pdo->beginTransaction();
         $uid = newId();
         $pdo->prepare('INSERT INTO `User` (id, name, phone, passwordHash, role, isActive, isPhoneVerified, governorate, createdAt, updatedAt) VALUES (?,?,?,?,?,1,1,?,NOW(3),NOW(3))')
             ->execute([$uid, $name, $phone, password_hash($pass, PASSWORD_BCRYPT), 'DRIVER', $governorate]);
-        $pdo->prepare('INSERT INTO `DriverProfile` (id, userId, status, vehicleType, vehiclePlate, nationalId, governorate, createdAt, updatedAt) VALUES (?,?,?,?,?,?,?,NOW(3),NOW(3))')
+        $pdo->prepare('INSERT INTO `DriverProfile` (id, userId, status, vehicleType, vehiclePlate, nationalId, governorate, deliverySharePct, createdAt, updatedAt) VALUES (?,?,?,?,?,?,?,?,NOW(3),NOW(3))')
             ->execute([newId(), $uid, 'OFFLINE', $vehicleType, $vehiclePlate,
-                (($b['nationalId'] ?? '') !== '' ? (string)$b['nationalId'] : null), $governorate]);
+                (($b['nationalId'] ?? '') !== '' ? (string)$b['nationalId'] : null), $governorate, $share]);
         $pdo->commit();
     } catch (PDOException $e) {
         if ($pdo->inTransaction()) $pdo->rollBack();
@@ -3835,6 +4083,13 @@ if ($method === 'PATCH' && preg_match('#^/admin/drivers/([^/]+)$#', $path, $m)) 
         foreach (['vehicleType', 'vehiclePlate', 'nationalId', 'governorate', 'status', 'notes'] as $f) {
             if (array_key_exists($f, $b) && isset($dcols[$f])) { $ds[] = "`$f` = ?"; $da[] = coerceForColumn($b[$f], $dcols[$f]); }
         }
+        // Driver delivery-fee share (0–100%). Validated separately from the
+        // generic loop so a bad value is rejected, not silently clamped.
+        if (array_key_exists('deliverySharePct', $b)) {
+            $share = $b['deliverySharePct'];
+            if (!is_numeric($share) || (float)$share < 0 || (float)$share > 100) { if ($pdo->inTransaction()) $pdo->rollBack(); jsonErr('نسبة السائق يجب أن تكون بين 0 و100', 422, 'BAD_SHARE'); }
+            $ds[] = '`deliverySharePct` = ?'; $da[] = round((float)$share, 2);
+        }
         if ($ds) { $ds[] = '`updatedAt` = NOW(3)'; $da[] = $id; $pdo->prepare('UPDATE `DriverProfile` SET ' . implode(',', $ds) . ' WHERE userId = ?')->execute($da); }
         $pdo->commit();
     } catch (PDOException $e) {
@@ -3844,6 +4099,54 @@ if ($method === 'PATCH' && preg_match('#^/admin/drivers/([^/]+)$#', $path, $m)) 
     }
     $r = $pdo->prepare('SELECT * FROM `User` WHERE id = ?'); $r->execute([$id]);
     jsonOk(jsonizeRow($r->fetch()) ?: []);
+}
+// Settle a driver's outstanding delivery dues: mark a batch of their delivered
+// orders SETTLED and record the settlement (amount + who + when). Body: optional
+// orderIds[] (explicit selection), else all still-PENDING delivered orders,
+// optionally bounded by from/to. Any order missing a snapshot is locked first.
+if ($method === 'POST' && preg_match('#^/admin/drivers/([^/]+)/settle$#', $path, $m)) {
+    $u = authUser(); if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
+    $driverId = $m[1]; $b = readJsonBody(); $pdo = db();
+    $w = ["o.assignedDriverId = ?", "o.status IN ('DELIVERED','COMPLETED')", "o.driverSettlementStatus <> 'SETTLED'"]; $a = [$driverId];
+    $ids = $b['orderIds'] ?? null;
+    if (is_array($ids) && $ids) {
+        $w[] = 'o.id IN (' . implode(',', array_fill(0, count($ids), '?')) . ')';
+        foreach ($ids as $id) $a[] = (string) $id;
+    } else {
+        $from = trim((string) ($b['from'] ?? '')); $to = trim((string) ($b['to'] ?? ''));
+        if ($from !== '') { $w[] = "COALESCE(o.deliveredAt, o.completedAt, o.updatedAt) >= ?"; $a[] = $from . ' 00:00:00'; }
+        if ($to !== '')   { $w[] = "COALESCE(o.deliveredAt, o.completedAt, o.updatedAt) <= ?"; $a[] = $to . ' 23:59:59'; }
+    }
+    $sel = $pdo->prepare("SELECT o.id, o.driverDeliveryRevenue FROM `Order` o WHERE " . implode(' AND ', $w));
+    $sel->execute($a);
+    $rows = $sel->fetchAll();
+    if (!$rows) jsonErr('لا توجد طلبات مستحقة للتسوية', 422, 'NOTHING_TO_SETTLE');
+    $orderIds = [];
+    foreach ($rows as $r) { if ($r['driverDeliveryRevenue'] === null) snapshotDriverShare($r['id']); $orderIds[] = $r['id']; }
+    $ph = implode(',', array_fill(0, count($orderIds), '?'));
+    $amt = $pdo->prepare("SELECT COALESCE(SUM(driverDeliveryRevenue), 0) FROM `Order` WHERE id IN ($ph)");
+    $amt->execute($orderIds); $amount = round((float) $amt->fetchColumn(), 2);
+    $note = mb_substr(trim((string) ($b['note'] ?? '')), 0, 255);
+    $sid = newId();
+    try {
+        $pdo->beginTransaction();
+        $pdo->prepare('INSERT INTO `DriverSettlement` (id, driverId, amount, orderCount, note, createdById, createdAt) VALUES (?,?,?,?,?,?,NOW(3))')
+            ->execute([$sid, $driverId, $amount, count($orderIds), $note !== '' ? $note : null, $u['sub'] ?? null]);
+        $pdo->prepare("UPDATE `Order` SET driverSettlementStatus = 'SETTLED', driverSettledAt = NOW(3), driverSettlementId = ?, updatedAt = NOW(3) WHERE id IN ($ph)")
+            ->execute(array_merge([$sid], $orderIds));
+        $pdo->commit();
+    } catch (Throwable $e) { if ($pdo->inTransaction()) $pdo->rollBack(); error_log('[api.php] settle: ' . $e->getMessage()); jsonErr('تعذّرت التسوية', 422, 'SETTLE_FAILED'); }
+    jsonOk(['settlementId' => $sid, 'driverId' => $driverId, 'amount' => $amount, 'orderCount' => count($orderIds)]);
+}
+// Settlement history for a driver (audit trail of paid batches).
+if ($method === 'GET' && preg_match('#^/admin/drivers/([^/]+)/settlements$#', $path, $m)) {
+    $u = authUser(); if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
+    $st = db()->prepare('SELECT id, amount, orderCount, note, createdAt FROM `DriverSettlement` WHERE driverId = ? ORDER BY createdAt DESC LIMIT 200');
+    $st->execute([$m[1]]);
+    jsonOk(['settlements' => array_map(static fn ($r) => [
+        'id' => $r['id'], 'amount' => (float) $r['amount'], 'orderCount' => (int) $r['orderCount'],
+        'note' => $r['note'], 'createdAt' => isoZ($r['createdAt']),
+    ], $st->fetchAll())]);
 }
 if ($method === 'DELETE' && preg_match('#^/admin/drivers/([^/]+)$#', $path, $m)) {
     $u = authUser(); if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
@@ -3910,6 +4213,8 @@ if ($method === 'PATCH' && preg_match('#^/admin/orders/([^/]+)/status$#', $path,
     $args[] = $m[1];
     try { db()->prepare('UPDATE `Order` SET ' . implode(',', $sets) . ' WHERE id = ?')->execute($args); }
     catch (PDOException $e) { error_log('[api.php] order status: ' . $e->getMessage()); jsonErr('تعذّر تحديث الحالة', 422, 'FAILED'); }
+    // Lock the driver's delivery-fee share at delivery (final fee, final %).
+    if (in_array($status, ['DELIVERED', 'COMPLETED'], true)) snapshotDriverShare($m[1]);
     // The order is over — hand the driver back to the available pool, unless
     // they're still carrying another one. Without this, assigning once would
     // mark a driver BUSY for good and quietly drain the assignable list.
@@ -3979,6 +4284,8 @@ if ($method === 'PATCH' && preg_match('#^/admin/orders/([^/]+)/assign-driver$#',
     // "available" and collect a second order.
     db()->prepare("UPDATE `DriverProfile` SET `status` = 'BUSY', `updatedAt` = NOW(3) WHERE userId = ?")
         ->execute([$driverId]);
+    // Freeze the driver's delivery-fee share onto the order at assignment.
+    snapshotDriverShare($m[1]);
     // Notifies the driver (new assignment + pickup/delivery) AND the customer.
     notifyOrderParties($m[1], 'DRIVER_ASSIGNED');
     $r = db()->prepare('SELECT * FROM `Order` WHERE id = ?'); $r->execute([$m[1]]);
@@ -5065,19 +5372,9 @@ if ($method === 'POST' && $path === '/orders/cart') {
     // so app, dashboard and manual orders can never disagree.
     computeOrderFinancials($parentId);
     alertNewOrder($parentId, $parentNo);
-    // Best-effort side channels — never fail the order.
-    try {
-        $ph = db()->prepare('SELECT phone FROM `User` WHERE id = ?');
-        $ph->execute([$uid]);
-        $cu = $ph->fetch();
-        if ($cu) waEnqueue($cu['phone'], "تميم للتوصيل 🚚\nتم استلام طلبك رقم *#$parentNo*\nجاري المراجعة والتسعير، هنبعتلك التفاصيل حالاً.");
-        [$dow, $mins] = nowCairo();
-        foreach (db()->query('SELECT * FROM `Supervisor` WHERE isActive = 1')->fetchAll() as $sup) {
-            foreach (shiftsForSupervisor($sup['id']) as $sh) {
-                if (shiftCoversNow($sh, $dow, $mins)) { waEnqueue($sup['whatsappPhone'] ?? null, "🆕 طلب جديد *#$parentNo*\nالعنوان: $addr"); break; }
-            }
-        }
-    } catch (Throwable $e) { error_log('[api.php] order notify failed: ' . $e->getMessage()); }
+    // New-order WhatsApp fan-out — customer + supervisor + group + extras via
+    // the editable notification templates (single source of truth).
+    notifyOrderParties($parentId, 'NEW');
 
     $st = db()->prepare('SELECT * FROM `Order` WHERE id = ?');
     $st->execute([$parentId]);
@@ -5108,6 +5405,7 @@ if (preg_match('#^/orders/from/([^/]+)$#', $path, $mm) && $method === 'POST') {
     orderHistory($id, null, 'NEW', $uid, 'CUSTOMER', 'Reorder from ' . $src['orderNumber']);
     computeOrderFinancials($id);
     alertNewOrder($id, $no);
+    notifyOrderParties($id, 'NEW'); // customer + supervisor + group + extras via templates
     $st->execute([$id]);
     jsonOk(orderRow($st->fetch()), 201); // OrdersScreen toasts newOrder.orderNumber
 }
@@ -5217,18 +5515,10 @@ if ($method === 'POST' && $path === '/orders') {
     }
     orderHistory($id, null, 'NEW', $uid, 'CUSTOMER', 'Order placed');
     notifyUser($uid, 'ORDER_STATUS', 'Order received', 'تم استلام طلبك', "Order $no received", "طلبك رقم $no تم استلامه وجاري مراجعته", ['orderId' => $id, 'orderNumber' => $no]);
-    try {
-        $ph = db()->prepare('SELECT phone FROM `User` WHERE id = ?');
-        $ph->execute([$uid]);
-        $cu = $ph->fetch();
-        if ($cu) waEnqueue($cu['phone'], "تميم للتوصيل 🚚\nتم استلام طلبك رقم *#$no*\nجاري المراجعة والتسعير.");
-        [$dow, $mins] = nowCairo();
-        foreach (db()->query('SELECT * FROM `Supervisor` WHERE isActive = 1')->fetchAll() as $sup) {
-            foreach (shiftsForSupervisor($sup['id']) as $sh) {
-                if (shiftCoversNow($sh, $dow, $mins)) { waEnqueue($sup['whatsappPhone'] ?? null, "🆕 طلب جديد *#$no*"); break; }
-            }
-        }
-    } catch (Throwable $e) { error_log('[api.php] order notify failed: ' . $e->getMessage()); }
+    // New-order WhatsApp fan-out — customer + supervisor + group + extra
+    // recipients, all through the editable notification templates (one source
+    // of truth). Replaces the old hardcoded customer + on-shift supervisor sends.
+    notifyOrderParties($id, 'NEW');
     $st = db()->prepare('SELECT * FROM `Order` WHERE id = ?');
     $st->execute([$id]);
     jsonOk(orderRow($st->fetch()), 201);

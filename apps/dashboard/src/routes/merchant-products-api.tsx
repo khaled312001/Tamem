@@ -63,6 +63,7 @@ interface TestResult {
   error?: string;
   sampleItems?: unknown[];
   sampleFields?: string[];
+  sampleValues?: Record<string, string>;
 }
 
 interface SyncLog {
@@ -80,21 +81,90 @@ interface SyncLog {
 }
 
 const APP_FIELDS = [
-  { key: 'nameAr', label: 'اسم المنتج (عربي)' },
-  { key: 'name', label: 'اسم المنتج (إنجليزي)' },
-  { key: 'description', label: 'الوصف' },
-  { key: 'price', label: 'السعر' },
-  { key: 'salePrice', label: 'سعر الخصم' },
-  { key: 'imageUrl', label: 'صورة المنتج' },
-  { key: 'imageUrls', label: 'صور إضافية' },
-  { key: 'categoryName', label: 'التصنيف' },
-  { key: 'stock', label: 'الكمية' },
-  { key: 'isAvailable', label: 'حالة التوفر' },
-  { key: 'sku', label: 'SKU' },
-  { key: 'externalId', label: 'External ID' },
-  { key: 'barcode', label: 'الباركود' },
-  { key: 'weight', label: 'الوزن' },
+  {
+    key: 'nameAr',
+    label: 'اسم المنتج (عربي)',
+    required: true,
+    aliases: ['namear', 'arabicname', 'titlear', 'name', 'title', 'nameen'],
+  },
+  {
+    key: 'name',
+    label: 'اسم المنتج (إنجليزي)',
+    aliases: ['nameen', 'name', 'title', 'productname', 'titleen'],
+  },
+  {
+    key: 'description',
+    label: 'الوصف',
+    aliases: ['description', 'desc', 'details', 'body', 'longdescription'],
+  },
+  {
+    key: 'price',
+    label: 'السعر',
+    required: true,
+    aliases: ['price', 'cost', 'amount', 'unitprice', 'sellprice', 'regularprice'],
+  },
+  {
+    key: 'salePrice',
+    label: 'سعر الخصم',
+    aliases: ['saleprice', 'discountprice', 'specialprice', 'offerprice', 'originalprice'],
+  },
+  {
+    key: 'imageUrl',
+    label: 'صورة المنتج',
+    aliases: ['image', 'imageurl', 'img', 'thumbnail', 'picture', 'photo', 'mainimage'],
+  },
+  {
+    key: 'imageUrls',
+    label: 'صور إضافية',
+    aliases: ['images', 'imageurls', 'gallery', 'photos', 'pictures'],
+  },
+  {
+    key: 'categoryName',
+    label: 'التصنيف',
+    aliases: ['category', 'categoryname', 'cat', 'type', 'group'],
+  },
+  { key: 'stock', label: 'الكمية', aliases: ['stock', 'quantity', 'qty', 'inventory', 'count'] },
+  {
+    key: 'isAvailable',
+    label: 'حالة التوفر',
+    aliases: ['instock', 'isavailable', 'available', 'status', 'active', 'enabled'],
+  },
+  { key: 'sku', label: 'SKU', aliases: ['sku', 'code', 'productcode', 'itemcode', 'ref'] },
+  { key: 'externalId', label: 'External ID', aliases: ['id', 'externalid', 'productid', 'uuid'] },
+  { key: 'barcode', label: 'الباركود', aliases: ['barcode', 'ean', 'upc', 'gtin'] },
+  { key: 'weight', label: 'الوزن', aliases: ['weight', 'wt', 'mass', 'gram'] },
 ] as const;
+
+const REQUIRED_KEYS = APP_FIELDS.filter((f) => 'required' in f && f.required).map((f) => f.key);
+
+/** Normalise a field name for fuzzy matching: lowercase, strip separators. */
+function normKey(s: string): string {
+  return s.toLowerCase().replace(/[\s_\-.]/g, '');
+}
+
+/** Best-effort auto-map app fields ← API fields by name similarity. Keeps any
+ *  mapping the admin already set; only fills the blanks. */
+function autoMatch(
+  sampleFields: string[],
+  current: Record<string, string>,
+): Record<string, string> {
+  const norm = sampleFields.map((f) => ({ raw: f, n: normKey(f) }));
+  const used = new Set(Object.values(current));
+  const next = { ...current };
+  for (const af of APP_FIELDS) {
+    if (next[af.key]) continue;
+    const aliases = (af.aliases as readonly string[]).map(normKey);
+    const selfKey = normKey(af.key);
+    const hit =
+      norm.find((s) => !used.has(s.raw) && aliases.includes(s.n)) ??
+      norm.find((s) => !used.has(s.raw) && s.n === selfKey);
+    if (hit) {
+      next[af.key] = hit.raw;
+      used.add(hit.raw);
+    }
+  }
+  return next;
+}
 
 const INTERVAL_LABELS: Record<Interval, string> = {
   DISABLED: 'إيقاف',
@@ -233,8 +303,18 @@ export function MerchantProductsApiPage() {
       return res;
     },
     onSuccess: (res: TestResult) => {
-      if (res.ok) toast.success(`✓ الاتصال ناجح — ${res.fetchedCount} منتج`);
-      else toast.error(`✕ فشل الاتصال — ${res.error ?? 'خطأ غير معروف'}`);
+      if (res.ok) {
+        toast.success(`✓ الاتصال ناجح — ${res.fetchedCount} منتج`);
+        // Auto-fill the mapping the first time (nothing set yet), so the admin
+        // usually only has to review, not build it field by field.
+        if (res.sampleFields?.length && Object.keys(fieldMapping).length === 0) {
+          const auto = autoMatch(res.sampleFields, fieldMapping);
+          if (Object.keys(auto).length) {
+            setFieldMapping(auto);
+            toast.success(`تمت مطابقة ${Object.keys(auto).length} حقل تلقائياً — راجعها`);
+          }
+        }
+      } else toast.error(`✕ فشل الاتصال — ${res.error ?? 'خطأ غير معروف'}`);
       qc.invalidateQueries({ queryKey: ['admin', 'merchant-api', merchantId] });
     },
     onError: (err: Error) => toast.error(err.message),
@@ -491,37 +571,84 @@ export function MerchantProductsApiPage() {
       {test?.ok && test.sampleFields && test.sampleFields.length > 0 && (
         <Section
           title="مطابقة الحقول"
-          hint="حدد أي حقل من API يقابل كل حقل داخل التطبيق. النظام يحفظ المطابقة مع كل عملية حفظ."
+          hint="لكل حقل في التطبيق، اختر الحقل المقابل له من الـ API. المعاينة تعرض قيمة فعلية من أول منتج."
+          rightSlot={
+            <button
+              onClick={() => {
+                setFieldMapping((prev) => autoMatch(test.sampleFields ?? [], prev));
+                toast.success('تمت المطابقة التلقائية — راجعها قبل الحفظ');
+              }}
+              className="inline-flex items-center gap-1 text-xs font-bold text-brand-red hover:underline shrink-0"
+            >
+              <RefreshCcw className="w-3 h-3" /> مطابقة تلقائية
+            </button>
+          }
         >
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-            {APP_FIELDS.map((f) => (
-              <div key={f.key} className="flex items-center gap-2">
-                <label className="text-sm font-bold w-32 shrink-0">{f.label}</label>
-                <span className="text-muted-foreground">←</span>
-                <select
-                  value={fieldMapping[f.key] ?? ''}
-                  onChange={(e) =>
-                    setFieldMapping((prev) => {
-                      const next = { ...prev };
-                      if (e.target.value) next[f.key] = e.target.value;
-                      else delete next[f.key];
-                      return next;
-                    })
-                  }
-                  className="flex-1 px-2 py-1 rounded border border-input text-sm bg-white"
-                >
-                  <option value="">— تجاهل —</option>
-                  {(test.sampleFields ?? []).map((sf) => (
-                    <option key={sf} value={sf}>
-                      {sf}
-                    </option>
-                  ))}
-                </select>
+          {/* Missing-required warning */}
+          {(() => {
+            const missing = REQUIRED_KEYS.filter((k) => !fieldMapping[k]);
+            if (!missing.length) return null;
+            const labels = missing
+              .map((k) => APP_FIELDS.find((f) => f.key === k)?.label)
+              .filter(Boolean)
+              .join('، ');
+            return (
+              <div className="bg-amber-50 border border-amber-200 text-amber-800 rounded-lg p-2 text-xs font-bold">
+                ⚠ حقول إلزامية غير مربوطة: {labels}
               </div>
-            ))}
+            );
+          })()}
+
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-2">
+            {APP_FIELDS.map((f) => {
+              const src = fieldMapping[f.key] ?? '';
+              const preview = src ? test.sampleValues?.[src] : undefined;
+              const required = 'required' in f && f.required;
+              return (
+                <div
+                  key={f.key}
+                  className={`flex items-center gap-2 rounded-lg border p-2 ${
+                    required && !src ? 'border-amber-300 bg-amber-50/40' : 'border-border'
+                  }`}
+                >
+                  <label className="text-sm font-bold w-28 shrink-0 flex items-center gap-1">
+                    {f.label}
+                    {required && <span className="text-brand-red">*</span>}
+                  </label>
+                  <span className="text-muted-foreground shrink-0">←</span>
+                  <div className="flex-1 min-w-0">
+                    <select
+                      value={src}
+                      onChange={(e) =>
+                        setFieldMapping((prev) => {
+                          const next = { ...prev };
+                          if (e.target.value) next[f.key] = e.target.value;
+                          else delete next[f.key];
+                          return next;
+                        })
+                      }
+                      className="w-full px-2 py-1 rounded border border-input text-sm bg-white"
+                    >
+                      <option value="">— تجاهل —</option>
+                      {(test.sampleFields ?? []).map((sf) => (
+                        <option key={sf} value={sf}>
+                          {sf}
+                        </option>
+                      ))}
+                    </select>
+                    {preview !== undefined && (
+                      <div className="text-[11px] text-muted-foreground truncate mt-0.5" dir="ltr">
+                        = {preview}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
           </div>
           <p className="text-xs text-muted-foreground mt-2">
-            ⓘ الحقول الإلزامية: اسم المنتج (عربي) + السعر. الباقي اختياري.
+            ⓘ الحقول المعلَّمة بـ <span className="text-brand-red font-bold">*</span> إلزامية.
+            النظام يطابق الحقول تلقائياً عند أول اختبار ناجح، ويعرّف المنتج بالـ SKU إن وُجد.
           </p>
         </Section>
       )}

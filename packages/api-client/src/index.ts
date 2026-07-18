@@ -871,8 +871,17 @@ export class TamemClient {
   async adminReportServices(): Promise<unknown[]> {
     return this.request({ method: 'GET', url: '/admin/reports/services' });
   }
-  async adminReportDrivers(): Promise<unknown[]> {
-    return this.request({ method: 'GET', url: '/admin/reports/drivers' });
+  async adminReportDrivers(params?: Record<string, unknown>): Promise<unknown> {
+    return this.request({ method: 'GET', url: '/admin/reports/drivers', params });
+  }
+  async adminReportDriverDetail(id: string, params?: Record<string, unknown>): Promise<unknown> {
+    return this.request({ method: 'GET', url: `/admin/reports/drivers/${id}`, params });
+  }
+  async adminSettleDriver(id: string, data?: unknown): Promise<unknown> {
+    return this.request({ method: 'POST', url: `/admin/drivers/${id}/settle`, data });
+  }
+  async adminDriverSettlements(id: string): Promise<unknown> {
+    return this.request({ method: 'GET', url: `/admin/drivers/${id}/settlements` });
   }
   async adminReportCustomers(): Promise<unknown[]> {
     return this.request({ method: 'GET', url: '/admin/reports/customers' });

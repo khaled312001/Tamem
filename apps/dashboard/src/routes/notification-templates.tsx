@@ -84,8 +84,19 @@ const SAMPLES: Record<string, string> = {
   serviceName: 'دليفري',
   pickupAddress: 'قنا - شارع الجمهورية',
   deliveryAddress: 'قفط - أمام المستشفى',
-  paymentMethod: 'CASH',
+  paymentMethod: 'كاش عند الاستلام',
+  payment: 'كاش عند الاستلام — غير مدفوع',
   reason: 'العميل ألغى الطلب',
+  // Multi-line values — mirror what the server composes at send time so the
+  // preview shows the full message, not blank gaps.
+  items: '• 2× بيتزا فراخ (75.00 ج.م)\n• 1× بيبسي (10.00 ج.م)',
+  locations:
+    '📍 الاستلام: قنا - شارع الجمهورية\n   📍 خريطة: https://maps.google.com/?q=26.16,32.72\n🏁 التوصيل: قفط - أمام المستشفى\n   📍 خريطة: https://maps.google.com/?q=25.99,32.81',
+  priceBlock: 'قيمة الطلب: 160.00 ج.م\nالتوصيل: 25.00 ج.م\n*الإجمالي: 185.00 ج.م*',
+  summary:
+    '🧾 الطلب رقم *#TMM12AB34*\nالخدمة: دليفري\n\n🛒 التفاصيل:\n• 2× بيتزا فراخ\n\n📍 الاستلام: قنا\n🏁 التوصيل: قفط\n\n💳 الدفع: كاش عند الاستلام\nقيمة الطلب: 160.00 ج.م\nالتوصيل: 25.00 ج.م\n*الإجمالي: 185.00 ج.م*',
+  collect: 'حصّل *185.00 ج.م* (كاش عند الاستلام)',
+  shipping: 'الوزن: 2 كجم · الحجم: SMALL',
 };
 
 export function NotificationTemplatesPage() {
