@@ -3447,14 +3447,25 @@ if ($method === 'PUT' && preg_match('#^/admin/merchants/([^/]+)/api-config$#', $
     $id = $m[1]; $b = readJsonBody(); $cols = tableColumns('MerchantApiConfig');
     $st = db()->prepare('SELECT id FROM `MerchantApiConfig` WHERE merchantId = ? LIMIT 1'); $st->execute([$id]); $ex = $st->fetch();
     try {
+        // The client calls the credential `token`, but the column is
+        // `tokenSecret`. The generic loop below only copies keys that ARE
+        // columns, so `token` was silently dropped and every authenticated
+        // merchant API was then fetched with NO Authorization header —
+        // which looks exactly like "the API returned no products".
+        // Contract: key absent or null → keep what's saved; '' → clear it;
+        // anything else → replace.
+        $tokenGiven = array_key_exists('token', $b) && $b['token'] !== null;
+        $tokenValue = $tokenGiven ? (trim((string) $b['token']) === '' ? null : (string) $b['token']) : null;
         if ($ex) {
             $sets = []; $args = [];
             foreach ($b as $k => $v) if (isset($cols[$k]) && !in_array($k, ['id', 'merchantId', 'createdAt', 'updatedAt'], true)) { $sets[] = "`$k` = ?"; $args[] = coerceForColumn($v, $cols[$k]); }
+            if ($tokenGiven && isset($cols['tokenSecret'])) { $sets[] = '`tokenSecret` = ?'; $args[] = $tokenValue; }
             if ($sets) { $sets[] = '`updatedAt` = NOW(3)'; $args[] = $ex['id']; db()->prepare('UPDATE `MerchantApiConfig` SET ' . implode(',', $sets) . ' WHERE id = ?')->execute($args); }
             $newId = $ex['id'];
         } else {
             $names = ['`id`', '`merchantId`']; $ph = ['?', '?']; $args = [$newId = newId(), $id];
             foreach ($b as $k => $v) if (isset($cols[$k]) && !in_array($k, ['id', 'merchantId', 'createdAt', 'updatedAt'], true)) { $names[] = "`$k`"; $ph[] = '?'; $args[] = coerceForColumn($v, $cols[$k]); }
+            if ($tokenGiven && isset($cols['tokenSecret'])) { $names[] = '`tokenSecret`'; $ph[] = '?'; $args[] = $tokenValue; }
             if (!in_array('`apiUrl`', $names, true)) { $names[] = '`apiUrl`'; $ph[] = '?'; $args[] = (string)($b['apiUrl'] ?? ''); }
             $names[] = '`createdAt`'; $ph[] = 'NOW(3)'; $names[] = '`updatedAt`'; $ph[] = 'NOW(3)';
             db()->prepare('INSERT INTO `MerchantApiConfig` (' . implode(',', $names) . ') VALUES (' . implode(',', $ph) . ')')->execute($args);
