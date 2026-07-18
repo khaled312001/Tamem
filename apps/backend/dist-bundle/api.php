@@ -3038,7 +3038,8 @@ if ($method === 'GET' && $path === '/admin/drivers') {
         "SELECT u.*, dp.id AS dp_id, dp.status AS dp_status, dp.vehicleType AS dp_vehicleType, dp.vehiclePlate AS dp_vehiclePlate,
                 dp.nationalId AS dp_nationalId, dp.governorate AS dp_governorate, dp.totalDeliveries AS dp_totalDeliveries,
                 dp.totalEarnings AS dp_totalEarnings, dp.cashOnHand AS dp_cashOnHand, dp.rating AS dp_rating,
-                dp.deliverySharePct AS dp_deliverySharePct
+                dp.deliverySharePct AS dp_deliverySharePct,
+                dp.vehicleImageUrl AS dp_vehicleImageUrl, dp.idCardFrontUrl AS dp_idCardFrontUrl, dp.idCardBackUrl AS dp_idCardBackUrl
          FROM `User` u LEFT JOIN `DriverProfile` dp ON dp.userId = u.id
          WHERE $dWhere ORDER BY u.createdAt DESC LIMIT $size OFFSET $off"
     );
@@ -3047,6 +3048,7 @@ if ($method === 'GET' && $path === '/admin/drivers') {
     foreach ($st->fetchAll() as $r) {
         $row = jsonizeRow([
             'id' => $r['id'], 'name' => $r['name'], 'phone' => $r['phone'], 'email' => $r['email'],
+            'avatarUrl' => $r['avatarUrl'] ?? null,
             'isActive' => (bool)(int)$r['isActive'], 'city' => $r['city'], 'governorate' => $r['governorate'],
             'createdAt' => $r['createdAt'],
         ]);
@@ -3056,6 +3058,7 @@ if ($method === 'GET' && $path === '/admin/drivers') {
             'governorate' => $r['dp_governorate'], 'totalDeliveries' => (int)$r['dp_totalDeliveries'],
             'totalEarnings' => $r['dp_totalEarnings'], 'cashOnHand' => $r['dp_cashOnHand'], 'rating' => $r['dp_rating'],
             'deliverySharePct' => $r['dp_deliverySharePct'] !== null ? (float)$r['dp_deliverySharePct'] : 0,
+            'vehicleImageUrl' => $r['dp_vehicleImageUrl'], 'idCardFrontUrl' => $r['dp_idCardFrontUrl'], 'idCardBackUrl' => $r['dp_idCardBackUrl'],
         ] : null;
         $rows[] = $row;
     }
@@ -3077,7 +3080,8 @@ if ($method === 'GET' && preg_match('#^/admin/drivers/([^/]+)$#', $path, $m)) {
                 dp.id AS dp_id, dp.status AS dp_status, dp.vehicleType AS dp_vehicleType, dp.vehiclePlate AS dp_vehiclePlate,
                 dp.nationalId AS dp_nationalId, dp.governorate AS dp_governorate, dp.totalDeliveries AS dp_totalDeliveries,
                 dp.totalEarnings AS dp_totalEarnings, dp.cashOnHand AS dp_cashOnHand, dp.rating AS dp_rating,
-                dp.deliverySharePct AS dp_deliverySharePct
+                dp.deliverySharePct AS dp_deliverySharePct,
+                dp.vehicleImageUrl AS dp_vehicleImageUrl, dp.idCardFrontUrl AS dp_idCardFrontUrl, dp.idCardBackUrl AS dp_idCardBackUrl
          FROM `User` u LEFT JOIN `DriverProfile` dp ON dp.userId = u.id
          WHERE u.id = ? AND u.role = 'DRIVER' LIMIT 1"
     );
@@ -3094,6 +3098,7 @@ if ($method === 'GET' && preg_match('#^/admin/drivers/([^/]+)$#', $path, $m)) {
             'governorate' => $r['dp_governorate'], 'totalDeliveries' => (int) $r['dp_totalDeliveries'],
             'totalEarnings' => $r['dp_totalEarnings'], 'cashOnHand' => $r['dp_cashOnHand'], 'rating' => $r['dp_rating'],
             'deliverySharePct' => $r['dp_deliverySharePct'] !== null ? (float) $r['dp_deliverySharePct'] : 0,
+            'vehicleImageUrl' => $r['dp_vehicleImageUrl'], 'idCardFrontUrl' => $r['dp_idCardFrontUrl'], 'idCardBackUrl' => $r['dp_idCardBackUrl'],
         ] : null,
     ];
     // Reviews for this driver, newest first, with the order number.
@@ -3988,12 +3993,17 @@ if ($method === 'POST' && $path === '/admin/drivers') {
     $b = readJsonBody();
     $name = trim((string)($b['name'] ?? ''));
     $phone = trim((string)($b['phone'] ?? ''));
-    $pass = (string)($b['password'] ?? '');
     $vehicleType = trim((string)($b['vehicleType'] ?? ''));
     $vehiclePlate = trim((string)($b['vehiclePlate'] ?? ''));
-    if ($name === '' || $phone === '' || strlen($pass) < 6 || $vehicleType === '' || $vehiclePlate === '') {
-        jsonErr('بيانات ناقصة: الاسم، الهاتف، كلمة المرور، نوع المركبة، ولوحتها مطلوبين', 422, 'MISSING');
+    if ($name === '' || $phone === '' || $vehicleType === '' || $vehiclePlate === '') {
+        jsonErr('بيانات ناقصة: الاسم، الهاتف، نوع المركبة، ولوحتها مطلوبين', 422, 'MISSING');
     }
+    // Password is no longer entered when adding a driver. Accept one if sent
+    // (kept for compatibility), else auto-generate a strong one — the driver
+    // signs in via OTP / reset-password, so a login secret isn't needed here.
+    $pass = (string)($b['password'] ?? '');
+    if ($pass !== '' && strlen($pass) < 6) jsonErr('كلمة المرور قصيرة (6 أحرف على الأقل)', 422, 'WEAK_PASSWORD');
+    if ($pass === '') $pass = bin2hex(random_bytes(9));
     $clean = preg_replace('/[\s\-()]/', '', $phone);
     if (preg_match('/^(?:\+?20|0)?(1[0125]\d{8})$/', $clean, $mm)) $phone = '+20' . $mm[1];
     $governorate = trim((string)($b['governorate'] ?? 'قنا')) ?: 'قنا';
@@ -4005,11 +4015,12 @@ if ($method === 'POST' && $path === '/admin/drivers') {
     try {
         $pdo->beginTransaction();
         $uid = newId();
-        $pdo->prepare('INSERT INTO `User` (id, name, phone, passwordHash, role, isActive, isPhoneVerified, governorate, createdAt, updatedAt) VALUES (?,?,?,?,?,1,1,?,NOW(3),NOW(3))')
-            ->execute([$uid, $name, $phone, password_hash($pass, PASSWORD_BCRYPT), 'DRIVER', $governorate]);
-        $pdo->prepare('INSERT INTO `DriverProfile` (id, userId, status, vehicleType, vehiclePlate, nationalId, governorate, deliverySharePct, createdAt, updatedAt) VALUES (?,?,?,?,?,?,?,?,NOW(3),NOW(3))')
+        $nn = fn ($k) => trim((string) ($b[$k] ?? '')) !== '' ? trim((string) $b[$k]) : null;
+        $pdo->prepare('INSERT INTO `User` (id, name, phone, passwordHash, role, isActive, isPhoneVerified, governorate, avatarUrl, createdAt, updatedAt) VALUES (?,?,?,?,?,1,1,?,?,NOW(3),NOW(3))')
+            ->execute([$uid, $name, $phone, password_hash($pass, PASSWORD_BCRYPT), 'DRIVER', $governorate, $nn('avatarUrl')]);
+        $pdo->prepare('INSERT INTO `DriverProfile` (id, userId, status, vehicleType, vehiclePlate, nationalId, governorate, deliverySharePct, vehicleImageUrl, idCardFrontUrl, idCardBackUrl, createdAt, updatedAt) VALUES (?,?,?,?,?,?,?,?,?,?,?,NOW(3),NOW(3))')
             ->execute([newId(), $uid, 'OFFLINE', $vehicleType, $vehiclePlate,
-                (($b['nationalId'] ?? '') !== '' ? (string)$b['nationalId'] : null), $governorate, $share]);
+                $nn('nationalId'), $governorate, $share, $nn('vehicleImageUrl'), $nn('idCardFrontUrl'), $nn('idCardBackUrl')]);
         $pdo->commit();
     } catch (PDOException $e) {
         if ($pdo->inTransaction()) $pdo->rollBack();
@@ -4094,9 +4105,11 @@ if ($method === 'PATCH' && preg_match('#^/admin/drivers/([^/]+)$#', $path, $m)) 
         if (array_key_exists('name', $b)) { $us[] = '`name` = ?'; $ua[] = (string)$b['name']; }
         if (array_key_exists('phone', $b)) { $ph = (string)$b['phone']; $cl = preg_replace('/[\s\-()]/', '', $ph); if (preg_match('/^(?:\+?20|0)?(1[0125]\d{8})$/', $cl, $mm)) $ph = '+20' . $mm[1]; $us[] = '`phone` = ?'; $ua[] = $ph; }
         if (array_key_exists('isActive', $b)) { $us[] = '`isActive` = ?'; $ua[] = $b['isActive'] ? 1 : 0; }
+        // Driver photo lives on the User row. '' clears it, a URL sets it.
+        if (array_key_exists('avatarUrl', $b)) { $av = trim((string) $b['avatarUrl']); $us[] = '`avatarUrl` = ?'; $ua[] = $av !== '' ? $av : null; }
         if ($us) { $us[] = '`updatedAt` = NOW(3)'; $ua[] = $id; $pdo->prepare('UPDATE `User` SET ' . implode(',', $us) . ' WHERE id = ?')->execute($ua); }
         $dcols = tableColumns('DriverProfile'); $ds = []; $da = [];
-        foreach (['vehicleType', 'vehiclePlate', 'nationalId', 'governorate', 'status', 'notes'] as $f) {
+        foreach (['vehicleType', 'vehiclePlate', 'nationalId', 'governorate', 'status', 'notes', 'vehicleImageUrl', 'idCardFrontUrl', 'idCardBackUrl'] as $f) {
             if (array_key_exists($f, $b) && isset($dcols[$f])) { $ds[] = "`$f` = ?"; $da[] = coerceForColumn($b[$f], $dcols[$f]); }
         }
         // Driver delivery-fee share (0–100%). Validated separately from the
