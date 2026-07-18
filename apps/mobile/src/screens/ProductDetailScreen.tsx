@@ -68,6 +68,12 @@ export function ProductDetailScreen() {
   const navigation = useNavigation<NavProp>();
   const { productId } = route.params;
   const [quantity, setQuantity] = useState(1);
+  // Reactive cart state. MUST be called unconditionally, above the early
+  // returns below — placing it after them meant it ran only once `data` loaded,
+  // adding hooks that didn't exist on the loading render → React threw
+  // "Rendered more hooks than during the previous render" and crashed the screen
+  // on EVERY product open. (This is the bug: "opening any product closes the app".)
+  const cart = useCart();
 
   const { data, isLoading, error, refetch } = useQuery<ProductDetail>({
     queryKey: ['product', productId],
@@ -123,13 +129,12 @@ export function ProductDetailScreen() {
   const discountPct = hasSale ? Math.round(((priceNum - saleNum!) / priceNum) * 100) : 0;
   const effectivePrice = hasSale ? saleNum! : priceNum;
 
-  const merchantOpen = data.merchant.openness?.isOpenNow ?? true;
+  // Guard `data.merchant` itself (not just openness) — an orphaned merchantId
+  // would otherwise throw here.
+  const merchantOpen = data.merchant?.openness?.isOpenNow ?? true;
   const productInStock =
     data.isAvailable && !data.isHidden && (data.stock == null || data.stock > 0);
   const canAdd = productInStock && merchantOpen;
-  // Reactive cart state so the "view cart" shortcut appears the instant
-  // the user adds something — without leaving the product page.
-  const cart = useCart();
 
   const openCart = () => {
     if (!navigationRef.isReady()) return;
@@ -152,7 +157,7 @@ export function ProductDetailScreen() {
     showToast({ title: 'تمت إضافة المنتج إلى السلة', tone: 'success' });
   };
 
-  const rating = data.merchant.rating != null ? Number(data.merchant.rating) : null;
+  const rating = data.merchant?.rating != null ? Number(data.merchant.rating) : null;
 
   return (
     <SafeAreaView edges={[]} style={styles.container}>

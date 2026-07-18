@@ -132,27 +132,39 @@ export async function clearAppBadge(): Promise<void> {
  */
 const HANDLED_RESP_KEY = '@tamem/handled-notif-id';
 
+/** A key that is STABLE across launches for the same tapped notification, even
+ *  when expo doesn't populate a request identifier — so a plain app launch can
+ *  never be mistaken for a fresh tap. */
+function responseKey(resp: Notifications.NotificationResponse): string {
+  const req = resp.notification.request;
+  if (req.identifier) return req.identifier;
+  const c = req.content ?? ({} as { title?: string | null; body?: string | null });
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const date = (resp.notification as any).date ?? '';
+  return `${c.title ?? ''}|${c.body ?? ''}|${date}`;
+}
+
 export function usePushTapNavigation(): void {
   useEffect(() => {
     // expo-notifications is native-only; skip on web entirely.
     if (Platform.OS === 'web') return;
-    // Cold start — app opened from a notification tap. CRITICAL: only route once
-    // per notification. getLastNotificationResponseAsync() persistently returns
-    // the LAST response, so without this guard EVERY normal app launch would
-    // re-navigate to that old notification's screen — which is exactly why the
-    // app kept opening on the Notifications page instead of Home.
+    // Cold start — the app may have been opened by a notification tap OR by the
+    // launcher icon. getLastNotificationResponseAsync() PERSISTENTLY returns the
+    // last tapped notification across every subsequent plain launch, so without
+    // this guard the app re-navigates to that old notification's screen on EVERY
+    // open — which is why it kept landing on the Notifications page instead of
+    // Home. We only navigate the FIRST time we ever see a given response key.
     void Notifications.getLastNotificationResponseAsync().then(async (resp) => {
-      if (!resp) return;
-      const id = resp.notification.request.identifier;
+      if (!resp) return; // launched normally (icon) → stay on Home
+      const key = responseKey(resp);
       const alreadyHandled = await AsyncStorage.getItem(HANDLED_RESP_KEY);
-      if (id && id === alreadyHandled) return; // stale — a plain launch, stay on Home
-      if (id) await AsyncStorage.setItem(HANDLED_RESP_KEY, id);
+      if (key === alreadyHandled) return; // already consumed → a plain launch, stay on Home
+      await AsyncStorage.setItem(HANDLED_RESP_KEY, key);
       handle(resp);
     });
-    // Warm tap — app was in background or foreground; these are always genuine.
+    // Warm tap — app was already in background/foreground; always a genuine tap.
     const sub = Notifications.addNotificationResponseReceivedListener((resp) => {
-      const id = resp.notification.request.identifier;
-      if (id) void AsyncStorage.setItem(HANDLED_RESP_KEY, id);
+      void AsyncStorage.setItem(HANDLED_RESP_KEY, responseKey(resp));
       handle(resp);
     });
     return () => sub.remove();
