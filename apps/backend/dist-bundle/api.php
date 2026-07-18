@@ -3152,6 +3152,30 @@ if ($method === 'GET' && preg_match('#^/admin/merchants/([^/]+)/api-config/logs$
     try { $st->execute([$m[1]]); $rows = array_map('jsonizeRow', $st->fetchAll()); } catch (Throwable $e) { $rows = []; }
     jsonOk($rows);
 }
+/// True for a JSON object (associative array), false for a JSON list or scalar.
+function isAssocArr($a): bool {
+    if (!is_array($a) || $a === []) return false;
+    return array_keys($a) !== range(0, count($a) - 1);
+}
+/// Reduce whatever the API returned (after productsPath) to a flat list of
+/// product OBJECTS. Handles three shapes: a bare list of products; a wrapper
+/// object like {data:[...], meta:{...}} (Laravel-style) → its first
+/// list-of-objects value; or a single product object → a one-item list. This is
+/// what stops the field picker from showing 0,1,2… (array indices) instead of
+/// the real field names.
+function normalizeProductRows($items): array {
+    if (!is_array($items)) return [];
+    if (isAssocArr($items)) {
+        foreach ($items as $v) {
+            if (is_array($v) && !isAssocArr($v)) {
+                $rows = array_values(array_filter($v, 'isAssocArr'));
+                if ($rows) return $rows;
+            }
+        }
+        return [$items]; // a single product object
+    }
+    return array_values(array_filter($items, 'isAssocArr'));
+}
 // Fetch an external merchant API (PHP does this fine — no Node.js needed).
 function fetchMerchantApi(array $cfg): array {
     $url = (string)($cfg['apiUrl'] ?? '');
@@ -3186,28 +3210,55 @@ function fetchMerchantApi(array $cfg): array {
     if (!is_array($json)) return ['ok' => false, 'reason' => 'الرد ليس JSON صالح', 'httpCode' => $httpCode];
     // Drill into productsPath (e.g. "data" or "result.products"); empty = root list.
     $items = $json; $pp = trim((string)($cfg['productsPath'] ?? ''));
-    if ($pp !== '') foreach (explode('.', $pp) as $seg) { $items = is_array($items) && isset($items[$seg]) ? $items[$seg] : []; }
-    if (!is_array($items)) $items = [];
-    // normalise a list (some APIs wrap each row)
-    $items = array_values(array_filter($items, 'is_array'));
+    if ($pp !== '') foreach (explode('.', $pp) as $seg) { $items = is_array($items) && array_key_exists($seg, $items) ? $items[$seg] : []; }
+    // Normalise to a clean list of product objects (handles wrapper objects,
+    // bare lists, and single-object responses).
+    $items = normalizeProductRows($items);
     return ['ok' => true, 'items' => $items, 'httpCode' => $httpCode];
 }
 function mapExternalProduct(array $row, array $mapping): array {
-    $get = function($key) use ($row) {
-        foreach (explode('.', (string)$key) as $seg) { $row = is_array($row) && isset($row[$seg]) ? $row[$seg] : null; if ($row === null) return null; }
-        return $row;
+    // Read a (possibly dotted) key path out of the row.
+    $get = function ($key) use ($row) {
+        $key = (string) $key; if ($key === '') return null;
+        $cur = $row;
+        foreach (explode('.', $key) as $seg) { $cur = is_array($cur) && array_key_exists($seg, $cur) ? $cur[$seg] : null; if ($cur === null) return null; }
+        return $cur;
     };
-    $name = $mapping['name'] ?? 'name';
-    $nameAr = $mapping['nameAr'] ?? $mapping['name'] ?? 'name';
-    $price = $mapping['price'] ?? 'price';
-    $img = $mapping['imageUrl'] ?? $mapping['image'] ?? 'image';
-    $desc = $mapping['description'] ?? 'description';
+    // Resolve an app field from its mapped source key (+ legacy fallbacks).
+    $pick = function ($appKey, array $fallbacks = []) use ($mapping, $get) {
+        foreach (array_merge([$mapping[$appKey] ?? null], $fallbacks) as $k) {
+            if ($k) { $v = $get($k); if ($v !== null && $v !== '') return $v; }
+        }
+        return null;
+    };
+    $num = fn ($v) => ($v === null || $v === '') ? null : (float) $v;
+    $intv = fn ($v) => ($v === null || $v === '') ? null : (int) $v;
+    $boolv = function ($v) {
+        if ($v === null) return null;
+        if (is_bool($v)) return $v;
+        $s = strtolower(trim((string) $v));
+        if (in_array($s, ['1', 'true', 'yes', 'available', 'in_stock', 'instock', 'متاح', 'متوفر'], true)) return true;
+        if (in_array($s, ['0', 'false', 'no', 'unavailable', 'out_of_stock', 'outofstock', 'غير متاح', 'غير متوفر', 'نفذ'], true)) return false;
+        return (bool) $v;
+    };
+    $name = $pick('name', ['name']);
+    $imgs = $pick('imageUrls');
+    $s = fn ($v, $len) => $v !== null ? mb_substr((string) $v, 0, $len) : null;
     return [
-        'name' => (string)($get($name) ?? ''),
-        'nameAr' => (string)($get($nameAr) ?? $get($name) ?? ''),
-        'price' => (float)($get($price) ?? 0),
-        'imageUrl' => $get($img) ? (string)$get($img) : null,
-        'description' => $get($desc) ? (string)$get($desc) : null,
+        'name' => trim((string) ($name ?? '')),
+        'nameAr' => trim((string) ($pick('nameAr', ['name']) ?? $name ?? '')),
+        'description' => ($d = $pick('description')) !== null ? (string) $d : null,
+        'price' => $num($pick('price', ['price'])),        // null = unmapped → keep existing on update
+        'salePrice' => $num($pick('salePrice')),
+        'imageUrl' => ($i = $pick('imageUrl', ['image'])) ? (string) $i : null,
+        'imageUrls' => is_array($imgs) ? array_values(array_filter(array_map('strval', $imgs), fn ($x) => $x !== '')) : null,
+        'categoryName' => $s($pick('categoryName', ['category']), 120),
+        'stock' => $intv($pick('stock')),
+        'isAvailable' => $boolv($pick('isAvailable')),
+        'sku' => $s($pick('sku'), 80),
+        'externalId' => $s($pick('externalId'), 120),
+        'barcode' => $s($pick('barcode'), 80),
+        'weight' => $num($pick('weight')),
     ];
 }
 if ($method === 'POST' && preg_match('#^/admin/merchants/([^/]+)/api-config/test$#', $path, $m)) {
@@ -3218,12 +3269,25 @@ if ($method === 'POST' && preg_match('#^/admin/merchants/([^/]+)/api-config/test
     $res = fetchMerchantApi($cfg);
     if (!$res['ok']) jsonErr($res['reason'] ?? 'فشل الاختبار', 400, 'TEST_FAILED');
     db()->prepare('UPDATE `MerchantApiConfig` SET isConnected = 1, lastError = NULL, updatedAt = NOW(3) WHERE merchantId = ?')->execute([$m[1]]);
-    // Shape MUST match the dashboard TestResult: { ok, fetchedCount, sampleItems, sampleFields }.
+    // Field list = the UNION of keys across sample rows (not array_keys of the
+    // list, which produced 0,1,2…). Also send one example value per field so the
+    // dashboard can preview + auto-match.
+    $fieldSet = []; $sampleValues = [];
+    foreach (array_slice($res['items'], 0, 5) as $row) {
+        if (!is_array($row)) continue;
+        foreach ($row as $k => $v) {
+            $fieldSet[$k] = true;
+            if (!isset($sampleValues[$k]) && !is_array($v) && $v !== null && $v !== '') {
+                $sampleValues[$k] = mb_substr((string) $v, 0, 80);
+            }
+        }
+    }
     jsonOk([
         'ok' => true,
         'fetchedCount' => count($res['items']),
         'sampleItems' => array_slice($res['items'], 0, 3),
-        'sampleFields' => (!empty($res['items']) && is_array($res['items'][0])) ? array_keys($res['items'][0]) : [],
+        'sampleFields' => array_keys($fieldSet),
+        'sampleValues' => (object) $sampleValues,
     ]);
 }
 if ($method === 'POST' && preg_match('#^/admin/merchants/([^/]+)/api-config/sync$#', $path, $m)) {
@@ -3237,27 +3301,86 @@ if ($method === 'POST' && preg_match('#^/admin/merchants/([^/]+)/api-config/sync
         jsonErr($res['reason'] ?? 'فشلت المزامنة', 400, 'SYNC_FAILED');
     }
     $mapping = is_string($cfg['fieldMapping'] ?? null) ? (json_decode($cfg['fieldMapping'], true) ?: []) : ($cfg['fieldMapping'] ?? []);
-    $pdo = db(); $added = 0; $updated = 0;
-    $ins = $pdo->prepare('INSERT INTO `Product` (id, merchantId, name, nameAr, description, imageUrl, price, isAvailable, sortOrder, createdAt, updatedAt) VALUES (?,?,?,?,?,?,?,1,0,NOW(3),NOW(3))');
-    $upd = $pdo->prepare('UPDATE `Product` SET nameAr = ?, description = ?, imageUrl = ?, price = ?, updatedAt = NOW(3) WHERE id = ?');
+    if (!is_array($mapping)) $mapping = [];
+    $pdo = db(); $added = 0; $updated = 0; $failed = 0; $seen = [];
+    // Full-field upsert. imageUrls is stored as JSON; COALESCE(?, col) means an
+    // unmapped (null) field keeps the existing value instead of wiping it.
+    $ins = $pdo->prepare('INSERT INTO `Product`
+        (id, merchantId, name, nameAr, description, imageUrl, imageUrls, price, salePrice, categoryName, stock, isAvailable, sku, externalId, barcode, weight, sortOrder, isHidden, lastSyncedAt, createdAt, updatedAt)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,0,NOW(3),NOW(3),NOW(3))');
+    $upd = $pdo->prepare('UPDATE `Product` SET
+        nameAr = ?, name = ?,
+        description = COALESCE(?, description),
+        imageUrl = COALESCE(?, imageUrl),
+        imageUrls = COALESCE(?, imageUrls),
+        price = COALESCE(?, price),
+        salePrice = COALESCE(?, salePrice),
+        categoryName = COALESCE(?, categoryName),
+        stock = COALESCE(?, stock),
+        isAvailable = COALESCE(?, isAvailable),
+        sku = COALESCE(?, sku),
+        externalId = COALESCE(?, externalId),
+        barcode = COALESCE(?, barcode),
+        weight = COALESCE(?, weight),
+        isHidden = 0, lastSyncedAt = NOW(3), updatedAt = NOW(3)
+        WHERE id = ?');
     foreach ($res['items'] as $row) {
         $p = mapExternalProduct($row, $mapping);
         if ($p['name'] === '' && $p['nameAr'] === '') continue;
-        $find = $pdo->prepare('SELECT id FROM `Product` WHERE merchantId = ? AND name = ? LIMIT 1');
-        $find->execute([$m[1], $p['name']]); $ex = $find->fetch();
+        // De-dup within the merchant, best key first: SKU → externalId → name.
+        $ex = null;
+        if ($p['sku'] !== null) { $q = $pdo->prepare('SELECT id FROM `Product` WHERE merchantId = ? AND sku = ? LIMIT 1'); $q->execute([$m[1], $p['sku']]); $ex = $q->fetch(); }
+        if (!$ex && $p['externalId'] !== null) { $q = $pdo->prepare('SELECT id FROM `Product` WHERE merchantId = ? AND externalId = ? LIMIT 1'); $q->execute([$m[1], $p['externalId']]); $ex = $q->fetch(); }
+        if (!$ex) { $nm = $p['name'] !== '' ? $p['name'] : $p['nameAr']; $q = $pdo->prepare('SELECT id FROM `Product` WHERE merchantId = ? AND name = ? LIMIT 1'); $q->execute([$m[1], $nm]); $ex = $q->fetch(); }
+        $imgsJson = $p['imageUrls'] !== null ? json_encode($p['imageUrls'], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) : null;
+        $avail = $p['isAvailable'];
         try {
-            if ($ex) { $upd->execute([$p['nameAr'], $p['description'], $p['imageUrl'], $p['price'], $ex['id']]); $updated++; }
-            else { $ins->execute([newId(), $m[1], $p['name'] ?: $p['nameAr'], $p['nameAr'] ?: $p['name'], $p['description'], $p['imageUrl'], $p['price']]); $added++; }
-        } catch (PDOException $e) { error_log('[api.php] product upsert: ' . $e->getMessage()); }
+            if ($ex) {
+                $upd->execute([
+                    $p['nameAr'] ?: $p['name'], $p['name'] ?: $p['nameAr'],
+                    $p['description'], $p['imageUrl'], $imgsJson,
+                    $p['price'], $p['salePrice'], $p['categoryName'], $p['stock'],
+                    $avail === null ? null : ($avail ? 1 : 0),
+                    $p['sku'], $p['externalId'], $p['barcode'], $p['weight'], $ex['id'],
+                ]);
+                $seen[] = $ex['id']; $updated++;
+            } else {
+                $nid = newId();
+                $ins->execute([
+                    $nid, $m[1], $p['name'] ?: $p['nameAr'], $p['nameAr'] ?: $p['name'],
+                    $p['description'], $p['imageUrl'], $imgsJson,
+                    $p['price'] ?? 0, $p['salePrice'], $p['categoryName'], $p['stock'],
+                    $avail === null ? 1 : ($avail ? 1 : 0),
+                    $p['sku'], $p['externalId'], $p['barcode'], $p['weight'],
+                ]);
+                $seen[] = $nid; $added++;
+            }
+        } catch (PDOException $e) { $failed++; error_log('[api.php] product upsert: ' . $e->getMessage()); }
     }
+    // Missing-product policy: previously-synced products (lastSyncedAt set) the
+    // API no longer returns. Hand-entered products (lastSyncedAt NULL) untouched.
+    $policy = strtoupper((string) ($cfg['missingPolicy'] ?? 'IGNORE'));
+    $hidden = 0;
+    if ($policy !== 'IGNORE' && $seen) {
+        $ph = implode(',', array_fill(0, count($seen), '?'));
+        $byPolicy = [
+            'DELETE' => "DELETE FROM `Product` WHERE merchantId = ? AND lastSyncedAt IS NOT NULL AND id NOT IN ($ph)",
+            'HIDE' => "UPDATE `Product` SET isHidden = 1, updatedAt = NOW(3) WHERE merchantId = ? AND lastSyncedAt IS NOT NULL AND isHidden = 0 AND id NOT IN ($ph)",
+            'MARK_UNAVAILABLE' => "UPDATE `Product` SET isAvailable = 0, updatedAt = NOW(3) WHERE merchantId = ? AND lastSyncedAt IS NOT NULL AND isAvailable = 1 AND id NOT IN ($ph)",
+        ];
+        if (isset($byPolicy[$policy])) {
+            try { $q = $pdo->prepare($byPolicy[$policy]); $q->execute(array_merge([$m[1]], $seen)); $hidden = $q->rowCount(); }
+            catch (Throwable $e) { error_log('[api.php] missing-policy: ' . $e->getMessage()); }
+        }
+    }
+    $status = $failed > 0 ? 'PARTIAL' : 'SUCCESS';
     $pdo->prepare('UPDATE `MerchantApiConfig` SET isConnected = 1, lastError = NULL, lastSyncedAt = NOW(3), updatedAt = NOW(3) WHERE merchantId = ?')->execute([$m[1]]);
-    // log the sync if the table exists
     try {
         $pdo->prepare('INSERT INTO `ProductSyncLog` (id, merchantId, status, added, updated, message, createdAt) VALUES (?,?,?,?,?,?,NOW(3))')
-            ->execute([newId(), $m[1], 'SUCCESS', $added, $updated, "أُضيف $added، حُدّث $updated"]);
+            ->execute([newId(), $m[1], $status, $added, $updated, "أُضيف $added، حُدّث $updated" . ($failed ? "، فشل $failed" : '') . ($hidden ? "، محذوف/مخفي $hidden" : '')]);
     } catch (Throwable $e) { /* table shape may differ; ignore */ }
     jsonOk(['ok' => true, 'fetchedCount' => count($res['items']), 'createdCount' => $added, 'updatedCount' => $updated,
-        'failedCount' => 0, 'hiddenCount' => 0, 'added' => $added, 'updated' => $updated, 'total' => count($res['items'])]);
+        'failedCount' => $failed, 'hiddenCount' => $hidden, 'added' => $added, 'updated' => $updated, 'total' => count($res['items'])]);
 }
 if ($method === 'DELETE' && preg_match('#^/admin/merchants/([^/]+)/api-config$#', $path, $m)) {
     authUser();
