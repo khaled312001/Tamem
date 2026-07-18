@@ -424,6 +424,31 @@ function defaultCommissionPct(): float {
     } catch (Throwable $e) { /* fall through */ }
     return 0.0;
 }
+/// Snapshot the assigned driver's delivery-fee share onto the order, freezing
+/// the numbers so a later change to the driver's percentage never rewrites this
+/// order's accounting. Called at driver-assign and again at delivery — delivery
+/// wins, locking the final split against the final deliveryFee. Merchant goods
+/// value is NEVER part of this split; a zero/absent fee yields a zero split.
+function snapshotDriverShare(string $orderId): void {
+    try {
+        $q = db()->prepare(
+            "SELECT o.deliveryFee, o.assignedDriverId, dp.deliverySharePct
+             FROM `Order` o
+             LEFT JOIN `DriverProfile` dp ON dp.userId = o.assignedDriverId
+             WHERE o.id = ? LIMIT 1"
+        );
+        $q->execute([$orderId]);
+        $o = $q->fetch();
+        if (!$o || empty($o['assignedDriverId'])) return;
+        $fee = $o['deliveryFee'] !== null ? (float) $o['deliveryFee'] : 0.0;
+        if ($fee < 0) $fee = 0.0;
+        $pct = $o['deliverySharePct'] !== null ? (float) $o['deliverySharePct'] : 0.0;
+        $driverRev = round($fee * $pct / 100, 2);
+        $companyRev = round($fee - $driverRev, 2);
+        db()->prepare('UPDATE `Order` SET driverSharePct = ?, driverDeliveryRevenue = ?, companyDeliveryRevenue = ?, updatedAt = NOW(3) WHERE id = ?')
+            ->execute([$pct, $driverRev, $companyRev, $orderId]);
+    } catch (Throwable $e) { error_log('[api.php] snapshotDriverShare: ' . $e->getMessage()); }
+}
 function computeOrderFinancials(string $orderId): void {
     try {
         $q = db()->prepare(
@@ -519,23 +544,121 @@ if ($method === 'GET' && $path === '/admin/reports/services') {
     ], $rows));
 }
 if ($method === 'GET' && $path === '/admin/reports/drivers') {
-    authUser();
-    $rows = db()->query(
-        "SELECT u.id AS driverId, u.name, u.phone, dp.rating,
-                COUNT(o.id) AS deliveries,
-                COALESCE(SUM(COALESCE(o.finalPrice, o.quotedPrice, 0)), 0) AS totalRevenue
-         FROM `User` u
-         LEFT JOIN `DriverProfile` dp ON dp.userId = u.id
-         LEFT JOIN `Order` o ON o.assignedDriverId = u.id AND o.status IN ('DELIVERED','COMPLETED')
-         WHERE u.role = 'DRIVER'
-         GROUP BY u.id, u.name, u.phone, dp.rating
-         ORDER BY deliveries DESC"
-    )->fetchAll();
-    jsonOk(array_map(static fn ($r) => [
+    $u = authUser(); if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
+    // Revenue is counted for DELIVERED/COMPLETED orders only — cancelled orders
+    // never enter. Merchant goods value is separated from delivery fees, and the
+    // driver's cut uses the SNAPSHOT saved on each order (falling back to the
+    // driver's current % only for orders that predate the snapshot).
+    // ── order-level filters (live in the JOIN so drivers with no matching
+    //    orders still appear with zeros) ──
+    $onArgs = []; $on = ["o.assignedDriverId = u.id", "o.status IN ('DELIVERED','COMPLETED')"];
+    $from = trim((string) ($_GET['from'] ?? '')); $to = trim((string) ($_GET['to'] ?? ''));
+    if ($from !== '') { $on[] = "COALESCE(o.deliveredAt, o.completedAt, o.updatedAt) >= ?"; $onArgs[] = $from . ' 00:00:00'; }
+    if ($to !== '')   { $on[] = "COALESCE(o.deliveredAt, o.completedAt, o.updatedAt) <= ?"; $onArgs[] = $to . ' 23:59:59'; }
+    $stf = strtoupper(trim((string) ($_GET['status'] ?? '')));
+    if (in_array($stf, ['DELIVERED', 'COMPLETED'], true)) { $on[] = "o.status = ?"; $onArgs[] = $stf; }
+    $settle = strtoupper(trim((string) ($_GET['settlement'] ?? '')));
+    if (in_array($settle, ['PENDING', 'SETTLED'], true)) { $on[] = "o.driverSettlementStatus = ?"; $onArgs[] = $settle; }
+    // ── driver-level filters (WHERE) ──
+    $whArgs = []; $wh = ["u.role = 'DRIVER'"];
+    $drv = trim((string) ($_GET['driverId'] ?? ''));
+    if ($drv !== '') { $wh[] = "u.id = ?"; $whArgs[] = $drv; }
+    $gov = trim((string) ($_GET['governorate'] ?? ''));
+    if ($gov !== '') { $wh[] = "dp.governorate = ?"; $whArgs[] = $gov; }
+    // Driver's delivery cut: the saved snapshot, else live (deliveryFee × current %).
+    $due = "COALESCE(o.driverDeliveryRevenue, ROUND(COALESCE(o.deliveryFee,0) * COALESCE(dp.deliverySharePct,0) / 100, 2))";
+    $sql = "SELECT u.id AS driverId, u.name, u.phone, u.governorate, dp.rating, dp.deliverySharePct,
+                   COUNT(o.id) AS deliveries,
+                   COALESCE(SUM(COALESCE(o.finalPrice, o.quotedPrice, 0)), 0) AS totalCollected,
+                   COALESCE(SUM(COALESCE(o.merchantSubtotal, 0)), 0) AS merchantGoods,
+                   COALESCE(SUM(COALESCE(o.deliveryFee, 0)), 0) AS totalDeliveryFees,
+                   COALESCE(SUM($due), 0) AS driverDue,
+                   COALESCE(SUM(COALESCE(o.deliveryFee, 0)) - SUM($due), 0) AS tamemRevenue,
+                   COALESCE(SUM(CASE WHEN o.driverSettlementStatus = 'SETTLED' THEN $due ELSE 0 END), 0) AS paid,
+                   COALESCE(SUM(CASE WHEN o.id IS NOT NULL AND o.driverSettlementStatus <> 'SETTLED' THEN $due ELSE 0 END), 0) AS remaining,
+                   COALESCE(SUM(CASE WHEN o.id IS NOT NULL AND o.driverSettlementStatus <> 'SETTLED' THEN 1 ELSE 0 END), 0) AS pendingCount
+            FROM `User` u
+            JOIN `DriverProfile` dp ON dp.userId = u.id
+            LEFT JOIN `Order` o ON " . implode(' AND ', $on) . "
+            WHERE " . implode(' AND ', $wh) . "
+            GROUP BY u.id, u.name, u.phone, u.governorate, dp.rating, dp.deliverySharePct
+            ORDER BY driverDue DESC, deliveries DESC";
+    $st = db()->prepare($sql);
+    $st->execute(array_merge($onArgs, $whArgs));
+    $rows = array_map(static fn ($r) => [
         'driverId' => $r['driverId'], 'name' => $r['name'], 'phone' => $r['phone'],
-        'deliveries' => (int) $r['deliveries'], 'totalRevenue' => (float) $r['totalRevenue'],
+        'governorate' => $r['governorate'],
         'rating' => $r['rating'] !== null ? (float) $r['rating'] : null,
-    ], $rows));
+        'deliverySharePct' => (float) $r['deliverySharePct'],
+        'deliveries' => (int) $r['deliveries'],
+        'totalCollected' => (float) $r['totalCollected'],
+        'merchantGoods' => (float) $r['merchantGoods'],
+        'totalDeliveryFees' => (float) $r['totalDeliveryFees'],
+        'driverDue' => (float) $r['driverDue'],
+        'tamemRevenue' => (float) $r['tamemRevenue'],
+        'paid' => (float) $r['paid'],
+        'remaining' => (float) $r['remaining'],
+        'pendingCount' => (int) $r['pendingCount'],
+    ], $st->fetchAll());
+    // Grand totals row.
+    $sum = fn(string $k) => round(array_sum(array_map(fn($r) => $r[$k], $rows)), 2);
+    $totals = [
+        'deliveries' => array_sum(array_map(fn($r) => $r['deliveries'], $rows)),
+        'totalCollected' => $sum('totalCollected'), 'merchantGoods' => $sum('merchantGoods'),
+        'totalDeliveryFees' => $sum('totalDeliveryFees'), 'driverDue' => $sum('driverDue'),
+        'tamemRevenue' => $sum('tamemRevenue'), 'paid' => $sum('paid'), 'remaining' => $sum('remaining'),
+    ];
+    // Distinct governorates for the filter dropdown.
+    $govs = db()->query("SELECT DISTINCT governorate FROM `DriverProfile` WHERE governorate IS NOT NULL AND governorate <> '' ORDER BY governorate")->fetchAll(PDO::FETCH_COLUMN);
+    jsonOk(['drivers' => $rows, 'totals' => $totals, 'governorates' => $govs]);
+}
+// Per-driver detail: every delivered order with its revenue split + a totals row.
+if ($method === 'GET' && preg_match('#^/admin/reports/drivers/([^/]+)$#', $path, $m)) {
+    $u = authUser(); if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
+    $driverId = $m[1];
+    $w = ["o.assignedDriverId = ?", "o.status IN ('DELIVERED','COMPLETED')"]; $a = [$driverId];
+    $from = trim((string) ($_GET['from'] ?? '')); $to = trim((string) ($_GET['to'] ?? ''));
+    if ($from !== '') { $w[] = "COALESCE(o.deliveredAt, o.completedAt, o.updatedAt) >= ?"; $a[] = $from . ' 00:00:00'; }
+    if ($to !== '')   { $w[] = "COALESCE(o.deliveredAt, o.completedAt, o.updatedAt) <= ?"; $a[] = $to . ' 23:59:59'; }
+    $stf = strtoupper(trim((string) ($_GET['status'] ?? '')));
+    if (in_array($stf, ['DELIVERED', 'COMPLETED'], true)) { $w[] = "o.status = ?"; $a[] = $stf; }
+    $settle = strtoupper(trim((string) ($_GET['settlement'] ?? '')));
+    if (in_array($settle, ['PENDING', 'SETTLED'], true)) { $w[] = "o.driverSettlementStatus = ?"; $a[] = $settle; }
+    $due = "COALESCE(o.driverDeliveryRevenue, ROUND(COALESCE(o.deliveryFee,0) * COALESCE(dp.deliverySharePct,0) / 100, 2))";
+    $sql = "SELECT o.id, o.orderNumber, o.status, o.deliveredAt, o.completedAt,
+                   COALESCE(o.merchantSubtotal, 0) AS merchantGoods,
+                   COALESCE(o.deliveryFee, 0) AS deliveryFee,
+                   COALESCE(o.driverSharePct, dp.deliverySharePct, 0) AS sharePct,
+                   $due AS driverDue,
+                   (COALESCE(o.deliveryFee, 0) - $due) AS tamemRevenue,
+                   COALESCE(o.finalPrice, o.quotedPrice, 0) AS totalCollected,
+                   o.driverSettlementStatus AS settlementStatus, o.driverSettledAt
+            FROM `Order` o JOIN `DriverProfile` dp ON dp.userId = o.assignedDriverId
+            WHERE " . implode(' AND ', $w) . "
+            ORDER BY COALESCE(o.deliveredAt, o.completedAt, o.updatedAt) DESC";
+    $st = db()->prepare($sql); $st->execute($a);
+    $orders = array_map(static fn ($r) => [
+        'orderId' => $r['id'], 'orderNumber' => $r['orderNumber'], 'status' => $r['status'],
+        'deliveredAt' => isoZ($r['deliveredAt'] ?? $r['completedAt']),
+        'merchantGoods' => (float) $r['merchantGoods'], 'deliveryFee' => (float) $r['deliveryFee'],
+        'sharePct' => (float) $r['sharePct'], 'driverDue' => (float) $r['driverDue'],
+        'tamemRevenue' => (float) $r['tamemRevenue'], 'totalCollected' => (float) $r['totalCollected'],
+        'settlementStatus' => $r['settlementStatus'], 'settledAt' => isoZ($r['driverSettledAt']),
+    ], $st->fetchAll());
+    $sum = fn(string $k) => round(array_sum(array_map(fn($r) => $r[$k], $orders)), 2);
+    $dh = db()->prepare("SELECT u.name, u.phone, dp.deliverySharePct, dp.rating FROM `User` u JOIN `DriverProfile` dp ON dp.userId = u.id WHERE u.id = ? LIMIT 1");
+    $dh->execute([$driverId]); $d = $dh->fetch() ?: [];
+    jsonOk([
+        'driver' => ['id' => $driverId, 'name' => $d['name'] ?? null, 'phone' => $d['phone'] ?? null,
+            'deliverySharePct' => isset($d['deliverySharePct']) ? (float) $d['deliverySharePct'] : 0,
+            'rating' => isset($d['rating']) && $d['rating'] !== null ? (float) $d['rating'] : null],
+        'orders' => $orders,
+        'totals' => [
+            'deliveries' => count($orders), 'merchantGoods' => $sum('merchantGoods'),
+            'deliveryFees' => $sum('deliveryFee'), 'driverDue' => $sum('driverDue'),
+            'tamemRevenue' => $sum('tamemRevenue'), 'totalCollected' => $sum('totalCollected'),
+        ],
+    ]);
 }
 if ($method === 'GET' && $path === '/admin/reports/customers') {
     authUser();
@@ -2863,7 +2986,8 @@ if ($method === 'GET' && $path === '/admin/drivers') {
     $st = db()->prepare(
         "SELECT u.*, dp.id AS dp_id, dp.status AS dp_status, dp.vehicleType AS dp_vehicleType, dp.vehiclePlate AS dp_vehiclePlate,
                 dp.nationalId AS dp_nationalId, dp.governorate AS dp_governorate, dp.totalDeliveries AS dp_totalDeliveries,
-                dp.totalEarnings AS dp_totalEarnings, dp.cashOnHand AS dp_cashOnHand, dp.rating AS dp_rating
+                dp.totalEarnings AS dp_totalEarnings, dp.cashOnHand AS dp_cashOnHand, dp.rating AS dp_rating,
+                dp.deliverySharePct AS dp_deliverySharePct
          FROM `User` u LEFT JOIN `DriverProfile` dp ON dp.userId = u.id
          WHERE $dWhere ORDER BY u.createdAt DESC LIMIT $size OFFSET $off"
     );
@@ -2880,6 +3004,7 @@ if ($method === 'GET' && $path === '/admin/drivers') {
             'vehiclePlate' => $r['dp_vehiclePlate'], 'nationalId' => $r['dp_nationalId'],
             'governorate' => $r['dp_governorate'], 'totalDeliveries' => (int)$r['dp_totalDeliveries'],
             'totalEarnings' => $r['dp_totalEarnings'], 'cashOnHand' => $r['dp_cashOnHand'], 'rating' => $r['dp_rating'],
+            'deliverySharePct' => $r['dp_deliverySharePct'] !== null ? (float)$r['dp_deliverySharePct'] : 0,
         ] : null;
         $rows[] = $row;
     }
@@ -2900,7 +3025,8 @@ if ($method === 'GET' && preg_match('#^/admin/drivers/([^/]+)$#', $path, $m)) {
         "SELECT u.id, u.name, u.phone, u.email, u.avatarUrl, u.isActive, u.city, u.governorate, u.createdAt,
                 dp.id AS dp_id, dp.status AS dp_status, dp.vehicleType AS dp_vehicleType, dp.vehiclePlate AS dp_vehiclePlate,
                 dp.nationalId AS dp_nationalId, dp.governorate AS dp_governorate, dp.totalDeliveries AS dp_totalDeliveries,
-                dp.totalEarnings AS dp_totalEarnings, dp.cashOnHand AS dp_cashOnHand, dp.rating AS dp_rating
+                dp.totalEarnings AS dp_totalEarnings, dp.cashOnHand AS dp_cashOnHand, dp.rating AS dp_rating,
+                dp.deliverySharePct AS dp_deliverySharePct
          FROM `User` u LEFT JOIN `DriverProfile` dp ON dp.userId = u.id
          WHERE u.id = ? AND u.role = 'DRIVER' LIMIT 1"
     );
@@ -2916,6 +3042,7 @@ if ($method === 'GET' && preg_match('#^/admin/drivers/([^/]+)$#', $path, $m)) {
             'vehiclePlate' => $r['dp_vehiclePlate'], 'nationalId' => $r['dp_nationalId'],
             'governorate' => $r['dp_governorate'], 'totalDeliveries' => (int) $r['dp_totalDeliveries'],
             'totalEarnings' => $r['dp_totalEarnings'], 'cashOnHand' => $r['dp_cashOnHand'], 'rating' => $r['dp_rating'],
+            'deliverySharePct' => $r['dp_deliverySharePct'] !== null ? (float) $r['dp_deliverySharePct'] : 0,
         ] : null,
     ];
     // Reviews for this driver, newest first, with the order number.
@@ -3680,15 +3807,19 @@ if ($method === 'POST' && $path === '/admin/drivers') {
     $clean = preg_replace('/[\s\-()]/', '', $phone);
     if (preg_match('/^(?:\+?20|0)?(1[0125]\d{8})$/', $clean, $mm)) $phone = '+20' . $mm[1];
     $governorate = trim((string)($b['governorate'] ?? 'قنا')) ?: 'قنا';
+    // Driver's cut of the delivery fee (0–100%). Default 0 — the admin sets it.
+    $share = $b['deliverySharePct'] ?? 0;
+    if (!is_numeric($share) || (float)$share < 0 || (float)$share > 100) jsonErr('نسبة السائق يجب أن تكون بين 0 و100', 422, 'BAD_SHARE');
+    $share = round((float)$share, 2);
     $pdo = db();
     try {
         $pdo->beginTransaction();
         $uid = newId();
         $pdo->prepare('INSERT INTO `User` (id, name, phone, passwordHash, role, isActive, isPhoneVerified, governorate, createdAt, updatedAt) VALUES (?,?,?,?,?,1,1,?,NOW(3),NOW(3))')
             ->execute([$uid, $name, $phone, password_hash($pass, PASSWORD_BCRYPT), 'DRIVER', $governorate]);
-        $pdo->prepare('INSERT INTO `DriverProfile` (id, userId, status, vehicleType, vehiclePlate, nationalId, governorate, createdAt, updatedAt) VALUES (?,?,?,?,?,?,?,NOW(3),NOW(3))')
+        $pdo->prepare('INSERT INTO `DriverProfile` (id, userId, status, vehicleType, vehiclePlate, nationalId, governorate, deliverySharePct, createdAt, updatedAt) VALUES (?,?,?,?,?,?,?,?,NOW(3),NOW(3))')
             ->execute([newId(), $uid, 'OFFLINE', $vehicleType, $vehiclePlate,
-                (($b['nationalId'] ?? '') !== '' ? (string)$b['nationalId'] : null), $governorate]);
+                (($b['nationalId'] ?? '') !== '' ? (string)$b['nationalId'] : null), $governorate, $share]);
         $pdo->commit();
     } catch (PDOException $e) {
         if ($pdo->inTransaction()) $pdo->rollBack();
@@ -3778,6 +3909,13 @@ if ($method === 'PATCH' && preg_match('#^/admin/drivers/([^/]+)$#', $path, $m)) 
         foreach (['vehicleType', 'vehiclePlate', 'nationalId', 'governorate', 'status', 'notes'] as $f) {
             if (array_key_exists($f, $b) && isset($dcols[$f])) { $ds[] = "`$f` = ?"; $da[] = coerceForColumn($b[$f], $dcols[$f]); }
         }
+        // Driver delivery-fee share (0–100%). Validated separately from the
+        // generic loop so a bad value is rejected, not silently clamped.
+        if (array_key_exists('deliverySharePct', $b)) {
+            $share = $b['deliverySharePct'];
+            if (!is_numeric($share) || (float)$share < 0 || (float)$share > 100) { if ($pdo->inTransaction()) $pdo->rollBack(); jsonErr('نسبة السائق يجب أن تكون بين 0 و100', 422, 'BAD_SHARE'); }
+            $ds[] = '`deliverySharePct` = ?'; $da[] = round((float)$share, 2);
+        }
         if ($ds) { $ds[] = '`updatedAt` = NOW(3)'; $da[] = $id; $pdo->prepare('UPDATE `DriverProfile` SET ' . implode(',', $ds) . ' WHERE userId = ?')->execute($da); }
         $pdo->commit();
     } catch (PDOException $e) {
@@ -3787,6 +3925,54 @@ if ($method === 'PATCH' && preg_match('#^/admin/drivers/([^/]+)$#', $path, $m)) 
     }
     $r = $pdo->prepare('SELECT * FROM `User` WHERE id = ?'); $r->execute([$id]);
     jsonOk(jsonizeRow($r->fetch()) ?: []);
+}
+// Settle a driver's outstanding delivery dues: mark a batch of their delivered
+// orders SETTLED and record the settlement (amount + who + when). Body: optional
+// orderIds[] (explicit selection), else all still-PENDING delivered orders,
+// optionally bounded by from/to. Any order missing a snapshot is locked first.
+if ($method === 'POST' && preg_match('#^/admin/drivers/([^/]+)/settle$#', $path, $m)) {
+    $u = authUser(); if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
+    $driverId = $m[1]; $b = readJsonBody(); $pdo = db();
+    $w = ["o.assignedDriverId = ?", "o.status IN ('DELIVERED','COMPLETED')", "o.driverSettlementStatus <> 'SETTLED'"]; $a = [$driverId];
+    $ids = $b['orderIds'] ?? null;
+    if (is_array($ids) && $ids) {
+        $w[] = 'o.id IN (' . implode(',', array_fill(0, count($ids), '?')) . ')';
+        foreach ($ids as $id) $a[] = (string) $id;
+    } else {
+        $from = trim((string) ($b['from'] ?? '')); $to = trim((string) ($b['to'] ?? ''));
+        if ($from !== '') { $w[] = "COALESCE(o.deliveredAt, o.completedAt, o.updatedAt) >= ?"; $a[] = $from . ' 00:00:00'; }
+        if ($to !== '')   { $w[] = "COALESCE(o.deliveredAt, o.completedAt, o.updatedAt) <= ?"; $a[] = $to . ' 23:59:59'; }
+    }
+    $sel = $pdo->prepare("SELECT o.id, o.driverDeliveryRevenue FROM `Order` o WHERE " . implode(' AND ', $w));
+    $sel->execute($a);
+    $rows = $sel->fetchAll();
+    if (!$rows) jsonErr('لا توجد طلبات مستحقة للتسوية', 422, 'NOTHING_TO_SETTLE');
+    $orderIds = [];
+    foreach ($rows as $r) { if ($r['driverDeliveryRevenue'] === null) snapshotDriverShare($r['id']); $orderIds[] = $r['id']; }
+    $ph = implode(',', array_fill(0, count($orderIds), '?'));
+    $amt = $pdo->prepare("SELECT COALESCE(SUM(driverDeliveryRevenue), 0) FROM `Order` WHERE id IN ($ph)");
+    $amt->execute($orderIds); $amount = round((float) $amt->fetchColumn(), 2);
+    $note = mb_substr(trim((string) ($b['note'] ?? '')), 0, 255);
+    $sid = newId();
+    try {
+        $pdo->beginTransaction();
+        $pdo->prepare('INSERT INTO `DriverSettlement` (id, driverId, amount, orderCount, note, createdById, createdAt) VALUES (?,?,?,?,?,?,NOW(3))')
+            ->execute([$sid, $driverId, $amount, count($orderIds), $note !== '' ? $note : null, $u['sub'] ?? null]);
+        $pdo->prepare("UPDATE `Order` SET driverSettlementStatus = 'SETTLED', driverSettledAt = NOW(3), driverSettlementId = ?, updatedAt = NOW(3) WHERE id IN ($ph)")
+            ->execute(array_merge([$sid], $orderIds));
+        $pdo->commit();
+    } catch (Throwable $e) { if ($pdo->inTransaction()) $pdo->rollBack(); error_log('[api.php] settle: ' . $e->getMessage()); jsonErr('تعذّرت التسوية', 422, 'SETTLE_FAILED'); }
+    jsonOk(['settlementId' => $sid, 'driverId' => $driverId, 'amount' => $amount, 'orderCount' => count($orderIds)]);
+}
+// Settlement history for a driver (audit trail of paid batches).
+if ($method === 'GET' && preg_match('#^/admin/drivers/([^/]+)/settlements$#', $path, $m)) {
+    $u = authUser(); if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
+    $st = db()->prepare('SELECT id, amount, orderCount, note, createdAt FROM `DriverSettlement` WHERE driverId = ? ORDER BY createdAt DESC LIMIT 200');
+    $st->execute([$m[1]]);
+    jsonOk(['settlements' => array_map(static fn ($r) => [
+        'id' => $r['id'], 'amount' => (float) $r['amount'], 'orderCount' => (int) $r['orderCount'],
+        'note' => $r['note'], 'createdAt' => isoZ($r['createdAt']),
+    ], $st->fetchAll())]);
 }
 if ($method === 'DELETE' && preg_match('#^/admin/drivers/([^/]+)$#', $path, $m)) {
     $u = authUser(); if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
@@ -3853,6 +4039,8 @@ if ($method === 'PATCH' && preg_match('#^/admin/orders/([^/]+)/status$#', $path,
     $args[] = $m[1];
     try { db()->prepare('UPDATE `Order` SET ' . implode(',', $sets) . ' WHERE id = ?')->execute($args); }
     catch (PDOException $e) { error_log('[api.php] order status: ' . $e->getMessage()); jsonErr('تعذّر تحديث الحالة', 422, 'FAILED'); }
+    // Lock the driver's delivery-fee share at delivery (final fee, final %).
+    if (in_array($status, ['DELIVERED', 'COMPLETED'], true)) snapshotDriverShare($m[1]);
     // The order is over — hand the driver back to the available pool, unless
     // they're still carrying another one. Without this, assigning once would
     // mark a driver BUSY for good and quietly drain the assignable list.
@@ -3922,6 +4110,8 @@ if ($method === 'PATCH' && preg_match('#^/admin/orders/([^/]+)/assign-driver$#',
     // "available" and collect a second order.
     db()->prepare("UPDATE `DriverProfile` SET `status` = 'BUSY', `updatedAt` = NOW(3) WHERE userId = ?")
         ->execute([$driverId]);
+    // Freeze the driver's delivery-fee share onto the order at assignment.
+    snapshotDriverShare($m[1]);
     // Notifies the driver (new assignment + pickup/delivery) AND the customer.
     notifyOrderParties($m[1], 'DRIVER_ASSIGNED');
     $r = db()->prepare('SELECT * FROM `Order` WHERE id = ?'); $r->execute([$m[1]]);

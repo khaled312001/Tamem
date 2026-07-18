@@ -27,6 +27,26 @@ type Row = any;
 
 const VEHICLE_TYPES = ['دراجة بخارية', 'سيارة', 'دراجة', 'نقل خفيف', 'نقل ثقيل'];
 
+/** Clamp a free-text percentage into a valid 0–100 number for the API. */
+function clampPct(v: string): number {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return 0;
+  return Math.min(100, Math.max(0, Math.round(n * 100) / 100));
+}
+
+/** Live "driver X% · company Y%" hint under the share input. */
+function ShareHint({ value }: { value: string }) {
+  const d = clampPct(value);
+  const c = Math.round((100 - d) * 100) / 100;
+  return (
+    <div className="mt-1 flex items-center gap-3 text-xs">
+      <span className="font-bold text-emerald-600">نسبة السائق: {d}%</span>
+      <span className="text-muted-foreground">·</span>
+      <span className="font-bold text-brand-red">نسبة الشركة: {c}%</span>
+    </div>
+  );
+}
+
 export function DriversPage() {
   const qc = useQueryClient();
   const [createOpen, setCreateOpen] = useState(false);
@@ -177,6 +197,9 @@ function EditDriverDialog({ driver, onClose }: { driver: Row; onClose: () => voi
   );
   const [nationalId, setNationalId] = useState<string>(driver.driverProfile?.nationalId ?? '');
   const [notes, setNotes] = useState<string>(driver.driverProfile?.notes ?? '');
+  const [deliverySharePct, setDeliverySharePct] = useState<string>(
+    String(driver.driverProfile?.deliverySharePct ?? 0),
+  );
   const [secondaryPhones, setSecondaryPhones] = useState<string[]>(
     Array.isArray(driver.secondaryPhones) ? driver.secondaryPhones : [],
   );
@@ -228,6 +251,19 @@ function EditDriverDialog({ driver, onClose }: { driver: Row; onClose: () => voi
         <Field label="ملاحظات">
           <Input value={notes} onChange={(e) => setNotes(e.target.value)} />
         </Field>
+        <Field label="نسبة السائق من رسوم التوصيل (%)">
+          <Input
+            type="number"
+            dir="ltr"
+            min={0}
+            max={100}
+            step="0.01"
+            value={deliverySharePct}
+            onChange={(e) => setDeliverySharePct(e.target.value)}
+            placeholder="0 - 100"
+          />
+          <ShareHint value={deliverySharePct} />
+        </Field>
 
         <div>
           <div className="flex items-center justify-between mb-2">
@@ -276,6 +312,7 @@ function EditDriverDialog({ driver, onClose }: { driver: Row; onClose: () => voi
                 vehicleType: vehicleType.trim() || undefined,
                 vehiclePlate: vehiclePlate.trim() || undefined,
                 notes: notes.trim() || undefined,
+                deliverySharePct: clampPct(deliverySharePct),
                 secondaryPhones: secondaryPhones.map((p) => p.trim()).filter(Boolean),
               })
             }
@@ -423,9 +460,11 @@ function CreateDriverDialog({ onClose }: { onClose: () => void }) {
     vehiclePlate: '',
     nationalId: '',
     governorate: 'قنا',
+    deliverySharePct: '0',
   });
   const mut = useMutation({
-    mutationFn: () => api.adminCreateDriver(form),
+    mutationFn: () =>
+      api.adminCreateDriver({ ...form, deliverySharePct: clampPct(form.deliverySharePct) }),
     onSuccess: () => {
       toast.success('تم إضافة السائق');
       qc.invalidateQueries({ queryKey: ['admin', 'drivers'] });
@@ -480,6 +519,19 @@ function CreateDriverDialog({ onClose }: { onClose: () => void }) {
             value={form.governorate}
             onChange={(e) => setForm({ ...form, governorate: e.target.value })}
           />
+        </Field>
+        <Field label="نسبة السائق من رسوم التوصيل (%)">
+          <Input
+            type="number"
+            dir="ltr"
+            min={0}
+            max={100}
+            step="0.01"
+            value={form.deliverySharePct}
+            onChange={(e) => setForm({ ...form, deliverySharePct: e.target.value })}
+            placeholder="0 - 100"
+          />
+          <ShareHint value={form.deliverySharePct} />
         </Field>
       </div>
       <div className="flex justify-end gap-2 mt-4">
