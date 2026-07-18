@@ -7,6 +7,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { ScreenHeader } from '../components/ScreenHeader';
 import { Badge, CardListSkeleton, EmptyState } from '../components/ui';
 import { api } from '../lib/api';
+import { LIST_PERF } from '../lib/listPerf';
 import { haptic } from '../lib/haptics';
 import { showToast } from '../lib/toast';
 import { colors, fontFamilies, fontSizes, palette, radii, shadows, spacing } from '../theme/tokens';
@@ -121,6 +122,7 @@ export function RecurringOrdersScreen() {
         </View>
       ) : (
         <FlatList
+          {...LIST_PERF}
           data={data ?? []}
           keyExtractor={(item) => item.id}
           contentContainerStyle={[

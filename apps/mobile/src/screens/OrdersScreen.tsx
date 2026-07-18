@@ -3,7 +3,7 @@ import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import * as Haptics from 'expo-haptics';
 import { Package, RotateCcw } from 'lucide-react-native';
-import { memo, useEffect, useMemo, useState } from 'react';
+import { memo, useMemo, useState } from 'react';
 import {
   FlatList,
   Platform,
@@ -20,7 +20,7 @@ import { ORDER_STATUS_AR, type OrderStatus } from '@tamem/types';
 import { GradientHeader } from '../components/GradientHeader';
 import { AnimatedListItem, CardListSkeleton, EmptyState, StatusPill } from '../components/ui';
 import { api } from '../lib/api';
-import { connectSocket } from '../lib/socket';
+import { useSocketEvents } from '../lib/useSocketEvents';
 import { showToast } from '../lib/toast';
 import type { OrdersStackParamList } from '../navigation/OrdersStack';
 import { colors, fontFamilies, fontSizes, radii, shadows, spacing } from '../theme/tokens';
@@ -59,6 +59,9 @@ const ACTIVE_STATUSES = new Set<OrderStatus>([
 ]);
 const COMPLETED_STATUSES = new Set<OrderStatus>(['DELIVERED', 'COMPLETED']);
 const CANCELLED_STATUSES = new Set<OrderStatus>(['CANCELLED', 'REJECTED']);
+
+/** Module-level so the array identity never changes across renders. */
+const SOCKET_EVENTS = ['order:status', 'order:new'];
 
 const tickHaptic = () => {
   if (Platform.OS !== 'web') void Haptics.selectionAsync();
@@ -161,28 +164,17 @@ export function OrdersScreen() {
   const { data, isLoading, refetch, isFetching } = useQuery<OrderListItem[]>({
     queryKey: ['orders-mine'],
     queryFn: () => api.raw.get('/orders/mine').then((r) => r.data.data),
-    // Live: order status changes reflect while the list is open.
-    refetchInterval: 20_000,
+    // The socket below is the real live channel. This poll is only a safety net
+    // for a dropped socket, so it can be slow — it used to run every 20s and
+    // duplicate work the socket had already done.
+    refetchInterval: 60_000,
+    refetchIntervalInBackground: false,
+    staleTime: 15_000,
   });
 
-  useEffect(() => {
-    let cancelled = false;
-    void (async () => {
-      const s = await connectSocket();
-      const refresh = () => {
-        if (!cancelled) qc.invalidateQueries({ queryKey: ['orders-mine'] });
-      };
-      s.on('order:status', refresh);
-      s.on('order:new', refresh);
-      return () => {
-        s.off('order:status', refresh);
-        s.off('order:new', refresh);
-      };
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [qc]);
+  useSocketEvents(SOCKET_EVENTS, () => {
+    void qc.invalidateQueries({ queryKey: ['orders-mine'] });
+  });
 
   const filtered = useMemo(() => {
     const list = data ?? [];

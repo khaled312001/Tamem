@@ -6,6 +6,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { ScreenHeader } from '../components/ScreenHeader';
 import { AnimatedListItem, CardListSkeleton, EmptyState } from '../components/ui';
 import { api } from '../lib/api';
+import { LIST_PERF } from '../lib/listPerf';
 import { copyToClipboard } from '../lib/clipboard';
 import { showToast } from '../lib/toast';
 import { colors, fontFamilies, fontSizes, radii, shadows, spacing } from '../theme/tokens';
@@ -54,6 +55,7 @@ export function CouponsScreen() {
         />
       ) : (
         <FlatList
+          {...LIST_PERF}
           data={data ?? []}
           keyExtractor={(c) => c.id}
           contentContainerStyle={[

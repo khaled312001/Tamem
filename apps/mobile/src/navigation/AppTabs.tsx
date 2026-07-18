@@ -1,5 +1,5 @@
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Bell, Home, Package, ShoppingCart, User } from 'lucide-react-native';
 import { Platform, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -7,6 +7,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { CartScreen } from '../screens/CartScreen';
 import { NotificationsScreen } from '../screens/NotificationsScreen';
 import { api } from '../lib/api';
+import { useSocketEvents } from '../lib/useSocketEvents';
 import { clearAppBadge } from '../lib/push';
 import { useCart } from '../stores/cart';
 
@@ -127,8 +128,25 @@ const badgeStyles = StyleSheet.create({
   },
 });
 
-/** Polls the unread notifications count so the bell tab can show a badge. */
+/** Module-level so the array identity never changes across renders. */
+const BADGE_EVENTS = ['notification:new', 'order:new', 'order:status'];
+
+/**
+ * Unread-notification count for the bell badge.
+ *
+ * This hook lives in the tab bar, so whatever it does runs on every screen for
+ * the whole session. It used to pull 100 full notification rows every 60s just
+ * to produce one integer. Now the socket drives it — a badge only changes when
+ * something actually happens — and the interval is just a slow safety net for a
+ * dropped socket.
+ *
+ * `pageSize` is capped at 100 server-side and there is no unread-only filter,
+ * so a user with more than 100 unread items still under-counts. Fixing that
+ * properly needs a `/notifications/unread-count` endpoint.
+ */
 function useUnreadCount(): number {
+  const qc = useQueryClient();
+
   const { data } = useQuery({
     queryKey: ['notifications', 'unread-count'],
     queryFn: async () => {
@@ -140,9 +158,15 @@ function useUnreadCount(): number {
         return 0;
       }
     },
-    refetchInterval: 60_000,
-    staleTime: 30_000,
+    refetchInterval: 10 * 60_000,
+    refetchIntervalInBackground: false,
+    staleTime: 60_000,
   });
+
+  useSocketEvents(BADGE_EVENTS, () => {
+    void qc.invalidateQueries({ queryKey: ['notifications', 'unread-count'] });
+  });
+
   return data ?? 0;
 }
 

@@ -10,6 +10,8 @@ import { GradientHeader } from '../components/GradientHeader';
 import { HeartButton } from '../components/HeartButton';
 import { CardListSkeleton, EmptyState } from '../components/ui';
 import { api } from '../lib/api';
+import { LIST_PERF } from '../lib/listPerf';
+import { useDebouncedValue } from '../lib/useDebouncedValue';
 import type { HomeStackParamList } from '../navigation/HomeStack';
 import { colors, fontFamilies, fontSizes, radii, spacing } from '../theme/tokens';
 
@@ -39,15 +41,22 @@ export function StoresListScreen() {
   const [search, setSearch] = useState('');
   const [sortKey, setSortKey] = useState<SortKey>('recommended');
 
+  // The input stays instant; only the query waits. Previously `search` went
+  // straight into the key, so one word = one request per letter.
+  const debouncedSearch = useDebouncedValue(search, 300);
+
   const { data: merchants, isLoading } = useQuery<Merchant[]>({
-    queryKey: ['merchants', activeFilter, search],
+    queryKey: ['merchants', activeFilter, debouncedSearch],
     queryFn: () => {
       const filter = FILTERS.find((f) => f.key === activeFilter);
       const params: Record<string, string> = {};
       if (filter?.categoryId) params.categoryId = filter.categoryId;
-      if (search) params.search = search;
+      if (debouncedSearch) params.search = debouncedSearch;
       return api.raw.get('/merchants', { params }).then((r) => r.data.data);
     },
+    // Browsing back and forth shouldn't refetch the same store list.
+    staleTime: 60_000,
+    placeholderData: (prev) => prev,
   });
 
   const sorted = useMemo(() => {
@@ -117,6 +126,7 @@ export function StoresListScreen() {
         </View>
       ) : (
         <FlatList
+          {...LIST_PERF}
           data={sorted}
           keyExtractor={(m) => m.id}
           contentContainerStyle={[

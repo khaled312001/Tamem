@@ -35,9 +35,17 @@ export function QuickOrderFAB() {
   const press = useRef(new Animated.Value(0)).current;
   // Subtle halo pulse so the FAB never feels static.
   const glow = useRef(new Animated.Value(0)).current;
+  const openTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(
+    () => () => {
+      if (openTimer.current) clearTimeout(openTimer.current);
+    },
+    [],
+  );
 
   useEffect(() => {
-    Animated.loop(
+    const bobLoop = Animated.loop(
       Animated.sequence([
         Animated.timing(bob, {
           toValue: 1,
@@ -52,9 +60,10 @@ export function QuickOrderFAB() {
           useNativeDriver: useNative,
         }),
       ]),
-    ).start();
+    );
+    bobLoop.start();
 
-    Animated.loop(
+    const glowLoop = Animated.loop(
       Animated.sequence([
         Animated.timing(glow, {
           toValue: 1,
@@ -69,7 +78,14 @@ export function QuickOrderFAB() {
           useNativeDriver: useNative,
         }),
       ]),
-    ).start();
+    );
+    glowLoop.start();
+
+    // Without this the two loops keep driving frames after unmount, forever.
+    return () => {
+      bobLoop.stop();
+      glowLoop.stop();
+    };
   }, [bob, glow]);
 
   const onPress = () => {
@@ -90,7 +106,8 @@ export function QuickOrderFAB() {
       }),
     ]).start();
 
-    setTimeout(() => setOpen(true), 320);
+    // Tracked so navigating away mid-bounce can't setState on a dead tree.
+    openTimer.current = setTimeout(() => setOpen(true), 320);
   };
 
   const translateY = bob.interpolate({ inputRange: [0, 1], outputRange: [0, -5] });

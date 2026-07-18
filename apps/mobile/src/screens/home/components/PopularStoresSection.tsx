@@ -10,6 +10,7 @@ import { memo, useCallback } from 'react';
 import { FlatList, I18nManager, Image, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { HeartButton } from '../../../components/HeartButton';
+import { LIST_PERF } from '../../../lib/listPerf';
 import { colors, fontFamilies, radii, shadows, spacing } from '../../../theme/tokens';
 import type { Merchant } from '../homeData';
 
@@ -110,6 +111,9 @@ function PopularStoresSectionBase({ merchants, onPressMerchant, onPressSeeAll }:
         </View>
       ) : (
         <FlatList
+          {...LIST_PERF}
+          // Cards carry remote cover images; clipping them offscreen is where
+          // the memory win is on a long rail.
           data={merchants}
           keyExtractor={keyExtractor}
           renderItem={renderItem}
