@@ -8,6 +8,29 @@
  */
 const fs = require('fs');
 const path = require('path');
+
+// libsignal-node prints verbose per-message session dumps ("Closing session:
+// SessionEntry { … }") via console.log/console.error, bypassing Baileys' silent
+// pino logger. Unchecked they flood bridge.log to megabytes (disk-quota outage)
+// and stall the event loop on every inbound message. Drop that specific noise
+// while keeping our own diagnostics. Must run before Baileys is required.
+for (const level of ['log', 'error', 'warn', 'info', 'debug']) {
+  const orig = console[level].bind(console);
+  console[level] = (...args) => {
+    const first = args.length ? args[0] : '';
+    if (
+      typeof first === 'string' &&
+      (first.startsWith('Closing session') ||
+        first.startsWith('Closing open session') ||
+        first.startsWith('SessionEntry') ||
+        first.includes('Closing stale'))
+    ) {
+      return; // libsignal ratcheting noise — not actionable
+    }
+    orig(...args);
+  };
+}
+
 let baileys;
 try {
   baileys = require('baileys');
@@ -218,6 +241,7 @@ async function connect() {
       if (connection === 'open') {
         const me =
           sock.user && sock.user.id ? String(sock.user.id).split(':')[0].split('@')[0] : null;
+        console.log('[bridge ' + new Date().toISOString() + '] connected as ' + me);
         writeStatus({
           status: 'connected',
           qrDataUrl: null,
@@ -238,6 +262,13 @@ async function connect() {
           lastDisconnect && lastDisconnect.error && lastDisconnect.error.output
             ? lastDisconnect.error.output.statusCode
             : 0;
+        console.log(
+          '[bridge ' +
+            new Date().toISOString() +
+            '] connection closed (code ' +
+            code +
+            ') — reconnecting',
+        );
         const loggedOut = code === (DisconnectReason && DisconnectReason.loggedOut);
         if (loggedOut) {
           try {
