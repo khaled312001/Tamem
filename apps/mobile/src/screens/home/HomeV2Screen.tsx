@@ -19,6 +19,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { SearchOverlay } from '../../components/home/SearchOverlay';
 import { QuickOrderFAB } from '../../components/QuickOrderFAB';
 import { haptic } from '../../lib/haptics';
+import { useUnreadCount } from '../../lib/useUnreadCount';
 import type { HomeStackParamList } from '../../navigation/HomeStack';
 import { colors, fontFamilies, radii, spacing } from '../../theme/tokens';
 
@@ -31,6 +32,7 @@ import { HomeSkeleton } from './components/HomeSkeleton';
 import { MainServicesSection, type HomeServiceItem } from './components/MainServicesSection';
 import { OffersCarousel } from './components/OffersCarousel';
 import { PopularStoresSection } from './components/PopularStoresSection';
+import { PromoCardsRow } from './components/PromoCardsRow';
 import { QuickActionsSection, type QuickAction } from './components/QuickActionsSection';
 import type { HomeCategory, Merchant, Offer, ServiceKey, ServiceRoute } from './homeData';
 import { useHomeData } from './useHomeData';
@@ -50,6 +52,8 @@ const BOTTOM_GAP = 130;
 export function HomeV2Screen() {
   const navigation = useNavigation<NavProp>();
   const [searchOpen, setSearchOpen] = useState(false);
+  // Same query key as the tab bar's bell — one fetch feeds both badges.
+  const unreadCount = useUnreadCount();
 
   const {
     user,
@@ -124,6 +128,27 @@ export function HomeV2Screen() {
     },
     [navigation, tick],
   );
+
+  // "تتبع طلبك" — straight to the live order when there is one, otherwise to
+  // the orders list so the card is never a dead end.
+  const goTracking = useCallback(() => {
+    tick();
+    if (activeOrder) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (navigation.getParent() as any)?.navigate('Orders', {
+        screen: 'OrderTracking',
+        params: { orderId: activeOrder.id },
+      });
+      return;
+    }
+    navigation.getParent()?.navigate('Orders' as never);
+  }, [navigation, activeOrder, tick]);
+
+  // "توصيل سريع" — the delivery service flow, same target as the دليفري card.
+  const goFastDelivery = useCallback(() => {
+    tick();
+    navigation.navigate('DeliveryServices');
+  }, [navigation, tick]);
 
   const goNearbyMap = useCallback(() => {
     tick();
@@ -216,6 +241,8 @@ export function HomeV2Screen() {
       >
         <HomeHeader
           name={user?.name}
+          avatarUrl={user?.avatarUrl}
+          notificationCount={unreadCount}
           locationLabel={locationLabel}
           onPressAvatar={goProfile}
           onPressLocation={goAddresses}
@@ -251,6 +278,14 @@ export function HomeV2Screen() {
           <MainServicesSection services={services} />
         </View>
 
+        {/* Benefits sit directly under the services in the design, not at the
+            bottom of the page. */}
+        {homeConfig?.showTrustStrip !== false && (
+          <View style={styles.section}>
+            <BenefitsBar />
+          </View>
+        )}
+
         <View style={styles.section}>
           <PopularStoresSection
             merchants={featuredMerchants}
@@ -259,6 +294,13 @@ export function HomeV2Screen() {
           />
         </View>
 
+        <View style={styles.section}>
+          <PromoCardsRow onPressTrack={goTracking} onPressFastDelivery={goFastDelivery} />
+        </View>
+
+        {/* Not in the reference design, kept below the fold: both are live
+            navigation paths (category browsing, wallet/favourites/coupons) that
+            would otherwise be unreachable from home. */}
         <View style={styles.section}>
           <CategoriesSection
             categories={categories ?? []}
@@ -270,12 +312,6 @@ export function HomeV2Screen() {
         <View style={styles.section}>
           <QuickActionsSection actions={quickActions} />
         </View>
-
-        {homeConfig?.showTrustStrip !== false && (
-          <View style={styles.section}>
-            <BenefitsBar />
-          </View>
-        )}
       </ScrollView>
 
       {/* Self-positioned (absolute, bottom-start) — same lamp as the old home. */}

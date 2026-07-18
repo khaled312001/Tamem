@@ -11,6 +11,7 @@ import {
   Eye,
   EyeOff,
   Gift,
+  Images,
   Loader2,
   Palette,
   Save,
@@ -27,6 +28,7 @@ import { Button } from '../components/ui/Button.js';
 import { Field, Input } from '../components/ui/Input.js';
 import { CardSkeleton } from '../components/ui/Skeleton.js';
 import { api } from '../lib/api.js';
+import { uploadFile } from '../lib/uploadFile.js';
 
 interface HomeConfig {
   heroGreeting: string | null;
@@ -70,10 +72,11 @@ interface Coupon {
   maxDiscount?: number | string | null;
 }
 
-type TabKey = 'hero' | 'promo' | 'services' | 'merchants' | 'trust';
+type TabKey = 'hero' | 'slider' | 'promo' | 'services' | 'merchants' | 'trust';
 
 const TABS: { key: TabKey; label: string; Icon: typeof Smartphone }[] = [
   { key: 'hero', label: 'الرأس', Icon: Palette },
+  { key: 'slider', label: 'سلايدر العروض', Icon: Images },
   { key: 'promo', label: 'بانر العروض', Icon: Gift },
   { key: 'services', label: 'الخدمات', Icon: Sparkles },
   { key: 'merchants', label: 'المتاجر', Icon: Store },
@@ -220,6 +223,7 @@ export function HomeSettingsPage() {
           onClear={() => update('featuredMerchantIds', null)}
         />
       )}
+      {tab === 'slider' && <SliderTab />}
       {tab === 'trust' && <TrustTab form={form} update={update} />}
     </div>
   );
@@ -682,5 +686,242 @@ function CheckRow({
         {hint && <div className="text-xs text-muted-foreground truncate">{hint}</div>}
       </div>
     </label>
+  );
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Slider offers
+//
+// The mobile home screen has always rendered GET /offers as its top carousel,
+// but nothing in the system ever wrote to that table — so it was permanently
+// empty. This tab is the missing authoring side: create, reorder, hide and
+// delete the slides customers see.
+//
+// The featuredOfferIds picker on the neighbouring tab chooses WHICH of these
+// appear first; this tab is where they come from in the first place.
+// ────────────────────────────────────────────────────────────────────────────
+
+interface Offer {
+  id: string;
+  title: string;
+  titleAr: string;
+  imageUrl: string;
+  linkType: string;
+  linkValue: string | null;
+  sortOrder: number;
+  isActive: boolean;
+}
+
+/** Blank slide used when the admin hits "إضافة شريحة". */
+const EMPTY_OFFER = {
+  titleAr: '',
+  imageUrl: '',
+  linkType: 'NONE',
+  linkValue: '',
+  sortOrder: 0,
+  isActive: true,
+};
+
+function SliderTab() {
+  const qc = useQueryClient();
+  const [editing, setEditing] = useState<Partial<Offer> | null>(null);
+
+  const { data: offers, isLoading } = useQuery({
+    queryKey: ['admin-offers'],
+    queryFn: () => api.adminListOffers() as Promise<Offer[]>,
+  });
+
+  const invalidate = () => {
+    void qc.invalidateQueries({ queryKey: ['admin-offers'] });
+  };
+
+  const save = useMutation({
+    mutationFn: (o: Partial<Offer>) =>
+      o.id ? api.adminUpdateOffer(o.id, o) : api.adminCreateOffer(o),
+    onSuccess: () => {
+      toast.success('تم الحفظ');
+      setEditing(null);
+      invalidate();
+    },
+    onError: (e: Error) => toast.error(e.message || 'فشل الحفظ'),
+  });
+
+  const remove = useMutation({
+    mutationFn: (id: string) => api.adminDeleteOffer(id),
+    onSuccess: () => {
+      toast.success('تم الحذف');
+      invalidate();
+    },
+    onError: (e: Error) => toast.error(e.message || 'فشل الحذف'),
+  });
+
+  // Reordering swaps sortOrder with the neighbour instead of renumbering the
+  // whole list, so moving one slide can't rewrite every other row.
+  const swap = (a: Offer, b: Offer) => {
+    void save.mutateAsync({ id: a.id, sortOrder: b.sortOrder });
+    void save.mutateAsync({ id: b.id, sortOrder: a.sortOrder });
+  };
+
+  if (isLoading) return <CardSkeleton />;
+
+  const list = offers ?? [];
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <div>
+          <div className="font-black">شرائح السلايدر</div>
+          <div className="text-xs text-muted-foreground">
+            تظهر أعلى الصفحة الرئيسية في التطبيق — الترتيب من أعلى لأسفل.
+          </div>
+        </div>
+        <Button onClick={() => setEditing({ ...EMPTY_OFFER, sortOrder: list.length })}>
+          إضافة شريحة
+        </Button>
+      </div>
+
+      {list.length === 0 ? (
+        <div className="rounded-xl border-2 border-dashed border-border p-8 text-center text-muted-foreground">
+          <Images className="w-8 h-8 mx-auto mb-2 opacity-60" />
+          <div className="font-bold">لا توجد شرائح بعد</div>
+          <div className="text-xs mt-1">أضف أول شريحة لتظهر للعملاء في الصفحة الرئيسية.</div>
+        </div>
+      ) : (
+        <div className="space-y-2">
+          {list.map((o: Offer, i: number) => (
+            <div
+              key={o.id}
+              className="flex items-center gap-3 rounded-xl border border-border p-2 bg-card"
+            >
+              <img
+                src={o.imageUrl}
+                alt={o.titleAr}
+                className="w-28 h-16 rounded-lg object-cover bg-muted shrink-0"
+              />
+              <div className="flex-1 min-w-0">
+                <div className="font-bold truncate">{o.titleAr}</div>
+                <div className="text-xs text-muted-foreground">
+                  {o.isActive ? 'ظاهر' : 'مخفي'} · ترتيب {o.sortOrder}
+                </div>
+              </div>
+              <div className="flex items-center gap-1 shrink-0">
+                <Button
+                  variant="ghost"
+                  disabled={i === 0}
+                  onClick={() => swap(o, list[i - 1]!)}
+                  title="تحريك لأعلى"
+                >
+                  ↑
+                </Button>
+                <Button
+                  variant="ghost"
+                  disabled={i === list.length - 1}
+                  onClick={() => swap(o, list[i + 1]!)}
+                  title="تحريك لأسفل"
+                >
+                  ↓
+                </Button>
+                <Button
+                  variant="ghost"
+                  onClick={() => save.mutate({ id: o.id, isActive: !o.isActive })}
+                  title={o.isActive ? 'إخفاء' : 'إظهار'}
+                >
+                  {o.isActive ? <Eye className="w-4 h-4" /> : <EyeOff className="w-4 h-4" />}
+                </Button>
+                <Button variant="ghost" onClick={() => setEditing(o)}>
+                  تعديل
+                </Button>
+                <Button
+                  variant="ghost"
+                  className="text-red-600"
+                  onClick={() => {
+                    if (confirm(`حذف "${o.titleAr}" نهائياً؟`)) remove.mutate(o.id);
+                  }}
+                >
+                  حذف
+                </Button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {editing && (
+        <div className="rounded-xl border border-border p-4 space-y-3 bg-card">
+          <div className="font-black">{editing.id ? 'تعديل شريحة' : 'شريحة جديدة'}</div>
+
+          <OfferImageField
+            value={editing.imageUrl ?? ''}
+            onChange={(url) => setEditing({ ...editing, imageUrl: url })}
+          />
+
+          <Field label="العنوان">
+            <Input
+              value={editing.titleAr ?? ''}
+              onChange={(e) => setEditing({ ...editing, titleAr: e.target.value })}
+              placeholder="مثال: خصم 20% على أول طلب"
+            />
+          </Field>
+
+          <div className="flex items-center gap-2">
+            <Button
+              onClick={() => save.mutate(editing)}
+              disabled={save.isPending || !editing.imageUrl || !editing.titleAr}
+            >
+              {save.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : 'حفظ'}
+            </Button>
+            <Button variant="ghost" onClick={() => setEditing(null)}>
+              إلغاء
+            </Button>
+            {!editing.imageUrl && (
+              <span className="text-xs text-muted-foreground">الصورة مطلوبة</span>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Wide, banner-shaped image picker for one slide. */
+function OfferImageField({ value, onChange }: { value: string; onChange: (url: string) => void }) {
+  const [busy, setBusy] = useState(false);
+  return (
+    <div>
+      <div className="text-xs font-bold text-muted-foreground mb-1">صورة الشريحة</div>
+      <label className="relative block w-full aspect-[16/6] rounded-xl border-2 border-dashed border-border overflow-hidden cursor-pointer bg-muted/30 hover:border-brand-red/60 transition">
+        {value ? (
+          <img src={value} alt="" className="w-full h-full object-cover" />
+        ) : (
+          <div className="w-full h-full flex flex-col items-center justify-center gap-1 text-muted-foreground">
+            <Images className="w-6 h-6" />
+            <span className="text-[11px]">اضغط لرفع صورة (يفضّل 1600×600)</span>
+          </div>
+        )}
+        {busy && (
+          <div className="absolute inset-0 bg-white/70 flex items-center justify-center">
+            <Loader2 className="w-5 h-5 animate-spin text-brand-red" />
+          </div>
+        )}
+        <input
+          type="file"
+          accept="image/*"
+          className="hidden"
+          onChange={async (e) => {
+            const file = e.target.files?.[0];
+            if (!file) return;
+            setBusy(true);
+            try {
+              const r = await uploadFile(file);
+              onChange(r.url);
+            } catch (err) {
+              toast.error((err as Error).message || 'فشل رفع الصورة');
+            } finally {
+              setBusy(false);
+            }
+          }}
+        />
+      </label>
+    </div>
   );
 }
