@@ -3496,7 +3496,32 @@ function normalizeProductRows($items): array {
     }
     return array_values(array_filter($items, 'isAssocArr'));
 }
-// Fetch an external merchant API (PHP does this fine — no Node.js needed).
+// One raw HTTP GET/POST of a merchant API URL → decoded JSON (or an error).
+function fetchMerchantApiOnce(string $url, array $headers, string $method, ?string $body): array {
+    $raw = null; $httpCode = 0;
+    if (function_exists('curl_init')) {
+        $ch = curl_init($url);
+        curl_setopt_array($ch, [CURLOPT_RETURNTRANSFER => true, CURLOPT_HTTPHEADER => $headers,
+            CURLOPT_TIMEOUT => 40, CURLOPT_FOLLOWLOCATION => true, CURLOPT_SSL_VERIFYPEER => false,
+            CURLOPT_ENCODING => '', // accept gzip/br so a big catalogue transfers compressed
+            CURLOPT_CUSTOMREQUEST => $method]);
+        if ($method === 'POST' && $body) curl_setopt($ch, CURLOPT_POSTFIELDS, $body);
+        $raw = curl_exec($ch); $httpCode = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $err = curl_error($ch); curl_close($ch);
+        if ($raw === false) return ['ok' => false, 'reason' => 'فشل الاتصال: ' . $err];
+    } else {
+        $ctx = stream_context_create(['http' => ['method' => $method, 'header' => implode("\r\n", $headers), 'timeout' => 40, 'ignore_errors' => true]]);
+        $raw = @file_get_contents($url, false, $ctx);
+        if ($raw === false) return ['ok' => false, 'reason' => 'فشل الاتصال بالـ API'];
+    }
+    $json = json_decode((string)$raw, true);
+    if (!is_array($json)) return ['ok' => false, 'reason' => 'الرد ليس JSON صالح', 'httpCode' => $httpCode];
+    return ['ok' => true, 'json' => $json, 'httpCode' => $httpCode];
+}
+// Fetch an external merchant API. Pulls the WHOLE catalogue, not just the first
+// page: it follows the response's `pagination.hasNextPage` (Tamem sync API /
+// Laravel-style), and if the URL has no per-page hint it requests a large page
+// so a single call returns everything. (PHP does this fine — no Node.js needed.)
 function fetchMerchantApi(array $cfg): array {
     $url = (string)($cfg['apiUrl'] ?? '');
     if ($url === '') return ['ok' => false, 'reason' => 'رابط الـ API فارغ'];
@@ -3511,30 +3536,36 @@ function fetchMerchantApi(array $cfg): array {
         if (is_array($extra)) foreach ($extra as $k => $v) $headers[] = "$k: $v";
     }
     $method = strtoupper((string)($cfg['method'] ?? 'GET'));
-    $raw = null; $httpCode = 0;
-    if (function_exists('curl_init')) {
-        $ch = curl_init($url);
-        curl_setopt_array($ch, [CURLOPT_RETURNTRANSFER => true, CURLOPT_HTTPHEADER => $headers,
-            CURLOPT_TIMEOUT => 25, CURLOPT_FOLLOWLOCATION => true, CURLOPT_SSL_VERIFYPEER => false,
-            CURLOPT_CUSTOMREQUEST => $method]);
-        if ($method === 'POST' && !empty($cfg['requestBody'])) curl_setopt($ch, CURLOPT_POSTFIELDS, (string)$cfg['requestBody']);
-        $raw = curl_exec($ch); $httpCode = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
-        $err = curl_error($ch); curl_close($ch);
-        if ($raw === false) return ['ok' => false, 'reason' => 'فشل الاتصال: ' . $err];
-    } else {
-        $ctx = stream_context_create(['http' => ['method' => $method, 'header' => implode("\r\n", $headers), 'timeout' => 25, 'ignore_errors' => true]]);
-        $raw = @file_get_contents($url, false, $ctx);
-        if ($raw === false) return ['ok' => false, 'reason' => 'فشل الاتصال بالـ API'];
+    $body = !empty($cfg['requestBody']) ? (string)$cfg['requestBody'] : null;
+    $pp = trim((string)($cfg['productsPath'] ?? ''));
+    $drill = function ($json) use ($pp) {
+        $items = $json;
+        if ($pp !== '') foreach (explode('.', $pp) as $seg) { $items = is_array($items) && array_key_exists($seg, $items) ? $items[$seg] : []; }
+        return normalizeProductRows($items);
+    };
+    // If the caller didn't specify a page size, ask for a big one so a single
+    // request returns the whole catalogue (perPage is capped server-side).
+    $hasPageHint = (bool) preg_match('/[?&](perPage|per_page|limit|pageSize)=/i', $url);
+    $allItems = []; $httpCode = 0; $lastJson = null;
+    $maxPages = 300; // hard backstop against a broken pagination loop
+    for ($page = 1; $page <= $maxPages; $page++) {
+        $fetchUrl = $url;
+        if (!$hasPageHint) {
+            $sep = strpos($fetchUrl, '?') === false ? '?' : '&';
+            $fetchUrl .= $sep . 'perPage=200&page=' . $page;
+        }
+        $r = fetchMerchantApiOnce($fetchUrl, $headers, $method, $body);
+        if (!$r['ok']) { if ($allItems) break; return $r; }
+        $httpCode = $r['httpCode']; $lastJson = $r['json'];
+        $rows = $drill($r['json']);
+        if ($rows) $allItems = array_merge($allItems, $rows);
+        // Stop unless the API explicitly says there's another page.
+        $pg = $r['json']['pagination'] ?? ($r['json']['meta']['pagination'] ?? null);
+        $hasNext = is_array($pg) && (!empty($pg['hasNextPage'])
+            || (isset($pg['currentPage'], $pg['lastPage']) && (int)$pg['currentPage'] < (int)$pg['lastPage']));
+        if ($hasPageHint || !$hasNext || !$rows) break;
     }
-    $json = json_decode((string)$raw, true);
-    if (!is_array($json)) return ['ok' => false, 'reason' => 'الرد ليس JSON صالح', 'httpCode' => $httpCode];
-    // Drill into productsPath (e.g. "data" or "result.products"); empty = root list.
-    $items = $json; $pp = trim((string)($cfg['productsPath'] ?? ''));
-    if ($pp !== '') foreach (explode('.', $pp) as $seg) { $items = is_array($items) && array_key_exists($seg, $items) ? $items[$seg] : []; }
-    // Normalise to a clean list of product objects (handles wrapper objects,
-    // bare lists, and single-object responses).
-    $items = normalizeProductRows($items);
-    return ['ok' => true, 'items' => $items, 'httpCode' => $httpCode];
+    return ['ok' => true, 'items' => $allItems, 'httpCode' => $httpCode];
 }
 function mapExternalProduct(array $row, array $mapping): array {
     // Read a (possibly dotted) key path out of the row.
@@ -3561,24 +3592,28 @@ function mapExternalProduct(array $row, array $mapping): array {
         if (in_array($s, ['0', 'false', 'no', 'unavailable', 'out_of_stock', 'outofstock', 'غير متاح', 'غير متوفر', 'نفذ'], true)) return false;
         return (bool) $v;
     };
-    $name = $pick('name', ['name']);
-    $imgs = $pick('imageUrls');
+    // Fallback source keys make the Tamem sync API auto-map with NO manual field
+    // selection: its fields are id / name / nameEn / description / price / image
+    // / category / brand / activeIngredient / unit / inStock / … so each app field
+    // falls back to the matching source key when the mapping is left on "تجاهل".
+    $name = $pick('name', ['name', 'nameAr', 'title']);
+    $imgs = $pick('imageUrls', ['images']);
     $s = fn ($v, $len) => $v !== null ? mb_substr((string) $v, 0, $len) : null;
     return [
         'name' => trim((string) ($name ?? '')),
-        'nameAr' => trim((string) ($pick('nameAr', ['name']) ?? $name ?? '')),
-        'description' => ($d = $pick('description')) !== null ? (string) $d : null,
+        'nameAr' => trim((string) ($pick('nameAr', ['name', 'title']) ?? $name ?? '')),
+        'description' => ($d = $pick('description', ['description', 'activeIngredient'])) !== null ? (string) $d : null,
         'price' => $num($pick('price', ['price'])),        // null = unmapped → keep existing on update
-        'salePrice' => $num($pick('salePrice')),
-        'imageUrl' => ($i = $pick('imageUrl', ['image'])) ? (string) $i : null,
+        'salePrice' => $num($pick('salePrice', ['originalPrice', 'discount'])),
+        'imageUrl' => ($i = $pick('imageUrl', ['image', 'imageUrl'])) ? (string) $i : null,
         'imageUrls' => is_array($imgs) ? array_values(array_filter(array_map('strval', $imgs), fn ($x) => $x !== '')) : null,
-        'categoryName' => $s($pick('categoryName', ['category']), 120),
-        'stock' => $intv($pick('stock')),
-        'isAvailable' => $boolv($pick('isAvailable')),
-        'sku' => $s($pick('sku'), 80),
-        'externalId' => $s($pick('externalId'), 120),
-        'barcode' => $s($pick('barcode'), 80),
-        'weight' => $num($pick('weight')),
+        'categoryName' => $s($pick('categoryName', ['category', 'categoryName']), 120),
+        'stock' => $intv($pick('stock', ['stock', 'quantity'])),
+        'isAvailable' => $boolv($pick('isAvailable', ['inStock', 'isAvailable', 'available'])),
+        'sku' => $s($pick('sku', ['sku', 'barcode']), 80),
+        'externalId' => $s($pick('externalId', ['id', 'externalId', 'productId', 'uuid']), 120),
+        'barcode' => $s($pick('barcode', ['barcode']), 80),
+        'weight' => $num($pick('weight', ['weight'])),
     ];
 }
 if ($method === 'POST' && preg_match('#^/admin/merchants/([^/]+)/api-config/test$#', $path, $m)) {

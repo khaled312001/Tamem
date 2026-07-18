@@ -9,11 +9,12 @@ import {
   Package,
   Search,
   ShoppingBag,
+  SlidersHorizontal,
   Store,
   Truck,
 } from 'lucide-react-native';
 import { useState } from 'react';
-import { Alert, Image, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { HeartButton } from '../components/HeartButton';
@@ -241,14 +242,6 @@ export function HomeScreen() {
     enabled: authReady,
   });
 
-  // Resolve the gradient: server-provided > brand default. We tuple it so
-  // LinearGradient is happy.
-  const heroGradient = (
-    homeConfig?.heroGradient && homeConfig.heroGradient.length >= 2
-      ? homeConfig.heroGradient
-      : (gradients.brand as readonly string[])
-  ) as readonly [string, string, ...string[]];
-
   // Resolve the visible services list: server filter > all hard-coded.
   const visibleServices =
     homeConfig?.visibleServiceKeys && homeConfig.visibleServiceKeys.length > 0
@@ -277,30 +270,10 @@ export function HomeScreen() {
 
   return (
     <SafeAreaView edges={['top']} style={styles.container}>
-      {/* ─────── Branded hero with location + bell ─────── */}
-      <LinearGradient
-        colors={heroGradient}
-        start={{ x: 0, y: 0 }}
-        end={{ x: 1, y: 1 }}
-        style={styles.hero}
-      >
-        {/* Top toolbar: logo + greeting + bell */}
-        <View style={styles.toolbar}>
-          <View style={styles.brandWrap}>
-            <View style={styles.brandLogoCircle}>
-              <Image
-                source={require('../assets/logo.jpg')}
-                style={styles.brandLogo}
-                resizeMode="cover"
-              />
-            </View>
-            <Text style={styles.brandName}>تميم</Text>
-          </View>
-
-          <Text style={styles.greeting} numberOfLines={1}>
-            أهلاً {user?.name?.split(' ')[0] ?? 'بك'} 👋
-          </Text>
-
+      {/* ─────── Light header (matches the design: bell left, location + avatar
+          right, greeting, then the search bar — all on the warm surface) ─────── */}
+      <View style={styles.header}>
+        <View style={styles.headerTop}>
           <Pressable
             onPress={() => {
               tickHaptic();
@@ -310,48 +283,52 @@ export function HomeScreen() {
             accessibilityLabel="الإشعارات"
             hitSlop={6}
           >
-            <Bell size={16} color={colors.white} />
+            <Bell size={22} color={colors.brand.dark} />
             <View style={styles.bellDot} />
           </Pressable>
+
+          <View style={styles.headerRight}>
+            <Pressable
+              onPress={() => {
+                tickHaptic();
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                (navigation.getParent() as any)?.navigate('ProfileTab', {
+                  screen: 'SavedAddresses',
+                });
+              }}
+              style={styles.locationRow}
+              accessibilityLabel="تغيير العنوان"
+            >
+              <ChevronDown size={14} color={colors.text.muted} />
+              <Text style={styles.locationText} numberOfLines={1}>
+                {defaultAddress?.label ?? (needsAddress ? 'أضف عنوان' : 'اختر العنوان')}
+              </Text>
+              <MapPin size={16} color={colors.brand.red} />
+            </Pressable>
+            <View style={styles.avatar}>
+              <Text style={styles.avatarText}>{(user?.name ?? 'ت').trim().charAt(0)}</Text>
+            </View>
+          </View>
         </View>
 
-        {/* Compact location pill — taps open SavedAddresses */}
-        <Pressable
-          onPress={() => {
-            tickHaptic();
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            (navigation.getParent() as any)?.navigate('ProfileTab', {
-              screen: 'SavedAddresses',
-            });
-          }}
-          style={({ pressed }) => [styles.locationPill, pressed && { opacity: 0.9 }]}
-          accessibilityLabel="تغيير العنوان"
-        >
-          <MapPin size={14} color={colors.white} />
-          <Text style={styles.locationPillText} numberOfLines={1}>
-            {defaultAddress
-              ? `${defaultAddress.label} · ${defaultAddress.address}`
-              : needsAddress
-                ? 'اضغط لإضافة عنوان توصيل'
-                : 'اختر عنوان التوصيل'}
-          </Text>
-          <ChevronDown size={14} color="rgba(255,255,255,0.9)" />
-        </Pressable>
+        <Text style={styles.greeting} numberOfLines={1}>
+          👋 <Text style={styles.greetingName}>أهلاً {user?.name?.split(' ')[0] ?? 'بك'}</Text>
+        </Text>
+        <Text style={styles.greetingSub}>ماذا تريد أن تطلب اليوم؟</Text>
 
-        {/* Collapsed search pill — opens the SearchOverlay (which auto-
-            focuses an input + shows live suggestions). */}
         <Pressable
           onPress={() => setSearchOpen(true)}
-          style={({ pressed }) => [styles.searchPill, pressed && { opacity: 0.92 }]}
+          style={({ pressed }) => [styles.searchBar, shadows.sm, pressed && { opacity: 0.92 }]}
           accessibilityRole="search"
           accessibilityLabel="افتح البحث"
         >
-          <Search size={18} color={colors.text.muted} />
-          <Text style={styles.searchPillText} numberOfLines={1}>
-            ابحث عن مطعم، محل، أو منتج…
+          <Search size={20} color={colors.text.muted} />
+          <Text style={styles.searchText} numberOfLines={1}>
+            ابحث عن مطعم، محل، منتج، أو خدمة…
           </Text>
+          <SlidersHorizontal size={18} color={colors.text.muted} />
         </Pressable>
-      </LinearGradient>
+      </View>
 
       <SearchOverlay visible={searchOpen} onClose={() => setSearchOpen(false)} />
 
@@ -543,105 +520,97 @@ export function HomeScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.surface },
-  // Hero
-  hero: {
-    // Redesigned hero: 3 stacked rows (toolbar / location pill / search
-    // pill). ~140px total, logo in the corner, no decorative subtitle.
+  // ── Light header ──
+  header: {
     paddingHorizontal: spacing.md,
-    paddingTop: 4,
+    paddingTop: spacing.xs,
     paddingBottom: spacing.sm,
-    borderBottomLeftRadius: radii.xl,
-    borderBottomRightRadius: radii.xl,
     gap: spacing.sm,
   },
-  // ── Row 1: brand + greeting + bell ──
-  toolbar: {
+  headerTop: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  headerRight: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing.sm,
   },
-  brandWrap: {
+  locationRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
+    gap: 4,
+    maxWidth: 170,
   },
-  brandLogoCircle: {
-    width: 30,
-    height: 30,
-    borderRadius: 15,
-    backgroundColor: colors.white,
-    alignItems: 'center',
-    justifyContent: 'center',
-    overflow: 'hidden',
-    padding: 2,
-  },
-  brandLogo: {
-    width: 26,
-    height: 26,
-    borderRadius: 13,
-  },
-  brandName: {
-    color: colors.white,
-    fontFamily: fontFamilies.headingBlack,
-    fontSize: fontSizes.sm,
-    letterSpacing: 0.3,
-  },
-  greeting: {
-    flex: 1,
-    textAlign: 'center',
-    color: colors.white,
-    fontFamily: fontFamilies.headingBold,
-    fontSize: fontSizes.sm,
-  },
-  bellBtn: {
-    width: 32,
-    height: 32,
-    borderRadius: radii.md,
-    backgroundColor: 'rgba(255,255,255,0.18)',
-    alignItems: 'center',
-    justifyContent: 'center',
-    position: 'relative',
-  },
-  bellDot: {
-    position: 'absolute',
-    top: 6,
-    end: 6,
-    width: 7,
-    height: 7,
-    borderRadius: 4,
-    backgroundColor: colors.brand.gold,
-  },
-  // ── Row 2: location pill ──
-  locationPill: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    paddingHorizontal: spacing.md,
-    paddingVertical: 7,
-    backgroundColor: 'rgba(255,255,255,0.18)',
-    borderRadius: 99,
-  },
-  locationPillText: {
-    flex: 1,
-    color: colors.white,
+  locationText: {
+    color: colors.brand.dark,
     fontFamily: fontFamilies.bodyBold,
     fontSize: fontSizes.xs,
     textAlign: 'right',
   },
-  // ── Row 3: search pill ──
-  searchPill: {
+  avatar: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: colors.brand.red,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  avatarText: {
+    color: colors.white,
+    fontFamily: fontFamilies.headingBlack,
+    fontSize: fontSizes.md,
+  },
+  bellBtn: {
+    width: 42,
+    height: 42,
+    borderRadius: radii.md,
+    backgroundColor: colors.white,
+    alignItems: 'center',
+    justifyContent: 'center',
+    position: 'relative',
+    ...shadows.sm,
+  },
+  bellDot: {
+    position: 'absolute',
+    top: 8,
+    end: 9,
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: colors.brand.red,
+    borderWidth: 1.5,
+    borderColor: colors.white,
+  },
+  greeting: {
+    textAlign: 'right',
+    fontFamily: fontFamilies.headingBold,
+    fontSize: fontSizes.lg,
+    color: colors.brand.dark,
+    marginTop: 2,
+  },
+  greetingName: { color: colors.brand.red },
+  greetingSub: {
+    textAlign: 'right',
+    fontFamily: fontFamilies.body,
+    fontSize: fontSizes.sm,
+    color: colors.text.muted,
+  },
+  searchBar: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing.sm,
-    height: 42,
+    height: 52,
     paddingHorizontal: spacing.md,
     backgroundColor: colors.white,
-    borderRadius: 99,
+    borderRadius: radii.lg,
+    marginTop: spacing.xs,
   },
-  searchPillText: {
+  searchText: {
     flex: 1,
     fontFamily: fontFamilies.body,
-    fontSize: fontSizes.xs,
+    fontSize: fontSizes.sm,
     color: colors.text.muted,
     textAlign: 'right',
   },
