@@ -305,13 +305,15 @@ export function MerchantProductsApiPage() {
     onSuccess: (res: TestResult) => {
       if (res.ok) {
         toast.success(`✓ الاتصال ناجح — ${res.fetchedCount} منتج`);
-        // Auto-fill the mapping the first time (nothing set yet), so the admin
-        // usually only has to review, not build it field by field.
-        if (res.sampleFields?.length && Object.keys(fieldMapping).length === 0) {
+        // Always auto-map on a successful test so the admin never has to build
+        // it field by field — we merge over whatever they had, filling every
+        // field we can match (name, price, image, category, availability, id…).
+        if (res.sampleFields?.length) {
           const auto = autoMatch(res.sampleFields, fieldMapping);
+          const merged = { ...fieldMapping, ...auto };
           if (Object.keys(auto).length) {
-            setFieldMapping(auto);
-            toast.success(`تمت مطابقة ${Object.keys(auto).length} حقل تلقائياً — راجعها`);
+            setFieldMapping(merged);
+            toast.success(`تمت مطابقة ${Object.keys(auto).length} حقل تلقائياً`);
           }
         }
       } else toast.error(`✕ فشل الاتصال — ${res.error ?? 'خطأ غير معروف'}`);

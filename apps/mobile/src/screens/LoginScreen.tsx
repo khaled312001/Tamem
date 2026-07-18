@@ -76,15 +76,11 @@ export function LoginScreen() {
     null,
   );
 
-  /** Promise that resolves when the user picks a role or closes the modal. */
+  /** The role to sign up new Google users as. Default customer — the app no
+   *  longer asks "عميل أم تاجر؟" up front; merchants sign up via the merchant
+   *  link. The backend ignores role for returning users, so this is safe. */
   const resolveGoogleRole = (): Promise<SignupRole | null | undefined> => {
-    // If the user already selected a role on the RoleChoice screen, skip the
-    // modal entirely — pass that role straight to the backend.
-    if (initialRole) return Promise.resolve(initialRole);
-    return new Promise((resolve) => {
-      setPendingResolve(() => resolve);
-      setRolePickerOpen(true);
-    });
+    return Promise.resolve(initialRole ?? 'CUSTOMER');
   };
 
   const handleRolePicked = (role: SignupRole | null) => {
