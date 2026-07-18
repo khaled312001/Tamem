@@ -4,16 +4,22 @@
   "private": true,
   "main": "index.ts",
   "scripts": {
+    "start": "expo start",
+    "start:clear": "expo start --clear",
     "dev": "expo start",
     "android": "expo run:android",
+    "android:device": "expo run:android --device",
+    "reverse": "adb reverse tcp:8081 tcp:8081",
     "ios": "expo run:ios",
     "web": "expo start --web",
     "build:android": "eas build --platform android --profile preview",
     "build:android-prod": "eas build --platform android --profile production",
+    "release:android": "cd android && gradlew.bat assembleRelease",
     "lint": "eslint src --max-warnings=0",
     "typecheck": "tsc --noEmit",
-    "test": "jest",
-    "clean": "rimraf .expo .turbo node_modules/.cache"
+    "clean": "rimraf .expo .turbo node_modules/.cache",
+    "clean:android": "cd android && gradlew.bat clean",
+    "clean:all": "npm run clean && npm run clean:android"
   },
   "dependencies": {
     "@babel/runtime": "^7.25.0",

@@ -926,6 +926,9 @@ export class TamemClient {
   }
 
   // ===== Admin Offers =====
+  // These have existed since launch but had no server implementation — the
+  // /admin/offers routes were only added to api.php now, which is why the home
+  // slider could never be filled.
   async adminListOffers(): Promise<unknown[]> {
     return this.request({ method: 'GET', url: '/admin/offers' });
   }

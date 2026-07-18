@@ -5,7 +5,7 @@
  */
 import { Bell, ChevronDown, MapPin } from 'lucide-react-native';
 import { memo } from 'react';
-import { I18nManager, Pressable, StyleSheet, Text, View } from 'react-native';
+import { I18nManager, Image, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { colors, fontFamilies, radii, shadows, spacing } from '../../../theme/tokens';
 
@@ -18,6 +18,8 @@ const ROW = I18nManager.isRTL ? 'row-reverse' : ('row' as const);
 interface Props {
   /** Display name; only the first word is greeted. */
   name?: string | null;
+  /** Profile photo. Falls back to the name's first letter when absent. */
+  avatarUrl?: string | null;
   /** Label of the default saved address, if any. */
   locationLabel: string;
   /** Unread notification count — hidden when 0. */
@@ -29,6 +31,7 @@ interface Props {
 
 function HomeHeaderBase({
   name,
+  avatarUrl,
   locationLabel,
   notificationCount = 0,
   onPressAvatar,
@@ -50,7 +53,11 @@ function HomeHeaderBase({
             accessibilityLabel="حسابي"
             hitSlop={6}
           >
-            <Text style={styles.avatarText}>{initial}</Text>
+            {avatarUrl ? (
+              <Image source={{ uri: avatarUrl }} style={styles.avatarImg} resizeMode="cover" />
+            ) : (
+              <Text style={styles.avatarText}>{initial}</Text>
+            )}
             <View style={styles.avatarDot} />
           </Pressable>
 
@@ -116,7 +123,9 @@ const styles = StyleSheet.create({
     backgroundColor: colors.brand.red,
     alignItems: 'center',
     justifyContent: 'center',
+    overflow: 'hidden',
   },
+  avatarImg: { width: '100%', height: '100%' },
   avatarText: {
     color: colors.white,
     fontSize: 19,

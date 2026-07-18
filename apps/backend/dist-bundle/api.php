@@ -4155,6 +4155,95 @@ if ($method === 'DELETE' && preg_match('#^/admin/categories/([^/]+)$#', $path, $
     jsonOk(['deleted' => true]);
 }
 
+// ── Offers (home slider) ───────────────────────────────────────────────────
+// The public GET /offers has existed since launch, but nothing in the system
+// ever wrote to the Offer table — so the home slider could never be filled.
+// These four routes are that missing half.
+
+if ($method === 'GET' && $path === '/admin/offers') {
+    authUser();
+    // Unlike the public route this returns inactive and expired rows too —
+    // an admin needs to see and re-enable them.
+    $rows = db()->query('SELECT * FROM `Offer` ORDER BY sortOrder ASC, createdAt DESC')->fetchAll();
+    jsonOk(array_map(fn($r) => boolCast(jsonizeRow($r), ['isActive']), $rows));
+}
+
+if ($method === 'POST' && $path === '/admin/offers') {
+    $u = authUser();
+    if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
+    $b = readJsonBody();
+
+    $imageUrl = trim((string) ($b['imageUrl'] ?? ''));
+    // imageUrl is NOT NULL in the schema, and a slide with no image is just an
+    // invisible row — reject it here rather than let MySQL throw.
+    if ($imageUrl === '') jsonErr('صورة العرض مطلوبة', 400, 'VALIDATION_ERROR');
+
+    $titleAr = trim((string) ($b['titleAr'] ?? $b['title'] ?? ''));
+    if ($titleAr === '') jsonErr('عنوان العرض مطلوب', 400, 'VALIDATION_ERROR');
+
+    $id = newId();
+    $st = db()->prepare(
+        'INSERT INTO `Offer` (id, title, titleAr, imageUrl, linkType, linkValue, sortOrder, isActive, startsAt, endsAt, createdAt, updatedAt)'
+        . ' VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(3), NOW(3))'
+    );
+    $st->execute([
+        $id,
+        (string) ($b['title'] ?? $titleAr),
+        $titleAr,
+        $imageUrl,
+        (string) ($b['linkType'] ?? 'NONE'),
+        isset($b['linkValue']) && $b['linkValue'] !== '' ? (string) $b['linkValue'] : null,
+        (int) ($b['sortOrder'] ?? 0),
+        array_key_exists('isActive', $b) ? (!empty($b['isActive']) ? 1 : 0) : 1,
+        !empty($b['startsAt']) ? (string) $b['startsAt'] : null,
+        !empty($b['endsAt']) ? (string) $b['endsAt'] : null,
+    ]);
+    $sel = db()->prepare('SELECT * FROM `Offer` WHERE id = ?');
+    $sel->execute([$id]);
+    jsonOk(boolCast(jsonizeRow($sel->fetch()), ['isActive']), 201);
+}
+
+if ($method === 'PATCH' && preg_match('#^/admin/offers/([^/]+)$#', $path, $m)) {
+    $u = authUser();
+    if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
+    $id = $m[1];
+    $b = readJsonBody();
+    $sets = [];
+    $args = [];
+    foreach (['title', 'titleAr', 'imageUrl', 'linkType', 'sortOrder'] as $f) {
+        if (array_key_exists($f, $b)) { $sets[] = "`$f`=?"; $args[] = $b[$f]; }
+    }
+    // Nullable columns: an empty string from a cleared form field means NULL,
+    // not the literal "".
+    foreach (['linkValue', 'startsAt', 'endsAt'] as $f) {
+        if (array_key_exists($f, $b)) {
+            $sets[] = "`$f`=?";
+            $args[] = ($b[$f] === '' || $b[$f] === null) ? null : (string) $b[$f];
+        }
+    }
+    if (array_key_exists('isActive', $b)) { $sets[] = '`isActive`=?'; $args[] = !empty($b['isActive']) ? 1 : 0; }
+    if ($sets) {
+        $sets[] = '`updatedAt`=NOW(3)';
+        $args[] = $id;
+        db()->prepare('UPDATE `Offer` SET ' . implode(',', $sets) . ' WHERE id = ?')->execute($args);
+    }
+    $sel = db()->prepare('SELECT * FROM `Offer` WHERE id = ?');
+    $sel->execute([$id]);
+    $row = $sel->fetch();
+    if (!$row) jsonErr('العرض غير موجود', 404, 'NOT_FOUND');
+    jsonOk(boolCast(jsonizeRow($row), ['isActive']));
+}
+
+if ($method === 'DELETE' && preg_match('#^/admin/offers/([^/]+)$#', $path, $m)) {
+    $u = authUser();
+    if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
+    // Offer has no inbound foreign keys, so a hard delete is safe here.
+    // HomeConfig.featuredOfferIds may still name it; the home screen already
+    // falls back to "all offers" when a pinned id resolves to nothing.
+    db()->prepare('DELETE FROM `Offer` WHERE id = ?')->execute([$m[1]]);
+    jsonOk(['deleted' => true]);
+}
+
 // POST /admin/supervisors — insert into Supervisor.
 if ($method === 'POST' && $path === '/admin/supervisors') {
     $u = authUser();

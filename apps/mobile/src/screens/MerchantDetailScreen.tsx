@@ -1,8 +1,8 @@
 import { useNavigation, useRoute, type RouteProp } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
-import { useQuery } from '@tanstack/react-query';
+import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
 import { LinearGradient } from 'expo-linear-gradient';
-import { memo, useCallback } from 'react';
+import { memo, useCallback, useMemo } from 'react';
 import { Clock, MapPin, Phone, Star, Store } from 'lucide-react-native';
 import {
   ActivityIndicator,
@@ -44,6 +44,9 @@ interface MerchantDetail {
   /// customer views these and orders via the free-text "اطلب الآن" flow.
   menuImages?: string[] | null;
   products?: Array<{ id: string; nameAr: string; price: number; imageUrl?: string }>;
+  /// Total catalogue size, independent of how many rows were embedded above.
+  /// Absent on backends that predate the paginated product endpoints.
+  productsTotal?: number;
   /// Server-computed openness verdict. Includes the next opening so we can
   /// render "يفتح غداً 10ص" instead of just "مغلق".
   openness?: {
@@ -58,6 +61,9 @@ type RouteParam = RouteProp<HomeStackParamList, 'MerchantDetail'>;
 type NavProp = NativeStackNavigationProp<HomeStackParamList, 'MerchantDetail'>;
 
 type MerchantProduct = NonNullable<MerchantDetail['products']>[number];
+
+/** Rows per page for the catalogue list. */
+const PRODUCTS_PAGE_SIZE = 30;
 
 /**
  * One product row. Memoised because the list can be thousands of rows long —
@@ -111,10 +117,75 @@ export function MerchantDetailScreen() {
     [openProduct],
   );
 
+  // `productsPageSize` caps the products embedded in the merchant payload —
+  // the catalogue itself is paged separately below. On a backend that predates
+  // this parameter the field is ignored and the full list comes back, which is
+  // exactly the old behaviour, so this is safe to ship ahead of the deploy.
   const { data, isLoading, error, refetch } = useQuery<MerchantDetail>({
     queryKey: ['merchant', merchantId],
-    queryFn: () => api.raw.get(`/merchants/${merchantId}`).then((r) => r.data.data),
+    queryFn: () =>
+      api.raw
+        .get(`/merchants/${merchantId}`, { params: { productsPageSize: 1 } })
+        .then((r) => r.data.data),
+    staleTime: 60_000,
   });
+
+  /**
+   * Products, one page at a time.
+   *
+   * Tolerates both backends: the paginated one returns
+   * `{ data, meta.pagination }`, the older one returns a bare array of every
+   * product. When there's no pagination meta we treat the response as the only
+   * page, so an un-deployed server degrades to today's behaviour instead of
+   * looping forever.
+   */
+  // `productsTotal` only exists on a backend that supports the paged product
+  // routes. Without it, the merchant payload above already carries the whole
+  // catalogue, so running the paged query too would fetch the same megabytes a
+  // second time.
+  const backendPaginates = data?.productsTotal !== undefined;
+
+  const productsQ = useInfiniteQuery({
+    queryKey: ['merchant-products', merchantId],
+    enabled: backendPaginates,
+    initialPageParam: 1,
+    queryFn: async ({ pageParam }) => {
+      const r = await api.raw.get(`/merchants/${merchantId}/products`, {
+        params: { page: pageParam, pageSize: PRODUCTS_PAGE_SIZE },
+      });
+      return {
+        items: (r.data?.data ?? []) as MerchantProduct[],
+        pagination: r.data?.meta?.pagination as { page: number; totalPages: number } | undefined,
+      };
+    },
+    getNextPageParam: (last) => {
+      if (!last.pagination) return undefined;
+      const { page, totalPages } = last.pagination;
+      return page < totalPages ? page + 1 : undefined;
+    },
+    staleTime: 60_000,
+  });
+
+  const products = useMemo(
+    () =>
+      backendPaginates
+        ? (productsQ.data?.pages.flatMap((p) => p.items) ?? [])
+        : (data?.products ?? []),
+    [backendPaginates, productsQ.data, data?.products],
+  );
+
+  /**
+   * How many products to advertise in the section header.
+   *
+   * `productsTotal` is the authoritative count, but a backend that predates it
+   * won't send one — then fall back to what we've actually loaded, which on
+   * that same old backend is the whole catalogue anyway.
+   */
+  const productCount = data?.productsTotal ?? products.length;
+
+  const loadMore = useCallback(() => {
+    if (productsQ.hasNextPage && !productsQ.isFetchingNextPage) void productsQ.fetchNextPage();
+  }, [productsQ]);
 
   if (isLoading) {
     return (
@@ -159,13 +230,20 @@ export function MerchantDetailScreen() {
       */}
       <FlatList
         {...LIST_PERF}
-        data={data.products ?? []}
+        data={products}
         keyExtractor={productKey}
         renderItem={renderProduct}
         showsVerticalScrollIndicator={false}
         contentContainerStyle={{ paddingBottom: 120 }}
+        onEndReached={loadMore}
+        onEndReachedThreshold={0.5}
+        ListFooterComponent={
+          productsQ.isFetchingNextPage ? (
+            <ActivityIndicator color={colors.brand.red} style={{ marginVertical: spacing.lg }} />
+          ) : null
+        }
         ListEmptyComponent={
-          !data.menuImages || data.menuImages.length === 0 ? (
+          productsQ.isLoading ? null : !data.menuImages || data.menuImages.length === 0 ? (
             <View style={styles.emptyProductsCard}>
               <Phone size={20} color={colors.brand.red} />
               <Text style={styles.emptyProductsTitle}>اطلب أي حاجة من المتجر</Text>
@@ -298,11 +376,11 @@ export function MerchantDetailScreen() {
             )}
 
             {/* ─────── Products (rows are the list body below) ─────── */}
-            {data.products && data.products.length > 0 && (
+            {productCount > 0 && (
               <View style={styles.section}>
                 <View style={styles.productsHeaderRow}>
                   <Text style={styles.sectionTitle}>المنتجات المتاحة</Text>
-                  <Text style={styles.productsCount}>{data.products.length} منتج</Text>
+                  <Text style={styles.productsCount}>{productCount} منتج</Text>
                 </View>
                 <Text style={styles.productsHint}>
                   اضغط "اطلب الآن" بالأسفل، أو افتح الطلب السريع من الصفحة الرئيسية لإضافة المنتجات.
