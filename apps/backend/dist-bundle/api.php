@@ -3199,7 +3199,10 @@ if ($method === 'PUT' && preg_match('#^/admin/merchants/([^/]+)/api-config$#', $
 }
 if ($method === 'GET' && preg_match('#^/admin/merchants/([^/]+)/api-config/logs$#', $path, $m)) {
     authUser();
-    $st = db()->prepare('SELECT * FROM `ProductSyncLog` WHERE merchantId = ? ORDER BY createdAt DESC LIMIT 50');
+    // ProductSyncLog orders by startedAt (there is no createdAt column) — the
+    // old ORDER BY createdAt threw and the catch returned an empty list, so the
+    // history always looked empty even right after a sync.
+    $st = db()->prepare('SELECT * FROM `ProductSyncLog` WHERE merchantId = ? ORDER BY startedAt DESC LIMIT 50');
     try { $st->execute([$m[1]]); $rows = array_map('jsonizeRow', $st->fetchAll()); } catch (Throwable $e) { $rows = []; }
     jsonOk($rows);
 }
@@ -3342,13 +3345,29 @@ if ($method === 'POST' && preg_match('#^/admin/merchants/([^/]+)/api-config/test
     ]);
 }
 if ($method === 'POST' && preg_match('#^/admin/merchants/([^/]+)/api-config/sync$#', $path, $m)) {
-    authUser();
+    $u = authUser();
     $st = db()->prepare('SELECT * FROM `MerchantApiConfig` WHERE merchantId = ? LIMIT 1'); $st->execute([$m[1]]);
     $cfg = $st->fetch();
     if (!$cfg) jsonErr('احفظ إعدادات الـ API الأول', 400, 'NO_CONFIG');
+    // Capture the start on the DB clock so startedAt/finishedAt share one clock
+    // (frontend shows the duration between them).
+    $startedAt = db()->query('SELECT NOW(3)')->fetchColumn();
+    // Write one ProductSyncLog row per run — matches the real table schema
+    // (configId/startedAt/finishedAt/…), which the old INSERT did not, so every
+    // run silently failed to log and the history stayed empty.
+    $writeSyncLog = function (string $status, int $fetched, int $created, int $updated, int $failed, int $hidden, ?string $err) use ($cfg, $m, $startedAt, $u) {
+        try {
+            db()->prepare('INSERT INTO `ProductSyncLog`
+                (id, configId, merchantId, `trigger`, startedAt, finishedAt, status, fetchedCount, createdCount, updatedCount, failedCount, hiddenCount, errorMessage, triggeredById)
+                VALUES (?,?,?, "MANUAL", ?, NOW(3), ?,?,?,?,?,?,?,?)')
+                ->execute([newId(), $cfg['id'], $m[1], $startedAt, $status, $fetched, $created, $updated, $failed, $hidden,
+                    $err !== null ? mb_substr($err, 0, 500) : null, $u['sub'] ?? null]);
+        } catch (Throwable $e) { error_log('[api.php] synclog: ' . $e->getMessage()); }
+    };
     $res = fetchMerchantApi($cfg);
     if (!$res['ok']) {
-        db()->prepare('UPDATE `MerchantApiConfig` SET lastError = ?, updatedAt = NOW(3) WHERE merchantId = ?')->execute([$res['reason'] ?? 'sync failed', $m[1]]);
+        db()->prepare('UPDATE `MerchantApiConfig` SET lastError = ?, isConnected = 0, updatedAt = NOW(3) WHERE merchantId = ?')->execute([$res['reason'] ?? 'sync failed', $m[1]]);
+        $writeSyncLog('FAILED', 0, 0, 0, 0, 0, $res['reason'] ?? 'فشل جلب البيانات');
         jsonErr($res['reason'] ?? 'فشلت المزامنة', 400, 'SYNC_FAILED');
     }
     $mapping = is_string($cfg['fieldMapping'] ?? null) ? (json_decode($cfg['fieldMapping'], true) ?: []) : ($cfg['fieldMapping'] ?? []);
@@ -3426,10 +3445,7 @@ if ($method === 'POST' && preg_match('#^/admin/merchants/([^/]+)/api-config/sync
     }
     $status = $failed > 0 ? 'PARTIAL' : 'SUCCESS';
     $pdo->prepare('UPDATE `MerchantApiConfig` SET isConnected = 1, lastError = NULL, lastSyncedAt = NOW(3), updatedAt = NOW(3) WHERE merchantId = ?')->execute([$m[1]]);
-    try {
-        $pdo->prepare('INSERT INTO `ProductSyncLog` (id, merchantId, status, added, updated, message, createdAt) VALUES (?,?,?,?,?,?,NOW(3))')
-            ->execute([newId(), $m[1], $status, $added, $updated, "أُضيف $added، حُدّث $updated" . ($failed ? "، فشل $failed" : '') . ($hidden ? "، محذوف/مخفي $hidden" : '')]);
-    } catch (Throwable $e) { /* table shape may differ; ignore */ }
+    $writeSyncLog($status, count($res['items']), $added, $updated, $failed, $hidden, $failed > 0 ? "فشل $failed منتج" : null);
     jsonOk(['ok' => true, 'fetchedCount' => count($res['items']), 'createdCount' => $added, 'updatedCount' => $updated,
         'failedCount' => $failed, 'hiddenCount' => $hidden, 'added' => $added, 'updated' => $updated, 'total' => count($res['items'])]);
 }
