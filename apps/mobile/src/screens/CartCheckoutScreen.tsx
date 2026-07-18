@@ -118,10 +118,15 @@ export function CartCheckoutScreen() {
       showToast({ title: 'أدخل عنوان التوصيل أولاً', tone: 'error' });
       return;
     }
-    if (address.lat == null || address.lng == null) {
+    // A locatable address needs EITHER a zone (which prices + routes it) OR a
+    // GPS pin — not both. Rejecting a zoned pin-less address here was the "لا
+    // يوجد عنوان" bug: the address shows fine up top but couldn't be submitted.
+    const hasZone = !!(address.zone?.cityId || address.zone?.villageId || address.zone?.areaId);
+    const hasPin = address.lat != null && address.lng != null;
+    if (!hasZone && !hasPin) {
       showToast({
-        title: 'لا يمكن استخدام هذا العنوان',
-        message: 'اختر عنوان محفوظ أو استخدم موقعك الحالي',
+        title: 'حدّد منطقة العنوان',
+        message: 'اختر منطقة التوصيل لهذا العنوان أو استخدم موقعك الحالي',
         tone: 'error',
       });
       return;

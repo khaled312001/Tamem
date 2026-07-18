@@ -177,6 +177,9 @@ export function QuickOrderSheet({ visible, onClose }: QuickOrderSheetProps) {
       let addressLine: string | null = null;
       let addressLat: number | null = null;
       let addressLng: number | null = null;
+      let addrCityId: string | null = null;
+      let addrVillageId: string | null = null;
+      let addrAreaId: string | null = null;
       try {
         const addrRes = await api.raw.get('/me/addresses');
         const list = (addrRes.data?.data ?? []) as Array<{
@@ -184,17 +187,28 @@ export function QuickOrderSheet({ visible, onClose }: QuickOrderSheetProps) {
           lat?: number | string | null;
           lng?: number | string | null;
           isDefault?: boolean;
+          cityId?: string | null;
+          villageId?: string | null;
+          areaId?: string | null;
         }>;
         const chosen = list.find((a) => a.isDefault) ?? list[0];
         if (chosen) {
           addressLine = chosen.address;
           if (chosen.lat != null) addressLat = Number(chosen.lat);
           if (chosen.lng != null) addressLng = Number(chosen.lng);
+          addrCityId = chosen.cityId ?? null;
+          addrVillageId = chosen.villageId ?? null;
+          addrAreaId = chosen.areaId ?? null;
         }
       } catch {
         // /me/addresses may be empty or fail — handled below.
       }
-      if (!addressLine || addressLat == null || addressLng == null) {
+      // A saved address with a zone (city/village/area) is deliverable even
+      // without a GPS pin — the zone prices and routes it. Only block when there
+      // is neither an address nor any way to locate it.
+      const hasZone = !!(addrCityId || addrVillageId || addrAreaId);
+      const hasPin = addressLat != null && addressLng != null;
+      if (!addressLine || (!hasZone && !hasPin)) {
         showToast({
           title: 'مفيش عنوان توصيل محفوظ',
           message: 'أضف عنوان من صفحة "حسابي" قبل إرسال الطلب السريع.',
@@ -209,6 +223,10 @@ export function QuickOrderSheet({ visible, onClose }: QuickOrderSheetProps) {
         deliveryAddress: addressLine,
         deliveryLat: addressLat,
         deliveryLng: addressLng,
+        // Forward the zone so the backend prices + routes a pin-less address.
+        cityId: addrCityId ?? undefined,
+        villageId: addrVillageId ?? undefined,
+        areaId: addrAreaId ?? undefined,
         paymentMethod: 'CASH',
         notes: finalNotes,
         imageUrls: hostedImages,
@@ -438,7 +456,7 @@ function TextMode({
       <TextInput
         value={text}
         onChangeText={setText}
-        placeholder="مثال:&#10;- 2 كيلو سكر&#10;- زيت ذرة 1 لتر&#10;- 3 علب تونة"
+        placeholder="اكتب أي طلب من أي محل:&#10;- 2 كيلو سكر + زيت (سوبر ماركت)&#10;- علبة بنادول (صيدلية)&#10;- وجبة فراخ + بيبسي (مطعم)"
         placeholderTextColor={colors.text.muted}
         multiline
         style={styles.textArea}
@@ -527,7 +545,7 @@ function PhotoMode({
       <TextInput
         value={caption}
         onChangeText={setCaption}
-        placeholder="مثال: روشتة بالأدوية المرفقة"
+        placeholder="أضف تفاصيل إن حابب: نوع، كمية، أو ملاحظة"
         placeholderTextColor={colors.text.muted}
         style={styles.inputSingle}
       />

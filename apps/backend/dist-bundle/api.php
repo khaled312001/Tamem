@@ -4862,9 +4862,33 @@ if ($method === 'GET' && $path === '/me/wallet') {
 // ═══ /me/addresses ═════════════════════════════════════════════════════
 if ($method === 'GET' && $path === '/me/addresses') {
     $u = authUser();
-    $st = db()->prepare('SELECT * FROM `CustomerAddress` WHERE userId = ? ORDER BY isDefault DESC, createdAt DESC');
+    // Return the zone (IDs + names + the live delivery fee) alongside each
+    // address. An address's zone — not its GPS pin — is what prices and routes
+    // the order, so the app must have it without depending on a local cache that
+    // an app reinstall would wipe (which was surfacing saved addresses as
+    // "العنوان غير مكتمل").
+    $st = db()->prepare(
+        "SELECT ca.*, c.nameAr AS cityName, v.nameAr AS villageName, a.nameAr AS areaName,
+                COALESCE(a.deliveryPrice, v.baseDeliveryPrice) AS zoneFee
+         FROM `CustomerAddress` ca
+         LEFT JOIN `City` c ON c.id = ca.cityId
+         LEFT JOIN `Village` v ON v.id = ca.villageId
+         LEFT JOIN `Area` a ON a.id = ca.areaId
+         WHERE ca.userId = ? ORDER BY ca.isDefault DESC, ca.createdAt DESC"
+    );
     $st->execute([(string) ($u['sub'] ?? '')]);
-    jsonOk(array_map(fn($r) => boolCast($r, ['isDefault']), $st->fetchAll()));
+    jsonOk(array_map(function ($r) {
+        $r = boolCast($r, ['isDefault']);
+        // A ready-to-use zone object mirroring the app's DeliveryZoneSelection,
+        // present only when the address actually has a zone.
+        $r['zone'] = ($r['cityId'] || $r['villageId'] || $r['areaId']) ? [
+            'cityId' => $r['cityId'], 'villageId' => $r['villageId'], 'areaId' => $r['areaId'],
+            'cityName' => $r['cityName'] ?? null, 'villageName' => $r['villageName'] ?? null,
+            'areaName' => $r['areaName'] ?? null,
+            'deliveryFee' => $r['zoneFee'] !== null ? (float) $r['zoneFee'] : null,
+        ] : null;
+        return $r;
+    }, $st->fetchAll()));
 }
 
 if ($method === 'POST' && $path === '/me/addresses') {
@@ -5457,13 +5481,19 @@ if ($method === 'POST' && $path === '/orders') {
         $as->execute([$uid]);
         $a = $as->fetch();
         if (!$a) conflictErr('NO_DEFAULT_ADDRESS', 'سجّل عنوان للتوصيل قبل ما تطلب أول مرة');
-        if ($a['lat'] === null || $a['lng'] === null) conflictErr('DEFAULT_ADDRESS_MISSING_PIN', 'العنوان الافتراضي يحتاج تحديد موقع على الخريطة');
-        $deliveryAddress = (string) $a['address']; $dLat = (float) $a['lat']; $dLng = (float) $a['lng'];
-        // Inherit the address's saved zone too, else the fee below never resolves
-        // and the order is created with deliveryFee = NULL.
+        // Inherit the address's saved zone — that's what prices and routes the
+        // order. The GPS pin is optional: a zoned address with no pin is fully
+        // deliverable, so require a zone OR a pin, not a pin specifically.
         if (!$cityId && !$villageId && !$areaId) {
             $cityId = $a['cityId'] ?: null; $villageId = $a['villageId'] ?: null; $areaId = $a['areaId'] ?: null;
         }
+        $hasZone = $cityId || $villageId || $areaId;
+        if (($a['lat'] === null || $a['lng'] === null) && !$hasZone) {
+            conflictErr('DEFAULT_ADDRESS_MISSING_PIN', 'العنوان الافتراضي يحتاج تحديد منطقة أو موقع على الخريطة');
+        }
+        $deliveryAddress = (string) $a['address'];
+        $dLat = $a['lat'] !== null ? (float) $a['lat'] : null;
+        $dLng = $a['lng'] !== null ? (float) $a['lng'] : null;
     }
     $fee = null;
     if ($cityId || $villageId || $areaId) {
