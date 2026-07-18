@@ -41,14 +41,23 @@ concurrency:
 jobs:
   keepalive:
     runs-on: ubuntu-latest
-    timeout-minutes: 3
+    timeout-minutes: 7
     steps:
-      - name: Ensure the bridge supervisor is running
+      # One cron fire covers the WHOLE 5-minute gap to the next: it SSHes in once
+      # and loops keepalive every 30s for ~5 min. So a reaped supervisor is
+      # revived within ~30s instead of up to the full 5-minute cron interval —
+      # the difference between "WhatsApp blips for 30s" and "for 5 minutes".
+      # Consecutive cron fires overlap-safe via the concurrency group above.
+      - name: Keep the bridge supervisor running (30s loop for ~5 min)
         uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ secrets.HOSTINGER_SSH_HOST }}
           port: ${{ secrets.HOSTINGER_SSH_PORT }}
           username: ${{ secrets.HOSTINGER_SSH_USER }}
           password: ${{ secrets.HOSTINGER_SSH_PASS }}
-          command_timeout: 2m
-          script: bash /home/u748721963/whatsapp/keepalive.sh
+          command_timeout: 6m
+          script: |
+            for i in $(seq 1 10); do
+              bash /home/u748721963/whatsapp/keepalive.sh
+              sleep 30
+            done
