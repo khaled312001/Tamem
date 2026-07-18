@@ -593,6 +593,10 @@ export class TamemClient {
   async adminListProducts(params?: Record<string, unknown>): Promise<Paginated<unknown>> {
     return this.requestPaginated({ method: 'GET', url: '/admin/products', params });
   }
+  /** Stat-card counts over the whole filtered set (not just the current page). */
+  async adminProductStats(params?: Record<string, unknown>): Promise<unknown> {
+    return this.request({ method: 'GET', url: '/admin/products/stats', params });
+  }
   /**
    * `headers` carries import attribution (X-Import-Job / X-Import-File). It only
    * tells the server WHERE a change came from — the audit record itself is

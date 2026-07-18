@@ -10,12 +10,14 @@
  */
 import { useQuery } from '@tanstack/react-query';
 import { ChevronLeft, MessageSquare, Search, Star } from 'lucide-react';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 
 import { Input } from '../components/ui/Input.js';
+import { Pagination } from '../components/ui/Pagination.js';
 import { EmptyState, TableSkeleton } from '../components/ui/Skeleton.js';
 import { api } from '../lib/api.js';
+import { useDebounced } from '../lib/useListQuery.js';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type ReviewRow = any;
@@ -39,25 +41,32 @@ export function ReviewsPage() {
   const [search, setSearch] = useState('');
   const [minRating, setMinRating] = useState<number | undefined>(undefined);
 
-  const { data, isLoading } = useQuery({
-    queryKey: ['admin', 'reviews', minRating],
+  // Real paging + server-side text search. This used to pull one capped page of
+  // 200 and filter the text in the browser, so review 201 was unreachable and
+  // the search only ever looked at what happened to be loaded.
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(20);
+  const debouncedQ = useDebounced(search, 300);
+  useEffect(() => setPage(1), [debouncedQ, minRating, pageSize]);
+
+  const { data, isLoading, isFetching } = useQuery({
+    queryKey: ['admin', 'reviews', minRating, debouncedQ, page, pageSize],
     queryFn: () =>
       api.adminListReviews({
-        pageSize: 200,
+        page,
+        pageSize,
         ...(minRating ? { minRating } : {}),
+        ...(debouncedQ.trim() ? { search: debouncedQ.trim() } : {}),
       }),
+    placeholderData: (prev) => prev,
   });
+  const total = data?.pagination.total ?? 0;
 
   const reviews = (data?.items as ReviewRow[]) ?? [];
 
-  const filtered = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    if (!q) return reviews;
-    return reviews.filter(
-      (r) =>
-        r.order?.orderNumber?.toLowerCase().includes(q) || r.comment?.toLowerCase().includes(q),
-    );
-  }, [reviews, search]);
+  // Search is applied in SQL now (order number / comment / names), so the page
+  // we receive is already the filtered result.
+  const filtered = reviews;
 
   // Leaderboards — group by driverId / merchantId, average the breakout
   // ratings (not the overall, because the overall mixes both targets).
@@ -244,6 +253,16 @@ export function ReviewsPage() {
               </li>
             ))}
           </ul>
+        )}
+        {!isLoading && total > 0 && (
+          <Pagination
+            page={page}
+            pageSize={pageSize}
+            total={total}
+            onPageChange={setPage}
+            onPageSizeChange={setPageSize}
+            disabled={isFetching}
+          />
         )}
       </div>
     </div>
