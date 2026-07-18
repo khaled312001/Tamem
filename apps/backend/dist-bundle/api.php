@@ -1207,22 +1207,21 @@ function notifyOrderParties(string $orderId, string $status, ?string $reason = n
         // These block variables let one template reproduce the full rich
         // message; each is self-contained (carries its own icon/label) and is
         // empty when not applicable, so an absent block leaves no dangling line.
-        $catAr = waCategoryAr($o['category'] ?? null);
-        $ctx['serviceFull']    = $svc . ($catAr && $catAr !== $svc ? " · {$catAr}" : '');
-        $ctx['customerLine']   = "👤 {$custName}" . (!empty($o['cust_phone']) ? " — {$o['cust_phone']}" : '');
-        $ctx['driverLine']     = $drvName ? ("🛵 السائق: {$drvName}" . (!empty($o['drv_phone']) ? " — {$o['drv_phone']}" : '')) : '';
-        $ctx['itemsBlock']     = $d['items'] ? "🛒 {$d['items']}" : '';
-        $ctx['shippingBlock']  = $d['shipping'] ? "📦 {$d['shipping']}" : '';
-        $ctx['locationsBlock'] = $d['locations'] ?: '';
-        $ctx['paymentLine']    = "💳 {$d['pay']}";
-        $ctx['payment']        = (string) $d['pay'];
-        $ctx['priceBlock']     = (string) $d['price'];
-        $ctx['summary']        = "🧾 الطلب رقم *#{$no}*\nالخدمة: {$svc}"
+        // Readable, granular variables — the same names the dashboard editor
+        // samples, so the live preview renders in full. Multi-line composites
+        // (items / locations / price breakdown / customer recap) are single
+        // variables too, each empty when absent so its labelled line drops.
+        $ctx['items']       = (string) $d['items'];       // bullet list / delivery notes
+        $ctx['shipping']    = (string) $d['shipping'];    // شحن specifics
+        $ctx['locations']   = (string) $d['locations'];   // 📍 استلام + 🏁 توصيل + خرائط
+        $ctx['priceBlock']  = (string) $d['price'];       // breakdown ending with الإجمالي
+        $ctx['payment']     = (string) $d['pay'];         // طريقة الدفع — حالة الدفع
+        $ctx['summary']     = "🧾 الطلب رقم *#{$no}*\nالخدمة: {$svc}"
             . ($d['items'] ? "\n\n🛒 التفاصيل:\n{$d['items']}" : '')
             . ($d['shipping'] ? "\n\n📦 {$d['shipping']}" : '')
             . ($d['locations'] ? "\n\n{$d['locations']}" : '')
             . "\n\n💳 الدفع: {$d['pay']}\n{$d['price']}";
-        $ctx['collect']        = ($o['paymentStatus'] ?? '') === 'PAID'
+        $ctx['collect']     = ($o['paymentStatus'] ?? '') === 'PAID'
             ? 'مدفوع — لا تُحصّل شيئاً'
             : ('حصّل *' . ($d['total'] ?? '') . '* (' . waPayMethodAr($o['paymentMethod'] ?? null) . ')');
 
@@ -1349,21 +1348,23 @@ function notifWriteSetting(string $key, array $value, ?string $uid): void {
         ->execute([$key, json_encode($value, JSON_UNESCAPED_UNICODE), $uid]);
 }
 /** Built-in template catalog: one entry per (event × recipient) the platform
- *  actually sends. `default` is a readable Arabic summary shown in the editor;
- *  the rich runtime message lives in notifyOrderParties and is used verbatim
- *  unless the admin saves an override here. */
+ *  sends. `default` IS what goes out (unless the admin saves an override) and
+ *  IS what the editor previews — one source of truth. Uses readable {{vars}};
+ *  any "التسمية: {{var}}" line whose value is empty drops out automatically. */
 function notifDefaultCatalog(): array {
     $ev = fn($event, $recipient, $label, $default) => compact('event', 'recipient', 'label', 'default')
         + ['key' => $event . '_' . $recipient];
     // Shared oversight body for the supervisor + the group: identical detail for
-    // both, each event supplying only its own header. Blocks collapse when empty.
+    // both, each event supplying its own header. Empty lines fall away, so an
+    // order with no items / no pickup simply omits those lines.
     $oversight = fn(string $header) => "{$header} *#{{orderNumber}}*\n"
-        . "الخدمة: {{serviceFull}}\n"
-        . "{{customerLine}}\n"
-        . "{{driverLine}}\n\n"
-        . "{{itemsBlock}}\n"
-        . "{{locationsBlock}}\n"
-        . "{{paymentLine}}\n"
+        . "الخدمة: {{serviceName}}\n"
+        . "👤 العميل: {{customerName}}\n"
+        . "📞 الهاتف: {{customerPhone}}\n"
+        . "🛵 السائق: {{driverName}}\n"
+        . "🛒 المطلوب: {{items}}\n"
+        . "{{locations}}\n"
+        . "💳 الدفع: {{payment}}\n"
         . "{{priceBlock}}";
     return [
         // ═══ ORDER_NEW ═══
@@ -1378,7 +1379,7 @@ function notifDefaultCatalog(): array {
         $ev('ORDER_ACCEPTED', 'CUSTOMER', 'العميل', "تميم للتوصيل ✅\nتم قبول طلبك وجارٍ تجهيزه:\n\n{{summary}}"),
         // ═══ DRIVER_ASSIGNED ═══
         $ev('DRIVER_ASSIGNED', 'CUSTOMER', 'العميل', "تميم للتوصيل 🚚\nالكابتن *{{driverName}}* في الطريق لطلبك — للتواصل: {{driverPhone}}\n\n{{summary}}"),
-        $ev('DRIVER_ASSIGNED', 'DRIVER', 'السائق', "🚚 *طلب جديد مُسند إليك* #{{orderNumber}}\nالخدمة: {{serviceFull}}\n{{customerLine}}\n{{locationsBlock}}\n\n{{itemsBlock}}\n\n💰 {{collect}}"),
+        $ev('DRIVER_ASSIGNED', 'DRIVER', 'السائق', "🚚 *طلب جديد مُسند إليك* #{{orderNumber}}\nالخدمة: {{serviceName}}\n👤 العميل: {{customerName}}\n📞 الهاتف: {{customerPhone}}\n🛒 المطلوب: {{items}}\n{{locations}}\n💰 التحصيل: {{collect}}"),
         $ev('DRIVER_ASSIGNED', 'SUPERVISOR', 'المشرف', $oversight('🚚 تعيين سائق لطلب')),
         $ev('DRIVER_ASSIGNED', 'GROUP', 'جروب الإدارة', $oversight('🚚 تعيين سائق لطلب')),
         // ═══ PICKED_UP ═══
@@ -1400,15 +1401,12 @@ function notifVariables(): array {
     return [
         'orderNumber' => 'رقم الطلب', 'customerName' => 'اسم العميل', 'customerPhone' => 'هاتف العميل',
         'driverName' => 'اسم المندوب', 'driverPhone' => 'هاتف المندوب', 'price' => 'الإجمالي',
-        'serviceName' => 'الخدمة', 'serviceFull' => 'الخدمة + التصنيف', 'pickupAddress' => 'عنوان الاستلام',
-        'deliveryAddress' => 'عنوان التسليم', 'paymentMethod' => 'طريقة الدفع', 'payment' => 'حالة الدفع',
-        'reason' => 'سبب الإلغاء',
-        // Rich composed blocks (self-contained, empty when not applicable):
-        'summary' => 'ملخص الطلب الكامل للعميل', 'customerLine' => 'سطر العميل (👤 الاسم — الهاتف)',
-        'driverLine' => 'سطر السائق (🛵 الاسم — الهاتف)', 'itemsBlock' => 'المنتجات (🛒)',
-        'locationsBlock' => 'العناوين', 'shippingBlock' => 'تفاصيل الشحن (📦)',
-        'paymentLine' => 'سطر الدفع (💳)', 'priceBlock' => 'تفاصيل السعر والإجمالي',
-        'collect' => 'تعليمات التحصيل للسائق',
+        'serviceName' => 'الخدمة', 'pickupAddress' => 'عنوان الاستلام', 'deliveryAddress' => 'عنوان التسليم',
+        'paymentMethod' => 'طريقة الدفع', 'payment' => 'الدفع (الطريقة + الحالة)', 'reason' => 'سبب الإلغاء',
+        // Multi-line values (each empty when not applicable, so its line drops):
+        'items' => 'المطلوب / المنتجات', 'locations' => 'عناوين الاستلام والتسليم + الخرائط',
+        'priceBlock' => 'تفاصيل السعر والإجمالي', 'summary' => 'ملخص الطلب الكامل للعميل',
+        'collect' => 'تعليمات التحصيل للسائق', 'shipping' => 'تفاصيل الشحن',
     ];
 }
 /** Render a template string against a context: replace {{var}}, drop dangling
