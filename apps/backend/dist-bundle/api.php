@@ -28,6 +28,33 @@ declare(strict_types=1);
 // changing the DB's stored timezone would reinterpret every existing row by 2-3h.
 date_default_timezone_set('Africa/Cairo');
 
+// ─── 0. Request timing ──────────────────────────────────────────────────
+// Every response appends one line to a daily NDJSON file: method, path, status,
+// duration and byte size. Registered before routing because most handlers end in
+// exit() — a shutdown function still runs. Writing is best-effort and wrapped in
+// @, so a full disk or a read-only dir can never break a response.
+// Read back through GET /admin/perf.
+register_shutdown_function(static function (): void {
+    try {
+        $start = (float) ($_SERVER['REQUEST_TIME_FLOAT'] ?? microtime(true));
+        $ms = (int) round((microtime(true) - $start) * 1000);
+        $path = (string) (parse_url((string) ($_SERVER['REQUEST_URI'] ?? ''), PHP_URL_PATH) ?? '');
+        // Collapse ids so /admin/orders/<cuid> aggregates with its siblings.
+        $route = preg_replace('#/(?:[0-9a-z]{20,}|\d+)(?=/|$)#i', '/:id', $path);
+        $dir = __DIR__ . '/uploads/.perf';
+        if (!is_dir($dir)) @mkdir($dir, 0755, true);
+        $line = json_encode([
+            't' => date('c'),
+            'm' => (string) ($_SERVER['REQUEST_METHOD'] ?? ''),
+            'r' => $route,
+            's' => http_response_code() ?: 0,
+            'ms' => $ms,
+            'b' => function_exists('ob_get_length') ? (int) @ob_get_length() : 0,
+        ], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+        @file_put_contents($dir . '/' . date('Y-m-d') . '.ndjson', $line . "\n", FILE_APPEND | LOCK_EX);
+    } catch (Throwable $e) { /* telemetry must never affect the response */ }
+});
+
 // ─── 1. Load .env from the same directory ───────────────────────────────
 $ENV = [];
 $envPath = __DIR__ . '/.env';
@@ -2204,6 +2231,88 @@ const ORDER_JOIN = "FROM `Order` o
     LEFT JOIN `User` dr ON dr.id = o.assignedDriverId";
 const ORDER_COLS = "o.*, cu.name AS cu_name, cu.phone AS cu_phone, cu.city AS cu_city,
     s.nameAr AS s_nameAr, s.name AS s_name, dr.name AS dr_name, dr.phone AS dr_phone";
+/**
+ * Slim column set for the ORDERS LIST only.
+ *
+ * The list used to select `o.*` — every one of the table's ~50 columns, including
+ * the customData/imageUrls JSON blobs and all six lat/lng values — for every row,
+ * none of which the list renders. Opening the detail still uses ORDER_COLS, so
+ * nothing is lost; the list just stops shipping fields it never shows.
+ */
+const ORDER_LIST_COLS = "o.id, o.orderNumber, o.status, o.category,
+    o.createdAt, o.updatedAt, o.deliveredAt, o.completedAt, o.cancelledAt, o.scheduledFor,
+    o.customerId, o.assignedDriverId, o.serviceId, o.merchantId,
+    o.deliveryAddress, o.pickupAddress,
+    o.paymentMethod, o.paymentStatus,
+    o.quotedPrice, o.finalPrice, o.deliveryFee, o.merchantSubtotal, o.discountAmount,
+    o.platformCommission, o.merchantPayout,
+    o.notes, o.whatsappSentAt, o.driverSettlementStatus,
+    cu.name AS cu_name, cu.phone AS cu_phone, cu.city AS cu_city,
+    s.nameAr AS s_nameAr, s.name AS s_name, dr.name AS dr_name, dr.phone AS dr_phone";
+// GET /admin/perf — API performance, aggregated from the request log written by
+// the shutdown hook at the top of this file. Per-route avg/p95/max, response
+// size, error rate, plus the slowest individual requests.
+if ($method === 'GET' && $path === '/admin/perf') {
+    $u = authUser();
+    if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
+    $days = min(7, max(1, (int) ($_GET['days'] ?? 1)));
+    $dir = __DIR__ . '/uploads/.perf';
+    // Housekeeping: drop logs older than a week so the folder stays bounded.
+    foreach (glob($dir . '/*.ndjson') ?: [] as $old) {
+        if (@filemtime($old) < time() - 8 * 86400) @unlink($old);
+    }
+    $rows = [];
+    for ($i = 0; $i < $days; $i++) {
+        $f = $dir . '/' . date('Y-m-d', strtotime("-$i day")) . '.ndjson';
+        if (!is_file($f)) continue;
+        $lines = @file($f, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: [];
+        if (count($lines) > 8000) $lines = array_slice($lines, -8000);  // stay cheap
+        foreach ($lines as $ln) { $d = json_decode($ln, true); if (is_array($d)) $rows[] = $d; }
+    }
+    $agg = [];
+    foreach ($rows as $r) {
+        $k = trim(((string) ($r['m'] ?? '')) . ' ' . ((string) ($r['r'] ?? '')));
+        if (!isset($agg[$k])) $agg[$k] = ['route' => $k, 'count' => 0, 'totalMs' => 0, 'maxMs' => 0, 'errors' => 0, 'bytes' => 0, 'samples' => []];
+        $ms = (int) ($r['ms'] ?? 0);
+        $agg[$k]['count']++;
+        $agg[$k]['totalMs'] += $ms;
+        $agg[$k]['maxMs'] = max($agg[$k]['maxMs'], $ms);
+        $agg[$k]['bytes'] += (int) ($r['b'] ?? 0);
+        if ((int) ($r['s'] ?? 200) >= 400) $agg[$k]['errors']++;
+        $agg[$k]['samples'][] = $ms;
+    }
+    $routes = [];
+    foreach ($agg as $a) {
+        sort($a['samples']);
+        $n = count($a['samples']);
+        $routes[] = [
+            'route' => $a['route'], 'count' => $a['count'],
+            'avgMs' => (int) round($a['totalMs'] / max(1, $a['count'])),
+            'p95Ms' => $n ? $a['samples'][min($n - 1, (int) floor($n * 0.95))] : 0,
+            'maxMs' => $a['maxMs'],
+            'avgBytes' => (int) round($a['bytes'] / max(1, $a['count'])),
+            'errors' => $a['errors'],
+            'errorRate' => round($a['errors'] * 100 / max(1, $a['count']), 1),
+        ];
+    }
+    usort($routes, static fn ($x, $y) => $y['avgMs'] <=> $x['avgMs']);
+    $slow = $rows;
+    usort($slow, static fn ($x, $y) => ((int) ($y['ms'] ?? 0)) <=> ((int) ($x['ms'] ?? 0)));
+    $totalReq = count($rows);
+    $totalErr = 0; $sumMs = 0;
+    foreach ($rows as $r) { if ((int) ($r['s'] ?? 200) >= 400) $totalErr++; $sumMs += (int) ($r['ms'] ?? 0); }
+    jsonOk([
+        'days' => $days,
+        'requests' => $totalReq,
+        'avgMs' => $totalReq ? (int) round($sumMs / $totalReq) : 0,
+        'errorRate' => round($totalErr * 100 / max(1, $totalReq), 2),
+        'routes' => array_slice($routes, 0, 60),
+        'slowest' => array_slice(array_map(static fn ($r) => [
+            'route' => trim(((string) ($r['m'] ?? '')) . ' ' . ((string) ($r['r'] ?? ''))),
+            'ms' => (int) ($r['ms'] ?? 0), 'status' => (int) ($r['s'] ?? 0), 'at' => $r['t'] ?? null,
+        ], $slow), 0, 20),
+    ]);
+}
 // GET /admin/orders/stats — the summary cards on the orders page (counts by
 // stage + today's sales). One grouped query, so it's cheap on the shared DB.
 if ($method === 'GET' && $path === '/admin/orders/stats') {
@@ -2276,7 +2385,7 @@ if ($method === 'GET' && $path === '/admin/orders') {
     $sortCol = $sortMap[$sortKey] ?? 'o.createdAt';
     $sortDir = strtoupper((string) ($_GET['sortDir'] ?? $_GET['dir'] ?? 'DESC')) === 'ASC' ? 'ASC' : 'DESC';
     $total = (int) (function() use ($where, $args) { $s = db()->prepare("SELECT COUNT(*) " . ORDER_JOIN . " WHERE $where"); $s->execute($args); return $s->fetchColumn(); })();
-    $st = db()->prepare("SELECT " . ORDER_COLS . " " . ORDER_JOIN . " WHERE $where ORDER BY $sortCol $sortDir LIMIT $size OFFSET $off");
+    $st = db()->prepare("SELECT " . ORDER_LIST_COLS . " " . ORDER_JOIN . " WHERE $where ORDER BY $sortCol $sortDir LIMIT $size OFFSET $off");
     $st->execute($args);
     $rows = array_map('orderNest', $st->fetchAll());
     http_response_code(200);

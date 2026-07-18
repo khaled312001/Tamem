@@ -143,6 +143,8 @@ export function CategoriesPage() {
                             <img
                               src={c.iconUrl}
                               alt=""
+                              loading="lazy"
+                              decoding="async"
                               className="w-8 h-8 rounded-lg object-cover border border-border"
                             />
                           ) : (
