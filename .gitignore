@@ -101,3 +101,10 @@ apps/backend/dist-bundle/uploads/
 apps/mobile/google-services.json
 apps/mobile/GoogleService-Info.plist
 apps/backend/dist-bundle/firebase-service-account.json
+
+# Firebase Admin SDK service-account keys — SECRET, never commit (any location/name)
+*firebase-adminsdk*.json
+tamem-acead-*.json
+# Built APKs and raw design assets (kept locally, not in git)
+*.apk
+/Home UI/
