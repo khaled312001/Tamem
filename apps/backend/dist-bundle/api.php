@@ -1422,6 +1422,17 @@ function notifyOrderParties(string $orderId, string $status, ?string $reason = n
         // ── DRIVER ──
         $drvMsg = $render('DRIVER');
         if ($drvMsg && !empty($o['drv_phone'])) { waEnqueue($o['drv_phone'], $drvMsg); $sent = true; }
+        // The driver used to get WhatsApp only — nothing reached their phone's
+        // notification tray. Same push path the customer gets, carrying orderId
+        // so the tap opens the order.
+        $drvPushAr = [
+            'DRIVER_ASSIGNED' => ['طلب جديد مُسند إليك', "طلب #{$no} — " . ($custName ?: 'عميل') . ($o['deliveryAddress'] ? " · {$o['deliveryAddress']}" : '')],
+            'CANCELLED' => ['أُلغي الطلب', "الطلب #{$no} اتلغى — مش محتاج توصيله" . ($reason ? " ({$reason})" : '')],
+        ][$status] ?? null;
+        if ($drvPushAr && !empty($o['assignedDriverId'])) {
+            notifyUser((string) $o['assignedDriverId'], 'ORDER_STATUS', $drvPushAr[0], $drvPushAr[0], $drvPushAr[1], $drvPushAr[1],
+                ['orderId' => $orderId, 'orderNumber' => $no, 'screen' => 'OrderTracking', 'status' => $status]);
+        }
 
         // ── SUPERVISOR ── the business / admin oversight number
         $supMsg = $render('SUPERVISOR');

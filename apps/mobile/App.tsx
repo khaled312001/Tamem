@@ -16,6 +16,7 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 import { ToastHost } from './src/components/ToastHost';
 import { useBrandFonts } from './src/lib/fonts';
+import { ensureNotificationChannel } from './src/lib/push';
 import { RootNavigator } from './src/navigation/RootNavigator';
 
 // Force RTL on app launch. A reload may be needed on first install.
@@ -80,6 +81,15 @@ export default function App() {
   useEffect(() => {
     if (fontsLoaded) onLayoutRootView();
   }, [fontsLoaded, onLayoutRootView]);
+
+  // The Android channel must exist BEFORE any push arrives — Android 8+ silently
+  // drops a notification whose channel is missing. It used to be created only
+  // inside registerForPushNotifications(), which runs on login, so a push that
+  // landed before the first sign-in had nowhere to go. Creating it here is
+  // idempotent and costs nothing.
+  useEffect(() => {
+    void ensureNotificationChannel();
+  }, []);
 
   if (!fontsLoaded) return null;
 
