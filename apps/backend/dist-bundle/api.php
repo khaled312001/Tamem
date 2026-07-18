@@ -3868,6 +3868,14 @@ if ($method === 'DELETE' && preg_match('#^/admin/zones/areas/([^/]+)$#', $path, 
 // There was no handler for this path, so the request fell to a generic fallback
 // that returned the row WITHOUT those arrays; the "آخر الطلبات" tab then did
 // `data.customerOrders.map(...)` on undefined and crashed the whole dashboard.
+// Distinct customer cities — so the customers-page city filter offers EVERY
+// city, not just the ones on the current page. MUST come before the
+// /admin/customers/:id catch below (which would otherwise swallow "cities").
+if ($method === 'GET' && $path === '/admin/customers/cities') {
+    authUser();
+    $rows = db()->query("SELECT DISTINCT city FROM `User` WHERE role = 'CUSTOMER' AND city IS NOT NULL AND city <> '' ORDER BY city")->fetchAll(PDO::FETCH_COLUMN);
+    jsonOk(array_values($rows));
+}
 if ($method === 'GET' && preg_match('#^/admin/customers/([^/]+)$#', $path, $m)) {
     authUser();
     $cid = $m[1];
@@ -3938,7 +3946,14 @@ if ($method === 'GET' && preg_match('#^/admin/(customers)$#', $path, $m)) {
     if ($status === 'active')   $where .= ' AND u.isActive = 1';
     elseif ($status === 'inactive') $where .= ' AND (u.isActive = 0 OR u.isActive IS NULL)';
     if (!empty($_GET['from'])) { $where .= ' AND u.createdAt >= ?'; $args[] = str_replace('T', ' ', substr((string)$_GET['from'], 0, 19)); }
-    if (!empty($_GET['to']))   { $where .= ' AND u.createdAt <= ?'; $args[] = str_replace('T', ' ', substr((string)$_GET['to'], 0, 19)); }
+    if (!empty($_GET['to']))   {
+        // A date-only "to" (e.g. 2026-07-15 from <input type=date>) coerces to
+        // 00:00:00, which would exclude everyone registered LATER that same day.
+        // Extend a bare date to end-of-day so the upper bound is inclusive.
+        $toVal = str_replace('T', ' ', substr((string)$_GET['to'], 0, 19));
+        if (strlen($toVal) <= 10) $toVal .= ' 23:59:59';
+        $where .= ' AND u.createdAt <= ?'; $args[] = $toVal;
+    }
     $ORDERCOUNT = '(SELECT COUNT(*) FROM `Order` o WHERE o.customerId = u.id)';
     $hasOrders = (string)($_GET['hasOrders'] ?? '');
     if ($hasOrders === 'yes')     $where .= " AND {$ORDERCOUNT} > 0";
