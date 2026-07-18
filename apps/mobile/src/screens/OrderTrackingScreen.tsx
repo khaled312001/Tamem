@@ -81,6 +81,9 @@ interface OrderDetail {
   deliveryAddress?: string | null;
   pickupAddress?: string | null;
   service?: { nameAr: string };
+  merchantId?: string | null;
+  /** Present only when the order is from a specific store (not a quick order). */
+  merchant?: { id: string; storeNameAr: string } | null;
   assignedDriver?: { id: string; name: string; phone: string } | null;
   statusHistory?: StatusHistoryItem[];
   createdAt: string;
@@ -628,6 +631,7 @@ export function OrderTrackingScreen() {
           <ReviewPrompt
             orderId={order.id}
             hasDriver={!!order.assignedDriver}
+            merchantName={order.merchant?.storeNameAr ?? (order.merchantId ? 'التاجر' : null)}
             existingReview={order.review ?? null}
           />
         ) : null}
@@ -1090,20 +1094,26 @@ const cancelStyles = StyleSheet.create({
 interface ReviewPromptProps {
   orderId: string;
   hasDriver: boolean;
+  /** Store name when the order is from a specific merchant; null for a quick
+   *  order (no merchant to rate). */
+  merchantName: string | null;
   existingReview: { rating: number; comment?: string | null } | null;
 }
 
-function ReviewPrompt({ orderId, hasDriver, existingReview }: ReviewPromptProps) {
+function ReviewPrompt({ orderId, hasDriver, merchantName, existingReview }: ReviewPromptProps) {
   const qc = useQueryClient();
   const [rating, setRating] = useState(0);
   const [driverRating, setDriverRating] = useState(0);
+  const [merchantRating, setMerchantRating] = useState(0);
   const [comment, setComment] = useState('');
+  const hasMerchant = !!merchantName;
 
   const submitMut = useMutation({
     mutationFn: () =>
       api.raw.post(`/orders/${orderId}/review`, {
         rating,
         ...(hasDriver && driverRating ? { driverRating } : {}),
+        ...(hasMerchant && merchantRating ? { merchantRating } : {}),
         ...(comment.trim() ? { comment: comment.trim() } : {}),
       }),
     onSuccess: () => {
@@ -1138,6 +1148,13 @@ function ReviewPrompt({ orderId, hasDriver, existingReview }: ReviewPromptProps)
       <StarRow value={rating} onChange={setRating} label="التقييم العام" />
       {hasDriver ? (
         <StarRow value={driverRating} onChange={setDriverRating} label="تقييم السائق" />
+      ) : null}
+      {hasMerchant ? (
+        <StarRow
+          value={merchantRating}
+          onChange={setMerchantRating}
+          label={`تقييم ${merchantName}`}
+        />
       ) : null}
 
       <Text style={reviewStyles.commentLabel}>تعليق (اختياري)</Text>

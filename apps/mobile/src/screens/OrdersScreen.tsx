@@ -161,6 +161,8 @@ export function OrdersScreen() {
   const { data, isLoading, refetch, isFetching } = useQuery<OrderListItem[]>({
     queryKey: ['orders-mine'],
     queryFn: () => api.raw.get('/orders/mine').then((r) => r.data.data),
+    // Live: order status changes reflect while the list is open.
+    refetchInterval: 20_000,
   });
 
   useEffect(() => {

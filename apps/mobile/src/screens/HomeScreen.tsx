@@ -214,6 +214,8 @@ export function HomeScreen() {
     queryKey: ['orders-mine'],
     queryFn: () => api.raw.get('/orders/mine').then((r) => r.data.data),
     enabled: authReady,
+    // Keep the "active order" strip live on the home screen.
+    refetchInterval: 30_000,
   });
 
   // Saved addresses — used to (1) drive the location row in the hero so it
@@ -414,6 +416,29 @@ export function HomeScreen() {
           </Pressable>
         )}
 
+        {/* ─────── Coupon banner — admin-controlled (Coupons table / home-config),
+              placed right under the search per the design. ─────── */}
+        {(() => {
+          if (!(homeConfig?.showPromoBanner ?? true)) return null;
+          const coupon = homeConfig?.promoCoupon;
+          const discountText = coupon
+            ? coupon.type === 'PERCENTAGE'
+              ? `خصم ${Number(coupon.value)}%`
+              : `خصم ${Number(coupon.value)} ج.م`
+            : (homeConfig?.promoBannerTitle ?? topOffer?.titleAr ?? 'خصم على أول طلب');
+          const subtitle = coupon?.description || 'على أول طلب';
+          const code = coupon?.code ?? homeConfig?.promoBannerCode ?? topOffer?.code ?? null;
+          if (!discountText && !code) return null;
+          return (
+            <CouponBanner
+              discountText={discountText}
+              subtitle={subtitle}
+              code={code ?? FALLBACK_PROMO_CODE}
+              onPress={onPromo}
+            />
+          );
+        })()}
+
         {/* ─────── Services — the three headline cards (دليفري / شحن / تاجر) ─────── */}
         <ServiceCards
           services={visibleServices.map(
@@ -431,32 +456,6 @@ export function HomeScreen() {
 
         {/* ─────── Trust / feature strip ─────── */}
         <FeatureStrip />
-
-        {/* ─────── Promo banner — admin-controlled. Source priority:
-              1. promoCoupon (admin picked from Coupons table — preferred)
-              2. promoBannerTitle/Code (manual override)
-              3. topOffer (legacy Offers table)
-              4. nothing → banner hidden ─────── */}
-        {(() => {
-          if (!(homeConfig?.showPromoBanner ?? true)) return null;
-          const coupon = homeConfig?.promoCoupon;
-          const couponTitle = coupon
-            ? coupon.description ||
-              (coupon.type === 'PERCENTAGE'
-                ? `خصم ${Number(coupon.value)}% على طلبك`
-                : `خصم ${Number(coupon.value)} ج.م على طلبك`)
-            : null;
-          const title = couponTitle ?? homeConfig?.promoBannerTitle ?? topOffer?.titleAr ?? null;
-          const code = coupon?.code ?? homeConfig?.promoBannerCode ?? topOffer?.code ?? null;
-          if (!title && !code) return null;
-          return (
-            <CouponBanner
-              title={title ?? 'خصم على أول طلب'}
-              code={code ?? FALLBACK_PROMO_CODE}
-              onPress={onPromo}
-            />
-          );
-        })()}
 
         {/* ─────── Categories strip — fetched from /categories, drills
             into a category-filtered StoresList. ─────── */}
