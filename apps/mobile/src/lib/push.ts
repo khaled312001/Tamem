@@ -1,3 +1,4 @@
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Notifications from 'expo-notifications';
 import { createNavigationContainerRef } from '@react-navigation/native';
 import { useEffect } from 'react';
@@ -45,12 +46,28 @@ export async function registerForPushNotifications(): Promise<string | null> {
   if (status !== 'granted') return null;
 
   try {
-    const tokenResp = await Notifications.getExpoPushTokenAsync();
-    const fcmToken = tokenResp.data;
-    await api.raw.post('/me/fcm-token', { fcmToken });
-    return fcmToken;
+    // The RAW native token (FCM on Android, APNs on iOS) — NOT the Expo push
+    // token — because the backend sends directly via Firebase Cloud Messaging
+    // HTTP v1. getExpoPushTokenAsync would return an ExponentPushToken the FCM
+    // API rejects.
+    const tokenResp = await Notifications.getDevicePushTokenAsync();
+    const token = String(tokenResp.data);
+    await api.raw.post('/me/devices', { token, platform: Platform.OS });
+    return token;
   } catch {
     return null;
+  }
+}
+
+/** Stop pushes to this device on logout, so a shared phone doesn't leak the
+ *  previous user's order notifications. Best-effort. */
+export async function unregisterPushToken(): Promise<void> {
+  if (Platform.OS === 'web') return;
+  try {
+    const tokenResp = await Notifications.getDevicePushTokenAsync();
+    await api.raw.post('/me/devices/unregister', { token: String(tokenResp.data) });
+  } catch {
+    /* ignore — token may already be gone */
   }
 }
 
@@ -73,16 +90,31 @@ export async function clearAppBadge(): Promise<void> {
  *   { screen: 'Coupons' }         → Profile → Coupons
  *   { type: 'promo' }             → Notifications tab
  */
+const HANDLED_RESP_KEY = '@tamem/handled-notif-id';
+
 export function usePushTapNavigation(): void {
   useEffect(() => {
     // expo-notifications is native-only; skip on web entirely.
     if (Platform.OS === 'web') return;
-    // Cold start — app was killed and opened from a notification
-    void Notifications.getLastNotificationResponseAsync().then((resp) => {
-      if (resp) handle(resp);
+    // Cold start — app opened from a notification tap. CRITICAL: only route once
+    // per notification. getLastNotificationResponseAsync() persistently returns
+    // the LAST response, so without this guard EVERY normal app launch would
+    // re-navigate to that old notification's screen — which is exactly why the
+    // app kept opening on the Notifications page instead of Home.
+    void Notifications.getLastNotificationResponseAsync().then(async (resp) => {
+      if (!resp) return;
+      const id = resp.notification.request.identifier;
+      const alreadyHandled = await AsyncStorage.getItem(HANDLED_RESP_KEY);
+      if (id && id === alreadyHandled) return; // stale — a plain launch, stay on Home
+      if (id) await AsyncStorage.setItem(HANDLED_RESP_KEY, id);
+      handle(resp);
     });
-    // Warm tap — app was in background or foreground
-    const sub = Notifications.addNotificationResponseReceivedListener(handle);
+    // Warm tap — app was in background or foreground; these are always genuine.
+    const sub = Notifications.addNotificationResponseReceivedListener((resp) => {
+      const id = resp.notification.request.identifier;
+      if (id) void AsyncStorage.setItem(HANDLED_RESP_KEY, id);
+      handle(resp);
+    });
     return () => sub.remove();
   }, []);
 }

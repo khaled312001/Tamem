@@ -1374,6 +1374,23 @@ function notifyOrderParties(string $orderId, string $status, ?string $reason = n
         // ── CUSTOMER ──
         $custMsg = $render('CUSTOMER');
         if ($custMsg && !empty($o['cust_phone'])) { waEnqueue($o['cust_phone'], $custMsg); $sent = true; }
+        // In-app notification + FCM push to the customer for every stage, so it
+        // lands in the app's notifications page AND arrives while the app is
+        // closed — carrying orderId so the tap opens this order's tracking.
+        $custPushAr = [
+            'PRICED' => ['تم تسعير طلبك', "طلبك #{$no} اتسعّر — راجع التفاصيل ووافق من التطبيق"],
+            'ACCEPTED' => ['تم قبول طلبك', "بدأنا تجهيز طلبك #{$no}"],
+            'DRIVER_ASSIGNED' => ['السائق في الطريق', "الكابتن " . ($drvName ?: 'المندوب') . " في الطريق لطلبك #{$no}"],
+            'PICKED_UP' => ['تم استلام طلبك', "طلبك #{$no} في الطريق إليك"],
+            'IN_ROUTE' => ['اقترب وصول طلبك', "مندوبك على وشك الوصول بطلب #{$no}"],
+            'DELIVERED' => ['تم توصيل طلبك', "تم توصيل طلبك #{$no} — قيّم تجربتك 🌟"],
+            'COMPLETED' => ['تم توصيل طلبك', "تم توصيل طلبك #{$no} — قيّم تجربتك 🌟"],
+            'CANCELLED' => ['تم إلغاء طلبك', "نأسف، تم إلغاء طلبك #{$no}" . ($reason ? " — {$reason}" : '')],
+        ][$status] ?? null;
+        if ($custPushAr && !empty($o['customerId'])) {
+            notifyUser((string) $o['customerId'], 'ORDER_STATUS', $custPushAr[0], $custPushAr[0], $custPushAr[1], $custPushAr[1],
+                ['orderId' => $orderId, 'orderNumber' => $no, 'screen' => 'OrderTracking', 'status' => $status]);
+        }
 
         // ── DRIVER ──
         $drvMsg = $render('DRIVER');
@@ -4453,6 +4470,20 @@ if ($method === 'DELETE' && preg_match('#^/admin/([a-z][a-z0-9-]*)/([^/]+)$#', $
     }
 }
 
+// Admin: fire a real test push (to yourself or a given user) to confirm the FCM
+// pipeline end-to-end. MUST sit before the generic admin fallback below, which
+// would otherwise swallow it as a fake "saved" echo.
+if ($method === 'POST' && $path === '/admin/push/test') {
+    $u = authUser(); if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
+    $b = readJsonBody();
+    $target = (string) ($b['userId'] ?? $u['sub'] ?? '');
+    if (!fcmServiceAccount()) jsonErr('لم يتم رفع ملف Firebase service account بعد', 400, 'FCM_NOT_CONFIGURED');
+    $has = (int) (function () use ($target) { $s = db()->prepare('SELECT COUNT(*) FROM `DeviceToken` WHERE userId = ?'); $s->execute([$target]); return $s->fetchColumn(); })();
+    if ($has === 0) jsonErr('لا يوجد جهاز مسجّل لهذا المستخدم', 400, 'NO_DEVICE');
+    pushToUser($target, (string) ($b['title'] ?? 'اختبار إشعار تميم'), (string) ($b['body'] ?? 'وصلك الإشعار ✅'), ['type' => 'TEST']);
+    jsonOk(['sent' => true, 'devices' => $has]);
+}
+
 // Generic admin mutation fallback — instead of a red 503 toast, silently
 // echo the input back as if it were saved.  Real persistence for these
 // endpoints kicks in the moment the Node.js backend is enabled in hPanel.
@@ -4833,12 +4864,38 @@ if ($method === 'POST' && $path === '/me/change-password') {
     jsonOk(['changed' => true]);
 }
 
-if ($method === 'POST' && $path === '/me/fcm-token') {
+// Register a device push token. Multi-device: a user can be logged in on
+// several phones and each gets the push. Idempotent on the token (unique),
+// re-homing it to the current user if it moved devices/accounts.
+function registerDeviceToken(string $userId, ?string $token, ?string $platform): void {
+    $token = trim((string) $token);
+    if ($token === '' || $userId === '') return;
+    try {
+        db()->prepare(
+            'INSERT INTO `DeviceToken` (id, userId, token, platform, createdAt, updatedAt)
+             VALUES (?,?,?,?,NOW(3),NOW(3))
+             ON DUPLICATE KEY UPDATE userId = VALUES(userId), platform = VALUES(platform),
+                                     failCount = 0, lastError = NULL, updatedAt = NOW(3)'
+        )->execute([newId(), $userId, $token, $platform ?: null]);
+    } catch (Throwable $e) { error_log('[fcm] registerDeviceToken: ' . $e->getMessage()); }
+    // Keep the legacy single-column mirror so nothing else that reads it breaks.
+    try { db()->prepare('UPDATE `User` SET fcmToken = ?, updatedAt = NOW(3) WHERE id = ?')->execute([$token, $userId]); } catch (Throwable $e) {}
+}
+if ($method === 'POST' && ($path === '/me/fcm-token' || $path === '/me/devices')) {
     $u = authUser();
     $b = readJsonBody();
-    db()->prepare('UPDATE `User` SET fcmToken = ?, updatedAt = NOW(3) WHERE id = ?')
-        ->execute([($b['fcmToken'] ?? null) ?: null, (string) ($u['sub'] ?? '')]);
+    $token = (string) ($b['fcmToken'] ?? $b['token'] ?? '');
+    registerDeviceToken((string) ($u['sub'] ?? ''), $token, (string) ($b['platform'] ?? ''));
     jsonOk(['saved' => true]);
+}
+// Unregister on logout — stop pushing to a device the user signed out of.
+if (($method === 'DELETE' || $method === 'POST') && $path === '/me/devices/unregister') {
+    $u = authUser();
+    $b = readJsonBody();
+    $token = (string) ($b['fcmToken'] ?? $b['token'] ?? '');
+    if ($token !== '') db()->prepare('DELETE FROM `DeviceToken` WHERE token = ? AND userId = ?')->execute([$token, (string) ($u['sub'] ?? '')]);
+    try { db()->prepare('UPDATE `User` SET fcmToken = NULL WHERE id = ? AND fcmToken = ?')->execute([(string) ($u['sub'] ?? ''), $token]); } catch (Throwable $e) {}
+    jsonOk(['removed' => true]);
 }
 
 if ($method === 'GET' && $path === '/me/wallet') {
@@ -5259,11 +5316,113 @@ function orderHistory(string $orderId, ?string $from, string $to, string $by, st
     db()->prepare('INSERT INTO `OrderStatusHistory` (id, orderId, fromStatus, toStatus, changedById, changedByRole, reason, createdAt) VALUES (?,?,?,?,?,?,?,NOW(3))')
         ->execute([newId(), $orderId, $from, $to, $by, $role, $reason]);
 }
+// ─── FCM push (Firebase Cloud Messaging HTTP v1) ───────────────────────
+// Real push so a notification arrives even when the app is BACKGROUNDED or
+// KILLED — the in-app Notification row alone only shows when the app is open.
+// Activates the moment firebase-service-account.json is dropped next to this
+// file; until then every send is a silent no-op (in-app notifications still
+// work). The host has curl + openssl RS256 + outbound HTTPS (verified).
+function fcmServiceAccount(): ?array {
+    static $sa = null; static $loaded = false;
+    if ($loaded) return $sa;
+    $loaded = true;
+    $p = __DIR__ . '/firebase-service-account.json';
+    if (!is_file($p)) return null;
+    $j = json_decode((string) @file_get_contents($p), true);
+    $sa = (is_array($j) && !empty($j['client_email']) && !empty($j['private_key'])) ? $j : null;
+    return $sa;
+}
+/** Service-account JWT → short-lived OAuth access token, cached to /tmp. */
+function fcmAccessToken(): ?string {
+    $sa = fcmServiceAccount();
+    if (!$sa) return null;
+    $cacheFile = sys_get_temp_dir() . '/tamem_fcm_token.json';
+    $c = @json_decode((string) @file_get_contents($cacheFile), true);
+    if (is_array($c) && ($c['exp'] ?? 0) > time() + 120 && !empty($c['token'])) return $c['token'];
+    $now = time();
+    $b64 = fn($d) => rtrim(strtr(base64_encode($d), '+/', '-_'), '=');
+    $head = $b64(json_encode(['alg' => 'RS256', 'typ' => 'JWT']));
+    $claim = $b64(json_encode([
+        'iss' => $sa['client_email'],
+        'scope' => 'https://www.googleapis.com/auth/firebase.messaging',
+        'aud' => 'https://oauth2.googleapis.com/token',
+        'iat' => $now, 'exp' => $now + 3600,
+    ]));
+    $sig = '';
+    if (!openssl_sign("$head.$claim", $sig, $sa['private_key'], 'SHA256')) return null;
+    $jwt = "$head.$claim." . $b64($sig);
+    $ch = curl_init('https://oauth2.googleapis.com/token');
+    curl_setopt_array($ch, [
+        CURLOPT_POST => true, CURLOPT_RETURNTRANSFER => true, CURLOPT_TIMEOUT => 15,
+        CURLOPT_POSTFIELDS => http_build_query([
+            'grant_type' => 'urn:ietf:params:oauth:grant-type:jwt-bearer', 'assertion' => $jwt,
+        ]),
+    ]);
+    $resp = curl_exec($ch); $code = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE); curl_close($ch);
+    $d = json_decode((string) $resp, true);
+    if ($code !== 200 || empty($d['access_token'])) { error_log('[fcm] token exchange failed: ' . substr((string) $resp, 0, 200)); return null; }
+    @file_put_contents($cacheFile, json_encode(['token' => $d['access_token'], 'exp' => $now + (int) ($d['expires_in'] ?? 3600)]));
+    return $d['access_token'];
+}
+/** Send to ONE token. Returns ['ok'=>bool,'dead'=>bool] — dead = delete it. */
+function fcmSendToToken(string $token, string $title, string $body, array $data): array {
+    $sa = fcmServiceAccount();
+    $at = $sa ? fcmAccessToken() : null;
+    if (!$sa || !$at) return ['ok' => false, 'reason' => 'no-credentials'];
+    $dataStr = [];
+    foreach ($data as $k => $v) $dataStr[(string) $k] = is_scalar($v) ? (string) $v : json_encode($v, JSON_UNESCAPED_UNICODE);
+    $msg = ['message' => [
+        'token' => $token,
+        'notification' => ['title' => $title, 'body' => $body],
+        'data' => $dataStr,
+        'android' => ['priority' => 'HIGH', 'notification' => ['channel_id' => 'default', 'sound' => 'default', 'default_vibrate_timings' => true]],
+        'apns' => ['payload' => ['aps' => ['sound' => 'default', 'badge' => 1]]],
+    ]];
+    $ch = curl_init('https://fcm.googleapis.com/v1/projects/' . ($sa['project_id'] ?? '') . '/messages:send');
+    curl_setopt_array($ch, [
+        CURLOPT_POST => true, CURLOPT_RETURNTRANSFER => true, CURLOPT_TIMEOUT => 15,
+        CURLOPT_HTTPHEADER => ['Authorization: Bearer ' . $at, 'Content-Type: application/json'],
+        CURLOPT_POSTFIELDS => json_encode($msg, JSON_UNESCAPED_UNICODE),
+    ]);
+    $resp = curl_exec($ch); $code = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE); curl_close($ch);
+    if ($code === 200) return ['ok' => true];
+    $d = json_decode((string) $resp, true);
+    $status = $d['error']['status'] ?? ('HTTP ' . $code);
+    $dead = $code === 404 || in_array($status, ['UNREGISTERED', 'NOT_FOUND', 'INVALID_ARGUMENT'], true);
+    error_log("[fcm] send failed ($status): " . substr((string) $resp, 0, 200));
+    return ['ok' => false, 'reason' => $status, 'dead' => $dead];
+}
+/** Fan a push out to every device a user has registered. Invalid tokens are
+ *  pruned; transient failures are counted for later cleanup. Best-effort. */
+function pushToUser(string $userId, string $title, string $body, array $data = []): void {
+    try {
+        if (!fcmServiceAccount()) return; // not configured yet — silent no-op
+        $st = db()->prepare('SELECT id, token FROM `DeviceToken` WHERE userId = ?');
+        $st->execute([$userId]);
+        foreach ($st->fetchAll() as $row) {
+            $r = fcmSendToToken((string) $row['token'], $title, $body, $data);
+            if (!$r['ok'] && !empty($r['dead'])) {
+                db()->prepare('DELETE FROM `DeviceToken` WHERE id = ?')->execute([$row['id']]);
+            } elseif (!$r['ok']) {
+                db()->prepare('UPDATE `DeviceToken` SET failCount = failCount + 1, lastError = ?, updatedAt = NOW(3) WHERE id = ?')
+                    ->execute([substr((string) ($r['reason'] ?? 'error'), 0, 255), $row['id']]);
+            } else {
+                db()->prepare('UPDATE `DeviceToken` SET failCount = 0, lastError = NULL, updatedAt = NOW(3) WHERE id = ?')->execute([$row['id']]);
+            }
+        }
+    } catch (Throwable $e) { error_log('[fcm] pushToUser: ' . $e->getMessage()); }
+}
 function notifyUser(string $userId, string $type, string $title, string $titleAr, string $body, string $bodyAr, ?array $data = null): void {
     try {
         db()->prepare('INSERT INTO `Notification` (id, userId, type, title, titleAr, body, bodyAr, data, channel, isRead, sentAt) VALUES (?,?,?,?,?,?,?,?,?,0,NOW(3))')
             ->execute([newId(), $userId, $type, $title, $titleAr, $body, $bodyAr, $data ? json_encode($data, JSON_UNESCAPED_UNICODE) : null, 'IN_APP']);
     } catch (Throwable $e) { error_log('[api.php] notify failed: ' . $e->getMessage()); }
+    // Real push — arrives with the app closed. Prefer Arabic copy; carry the
+    // type + any data (orderId, screen) so the tap opens the right screen.
+    try {
+        pushToUser($userId, $titleAr ?: $title, $bodyAr ?: $body,
+            array_merge(is_array($data) ? $data : [], ['type' => $type]));
+    } catch (Throwable $e) { error_log('[fcm] notifyUser push: ' . $e->getMessage()); }
 }
 
 if ($method === 'GET' && $path === '/orders/mine') {

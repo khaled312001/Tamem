@@ -73,6 +73,15 @@ export const useAuth = create<AuthState>((set) => ({
   },
 
   clear: async () => {
+    // Stop pushes to this device BEFORE dropping the token — a shared phone
+    // must not keep receiving the previous user's order notifications. Fire it
+    // while still authenticated; ignore failures so logout never blocks.
+    try {
+      const { unregisterPushToken } = await import('../lib/push');
+      await unregisterPushToken();
+    } catch {
+      /* best-effort */
+    }
     await Promise.all([
       secureStorage.deleteItem(ACCESS_KEY),
       secureStorage.deleteItem(REFRESH_KEY),
