@@ -1748,6 +1748,30 @@ if (in_array($method, ['PUT', 'POST'], true) && $path === '/admin/whatsapp/group
 
 // Payment gateway config — the page expects a fixed shape with `keys` and
 // `paymentOptions`. Returning a bare {} makes `initial.keys.apiKey` crash.
+// Customer payment config — the app's checkout screen reads this to decide which
+// methods to show. Was unhandled (fell through to the empty stub), so the
+// EasyKash screen got a blank config. Manual methods (cash / Vodafone Cash /
+// InstaPay) are always available; online card via EasyKash is gated behind a
+// setting because that gateway's checkout isn't live in the shim yet.
+if ($method === 'GET' && $path === '/payments/config') {
+    authUser();
+    $get = function (string $k, $def = null) {
+        try { $s = db()->prepare("SELECT `value` FROM `Setting` WHERE `key` = ? LIMIT 1"); $s->execute([$k]);
+            $v = $s->fetchColumn(); if ($v === false || $v === null) return $def;
+            $d = json_decode((string) $v, true); return $d !== null ? $d : $v;
+        } catch (Throwable $e) { return $def; }
+    };
+    $online = (bool) $get('online_payment_enabled', false);
+    jsonOk([
+        'gateway' => $online ? 'EASYKASH' : 'MANUAL',
+        'online' => $online,
+        'methods' => [
+            'vodafoneCash' => (bool) $get('pay_vodafone_cash', true),
+            'instapay' => (bool) $get('pay_instapay', true),
+            'visa' => $online, 'mastercard' => $online, 'meeza' => $online,
+        ],
+    ]);
+}
 if ($method === 'GET' && $path === '/admin/payments/gateway') {
     $u = authUser();
     if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
