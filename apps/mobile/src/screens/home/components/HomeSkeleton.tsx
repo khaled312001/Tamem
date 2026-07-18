@@ -4,11 +4,16 @@
  * single spinner in the middle of an empty screen.
  */
 import { memo } from 'react';
-import { I18nManager, StyleSheet, View, useWindowDimensions } from 'react-native';
+import { StyleSheet, View, useWindowDimensions } from 'react-native';
 
 import { radii, spacing } from '../../../theme/tokens';
 
-const ROW = I18nManager.isRTL ? 'row-reverse' : ('row' as const);
+// React Native already lays `flexDirection: 'row'` out right-to-left when
+// I18nManager RTL is on. Adding 'row-reverse' on top of that flips it a
+// SECOND time, back to left-to-right — which is why the header rendered
+// mirrored. Plain 'row' is correct on native; the web build gets its
+// direction from the document's dir="rtl".
+const ROW = 'row' as const;
 const BONE = '#F1EAE5';
 
 function Bone({

@@ -34,7 +34,13 @@ import { OffersCarousel } from './components/OffersCarousel';
 import { PopularStoresSection } from './components/PopularStoresSection';
 import { PromoCardsRow } from './components/PromoCardsRow';
 import { QuickActionsSection, type QuickAction } from './components/QuickActionsSection';
-import type { HomeCategory, Merchant, Offer, ServiceKey, ServiceRoute } from './homeData';
+import {
+  type HomeCategory,
+  type Merchant,
+  type Offer,
+  type ServiceKey,
+  type ServiceRoute,
+} from './homeData';
 import { useHomeData } from './useHomeData';
 
 type NavProp = NativeStackNavigationProp<HomeStackParamList, 'Home'>;
@@ -243,6 +249,8 @@ export function HomeV2Screen() {
           name={user?.name}
           avatarUrl={user?.avatarUrl}
           notificationCount={unreadCount}
+          greetingOverride={homeConfig?.heroGreeting}
+          subtitleOverride={homeConfig?.heroSubtitle}
           locationLabel={locationLabel}
           onPressAvatar={goProfile}
           onPressLocation={goAddresses}
@@ -282,7 +290,10 @@ export function HomeV2Screen() {
             bottom of the page. */}
         {homeConfig?.showTrustStrip !== false && (
           <View style={styles.section}>
-            <BenefitsBar />
+            <BenefitsBar
+              title={homeConfig?.trustStripTitle}
+              subtitle={homeConfig?.trustStripSubtitle}
+            />
           </View>
         )}
 

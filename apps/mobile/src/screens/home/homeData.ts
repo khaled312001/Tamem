@@ -113,6 +113,21 @@ export const SERVICE_CARD_COPY: Record<ServiceKey, { title: string; subtitle: st
  * Per-service palette for the V2 cards. Tints only — the route/key/order still
  * come from the SERVICES list the old screen already owns.
  */
+/**
+ * Illustration per service card. `require` is resolved at bundle time, so these
+ * must be static — a computed path would break the release build.
+ *
+ * The sources are ~1024px; these are downscaled to 300px (full-res originals
+ * kept in assets/_originals/). They render in a ~90px box, and shipping the
+ * originals would have added 5.7 MB to the app for three thumbnails.
+ */
+/* eslint-disable @typescript-eslint/no-var-requires */
+export const SERVICE_IMAGE: Record<ServiceKey, number> = {
+  delivery: require('../../assets/service-delivery.png'),
+  shipping: require('../../assets/service-shipping.png'),
+  merchant: require('../../assets/service-merchant.png'),
+};
+
 export const SERVICE_THEME: Record<ServiceKey, { bg: string; fg: string }> = {
   delivery: { bg: '#FFF1F0', fg: '#E0301E' },
   shipping: { bg: '#FFF4E8', fg: '#EC7A2C' },

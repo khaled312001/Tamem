@@ -4,7 +4,7 @@
  */
 import { Package, ShoppingBag, Truck } from 'lucide-react-native';
 import { memo } from 'react';
-import { I18nManager, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { ForwardChevron } from '../../../components/ui';
 import { colors, fontFamilies, radii, shadows, spacing } from '../../../theme/tokens';
@@ -12,7 +12,12 @@ import type { ActiveOrder } from '../homeData';
 
 import { ORDER_STATUS_AR } from '@tamem/types';
 
-const ROW = I18nManager.isRTL ? 'row-reverse' : ('row' as const);
+// React Native already lays `flexDirection: 'row'` out right-to-left when
+// I18nManager RTL is on. Adding 'row-reverse' on top of that flips it a
+// SECOND time, back to left-to-right — which is why the header rendered
+// mirrored. Plain 'row' is correct on native; the web build gets its
+// direction from the document's dir="rtl".
+const ROW = 'row' as const;
 
 /** Category → glyph. Falls back to the delivery bag for unknown categories. */
 function iconFor(category?: string) {

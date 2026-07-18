@@ -6,15 +6,16 @@
  */
 import type { LucideIcon } from 'lucide-react-native';
 import { memo } from 'react';
-import { I18nManager, Pressable, StyleSheet, Text, View } from 'react-native';
+import { I18nManager, Image, Pressable, StyleSheet, Text, View } from 'react-native';
 
-import { ForwardChevron } from '../../../components/ui';
 import { colors, fontFamilies, shadows, spacing } from '../../../theme/tokens';
 
 interface Props {
   title: string;
   subtitle: string;
   Icon: LucideIcon;
+  /** Illustration for this service. Falls back to `Icon` when absent. */
+  image?: number;
   /** Card tint. */
   bg: string;
   /** Icon + title colour. */
@@ -22,7 +23,7 @@ interface Props {
   onPress: () => void;
 }
 
-function ServiceCardBase({ title, subtitle, Icon, bg, fg, onPress }: Props) {
+function ServiceCardBase({ title, subtitle, Icon, image, bg, fg, onPress }: Props) {
   return (
     <Pressable
       onPress={onPress}
@@ -30,9 +31,15 @@ function ServiceCardBase({ title, subtitle, Icon, bg, fg, onPress }: Props) {
       accessibilityRole="button"
       accessibilityLabel={`${title} — ${subtitle}`}
     >
-      <View style={styles.iconWrap}>
-        <Icon size={44} color={fg} strokeWidth={1.6} />
-      </View>
+      {/* Stand-in for the illustration in the design: a tinted disc behind an
+          oversized icon. Swap in the real artwork when the assets land. */}
+      {image ? (
+        <Image source={image} style={styles.art} resizeMode="contain" />
+      ) : (
+        <View style={[styles.iconWrap, { backgroundColor: `${fg}1F` }]}>
+          <Icon size={38} color={fg} strokeWidth={1.7} />
+        </View>
+      )}
 
       <Text style={[styles.title, { color: fg }]} numberOfLines={1}>
         {title}
@@ -40,10 +47,6 @@ function ServiceCardBase({ title, subtitle, Icon, bg, fg, onPress }: Props) {
       <Text style={styles.subtitle} numberOfLines={1}>
         {subtitle}
       </Text>
-
-      <View style={[styles.arrow, { backgroundColor: fg }]}>
-        <ForwardChevron size={14} color={colors.white} />
-      </View>
     </Pressable>
   );
 }
@@ -60,12 +63,20 @@ const styles = StyleSheet.create({
     justifyContent: 'flex-start',
     ...shadows.sm,
   },
+  art: {
+    width: 88,
+    height: 72,
+    alignSelf: 'center',
+    marginBottom: spacing.sm,
+  },
   iconWrap: {
     width: 72,
     height: 72,
+    borderRadius: 36,
     alignItems: 'center',
     justifyContent: 'center',
     alignSelf: 'center',
+    marginBottom: spacing.sm,
   },
   title: {
     fontSize: 20,
@@ -82,16 +93,6 @@ const styles = StyleSheet.create({
     textAlign: 'right',
     writingDirection: 'rtl',
     alignSelf: 'stretch',
-  },
-  arrow: {
-    position: 'absolute',
-    bottom: spacing.md,
-    ...(I18nManager.isRTL ? { left: spacing.md } : { right: spacing.md }),
-    width: 26,
-    height: 26,
-    borderRadius: 13,
-    alignItems: 'center',
-    justifyContent: 'center',
   },
   pressed: { opacity: 0.85 },
 });

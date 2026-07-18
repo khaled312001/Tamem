@@ -14,7 +14,12 @@ import { LIST_PERF } from '../../../lib/listPerf';
 import { colors, fontFamilies, radii, shadows, spacing } from '../../../theme/tokens';
 import type { Merchant } from '../homeData';
 
-const ROW = I18nManager.isRTL ? 'row-reverse' : ('row' as const);
+// React Native already lays `flexDirection: 'row'` out right-to-left when
+// I18nManager RTL is on. Adding 'row-reverse' on top of that flips it a
+// SECOND time, back to left-to-right — which is why the header rendered
+// mirrored. Plain 'row' is correct on native; the web build gets its
+// direction from the document's dir="rtl".
+const ROW = 'row' as const;
 const CARD_W = 168;
 const COVER_H = 104;
 
