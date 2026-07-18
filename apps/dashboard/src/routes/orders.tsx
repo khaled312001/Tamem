@@ -276,6 +276,15 @@ export function OrdersPage() {
     refetchIntervalInBackground: false,
   });
 
+  // Summary cards — counts by stage + today's sales. Cheap grouped query, and
+  // clicking a card filters the table to that stage.
+  const { data: stats } = useQuery({
+    queryKey: ['admin', 'orders', 'stats'],
+    queryFn: () => api.adminOrderStats(),
+    refetchInterval: 60_000,
+    refetchIntervalInBackground: false,
+  });
+
   // Socket: auto refresh + sound + toast action on new orders
   useEffect(() => {
     const socket = connectSocket();
@@ -399,6 +408,66 @@ export function OrdersPage() {
       </div>
 
       {manualOpen && <ManualOrderDialog onClose={() => setManualOpen(false)} />}
+
+      {/* Summary cards — counts by stage + today's sales. Each card filters. */}
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-7 gap-2">
+        {(
+          [
+            { key: '', label: 'الإجمالي', value: stats?.total, tone: 'bg-white text-brand-dark' },
+            {
+              key: 'NEW',
+              label: 'جديدة',
+              value: stats?.new,
+              tone: 'bg-blue-50 text-blue-900 border-blue-200',
+            },
+            {
+              key: 'UNDER_REVIEW,PRICED,ACCEPTED',
+              label: 'قيد التجهيز',
+              value: stats?.preparing,
+              tone: 'bg-amber-50 text-amber-900 border-amber-200',
+            },
+            {
+              key: 'DRIVER_ASSIGNED,PICKED_UP,IN_ROUTE',
+              label: 'قيد التوصيل',
+              value: stats?.delivering,
+              tone: 'bg-purple-50 text-purple-900 border-purple-200',
+            },
+            {
+              key: 'COMPLETED',
+              label: 'مكتملة',
+              value: stats?.completed,
+              tone: 'bg-emerald-50 text-emerald-900 border-emerald-200',
+            },
+            {
+              key: 'CANCELLED,REJECTED',
+              label: 'ملغية',
+              value: stats?.cancelled,
+              tone: 'bg-red-50 text-red-900 border-red-200',
+            },
+          ] as { key: string; label: string; value?: number; tone: string }[]
+        ).map((c) => (
+          <button
+            key={c.label}
+            onClick={() => {
+              setStatusFilter(c.key);
+              setPage(1);
+            }}
+            className={`rounded-xl border p-3 text-start transition hover:shadow-sm ${c.tone} ${
+              statusFilter === c.key ? 'ring-2 ring-brand-red' : 'border-border'
+            }`}
+          >
+            <div className="text-xs font-bold opacity-70">{c.label}</div>
+            <div className="text-2xl font-black mt-0.5 tabular-nums">{c.value ?? '—'}</div>
+          </button>
+        ))}
+        <div className="rounded-xl border border-border bg-gradient-to-br from-brand-red/5 to-brand-orange/5 p-3">
+          <div className="text-xs font-bold opacity-70">مبيعات اليوم</div>
+          <div className="text-xl font-black mt-0.5 tabular-nums text-brand-red">
+            {stats?.salesToday != null ? `${stats.salesToday.toLocaleString('ar-EG')}` : '—'}
+            <span className="text-xs font-normal"> ج.م</span>
+          </div>
+        </div>
+      </div>
 
       {/* Quick filter presets */}
       <div className="flex flex-wrap gap-2">
