@@ -259,6 +259,10 @@ model DriverProfile {
   totalDeliveries Int          @default(0)
   totalEarnings   Decimal      @default(0) @db.Decimal(10, 2)
   cashOnHand      Decimal      @default(0) @db.Decimal(10, 2)
+  /// Driver's cut of the DELIVERY FEE, as a percentage (0–100). The company
+  /// keeps the remainder. Snapshotted onto each order at assign/deliver so
+  /// later changes to this value never rewrite past orders' accounting.
+  deliverySharePct Decimal     @default(0) @db.Decimal(5, 2)
   rating          Decimal?     @db.Decimal(3, 2)
   governorate     String
   notes           String?      @db.Text
@@ -267,6 +271,22 @@ model DriverProfile {
 
   @@index([status])
   @@index([governorate])
+}
+
+/// One settlement event: an admin paying a driver their accrued delivery cut.
+/// Each settlement marks a batch of the driver's delivered orders as SETTLED
+/// (Order.driverSettlementId points back here) and records the amount + who/when.
+model DriverSettlement {
+  id          String   @id @default(cuid())
+  driverId    String
+  amount      Decimal  @default(0) @db.Decimal(10, 2)
+  orderCount  Int      @default(0)
+  note        String?  @db.VarChar(255)
+  createdById String?
+  createdAt   DateTime @default(now())
+
+  @@index([driverId])
+  @@index([createdAt])
 }
 
 /// Manual store status override. Falls back to BusinessHours-based auto-status
@@ -488,6 +508,20 @@ model Order {
   deliveryFee        Decimal? @db.Decimal(10, 2)
   platformCommission Decimal? @db.Decimal(10, 2)
   merchantPayout     Decimal? @db.Decimal(10, 2)
+
+  /// Driver revenue-share SNAPSHOT — captured at assign/deliver from the
+  /// driver's deliverySharePct against this order's deliveryFee, so editing a
+  /// driver's percentage later never changes historical settlements.
+  ///   driverDeliveryRevenue  = deliveryFee * driverSharePct / 100
+  ///   companyDeliveryRevenue = deliveryFee - driverDeliveryRevenue
+  /// Merchant goods value (merchantSubtotal) is NEVER driver/company revenue.
+  driverSharePct         Decimal? @db.Decimal(5, 2)
+  driverDeliveryRevenue  Decimal? @db.Decimal(10, 2)
+  companyDeliveryRevenue Decimal? @db.Decimal(10, 2)
+  /// Settlement of the driver's delivery cut: PENDING until an admin settles it.
+  driverSettlementStatus String   @default("PENDING") @db.VarChar(16)
+  driverSettledAt        DateTime?
+  driverSettlementId     String?  @db.VarChar(30)
 
   // payment
   paymentMethod PaymentMethod?
