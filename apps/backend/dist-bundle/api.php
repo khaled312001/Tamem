@@ -2263,8 +2263,20 @@ if ($method === 'GET' && $path === '/admin/orders') {
     if (($_GET['from'] ?? '') !== '') { $where .= ' AND o.createdAt >= ?'; $args[] = gmdate('Y-m-d H:i:s', strtotime((string) $_GET['from'])); }
     if (($_GET['to'] ?? '') !== '')   { $where .= ' AND o.createdAt <= ?'; $args[] = gmdate('Y-m-d H:i:s', strtotime((string) $_GET['to'])); }
     if (($_GET['from'] ?? '') === 'today') { /* handled by 'from' via strtotime('today') above */ }
+    // Sorting: the list sends sortBy/sortDir but the ORDER BY used to be fixed,
+    // so clicking a column header did nothing. Whitelist maps a client key to a
+    // real SQL expression — anything unknown falls back to newest-first.
+    $sortMap = [
+        'createdAt' => 'o.createdAt', 'orderNumber' => 'o.orderNumber', 'status' => 'o.status',
+        'finalPrice' => 'COALESCE(o.finalPrice, o.quotedPrice)', 'total' => 'COALESCE(o.finalPrice, o.quotedPrice)',
+        'customer' => 'cu.name', 'driver' => 'dr.name', 'updatedAt' => 'o.updatedAt',
+        'deliveredAt' => 'COALESCE(o.deliveredAt, o.completedAt)',
+    ];
+    $sortKey = (string) ($_GET['sortBy'] ?? $_GET['sort'] ?? '');
+    $sortCol = $sortMap[$sortKey] ?? 'o.createdAt';
+    $sortDir = strtoupper((string) ($_GET['sortDir'] ?? $_GET['dir'] ?? 'DESC')) === 'ASC' ? 'ASC' : 'DESC';
     $total = (int) (function() use ($where, $args) { $s = db()->prepare("SELECT COUNT(*) " . ORDER_JOIN . " WHERE $where"); $s->execute($args); return $s->fetchColumn(); })();
-    $st = db()->prepare("SELECT " . ORDER_COLS . " " . ORDER_JOIN . " WHERE $where ORDER BY o.createdAt DESC LIMIT $size OFFSET $off");
+    $st = db()->prepare("SELECT " . ORDER_COLS . " " . ORDER_JOIN . " WHERE $where ORDER BY $sortCol $sortDir LIMIT $size OFFSET $off");
     $st->execute($args);
     $rows = array_map('orderNest', $st->fetchAll());
     http_response_code(200);
@@ -2480,6 +2492,34 @@ if ($method === 'GET' && $path === '/admin/categories') {
 // GET /admin/products — the generic $RES list below returns bare Product rows,
 // so the admin table rendered "—" for every merchant and ignored ?search.
 // Dedicated handler: joins the store and applies the filters the screen sends.
+// Product stat cards, computed over the WHOLE filtered set. The page used to
+// derive these from the 200 rows it had fetched, so every count was wrong once a
+// merchant had more than that. One aggregate query, cached separately from the
+// list so paging doesn't recompute it.
+if ($method === 'GET' && $path === '/admin/products/stats') {
+    authUser();
+    $where = '1=1'; $args = [];
+    if (!empty($_GET['merchantId'])) { $where .= ' AND merchantId = ?'; $args[] = (string) $_GET['merchantId']; }
+    $q = trim((string) ($_GET['search'] ?? ''));
+    if ($q !== '') {
+        $where .= ' AND (name LIKE ? OR nameAr LIKE ? OR sku LIKE ?)';
+        $like = "%$q%"; array_push($args, $like, $like, $like);
+    }
+    $st = db()->prepare("SELECT COUNT(*) total,
+        COALESCE(SUM(isAvailable = 1), 0) available,
+        COALESCE(SUM(isAvailable = 0), 0) disabled,
+        COALESCE(SUM(stock IS NOT NULL AND stock <= 0), 0) outOfStock,
+        COALESCE(SUM(stock IS NOT NULL AND stock > 0 AND stock <= 5), 0) low,
+        COALESCE(SUM(imageUrl IS NULL OR imageUrl = ''), 0) noImage
+        FROM `Product` WHERE $where");
+    $st->execute($args);
+    $r = $st->fetch() ?: [];
+    jsonOk([
+        'total' => (int) ($r['total'] ?? 0), 'available' => (int) ($r['available'] ?? 0),
+        'disabled' => (int) ($r['disabled'] ?? 0), 'out' => (int) ($r['outOfStock'] ?? 0),
+        'low' => (int) ($r['low'] ?? 0), 'noImage' => (int) ($r['noImage'] ?? 0),
+    ]);
+}
 if ($method === 'GET' && $path === '/admin/products') {
     authUser();
     $page = max(1, (int) ($_GET['page'] ?? 1));
@@ -2497,13 +2537,39 @@ if ($method === 'GET' && $path === '/admin/products') {
         $where .= ' AND p.isAvailable = ?';
         $args[] = filter_var($_GET['isAvailable'], FILTER_VALIDATE_BOOLEAN) ? 1 : 0;
     }
+    // Filters the products page used to apply in the browser (after pulling 200
+    // rows) — now done in SQL so paging/sorting reflect the whole table.
+    if (isset($_GET['isHidden']) && $_GET['isHidden'] !== '') {
+        $where .= ' AND p.isHidden = ?';
+        $args[] = filter_var($_GET['isHidden'], FILTER_VALIDATE_BOOLEAN) ? 1 : 0;
+    }
+    $stock = strtolower(trim((string) ($_GET['stock'] ?? '')));   // in | out | low
+    if ($stock === 'out') $where .= ' AND (p.stock IS NOT NULL AND p.stock <= 0)';
+    elseif ($stock === 'in') $where .= ' AND (p.stock IS NULL OR p.stock > 0)';
+    elseif ($stock === 'low') $where .= ' AND (p.stock IS NOT NULL AND p.stock > 0 AND p.stock <= 5)';
+    $img = strtolower(trim((string) ($_GET['hasImage'] ?? '')));  // yes | no
+    if ($img === 'yes') $where .= " AND (p.imageUrl IS NOT NULL AND p.imageUrl <> '')";
+    elseif ($img === 'no') $where .= " AND (p.imageUrl IS NULL OR p.imageUrl = '')";
+    if (!empty($_GET['categoryName'])) { $where .= ' AND p.categoryName = ?'; $args[] = (string) $_GET['categoryName']; }
     $cnt = db()->prepare('SELECT COUNT(*) FROM `Product` p WHERE ' . $where);
     $cnt->execute($args);
     $total = (int) $cnt->fetchColumn();
+    // Whitelisted sort (was fixed merchant/sortOrder/name, so header clicks and
+    // price/stock sorting only ever reordered the current page in the browser).
+    $pSortMap = [
+        'name' => 'p.nameAr', 'nameAr' => 'p.nameAr', 'price' => 'p.price', 'stock' => 'p.stock',
+        'createdAt' => 'p.createdAt', 'updatedAt' => 'p.updatedAt', 'category' => 'p.categoryName',
+        'merchant' => 'm.storeNameAr',
+    ];
+    $pKey = (string) ($_GET['sortBy'] ?? $_GET['sort'] ?? '');
+    $pDir = strtoupper((string) ($_GET['sortDir'] ?? $_GET['dir'] ?? 'ASC')) === 'DESC' ? 'DESC' : 'ASC';
+    $pOrder = isset($pSortMap[$pKey])
+        ? ($pSortMap[$pKey] . ' ' . $pDir)
+        : 'p.merchantId ASC, p.sortOrder ASC, p.nameAr ASC';
     $sql = 'SELECT p.*, m.storeNameAr AS m_storeNameAr, m.storeName AS m_storeName'
          . ' FROM `Product` p LEFT JOIN `MerchantProfile` m ON m.id = p.merchantId'
          . ' WHERE ' . $where
-         . ' ORDER BY p.merchantId ASC, p.sortOrder ASC, p.nameAr ASC'
+         . ' ORDER BY ' . $pOrder
          . ' LIMIT ' . $pageSize . ' OFFSET ' . (($page - 1) * $pageSize);
     $st = db()->prepare($sql);
     $st->execute($args);
@@ -2874,20 +2940,42 @@ if ($method === 'GET' && preg_match('#^/admin/([a-z][a-z0-9-]*)$#', $path, $m)
         && isset($RES[$m[1]])) {
     authUser();
     $tbl = $RES[$m[1]];
-    // Optional pagination: ?page=N&pageSize=M
+    // Pagination: ?page=N&pageSize=M
     $page = max(1, (int)($_GET['page'] ?? 1));
-    $size = min(100, max(1, (int)($_GET['pageSize'] ?? 20)));
+    $size = min(200, max(1, (int)($_GET['pageSize'] ?? 20)));
     $off = ($page - 1) * $size;
+    // Filtering / search / sort are driven by the table's REAL columns, so a
+    // client-supplied name can never reach SQL unless it exists. Previously this
+    // handler ignored every filter — the payments page's status tabs, for one,
+    // were inert server-side and returned the same rows for every tab.
+    $cols = tableColumns($tbl);
+    $where = []; $args = [];
+    foreach (['status', 'isActive', 'method', 'type', 'kind'] as $ff) {
+        $v = trim((string) ($_GET[$ff] ?? ''));
+        if ($v !== '' && strtoupper($v) !== 'ALL' && isset($cols[$ff])) { $where[] = "`$ff` = ?"; $args[] = $v; }
+    }
+    $q = trim((string) ($_GET['search'] ?? $_GET['q'] ?? ''));
+    if ($q !== '') {
+        $ors = [];
+        foreach (['code', 'name', 'nameAr', 'title', 'titleAr', 'description', 'key', 'method', 'status', 'orderId', 'transactionRef'] as $c) {
+            if (isset($cols[$c])) { $ors[] = "`$c` LIKE ?"; $args[] = "%$q%"; }
+        }
+        if ($ors) $where[] = '(' . implode(' OR ', $ors) . ')';
+    }
+    $wsql = $where ? ('WHERE ' . implode(' AND ', $where)) : '';
 
-    // Special: /admin/customers|drivers|merchants pull from User + profile.
-    // (handled outside this map.)
-    $orderBy = 'ORDER BY createdAt DESC';
-    // Setting has no createdAt column.
-    if ($tbl === 'Setting') $orderBy = 'ORDER BY `key` ASC';
+    $sort = (string) ($_GET['sort'] ?? $_GET['sortBy'] ?? '');
+    $dir = strtoupper((string) ($_GET['dir'] ?? $_GET['sortDir'] ?? 'DESC')) === 'ASC' ? 'ASC' : 'DESC';
+    if ($sort !== '' && isset($cols[$sort])) $orderBy = "ORDER BY `$sort` $dir";
+    elseif ($tbl === 'Setting') $orderBy = 'ORDER BY `key` ASC';           // Setting has no createdAt
+    elseif (isset($cols['createdAt'])) $orderBy = 'ORDER BY `createdAt` DESC';
+    else $orderBy = '';
 
-    $total = (int) db()->query("SELECT COUNT(*) FROM `$tbl`")->fetchColumn();
-    $st = db()->prepare("SELECT * FROM `$tbl` $orderBy LIMIT $size OFFSET $off");
-    $st->execute();
+    $ct = db()->prepare("SELECT COUNT(*) FROM `$tbl` $wsql");
+    $ct->execute($args);
+    $total = (int) $ct->fetchColumn();
+    $st = db()->prepare("SELECT * FROM `$tbl` $wsql $orderBy LIMIT $size OFFSET $off");
+    $st->execute($args);
     $rows = array_map('jsonizeRow', $st->fetchAll());
 
     http_response_code(200);

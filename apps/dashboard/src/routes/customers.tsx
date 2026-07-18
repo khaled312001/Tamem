@@ -22,6 +22,7 @@ import { StatusBadge } from '../components/ui/Badge.js';
 import { Dialog } from '../components/ui/Dialog.js';
 import { Input } from '../components/ui/Input.js';
 import { PhoneInput } from '../components/ui/PhoneInput.js';
+import { Pagination } from '../components/ui/Pagination.js';
 import { EmptyState, TableSkeleton } from '../components/ui/Skeleton.js';
 import { api } from '../lib/api.js';
 import { uploadFile } from '../lib/uploadFile.js';
@@ -114,6 +115,11 @@ export function CustomersPage() {
   const [checked, setChecked] = useState<Set<string>>(new Set());
   const [showFilters, setShowFilters] = useState(false);
   const [filters, setFilters] = useState<Filters>(EMPTY_FILTERS);
+  // Real paging: this screen used to ask for one capped page of 100 with no way
+  // to reach row 101. Page resets whenever the search or a filter changes.
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(20);
+  useEffect(() => setPage(1), [debounced, filters, pageSize]);
 
   useEffect(() => {
     const t = setTimeout(() => setDebounced(search), 300);
@@ -128,15 +134,18 @@ export function CustomersPage() {
       city: filters.city || undefined,
       from: filters.from || undefined,
       to: filters.to || undefined,
-      pageSize: 100,
+      page,
+      pageSize,
     }),
-    [debounced, filters],
+    [debounced, filters, page, pageSize],
   );
 
   const { data, isLoading, isFetching } = useQuery({
     queryKey: ['admin', 'customers', params],
     queryFn: () => api.adminListCustomers(params),
+    placeholderData: (prev) => prev,
   });
+  const total = data?.pagination.total ?? 0;
 
   const rows = (data?.items ?? []) as Row[];
   const activeFilterCount =
@@ -473,6 +482,16 @@ export function CustomersPage() {
               </tbody>
             </table>
           </div>
+        )}
+        {!isLoading && total > 0 && (
+          <Pagination
+            page={page}
+            pageSize={pageSize}
+            total={total}
+            onPageChange={setPage}
+            onPageSizeChange={setPageSize}
+            disabled={isFetching}
+          />
         )}
       </div>
 
