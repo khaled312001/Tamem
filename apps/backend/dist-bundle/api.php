@@ -5455,8 +5455,41 @@ if ($method === 'POST' && $path === '/merchants/openness') {
 }
 
 if (preg_match('#^/merchants/([^/]+)/products$#', $path, $mm) && $method === 'GET') {
-    $st = db()->prepare('SELECT * FROM `Product` WHERE merchantId = ? AND isAvailable = 1 AND isHidden = 0 ORDER BY sortOrder ASC');
-    $st->execute([$mm[1]]);
+    // Pagination is OPT-IN. A merchant with a synced catalogue returns ~2,900
+    // products (~3.1 MB) here, so the app should always send pageSize — but
+    // older installed builds don't, and silently truncating their catalogue
+    // would be worse than the payload. No params => previous behaviour.
+    $wantsPage = isset($_GET['pageSize']) || isset($_GET['page']);
+    $sql = 'SELECT * FROM `Product` WHERE merchantId = ? AND isAvailable = 1 AND isHidden = 0 ORDER BY sortOrder ASC';
+    $args = [$mm[1]];
+
+    if ($wantsPage) {
+        $page = max(1, (int) ($_GET['page'] ?? 1));
+        $pageSize = min(100, max(1, (int) ($_GET['pageSize'] ?? 30)));
+        $q = trim((string) ($_GET['q'] ?? $_GET['search'] ?? ''));
+
+        $where = 'merchantId = ? AND isAvailable = 1 AND isHidden = 0';
+        $args = [$mm[1]];
+        if ($q !== '') {
+            $where .= ' AND (name LIKE ? OR nameAr LIKE ?)';
+            $args[] = "%$q%";
+            $args[] = "%$q%";
+        }
+
+        $cst = db()->prepare('SELECT COUNT(*) n FROM `Product` WHERE ' . $where);
+        $cst->execute($args);
+        $total = (int) $cst->fetch()['n'];
+
+        $st = db()->prepare(
+            'SELECT * FROM `Product` WHERE ' . $where . ' ORDER BY sortOrder ASC'
+            . ' LIMIT ' . $pageSize . ' OFFSET ' . (($page - 1) * $pageSize)
+        );
+        $st->execute($args);
+        jsonList(array_map('productShape', $st->fetchAll()), $page, $pageSize, $total);
+    }
+
+    $st = db()->prepare($sql);
+    $st->execute($args);
     jsonOk(array_map('productShape', $st->fetchAll()));
 }
 
@@ -5468,9 +5501,24 @@ if (preg_match('#^/merchants/([^/]+)$#', $path, $mm) && $method === 'GET') {
     $hrs = hoursFor([$mm[1]]);
     $m = merchantShape($r, $hrs[$mm[1]] ?? []);
     $m['openHours'] = is_string($r['openHours'] ?? null) ? json_decode((string) $r['openHours'], true) : ($r['openHours'] ?? null);
-    $ps = db()->prepare('SELECT * FROM `Product` WHERE merchantId = ? ORDER BY sortOrder ASC');
+    // Embedded products are opt-in limited, for the same reason as the
+    // /products route above: this endpoint is what the store page calls, and
+    // it was returning the merchant's ENTIRE catalogue — hidden and
+    // unavailable rows included — on every open.
+    $embedLimit = isset($_GET['productsPageSize'])
+        ? min(100, max(1, (int) $_GET['productsPageSize']))
+        : null;
+    $psSql = 'SELECT * FROM `Product` WHERE merchantId = ? ORDER BY sortOrder ASC';
+    if ($embedLimit !== null) $psSql .= ' LIMIT ' . $embedLimit;
+    $ps = db()->prepare($psSql);
     $ps->execute([$mm[1]]);
     $m['products'] = array_map('productShape', $ps->fetchAll());
+
+    // Total count so the client knows whether to paginate, regardless of limit.
+    $pc = db()->prepare('SELECT COUNT(*) n FROM `Product` WHERE merchantId = ?');
+    $pc->execute([$mm[1]]);
+    $m['productsTotal'] = (int) $pc->fetch()['n'];
+
     jsonOk($m);
 }
 
