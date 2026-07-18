@@ -7,13 +7,18 @@ import { Bell, ChevronDown, MapPin } from 'lucide-react-native';
 import { memo } from 'react';
 import { I18nManager, Image, Pressable, StyleSheet, Text, View } from 'react-native';
 
-import { colors, fontFamilies, radii, shadows, spacing } from '../../../theme/tokens';
+import { colors, fontFamilies, spacing } from '../../../theme/tokens';
 
 const AVATAR = 46;
 // The whole screen is authored right-to-left. Rather than sprinkling
 // `row-reverse` per component, each row declares its direction once from the
 // single RTL flag, so a future LTR locale flips everything consistently.
-const ROW = I18nManager.isRTL ? 'row-reverse' : ('row' as const);
+// React Native already lays `flexDirection: 'row'` out right-to-left when
+// I18nManager RTL is on. Adding 'row-reverse' on top of that flips it a
+// SECOND time, back to left-to-right — which is why the header rendered
+// mirrored. Plain 'row' is correct on native; the web build gets its
+// direction from the document's dir="rtl".
+const ROW = 'row' as const;
 
 interface Props {
   /** Display name; only the first word is greeted. */
@@ -24,6 +29,13 @@ interface Props {
   locationLabel: string;
   /** Unread notification count — hidden when 0. */
   notificationCount?: number;
+  /**
+   * Admin overrides from home-config. Both screens used to hardcode the
+   * greeting even though صفحة التطبيق offers the field, so setting it did
+   * nothing. `{name}` is substituted with the customer's first name.
+   */
+  greetingOverride?: string | null;
+  subtitleOverride?: string | null;
   onPressAvatar: () => void;
   onPressLocation: () => void;
   onPressNotifications: () => void;
@@ -34,6 +46,8 @@ function HomeHeaderBase({
   avatarUrl,
   locationLabel,
   notificationCount = 0,
+  greetingOverride,
+  subtitleOverride,
   onPressAvatar,
   onPressLocation,
   onPressNotifications,
@@ -100,11 +114,21 @@ function HomeHeaderBase({
       </View>
 
       <Text style={styles.greeting} numberOfLines={1}>
-        <Text>👋 </Text>
-        <Text>أهلاً </Text>
-        <Text style={styles.greetingName}>{firstName}</Text>
+        {greetingOverride ? (
+          greetingOverride.replace('{name}', firstName)
+        ) : (
+          <>
+            <Text>أهلاً </Text>
+            <Text style={styles.greetingName}>{firstName}</Text>
+            {/* Trailing in the string so RTL lays it out on the far left, as
+                in the design. */}
+            <Text> 👋</Text>
+          </>
+        )}
       </Text>
-      <Text style={styles.subtitle}>ماذا تريد أن تطلب اليوم؟</Text>
+      <Text style={styles.subtitle} numberOfLines={2}>
+        {subtitleOverride || 'ماذا تريد أن تطلب اليوم؟'}
+      </Text>
     </View>
   );
 }
@@ -151,16 +175,13 @@ const styles = StyleSheet.create({
     fontFamily: fontFamilies.bodyBold,
   },
 
+  // Bare icon, no card behind it — the reference has the bell sitting directly
+  // on the background.
   bellBtn: {
     width: AVATAR,
     height: AVATAR,
-    borderRadius: radii.md,
-    backgroundColor: colors.white,
-    borderWidth: 1,
-    borderColor: '#EFE7E2',
     alignItems: 'center',
     justifyContent: 'center',
-    ...shadows.sm,
   },
   badge: {
     position: 'absolute',
@@ -185,10 +206,14 @@ const styles = StyleSheet.create({
   greeting: {
     marginTop: spacing.lg,
     fontSize: 26,
+    // "أهلاً" stays dark; only the customer's name is brand red.
     color: colors.brand.dark,
     fontFamily: fontFamilies.bodyExtraBold,
-    textAlign: 'right',
-    writingDirection: 'rtl',
+    // 'auto' (not 'right'): under RTL, React Native flips an explicit 'right'
+    // to the left. Letting it align to the writing direction puts Arabic on
+    // the right in RTL and would put English on the left in LTR.
+    alignSelf: 'stretch',
+    textAlign: 'auto',
   },
   greetingName: { color: colors.brand.red },
   subtitle: {
@@ -196,8 +221,8 @@ const styles = StyleSheet.create({
     fontSize: 15,
     color: colors.brand.gray,
     fontFamily: fontFamilies.body,
-    textAlign: 'right',
-    writingDirection: 'rtl',
+    alignSelf: 'stretch',
+    textAlign: 'auto',
   },
   pressed: { opacity: 0.7 },
 });
