@@ -88,6 +88,23 @@ android {
     buildToolsVersion rootProject.ext.buildToolsVersion
     compileSdk rootProject.ext.compileSdkVersion
 
+    // Autolinking writes PackageList.java into the build dir, but the root
+    // build.gradle redirects every subproject build dir to E:/tb/<name> (the
+    // Windows MAX_PATH workaround). The React plugin registers the autolinking
+    // source dir from the DEFAULT build dir — it resolves that path before the
+    // redirect applies — so the file lands in E:/tb/app while the compiler looks
+    // in app/build, and MainApplication.kt fails with
+    // "unresolved reference: PackageList". Register BOTH: whichever exists wins,
+    // and this keeps working if the redirect is ever removed.
+    sourceSets {
+        main {
+            java.srcDirs += [
+                "${layout.buildDirectory.get().asFile}/generated/autolinking/src/main/java",
+                "E:/tb/${project.name}/generated/autolinking/src/main/java",
+            ]
+        }
+    }
+
     namespace 'com.tamem.delivery'
     defaultConfig {
         applicationId 'com.tamem.delivery'

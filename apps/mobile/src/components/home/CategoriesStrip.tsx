@@ -66,7 +66,7 @@ const TILE_SIZE = 72;
  * never render a generic grid when the admin hasn't uploaded artwork yet.
  * Order matters — first match wins.
  */
-function iconFor(nameAr: string): LucideIcon {
+export function iconFor(nameAr: string): LucideIcon {
   const n = nameAr;
   if (/مطعم|طعام|وجب|أكل/.test(n)) return UtensilsCrossed;
   if (/برجر|سندوتش|ساندو/.test(n)) return Sandwich;
