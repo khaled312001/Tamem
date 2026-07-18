@@ -1462,13 +1462,25 @@ function waStatus(): array {
                 'lastError' => 'خدمة الواتساب لسه بتشتغل… لو استمر، حدّث الصفحة بعد دقيقة.'];
     }
     // Bridge heartbeats every ~15s; if the file is stale the process is down.
-    $stale = (time() * 1000 - (int) ($j['ts'] ?? 0)) > 90000;
+    $downMs = time() * 1000 - (int) ($j['ts'] ?? 0);
+    $stale = $downMs > 90000;
+    // Queued messages survive an outage as files and flush on reconnect, so the
+    // admin should see that nothing is lost — and how long it has really been
+    // down. The old copy promised "back in a minute", which was wrong whenever
+    // the reviver was late.
+    $pending = count(glob(waDir() . '/queue/*.json') ?: []);
+    $mins = (int) floor(max(0, $downMs) / 60000);
+    $since = $mins < 1 ? 'أقل من دقيقة' : ($mins < 60 ? "$mins دقيقة" : floor($mins / 60) . ' ساعة و' . ($mins % 60) . ' دقيقة');
+    $downMsg = "خدمة الواتساب متوقفة منذ $since — بتشتغل تلقائياً."
+        . ($pending > 0 ? " في انتظار الإرسال: $pending رسالة (مش هتضيع، هتتبعت أول ما ترجع)." : '');
     return [
         'status' => $stale ? 'disconnected' : ($j['status'] ?? 'disconnected'),
         'qrDataUrl' => $stale ? null : ($j['qrDataUrl'] ?? null),
         'phone' => $j['phone'] ?? null,
         'startedAt' => $j['startedAt'] ?? null,
-        'lastError' => $stale ? 'خدمة الواتساب متوقفة مؤقتاً — هتشتغل تلقائياً خلال دقيقة.' : ($j['lastError'] ?? null),
+        'pendingMessages' => $pending,
+        'downForMinutes' => $stale ? $mins : 0,
+        'lastError' => $stale ? $downMsg : ($j['lastError'] ?? null),
     ];
 }
 if ($method === 'GET' && $path === '/admin/whatsapp/status') {
