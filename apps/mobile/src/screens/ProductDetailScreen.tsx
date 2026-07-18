@@ -17,12 +17,14 @@ import { useState } from 'react';
 import {
   ActivityIndicator,
   Image,
+  Modal,
   Pressable,
   ScrollView,
   StyleSheet,
   Text,
   View,
 } from 'react-native';
+import { X } from 'lucide-react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { EmptyState, MoneyText, PrimaryButton } from '../components/ui';
@@ -68,6 +70,7 @@ export function ProductDetailScreen() {
   const navigation = useNavigation<NavProp>();
   const { productId } = route.params;
   const [quantity, setQuantity] = useState(1);
+  const [viewerOpen, setViewerOpen] = useState(false);
   // Reactive cart state. MUST be called unconditionally, above the early
   // returns below — placing it after them meant it ran only once `data` loaded,
   // adding hooks that didn't exist on the loading render → React threw
@@ -168,7 +171,9 @@ export function ProductDetailScreen() {
         {/* ─────── Big image + back button ─────── */}
         <View style={styles.imageWrap}>
           {data.imageUrl ? (
-            <Image source={{ uri: data.imageUrl }} style={styles.image} resizeMode="cover" />
+            <Pressable onPress={() => setViewerOpen(true)} accessibilityLabel="تكبير الصورة">
+              <Image source={{ uri: data.imageUrl }} style={styles.image} resizeMode="cover" />
+            </Pressable>
           ) : (
             <LinearGradient
               colors={['#FDE5DC', '#FFE9D7']}
@@ -200,6 +205,10 @@ export function ProductDetailScreen() {
         <View style={[styles.infoCard, shadows.sm]}>
           {data.categoryName && <Text style={styles.categoryTag}>{data.categoryName}</Text>}
           <Text style={styles.title}>{data.nameAr}</Text>
+          {/* English/secondary name when it differs — pharmacy items carry it. */}
+          {data.name && data.name.trim() && data.name.trim() !== (data.nameAr ?? '').trim() ? (
+            <Text style={styles.subtitleEn}>{data.name}</Text>
+          ) : null}
 
           {/* Merchant strip */}
           <Pressable
@@ -347,6 +356,32 @@ export function ProductDetailScreen() {
           </View>
         </View>
       </SafeAreaView>
+
+      {/* Full-screen image viewer — tap the product image to open. */}
+      <Modal
+        visible={viewerOpen}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setViewerOpen(false)}
+      >
+        <Pressable style={styles.viewerBackdrop} onPress={() => setViewerOpen(false)}>
+          <Pressable
+            onPress={() => setViewerOpen(false)}
+            style={styles.viewerClose}
+            hitSlop={10}
+            accessibilityLabel="إغلاق"
+          >
+            <X size={26} color={colors.white} />
+          </Pressable>
+          {data.imageUrl ? (
+            <Image
+              source={{ uri: data.imageUrl }}
+              style={styles.viewerImage}
+              resizeMode="contain"
+            />
+          ) : null}
+        </Pressable>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -356,6 +391,32 @@ const IMAGE_HEIGHT = 320;
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.surface },
   headerSpacer: { height: 80, backgroundColor: colors.soft },
+  subtitleEn: {
+    fontFamily: fontFamilies.body,
+    fontSize: fontSizes.sm,
+    color: colors.text.muted,
+    textAlign: 'right',
+    marginTop: 2,
+  },
+  viewerBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.92)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  viewerImage: { width: '100%', height: '80%' },
+  viewerClose: {
+    position: 'absolute',
+    top: 48,
+    right: 20,
+    zIndex: 2,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: 'rgba(255,255,255,0.15)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   // Loading skeletons
   skelImage: { height: IMAGE_HEIGHT, backgroundColor: colors.soft },
   skelBody: { padding: spacing.lg, gap: spacing.sm },

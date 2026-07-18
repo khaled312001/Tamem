@@ -20,7 +20,10 @@ const Stack = createNativeStackNavigator<AuthStackParamList>();
 
 export function AuthStack() {
   return (
-    <Stack.Navigator screenOptions={{ headerShown: false }} initialRouteName="RoleChoice">
+    // Start straight at Login — the app no longer asks "عميل أم تاجر؟" up front;
+    // customers log in directly and merchants use the merchant-signup link.
+    // RoleChoice stays registered (deep links / merchant flow may still push it).
+    <Stack.Navigator screenOptions={{ headerShown: false }} initialRouteName="Login">
       <Stack.Screen name="RoleChoice" component={RoleChoiceScreen} />
       <Stack.Screen name="Login" component={LoginScreen} />
       <Stack.Screen name="Register" component={RegisterScreen} />
