@@ -1,13 +1,14 @@
-import { ImageBackground, Pressable, StyleSheet, Text, View } from 'react-native';
+import { LinearGradient } from 'expo-linear-gradient';
+import { Image, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { colors, fontFamilies, radii, shadows, spacing } from '../../theme/tokens';
 
 /**
- * Hero coupon banner — the branded rider artwork with the active discount and
- * code overlaid on the left, exactly per the approved design:
- *   خصم <20%> / على أول طلب  ·  [ CODE ]  ·  استخدم الكود عند الدفع  ·  * لفترة محدودة
- * Title/discount/code are admin-controlled (home-config / Coupons table); the
- * artwork is fixed brand collateral. Carousel dots hint at multiple promos.
+ * Hero coupon banner. A red→orange gradient carries the discount copy + code
+ * chip on the LEFT (clean space, never over the artwork), while the rider
+ * artwork sits on the RIGHT — matching the approved design. Title/discount/code
+ * are admin-controlled; the artwork is fixed brand collateral. Carousel dots
+ * hint at multiple promos.
  */
 export function CouponBanner({
   discountText,
@@ -15,7 +16,7 @@ export function CouponBanner({
   code,
   onPress,
 }: {
-  /** e.g. "خصم 20%" — the headline discount. */
+  /** e.g. "خصم 20%". */
   discountText: string;
   /** e.g. "على أول طلب". */
   subtitle: string;
@@ -28,13 +29,22 @@ export function CouponBanner({
         onPress={onPress}
         style={({ pressed }) => [styles.wrap, shadows.md, pressed && { opacity: 0.95 }]}
       >
-        <ImageBackground
-          source={require('../../assets/home/coupon-banner.png')}
+        <LinearGradient
+          colors={['#E0301E', '#F0562A', '#F2A93B']}
+          start={{ x: 0, y: 0.2 }}
+          end={{ x: 1, y: 0.9 }}
           style={styles.bg}
-          imageStyle={styles.bgImage}
-          resizeMode="cover"
         >
-          <View style={styles.overlay}>
+          {/* Rider artwork, right-anchored. contain keeps the whole rider
+              visible; its own red backdrop blends into the gradient. */}
+          <Image
+            source={require('../../assets/home/coupon-banner.png')}
+            style={styles.rider}
+            resizeMode="contain"
+          />
+
+          {/* Copy on the clean left space. */}
+          <View style={styles.copy}>
             <Text style={styles.discount} numberOfLines={2}>
               {discountText}
             </Text>
@@ -47,10 +57,10 @@ export function CouponBanner({
             <Text style={styles.hint}>استخدم الكود عند الدفع</Text>
             <Text style={styles.limited}>* لفترة محدودة</Text>
           </View>
-        </ImageBackground>
+        </LinearGradient>
       </Pressable>
 
-      {/* Carousel dots — first active, matching the mockup. */}
+      {/* Carousel dots — first active. */}
       <View style={styles.dots}>
         <View style={[styles.dot, styles.dotActive]} />
         <View style={styles.dot} />
@@ -66,21 +76,29 @@ const styles = StyleSheet.create({
     marginHorizontal: spacing.md,
     borderRadius: radii.xl,
     overflow: 'hidden',
-    height: 168,
+    height: 172,
   },
   bg: { flex: 1, justifyContent: 'center' },
-  bgImage: { borderRadius: radii.xl },
-  overlay: {
+  rider: {
+    position: 'absolute',
+    right: -6,
+    top: 0,
+    bottom: 0,
+    width: '58%',
+    height: '100%',
+  },
+  copy: {
     alignItems: 'flex-end',
     paddingHorizontal: spacing.lg,
-    maxWidth: '58%',
+    width: '52%',
+    alignSelf: 'flex-end',
   },
   discount: {
     fontFamily: fontFamilies.headingBlack,
-    fontSize: 24,
+    fontSize: 25,
     color: colors.white,
     textAlign: 'right',
-    lineHeight: 32,
+    lineHeight: 34,
   },
   subtitle: {
     fontFamily: fontFamilies.headingBold,
@@ -122,14 +140,6 @@ const styles = StyleSheet.create({
     gap: 5,
     marginTop: spacing.sm,
   },
-  dot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-    backgroundColor: colors.border,
-  },
-  dotActive: {
-    width: 18,
-    backgroundColor: colors.brand.red,
-  },
+  dot: { width: 6, height: 6, borderRadius: 3, backgroundColor: colors.border },
+  dotActive: { width: 18, backgroundColor: colors.brand.red },
 });

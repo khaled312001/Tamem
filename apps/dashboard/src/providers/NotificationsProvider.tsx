@@ -78,10 +78,17 @@ export function NotificationsProvider({ children }: { children: React.ReactNode 
 
       // 2. toast
       const toastFn = chime === 'alert' ? toast.error : chime === 'success' ? toast.success : toast;
+      // The dashboard is served under a base path (/super_admin). A bare
+      // `window.location.href = '/alerts'` ignores that base and 404s at the
+      // domain root — so prefix the app's BASE_URL.
+      const base = (import.meta as unknown as { env: { BASE_URL: string } }).env.BASE_URL.replace(
+        /\/$/,
+        '',
+      );
       toastFn(title, {
         description: body,
         ...(link
-          ? { action: { label: 'فتح', onClick: () => (window.location.href = link!) } }
+          ? { action: { label: 'فتح', onClick: () => (window.location.href = base + link!) } }
           : {}),
       });
 
