@@ -267,10 +267,36 @@ export function ProductsPage() {
   const resetPage = () => setPage(1);
 
   // ── mutations ──
+  /**
+   * Patch one row inside every cached products page instead of refetching the
+   * whole list. Toggling availability on row 3 used to re-request the entire
+   * page (and the stats) — now the cached row is updated in place and nothing
+   * goes over the wire.
+   */
+  const patchCachedProduct = (id: string, changes: Record<string, unknown>) => {
+    qc.setQueriesData({ queryKey: ['admin', 'products'] }, (old: unknown) => {
+      const o = old as { items?: Row[] } | undefined;
+      if (!o?.items) return old;
+      let hit = false;
+      const items = o.items.map((it) => {
+        if (it?.id !== id) return it;
+        hit = true;
+        return { ...it, ...changes };
+      });
+      return hit ? { ...o, items } : old;
+    });
+  };
+
   const updateMut = useMutation({
     mutationFn: ({ id, data: d }: { id: string; data: unknown }) => api.adminUpdateProduct(id, d),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['admin', 'products'] }),
-    onError: (err: Error) => toast.error(err.message),
+    // Optimistic single-row patch; only the stat cards are refreshed, because
+    // availability/stock counts change and they're a tiny aggregate call.
+    onMutate: ({ id, data: d }) => patchCachedProduct(id, d as Record<string, unknown>),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['admin', 'products', 'stats'] }),
+    onError: (err: Error) => {
+      toast.error(err.message);
+      qc.invalidateQueries({ queryKey: ['admin', 'products'] }); // resync after a failed patch
+    },
   });
   const toggleAvail = (p: Row) => {
     updateMut.mutate({ id: p.id, data: { isAvailable: !p.isAvailable } });
@@ -1040,7 +1066,13 @@ function ProductThumb({ src, onClick }: { src: string | null; onClick?: () => vo
       onClick={onClick}
       className="w-11 h-11 rounded-lg overflow-hidden border border-border shrink-0 hover:ring-2 hover:ring-brand-red/40"
     >
-      <img src={src} alt="" className="w-full h-full object-cover" />
+      <img
+        src={src}
+        alt=""
+        loading="lazy"
+        decoding="async"
+        className="w-full h-full object-cover"
+      />
     </button>
   );
 }
@@ -1217,7 +1249,13 @@ function ProductGrid({
                   className="w-full h-full"
                   aria-label="معاينة الصورة"
                 >
-                  <img src={img} alt="" className="w-full h-full object-cover" />
+                  <img
+                    src={img}
+                    alt=""
+                    loading="lazy"
+                    decoding="async"
+                    className="w-full h-full object-cover"
+                  />
                 </button>
               ) : (
                 <div className="w-full h-full grid place-items-center text-muted-foreground/40">
@@ -2163,7 +2201,13 @@ function MerchantMenuPanel({ merchant }: { merchant: Row }) {
             key={`${url}-${idx}`}
             className="relative w-24 h-24 rounded-lg overflow-hidden border border-border group bg-white"
           >
-            <img src={url} alt="" className="w-full h-full object-cover" />
+            <img
+              src={url}
+              alt=""
+              loading="lazy"
+              decoding="async"
+              className="w-full h-full object-cover"
+            />
             <button
               type="button"
               onClick={() => commit(images.filter((_, i) => i !== idx))}

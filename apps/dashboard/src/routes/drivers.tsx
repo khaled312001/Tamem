@@ -166,11 +166,25 @@ export function DriversPage() {
   const updateStatusMut = useMutation({
     mutationFn: ({ id, status }: { id: string; status: 'AVAILABLE' | 'BUSY' | 'OFFLINE' }) =>
       api.adminUpdateDriverStatus(id, status),
-    onSuccess: () => {
-      toast.success('تم تحديث الحالة');
+    // Patch just this driver's card in the cached page — flipping one driver's
+    // status used to refetch the whole list.
+    onMutate: ({ id, status }) => {
+      qc.setQueriesData({ queryKey: ['admin', 'drivers'] }, (old: unknown) => {
+        const o = old as { items?: Row[] } | undefined;
+        if (!o?.items) return old;
+        return {
+          ...o,
+          items: o.items.map((d) =>
+            d?.id === id ? { ...d, driverProfile: { ...(d.driverProfile ?? {}), status } } : d,
+          ),
+        };
+      });
+    },
+    onSuccess: () => toast.success('تم تحديث الحالة'),
+    onError: (err: Error) => {
+      toast.error(err.message);
       qc.invalidateQueries({ queryKey: ['admin', 'drivers'] });
     },
-    onError: (err: Error) => toast.error(err.message),
   });
 
   const deleteMut = useMutation({
@@ -221,6 +235,8 @@ export function DriversPage() {
                   <img
                     src={d.avatarUrl}
                     alt={d.name}
+                    loading="lazy"
+                    decoding="async"
                     className="w-12 h-12 rounded-full object-cover border border-border"
                   />
                 ) : (

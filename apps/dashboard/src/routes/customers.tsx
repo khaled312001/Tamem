@@ -86,6 +86,8 @@ function Avatar({
       <img
         src={url}
         alt=""
+        loading="lazy"
+        decoding="async"
         onError={() => setBroken(true)}
         className={`${box} object-cover border border-border bg-white`}
       />
