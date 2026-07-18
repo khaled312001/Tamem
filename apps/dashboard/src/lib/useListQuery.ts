@@ -36,6 +36,11 @@ export interface ListState {
   get: (key: string) => string;
   /** Set a filter (empty string removes it). Always resets to page 1. */
   set: (key: string, value: string) => void;
+  /** Set several filters in ONE navigation (empty string removes a key). Use
+   *  this instead of calling `set` multiple times in one handler — react-router
+   *  does NOT chain sequential setSearchParams calls, so the later ones clobber
+   *  the earlier ones and the filter silently doesn't apply. Resets to page 1. */
+  setMany: (patch: Record<string, string>) => void;
   /** Clear search + every extra filter, back to page 1. */
   reset: () => void;
   /** True when at least one filter/search is active. */
@@ -108,6 +113,13 @@ export function useListState(extraKeys: string[] = [], defaultPageSize = 20): Li
     setPageSize: (s) => patch((n) => n.set('pageSize', String(s))),
     get: (key) => params.get(key) ?? '',
     set: (key, value) => patch((n) => (value ? n.set(key, value) : n.delete(key))),
+    setMany: (obj) =>
+      patch((n) => {
+        for (const [k, v] of Object.entries(obj)) {
+          if (v) n.set(k, v);
+          else n.delete(k);
+        }
+      }),
     reset: () => {
       setSearchLocal('');
       lastPushed.current = '';
