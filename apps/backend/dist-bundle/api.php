@@ -4479,7 +4479,32 @@ if ($method === 'POST' && $path === '/admin/broadcast') {
     $ins = db()->prepare('INSERT INTO `Notification` (id, userId, type, title, titleAr, body, bodyAr, channel, isRead, sentAt) VALUES (?,?,?,?,?,?,?,?,0,NOW(3))');
     $n = 0;
     foreach ($ids as $uid) { try { $ins->execute([newId(), $uid, $type, $titleAr, $titleAr, $bodyAr, $bodyAr, 'IN_APP']); $n++; } catch (Throwable $e) {} }
-    jsonOk(['recipients' => $n, 'pushSent' => 0, 'pushFailed' => 0]);
+
+    // Also deliver as a REAL push so the broadcast reaches phones with the app
+    // closed — not just the in-app notifications page. One FCM call per device
+    // (the OAuth token is cached across them). Capped so a huge audience can't
+    // exceed the request time limit; dead tokens are pruned.
+    $pushSent = 0; $pushFailed = 0; $capped = false;
+    if (fcmServiceAccount() && $ids) {
+        $data = ['type' => $type, 'screen' => 'Notifications'];
+        $MAX_PUSH = 800;
+        foreach (array_chunk($ids, 200) as $chunk) {
+            if ($pushSent + $pushFailed >= $MAX_PUSH) { $capped = true; break; }
+            $ph = implode(',', array_fill(0, count($chunk), '?'));
+            $dts = db()->prepare("SELECT id, token FROM `DeviceToken` WHERE userId IN ($ph)");
+            $dts->execute($chunk);
+            foreach ($dts->fetchAll() as $row) {
+                if ($pushSent + $pushFailed >= $MAX_PUSH) { $capped = true; break; }
+                $r = fcmSendToToken((string) $row['token'], $titleAr, $bodyAr, $data);
+                if (!empty($r['ok'])) { $pushSent++; }
+                else {
+                    $pushFailed++;
+                    if (!empty($r['dead'])) { try { db()->prepare('DELETE FROM `DeviceToken` WHERE id = ?')->execute([$row['id']]); } catch (Throwable $e) {} }
+                }
+            }
+        }
+    }
+    jsonOk(['recipients' => $n, 'pushSent' => $pushSent, 'pushFailed' => $pushFailed, 'pushCapped' => $capped]);
 }
 
 // ─── Order operational actions ─────────────────────────────────────────
@@ -6084,6 +6109,15 @@ if (preg_match('#^/orders/([^/]+)$#', $path, $mm) && $method === 'GET') {
         $ds = db()->prepare('SELECT id, name, phone FROM `User` WHERE id = ? LIMIT 1');
         $ds->execute([$o['assignedDriverId']]);
         $out['assignedDriver'] = $ds->fetch() ?: null;
+    }
+    // Nest the merchant so the app can show a "قيّم التاجر" row — only present
+    // when the order was actually placed against a specific store (not a quick
+    // order), which is exactly the gate the review row wants.
+    $out['merchant'] = null;
+    if ($o['merchantId']) {
+        $ms = db()->prepare('SELECT id, storeNameAr FROM `MerchantProfile` WHERE id = ? LIMIT 1');
+        $ms->execute([$o['merchantId']]);
+        $out['merchant'] = $ms->fetch() ?: null;
     }
     $rs = db()->prepare('SELECT * FROM `OrderReview` WHERE orderId = ? LIMIT 1');
     $rs->execute([$mm[1]]);

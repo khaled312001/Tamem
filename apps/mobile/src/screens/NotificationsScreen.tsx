@@ -66,6 +66,9 @@ export function NotificationsScreen() {
     queryKey: ['notifications'],
     queryFn: () =>
       api.raw.get('/notifications', { params: { pageSize: 30 } }).then((r) => r.data.data),
+    // Live: new notifications appear while the page is open, no pull-to-refresh.
+    refetchInterval: 20_000,
+    refetchIntervalInBackground: false,
   });
 
   // Live updates — listener attached to the singleton socket. Cleanup uses
