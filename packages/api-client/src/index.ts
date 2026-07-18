@@ -375,6 +375,19 @@ export class TamemClient {
     return this.requestPaginated({ method: 'GET', url: '/admin/orders', params });
   }
 
+  /** Counts by stage + today's sales — the orders-page summary cards. */
+  async adminOrderStats(): Promise<{
+    total: number;
+    new: number;
+    preparing: number;
+    delivering: number;
+    completed: number;
+    cancelled: number;
+    salesToday: number;
+  }> {
+    return this.request({ method: 'GET', url: '/admin/orders/stats' });
+  }
+
   async adminGetOrder(id: string): Promise<Order> {
     return this.request({ method: 'GET', url: `/admin/orders/${id}` });
   }

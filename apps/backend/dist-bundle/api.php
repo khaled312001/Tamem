@@ -2073,14 +2073,65 @@ const ORDER_JOIN = "FROM `Order` o
     LEFT JOIN `User` dr ON dr.id = o.assignedDriverId";
 const ORDER_COLS = "o.*, cu.name AS cu_name, cu.phone AS cu_phone, cu.city AS cu_city,
     s.nameAr AS s_nameAr, s.name AS s_name, dr.name AS dr_name, dr.phone AS dr_phone";
+// GET /admin/orders/stats — the summary cards on the orders page (counts by
+// stage + today's sales). One grouped query, so it's cheap on the shared DB.
+if ($method === 'GET' && $path === '/admin/orders/stats') {
+    authUser();
+    $row = db()->query(
+        "SELECT
+            COUNT(*) AS total,
+            SUM(status = 'NEW') AS newCount,
+            SUM(status IN ('UNDER_REVIEW','PRICED','ACCEPTED')) AS preparing,
+            SUM(status IN ('DRIVER_ASSIGNED','PICKED_UP','IN_ROUTE')) AS delivering,
+            SUM(status IN ('DELIVERED','COMPLETED')) AS completed,
+            SUM(status IN ('CANCELLED','REJECTED')) AS cancelled
+         FROM `Order`"
+    )->fetch() ?: [];
+    // Today's sales in Cairo — bound by the epoch of Cairo midnight so we never
+    // compare a stored UTC datetime against a PHP local time.
+    $cairoMidnightUtc = gmdate('Y-m-d H:i:s', strtotime('today 00:00') - 3 * 3600);
+    $salesStmt = db()->prepare(
+        "SELECT COALESCE(SUM(COALESCE(finalPrice, quotedPrice, 0)), 0)
+         FROM `Order`
+         WHERE status IN ('DELIVERED','COMPLETED')
+           AND (completedAt >= ? OR deliveredAt >= ? OR createdAt >= ?)"
+    );
+    $salesStmt->execute([$cairoMidnightUtc, $cairoMidnightUtc, $cairoMidnightUtc]);
+    jsonOk([
+        'total' => (int) ($row['total'] ?? 0),
+        'new' => (int) ($row['newCount'] ?? 0),
+        'preparing' => (int) ($row['preparing'] ?? 0),
+        'delivering' => (int) ($row['delivering'] ?? 0),
+        'completed' => (int) ($row['completed'] ?? 0),
+        'cancelled' => (int) ($row['cancelled'] ?? 0),
+        'salesToday' => round((float) $salesStmt->fetchColumn(), 2),
+    ]);
+}
 if ($method === 'GET' && $path === '/admin/orders') {
     authUser();
     $page = max(1, (int)($_GET['page'] ?? 1)); $size = min(100, max(1, (int)($_GET['pageSize'] ?? 20))); $off = ($page - 1) * $size;
     $where = '1=1'; $args = [];
     $status = (string)($_GET['status'] ?? '');
-    if ($status !== '' && $status !== 'all') { $where .= ' AND o.status = ?'; $args[] = $status; }
+    if ($status !== '' && $status !== 'all') {
+        // The status tabs send a CSV set (e.g. "DRIVER_ASSIGNED,PICKED_UP,IN_ROUTE").
+        // An exact `= ?` silently matched none of them, so the "في الطريق" and
+        // "ملغي" tabs showed empty. Split into an IN (...) list.
+        $parts = array_values(array_filter(array_map('trim', explode(',', $status))));
+        if (count($parts) === 1) { $where .= ' AND o.status = ?'; $args[] = $parts[0]; }
+        elseif ($parts) { $where .= ' AND o.status IN (' . implode(',', array_fill(0, count($parts), '?')) . ')'; array_push($args, ...$parts); }
+    }
     $search = trim((string)($_GET['search'] ?? ''));
-    if ($search !== '') { $where .= ' AND (o.orderNumber LIKE ? OR cu.name LIKE ? OR cu.phone LIKE ?)'; $like = "%$search%"; array_push($args, $like, $like, $like); }
+    if ($search !== '') {
+        // Match order#, customer, and — as the spec asks — driver and merchant.
+        $where .= ' AND (o.orderNumber LIKE ? OR cu.name LIKE ? OR cu.phone LIKE ? OR dr.name LIKE ? OR dr.phone LIKE ? OR s.nameAr LIKE ?)';
+        $like = "%$search%"; array_push($args, $like, $like, $like, $like, $like, $like);
+    }
+    if (($_GET['driverId'] ?? '') !== '') { $where .= ' AND o.assignedDriverId = ?'; $args[] = (string) $_GET['driverId']; }
+    if (($_GET['merchantId'] ?? '') !== '') { $where .= ' AND o.merchantId = ?'; $args[] = (string) $_GET['merchantId']; }
+    if (($_GET['paymentMethod'] ?? '') !== '') { $where .= ' AND o.paymentMethod = ?'; $args[] = (string) $_GET['paymentMethod']; }
+    if (($_GET['from'] ?? '') !== '') { $where .= ' AND o.createdAt >= ?'; $args[] = gmdate('Y-m-d H:i:s', strtotime((string) $_GET['from'])); }
+    if (($_GET['to'] ?? '') !== '')   { $where .= ' AND o.createdAt <= ?'; $args[] = gmdate('Y-m-d H:i:s', strtotime((string) $_GET['to'])); }
+    if (($_GET['from'] ?? '') === 'today') { /* handled by 'from' via strtotime('today') above */ }
     $total = (int) (function() use ($where, $args) { $s = db()->prepare("SELECT COUNT(*) " . ORDER_JOIN . " WHERE $where"); $s->execute($args); return $s->fetchColumn(); })();
     $st = db()->prepare("SELECT " . ORDER_COLS . " " . ORDER_JOIN . " WHERE $where ORDER BY o.createdAt DESC LIMIT $size OFFSET $off");
     $st->execute($args);
