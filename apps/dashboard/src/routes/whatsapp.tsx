@@ -342,8 +342,7 @@ function ConnectionCard({
           <div className="font-bold mb-1">آخر خطأ:</div>
           <div>{data.lastError}</div>
           <div className="text-xs mt-2 text-muted-foreground">
-            لو الخطأ &quot;لا يوجد متصفح&quot; ثبّت Google Chrome على السيرفر أو حدد متغير البيئة{' '}
-            <code>WPP_CHROME_PATH</code> على مسار Chrome.
+            الخدمة بتعيد الاتصال تلقائياً. لو فضلت غير متصلة أكتر من دقيقتين، اضغط «إعادة تشغيل».
           </div>
         </div>
       )}
