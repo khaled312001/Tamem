@@ -6073,6 +6073,15 @@ if (preg_match('#^/orders/([^/]+)$#', $path, $mm) && $method === 'GET') {
         $ds->execute([$o['assignedDriverId']]);
         $out['assignedDriver'] = $ds->fetch() ?: null;
     }
+    // Nest the merchant so the app can show a "قيّم التاجر" row — only present
+    // when the order was actually placed against a specific store (not a quick
+    // order), which is exactly the gate the review row wants.
+    $out['merchant'] = null;
+    if ($o['merchantId']) {
+        $ms = db()->prepare('SELECT id, storeNameAr FROM `MerchantProfile` WHERE id = ? LIMIT 1');
+        $ms->execute([$o['merchantId']]);
+        $out['merchant'] = $ms->fetch() ?: null;
+    }
     $rs = db()->prepare('SELECT * FROM `OrderReview` WHERE orderId = ? LIMIT 1');
     $rs->execute([$mm[1]]);
     $out['review'] = $rs->fetch() ?: null;
