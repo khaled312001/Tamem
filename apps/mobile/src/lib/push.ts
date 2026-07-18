@@ -6,16 +6,43 @@ import { Platform } from 'react-native';
 
 import { api } from './api';
 
-// Foreground behavior: show banner + play sound + set system badge
+// Foreground behavior: show a heads-up banner + play sound + bump the badge —
+// so a notification pops over the app like WhatsApp/Telegram even while it's
+// open (Android only shows heads-up when the channel importance is HIGH/MAX,
+// which the 'default' channel below is).
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
-    shouldShowAlert: true,
+    shouldShowAlert: true, // legacy key (SDK ≤52) — keep for back-compat
     shouldPlaySound: true,
     shouldSetBadge: true,
-    shouldShowBanner: true,
+    shouldShowBanner: true, // new key (SDK 53+)
     shouldShowList: true,
   }),
 });
+
+/**
+ * Creates the high-priority notification channel. MUST exist before any push
+ * lands, otherwise Android 8+ silently drops it — so this runs at app bootstrap,
+ * BEFORE login/permission, not only at token registration. MAX importance makes
+ * it a heads-up notification with sound + vibration, matching WhatsApp.
+ */
+export async function ensureNotificationChannel(): Promise<void> {
+  if (Platform.OS !== 'android') return;
+  try {
+    await Notifications.setNotificationChannelAsync('default', {
+      name: 'إشعارات تميم',
+      importance: Notifications.AndroidImportance.MAX,
+      vibrationPattern: [0, 250, 250, 250],
+      lightColor: '#E0301E',
+      sound: 'default',
+      enableVibrate: true,
+      lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
+      bypassDnd: false,
+    });
+  } catch {
+    /* channel setup is best-effort */
+  }
+}
 
 /**
  * Navigation ref shared with RootNavigator so push handlers can route
@@ -27,16 +54,20 @@ export const navigationRef = createNavigationContainerRef<any>();
 /**
  * Requests notification permission and registers the Expo push token with the backend.
  */
-export async function registerForPushNotifications(): Promise<string | null> {
-  if (Platform.OS === 'android') {
-    await Notifications.setNotificationChannelAsync('default', {
-      name: 'Tamem default',
-      importance: Notifications.AndroidImportance.HIGH,
-      vibrationPattern: [0, 250, 250, 250],
-      lightColor: '#E0301E',
-    });
-  }
+let tokenRefreshSub: Notifications.Subscription | null = null;
 
+async function sendTokenToBackend(token: string): Promise<void> {
+  try {
+    await api.raw.post('/me/devices', { token, platform: Platform.OS });
+  } catch {
+    /* will retry on next app open / token change */
+  }
+}
+
+export async function registerForPushNotifications(): Promise<string | null> {
+  await ensureNotificationChannel();
+
+  // POST_NOTIFICATIONS on Android 13+ is requested here.
   const existing = await Notifications.getPermissionsAsync();
   let status = existing.status;
   if (status !== 'granted') {
@@ -45,6 +76,15 @@ export async function registerForPushNotifications(): Promise<string | null> {
   }
   if (status !== 'granted') return null;
 
+  // Auto-update the stored token whenever FCM rotates it (reinstall, restore,
+  // periodic refresh) — otherwise pushes would silently start going to a dead
+  // token. Registered once.
+  if (!tokenRefreshSub) {
+    tokenRefreshSub = Notifications.addPushTokenListener((t) => {
+      if (t?.data) void sendTokenToBackend(String(t.data));
+    });
+  }
+
   try {
     // The RAW native token (FCM on Android, APNs on iOS) — NOT the Expo push
     // token — because the backend sends directly via Firebase Cloud Messaging
@@ -52,7 +92,7 @@ export async function registerForPushNotifications(): Promise<string | null> {
     // API rejects.
     const tokenResp = await Notifications.getDevicePushTokenAsync();
     const token = String(tokenResp.data);
-    await api.raw.post('/me/devices', { token, platform: Platform.OS });
+    await sendTokenToBackend(token);
     return token;
   } catch {
     return null;
