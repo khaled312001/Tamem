@@ -35,12 +35,15 @@ import { Divider, ListItem, SecondaryButton } from '../components/ui';
 import { api } from '../lib/api';
 import { confirm, notify } from '../lib/confirm';
 import { isNotificationSoundMuted, setNotificationSoundMuted } from '../lib/notificationSound';
-import { connectSocket } from '../lib/socket';
+import { useSocketEvents } from '../lib/useSocketEvents';
 import type { ProfileStackParamList } from '../navigation/ProfileStack';
 import { useAuth } from '../stores/auth';
 import { colors, fontFamilies, fontSizes, radii, shadows, spacing } from '../theme/tokens';
 
 type Nav = NativeStackNavigationProp<ProfileStackParamList, 'Profile'>;
+
+/** Module-level so the array identity never changes across renders. */
+const SOCKET_EVENTS = ['order:new', 'order:status'];
 
 interface UserExt {
   id?: string;
@@ -149,26 +152,10 @@ export function ProfileScreen() {
 
   // Live updates: when a new order arrives or a status changes anywhere in
   // the app, the count/balance becomes stale — invalidate the trio.
-  useEffect(() => {
-    let cancelled = false;
-    void (async () => {
-      const s = await connectSocket();
-      const refresh = () => {
-        if (cancelled) return;
-        void qc.invalidateQueries({ queryKey: ['profile', 'orders-count'] });
-        void qc.invalidateQueries({ queryKey: ['profile', 'wallet'] });
-      };
-      s.on('order:new', refresh);
-      s.on('order:status', refresh);
-      return () => {
-        s.off('order:new', refresh);
-        s.off('order:status', refresh);
-      };
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [qc]);
+  useSocketEvents(SOCKET_EVENTS, () => {
+    void qc.invalidateQueries({ queryKey: ['profile', 'orders-count'] });
+    void qc.invalidateQueries({ queryKey: ['profile', 'wallet'] });
+  });
 
   const refetchAll = () => {
     void meQuery.refetch();

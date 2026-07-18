@@ -59,6 +59,8 @@ export function ShippingFlowScreen() {
   const { data: services } = useQuery<Service[]>({
     queryKey: ['services'],
     queryFn: () => api.raw.get('/services').then((r) => r.data.data),
+    // Service definitions are admin config — they change rarely.
+    staleTime: 10 * 60_000,
   });
 
   const shippingService = useMemo(

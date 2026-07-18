@@ -33,26 +33,37 @@ export function useHomeData() {
     queryKey: ['offers'],
     queryFn: () => api.raw.get('/offers').then((r) => r.data.data),
     enabled: authReady,
+    // Promotions are edited by admins, not per-minute. Matches BannerCarousel,
+    // which shares this key.
+    staleTime: 5 * 60_000,
   });
 
   const merchantsQ = useQuery<Merchant[]>({
     queryKey: ['merchants'],
     queryFn: () => api.raw.get('/merchants').then((r) => r.data.data),
     enabled: authReady,
+    // The largest payload on the home screen. Under the global 15s staleTime it
+    // refetched on virtually every return to the tab.
+    staleTime: 5 * 60_000,
   });
 
   const ordersQ = useQuery<ActiveOrder[]>({
     queryKey: ['orders-mine'],
     queryFn: () => api.raw.get('/orders/mine').then((r) => r.data.data),
     enabled: authReady,
-    // Keeps the "active order" card live without a manual refresh.
-    refetchInterval: 30_000,
+    // Keeps the "active order" card live without a manual refresh. The socket
+    // invalidates this key too, so the interval is only a fallback — and it
+    // must not run while the app is backgrounded.
+    refetchInterval: 60_000,
+    refetchIntervalInBackground: false,
   });
 
   const addressesQ = useQuery<SavedAddress[]>({
     queryKey: ['my-addresses'],
     queryFn: () => api.raw.get('/me/addresses').then((r) => r.data.data),
     enabled: authReady,
+    // The user's own address book — changes only when they edit it.
+    staleTime: 5 * 60_000,
   });
 
   // Same key the existing CategoriesStrip uses, so both render from one fetch.
@@ -60,6 +71,8 @@ export function useHomeData() {
     queryKey: ['home-categories'],
     queryFn: () => api.raw.get('/categories').then((r) => r.data.data),
     enabled: authReady,
+    // Matches CategoriesStrip, which shares this key.
+    staleTime: 5 * 60_000,
   });
 
   const homeConfigQ = useQuery<HomeConfig>({

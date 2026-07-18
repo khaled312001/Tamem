@@ -53,6 +53,9 @@ const DEFAULT_REGION = {
 
 // Category filter chips — uses categoryId or a fuzzy nameAr match
 type Filter = { key: string; label: string; icon: typeof Store; match: (m: Merchant) => boolean };
+/** Stable identity — an inline `() => true` fallback breaks memoisation. */
+const ALWAYS_MATCH = () => true;
+
 const FILTERS: Filter[] = [
   { key: 'all', label: 'الكل', icon: Store, match: () => true },
   {
@@ -99,21 +102,30 @@ const RADIUS_KM = 5;
 export function NearbyMapScreen() {
   const navigation = useNavigation<Nav>();
   const route = useRoute<Route>();
-  const [region, setRegion] = useState(DEFAULT_REGION);
   const [userLoc, setUserLoc] = useState<{ lat: number; lng: number } | null>(null);
   const [filter, setFilter] = useState('all');
   const [search, setSearch] = useState(route.params?.search ?? '');
   const mapRef = useRef<MapView | null>(null);
 
   useEffect(() => {
+    let cancelled = false;
     (async () => {
       const { status } = await Location.requestForegroundPermissionsAsync();
-      if (status !== 'granted') return;
+      if (status !== 'granted' || cancelled) return;
       const loc = await Location.getCurrentPositionAsync({});
+      if (cancelled) return;
       const next = { lat: loc.coords.latitude, lng: loc.coords.longitude };
       setUserLoc(next);
-      setRegion((r) => ({ ...r, latitude: next.lat, longitude: next.lng }));
+      // Move the camera imperatively. The map is uncontrolled (initialRegion),
+      // so driving it through state would fight the user's own panning.
+      mapRef.current?.animateToRegion(
+        { latitude: next.lat, longitude: next.lng, latitudeDelta: 0.03, longitudeDelta: 0.03 },
+        500,
+      );
     })();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const recenter = () => {
@@ -142,8 +154,15 @@ export function NearbyMapScreen() {
     },
   });
 
-  const activeFilter = FILTERS.find((f) => f.key === filter);
-  const matcher = activeFilter?.match ?? (() => true);
+  // `matcher` used to be built inline in the render body, and its
+  // `?? (() => true)` fallback allocated a NEW function every render — which
+  // was a dependency of the memo below, so the filter+filter+sort re-ran on
+  // every keystroke. Memoising the matcher is what makes the memo real.
+  const matcher = useMemo(() => {
+    const activeFilter = FILTERS.find((f) => f.key === filter);
+    return activeFilter?.match ?? ALWAYS_MATCH;
+  }, [filter]);
+
   const filtered = useMemo(() => {
     const q = search.trim();
     return (merchants ?? [])
@@ -203,7 +222,10 @@ export function NearbyMapScreen() {
           ref={mapRef}
           provider={PROVIDER_GOOGLE}
           style={styles.map}
-          region={region}
+          // Uncontrolled on purpose. With `region={region}` and no
+          // onRegionChangeComplete, every parent re-render re-asserted the old
+          // region — so typing in the search box above snapped the map back.
+          initialRegion={DEFAULT_REGION}
           showsUserLocation
           showsMyLocationButton={false}
         >
@@ -227,6 +249,9 @@ export function NearbyMapScreen() {
                 title={m.storeNameAr}
                 description={`${m.category?.nameAr ?? ''}${m.distanceKm ? ` · ${m.distanceKm.toFixed(1)} كم` : ''}`}
                 pinColor={p.color}
+                // Default pins never change after mount; re-snapshotting them
+                // on every render is pure cost on Android.
+                tracksViewChanges={false}
                 onPress={() => openMerchant(m)}
               />
             );

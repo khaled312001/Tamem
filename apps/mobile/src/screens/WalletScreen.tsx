@@ -15,6 +15,7 @@ import { ScreenHeader } from '../components/ScreenHeader';
 import { ForwardChevron } from '../theme/rtl';
 import { CardListSkeleton, EmptyState } from '../components/ui';
 import { api } from '../lib/api';
+import { LIST_PERF } from '../lib/listPerf';
 import {
   colors,
   fontFamilies,
@@ -98,6 +99,7 @@ export function WalletScreen() {
       <ScreenHeader title="محفظة المكافآت" subtitle="نقاط ولائك تُستخدم في طلباتك القادمة" />
 
       <FlatList
+        {...LIST_PERF}
         data={data.transactions}
         keyExtractor={(t) => t.id}
         contentContainerStyle={styles.list}

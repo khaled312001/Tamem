@@ -2,13 +2,14 @@ import { useNavigation, useRoute, type RouteProp } from '@react-navigation/nativ
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useQuery } from '@tanstack/react-query';
 import { LinearGradient } from 'expo-linear-gradient';
+import { memo, useCallback } from 'react';
 import { Clock, MapPin, Phone, Star, Store } from 'lucide-react-native';
 import {
   ActivityIndicator,
+  FlatList,
   Image,
   Linking,
   Pressable,
-  ScrollView,
   StyleSheet,
   Text,
   View,
@@ -18,6 +19,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { HeartButton } from '../components/HeartButton';
 import { EmptyState, ForwardChevron, MoneyText, PrimaryButton, StatusPill } from '../components/ui';
 import { api } from '../lib/api';
+import { LIST_PERF } from '../lib/listPerf';
 import { formatEta } from '../lib/eta';
 import type { HomeStackParamList } from '../navigation/HomeStack';
 import { BackChevron } from '../theme/rtl';
@@ -55,10 +57,59 @@ interface MerchantDetail {
 type RouteParam = RouteProp<HomeStackParamList, 'MerchantDetail'>;
 type NavProp = NativeStackNavigationProp<HomeStackParamList, 'MerchantDetail'>;
 
+type MerchantProduct = NonNullable<MerchantDetail['products']>[number];
+
+/**
+ * One product row. Memoised because the list can be thousands of rows long —
+ * without it, any re-render of the screen re-renders every mounted row.
+ */
+const ProductRow = memo(function ProductRow({
+  product,
+  onPress,
+}: {
+  product: MerchantProduct;
+  onPress: (id: string) => void;
+}) {
+  return (
+    <Pressable
+      onPress={() => onPress(product.id)}
+      style={({ pressed }) => [styles.productRow, shadows.sm, pressed && { opacity: 0.9 }]}
+    >
+      <View style={styles.productImg}>
+        {product.imageUrl ? (
+          <Image source={{ uri: product.imageUrl }} style={{ width: '100%', height: '100%' }} />
+        ) : (
+          <Store size={20} color={colors.brand.red} />
+        )}
+      </View>
+      <View style={{ flex: 1 }}>
+        <Text style={styles.productName}>{product.nameAr}</Text>
+        <MoneyText amount={Number(product.price)} tone="brand" size="sm" />
+      </View>
+      <HeartButton collection="product" id={product.id} merchantName={product.nameAr} size="sm" />
+      <ForwardChevron size={16} color={colors.text.muted} />
+    </Pressable>
+  );
+});
+
+const productKey = (p: MerchantProduct) => p.id;
+
 export function MerchantDetailScreen() {
   const route = useRoute<RouteParam>();
   const navigation = useNavigation<NavProp>();
   const { merchantId } = route.params;
+
+  // Opening a product works even when the merchant is closed so the customer
+  // can still browse; the add-to-cart button is what's actually disabled.
+  const openProduct = useCallback(
+    (productId: string) => navigation.navigate('ProductDetail', { productId }),
+    [navigation],
+  );
+
+  const renderProduct = useCallback(
+    ({ item }: { item: MerchantProduct }) => <ProductRow product={item} onPress={openProduct} />,
+    [openProduct],
+  );
 
   const { data, isLoading, error, refetch } = useQuery<MerchantDetail>({
     queryKey: ['merchant', merchantId],
@@ -99,169 +150,22 @@ export function MerchantDetailScreen() {
 
   return (
     <SafeAreaView edges={[]} style={styles.container}>
-      <ScrollView
+      {/*
+        A FlatList, not a ScrollView: the merchant payload can carry thousands
+        of products (the pharmacy has ~2,900), and `.map()` inside a ScrollView
+        mounted every one of them — each with its own Image and HeartButton.
+        Everything above the product list is the header, so the layout is
+        unchanged.
+      */}
+      <FlatList
+        {...LIST_PERF}
+        data={data.products ?? []}
+        keyExtractor={productKey}
+        renderItem={renderProduct}
         showsVerticalScrollIndicator={false}
         contentContainerStyle={{ paddingBottom: 120 }}
-      >
-        {/* ─────── Cover with floating back ─────── */}
-        <View style={styles.cover}>
-          {data.coverUrl ? (
-            <Image source={{ uri: data.coverUrl }} style={styles.coverImage} resizeMode="cover" />
-          ) : (
-            <LinearGradient
-              colors={['#E0301E', '#EC7A2C']}
-              start={{ x: 0, y: 0 }}
-              end={{ x: 1, y: 1 }}
-              style={styles.coverPlaceholder}
-            >
-              <Store size={56} color={colors.white} />
-            </LinearGradient>
-          )}
-          <LinearGradient
-            colors={['rgba(36,19,16,0.6)', 'transparent']}
-            style={styles.coverOverlay}
-          />
-          <SafeAreaView edges={['top']} style={styles.coverHeader}>
-            <Pressable
-              onPress={() => navigation.goBack()}
-              style={({ pressed }) => [styles.floatingBack, pressed && { opacity: 0.7 }]}
-              hitSlop={8}
-              accessibilityLabel="رجوع"
-            >
-              <BackChevron size={20} color={colors.ink} />
-            </Pressable>
-            <HeartButton merchantId={data.id} merchantName={data.storeNameAr} floating />
-          </SafeAreaView>
-        </View>
-
-        {/* ─────── Info card ─────── */}
-        <View style={[styles.card, shadows.md]}>
-          <View style={styles.titleRow}>
-            <Text style={styles.title}>{data.storeNameAr}</Text>
-            <StatusPill
-              label={(data.openness?.isOpenNow ?? data.isOpen) ? 'مفتوح الآن' : 'مغلق الآن'}
-              color={(data.openness?.isOpenNow ?? data.isOpen) ? colors.success : colors.text.muted}
-              dot
-            />
-          </View>
-          {/* Closed-state banner — surfaces "يفتح غداً 10ص" so the customer
-              doesn't bounce off without knowing when to come back. */}
-          {!(data.openness?.isOpenNow ?? data.isOpen) && (
-            <View style={styles.closedBanner}>
-              <Clock size={14} color={colors.danger} />
-              <Text style={styles.closedBannerText}>
-                {data.openness?.message ?? 'هذا المتجر مغلق حالياً'}
-              </Text>
-            </View>
-          )}
-          {data.category && <Text style={styles.subtitle}>{data.category.nameAr}</Text>}
-
-          <View style={styles.metaRow}>
-            <View style={styles.metaItem}>
-              <Star size={14} color={colors.brand.gold} fill={colors.brand.gold} />
-              <Text style={styles.metaText}>{Number(data.rating ?? 0).toFixed(1)}</Text>
-            </View>
-            <View style={styles.metaDivider} />
-            <View style={styles.metaItem}>
-              <Clock size={14} color={colors.text.muted} />
-              <Text style={styles.metaText}>
-                {/* ETA computed from the merchant's distance if known, never
-                    the old hard-coded "20-40 دقيقة". */}
-                {formatEta(typeof data.lat === 'number' ? 4 : null)}
-              </Text>
-            </View>
-            <View style={styles.metaDivider} />
-            <View style={[styles.metaItem, { flex: 1 }]}>
-              <MapPin size={14} color={colors.text.muted} />
-              <Text style={styles.metaText} numberOfLines={1}>
-                {data.addressLine}
-              </Text>
-            </View>
-          </View>
-
-          {/* Tap-to-call merchant — silent before. */}
-          {data.phone ? (
-            <Pressable
-              onPress={() => void Linking.openURL(`tel:${data.phone}`)}
-              style={({ pressed }) => [styles.phoneRow, pressed && { opacity: 0.85 }]}
-            >
-              <View style={styles.phoneIcon}>
-                <Phone size={14} color={colors.brand.red} />
-              </View>
-              <Text style={styles.phoneText}>اتصل بالمتجر</Text>
-              <Text style={styles.phoneNumber}>{data.phone}</Text>
-            </Pressable>
-          ) : null}
-
-          {data.description && <Text style={styles.description}>{data.description}</Text>}
-        </View>
-
-        {/* ─────── Menu images (menu-image mode) ─────── */}
-        {data.menuImages && data.menuImages.length > 0 && (
-          <View style={styles.section}>
-            <View style={styles.productsHeaderRow}>
-              <Text style={styles.sectionTitle}>المنيو</Text>
-              <Text style={styles.productsCount}>{data.menuImages.length} صورة</Text>
-            </View>
-            <Text style={styles.productsHint}>
-              اضغط "اطلب الآن" بالأسفل واكتب طلبك من المنيو — هنوصّله لك من المتجر.
-            </Text>
-            {data.menuImages.map((uri, i) => (
-              <Image
-                key={`${uri}-${i}`}
-                source={{ uri }}
-                style={styles.menuImage}
-                resizeMode="contain"
-              />
-            ))}
-          </View>
-        )}
-
-        {/* ─────── Products ─────── */}
-        {data.products && data.products.length > 0 && (
-          <View style={styles.section}>
-            <View style={styles.productsHeaderRow}>
-              <Text style={styles.sectionTitle}>المنتجات المتاحة</Text>
-              <Text style={styles.productsCount}>{data.products.length} منتج</Text>
-            </View>
-            <Text style={styles.productsHint}>
-              اضغط "اطلب الآن" بالأسفل، أو افتح الطلب السريع من الصفحة الرئيسية لإضافة المنتجات.
-            </Text>
-            {data.products.map((p) => (
-              <Pressable
-                key={p.id}
-                onPress={() => {
-                  // Open the product detail page — works even when the
-                  // merchant is closed so the customer can still browse;
-                  // the add-to-cart button is what's actually disabled.
-                  navigation.navigate('ProductDetail', { productId: p.id });
-                }}
-                style={({ pressed }) => [
-                  styles.productRow,
-                  shadows.sm,
-                  pressed && { opacity: 0.9 },
-                ]}
-              >
-                <View style={styles.productImg}>
-                  {p.imageUrl ? (
-                    <Image source={{ uri: p.imageUrl }} style={{ width: '100%', height: '100%' }} />
-                  ) : (
-                    <Store size={20} color={colors.brand.red} />
-                  )}
-                </View>
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.productName}>{p.nameAr}</Text>
-                  <MoneyText amount={Number(p.price)} tone="brand" size="sm" />
-                </View>
-                <HeartButton collection="product" id={p.id} merchantName={p.nameAr} size="sm" />
-                <ForwardChevron size={16} color={colors.text.muted} />
-              </Pressable>
-            ))}
-          </View>
-        )}
-
-        {(!data.products || data.products.length === 0) &&
-          (!data.menuImages || data.menuImages.length === 0) && (
+        ListEmptyComponent={
+          !data.menuImages || data.menuImages.length === 0 ? (
             <View style={styles.emptyProductsCard}>
               <Phone size={20} color={colors.brand.red} />
               <Text style={styles.emptyProductsTitle}>اطلب أي حاجة من المتجر</Text>
@@ -269,8 +173,145 @@ export function MerchantDetailScreen() {
                 مفيش قائمة محددة هنا — كل اللي تطلبه هنوصّله من المتجر مباشرة.
               </Text>
             </View>
-          )}
-      </ScrollView>
+          ) : null
+        }
+        ListHeaderComponent={
+          <>
+            {/* ─────── Cover with floating back ─────── */}
+            <View style={styles.cover}>
+              {data.coverUrl ? (
+                <Image
+                  source={{ uri: data.coverUrl }}
+                  style={styles.coverImage}
+                  resizeMode="cover"
+                />
+              ) : (
+                <LinearGradient
+                  colors={['#E0301E', '#EC7A2C']}
+                  start={{ x: 0, y: 0 }}
+                  end={{ x: 1, y: 1 }}
+                  style={styles.coverPlaceholder}
+                >
+                  <Store size={56} color={colors.white} />
+                </LinearGradient>
+              )}
+              <LinearGradient
+                colors={['rgba(36,19,16,0.6)', 'transparent']}
+                style={styles.coverOverlay}
+              />
+              <SafeAreaView edges={['top']} style={styles.coverHeader}>
+                <Pressable
+                  onPress={() => navigation.goBack()}
+                  style={({ pressed }) => [styles.floatingBack, pressed && { opacity: 0.7 }]}
+                  hitSlop={8}
+                  accessibilityLabel="رجوع"
+                >
+                  <BackChevron size={20} color={colors.ink} />
+                </Pressable>
+                <HeartButton merchantId={data.id} merchantName={data.storeNameAr} floating />
+              </SafeAreaView>
+            </View>
+
+            {/* ─────── Info card ─────── */}
+            <View style={[styles.card, shadows.md]}>
+              <View style={styles.titleRow}>
+                <Text style={styles.title}>{data.storeNameAr}</Text>
+                <StatusPill
+                  label={(data.openness?.isOpenNow ?? data.isOpen) ? 'مفتوح الآن' : 'مغلق الآن'}
+                  color={
+                    (data.openness?.isOpenNow ?? data.isOpen) ? colors.success : colors.text.muted
+                  }
+                  dot
+                />
+              </View>
+              {/* Closed-state banner — surfaces "يفتح غداً 10ص" so the customer
+              doesn't bounce off without knowing when to come back. */}
+              {!(data.openness?.isOpenNow ?? data.isOpen) && (
+                <View style={styles.closedBanner}>
+                  <Clock size={14} color={colors.danger} />
+                  <Text style={styles.closedBannerText}>
+                    {data.openness?.message ?? 'هذا المتجر مغلق حالياً'}
+                  </Text>
+                </View>
+              )}
+              {data.category && <Text style={styles.subtitle}>{data.category.nameAr}</Text>}
+
+              <View style={styles.metaRow}>
+                <View style={styles.metaItem}>
+                  <Star size={14} color={colors.brand.gold} fill={colors.brand.gold} />
+                  <Text style={styles.metaText}>{Number(data.rating ?? 0).toFixed(1)}</Text>
+                </View>
+                <View style={styles.metaDivider} />
+                <View style={styles.metaItem}>
+                  <Clock size={14} color={colors.text.muted} />
+                  <Text style={styles.metaText}>
+                    {/* ETA computed from the merchant's distance if known, never
+                    the old hard-coded "20-40 دقيقة". */}
+                    {formatEta(typeof data.lat === 'number' ? 4 : null)}
+                  </Text>
+                </View>
+                <View style={styles.metaDivider} />
+                <View style={[styles.metaItem, { flex: 1 }]}>
+                  <MapPin size={14} color={colors.text.muted} />
+                  <Text style={styles.metaText} numberOfLines={1}>
+                    {data.addressLine}
+                  </Text>
+                </View>
+              </View>
+
+              {/* Tap-to-call merchant — silent before. */}
+              {data.phone ? (
+                <Pressable
+                  onPress={() => void Linking.openURL(`tel:${data.phone}`)}
+                  style={({ pressed }) => [styles.phoneRow, pressed && { opacity: 0.85 }]}
+                >
+                  <View style={styles.phoneIcon}>
+                    <Phone size={14} color={colors.brand.red} />
+                  </View>
+                  <Text style={styles.phoneText}>اتصل بالمتجر</Text>
+                  <Text style={styles.phoneNumber}>{data.phone}</Text>
+                </Pressable>
+              ) : null}
+
+              {data.description && <Text style={styles.description}>{data.description}</Text>}
+            </View>
+
+            {/* ─────── Menu images (menu-image mode) ─────── */}
+            {data.menuImages && data.menuImages.length > 0 && (
+              <View style={styles.section}>
+                <View style={styles.productsHeaderRow}>
+                  <Text style={styles.sectionTitle}>المنيو</Text>
+                  <Text style={styles.productsCount}>{data.menuImages.length} صورة</Text>
+                </View>
+                <Text style={styles.productsHint}>
+                  اضغط "اطلب الآن" بالأسفل واكتب طلبك من المنيو — هنوصّله لك من المتجر.
+                </Text>
+                {data.menuImages.map((uri, i) => (
+                  <Image
+                    key={`${uri}-${i}`}
+                    source={{ uri }}
+                    style={styles.menuImage}
+                    resizeMode="contain"
+                  />
+                ))}
+              </View>
+            )}
+
+            {/* ─────── Products (rows are the list body below) ─────── */}
+            {data.products && data.products.length > 0 && (
+              <View style={styles.section}>
+                <View style={styles.productsHeaderRow}>
+                  <Text style={styles.sectionTitle}>المنتجات المتاحة</Text>
+                  <Text style={styles.productsCount}>{data.products.length} منتج</Text>
+                </View>
+                <Text style={styles.productsHint}>
+                  اضغط "اطلب الآن" بالأسفل، أو افتح الطلب السريع من الصفحة الرئيسية لإضافة المنتجات.
+                </Text>
+              </View>
+            )}
+          </>
+        }
+      />
 
       {/* ─────── Sticky Order CTA ─────── */}
       <SafeAreaView edges={['bottom']} style={styles.ctaBar}>

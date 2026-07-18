@@ -10,6 +10,7 @@ import type { Service } from '@tamem/types';
 import { ScreenHeader } from '../components/ScreenHeader';
 import { AnimatedListItem, CardListSkeleton, EmptyState, ForwardChevron } from '../components/ui';
 import { api } from '../lib/api';
+import { LIST_PERF } from '../lib/listPerf';
 import type { HomeStackParamList } from '../navigation/HomeStack';
 import { colors, fontFamilies, fontSizes, radii, shadows, spacing } from '../theme/tokens';
 
@@ -27,6 +28,8 @@ export function DeliveryServicesScreen() {
   const { data, isLoading } = useQuery<Service[]>({
     queryKey: ['services'],
     queryFn: () => api.raw.get('/services').then((r) => r.data.data),
+    // Service definitions are admin config — they change rarely.
+    staleTime: 10 * 60_000,
   });
 
   const deliveryServices = (data ?? []).filter((s) => s.category === 'DELIVERY');
@@ -41,6 +44,7 @@ export function DeliveryServicesScreen() {
         </View>
       ) : (
         <FlatList
+          {...LIST_PERF}
           data={deliveryServices}
           keyExtractor={(s) => s.id}
           contentContainerStyle={[
