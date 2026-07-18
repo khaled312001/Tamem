@@ -13,7 +13,7 @@ import {
   Truck,
   X,
 } from 'lucide-react';
-import { useId, useState } from 'react';
+import { useEffect, useId, useState } from 'react';
 import type { ReactNode } from 'react';
 import { toast } from 'sonner';
 
@@ -22,8 +22,10 @@ import { Button } from '../components/ui/Button.js';
 import { Dialog } from '../components/ui/Dialog.js';
 import { Field, Input } from '../components/ui/Input.js';
 import { PhoneInput } from '../components/ui/PhoneInput.js';
+import { Pagination } from '../components/ui/Pagination.js';
 import { EmptyState, TableSkeleton } from '../components/ui/Skeleton.js';
 import { api } from '../lib/api.js';
+import { useDebounced } from '../lib/useListQuery.js';
 import { uploadFile } from '../lib/uploadFile.js';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -141,10 +143,25 @@ export function DriversPage() {
   const [editing, setEditing] = useState<Row | null>(null);
   const [viewingReviews, setViewingReviews] = useState<Row | null>(null);
 
-  const { data, isLoading } = useQuery({
-    queryKey: ['admin', 'drivers'],
-    queryFn: () => api.adminListDrivers({ pageSize: 100 }),
+  // Server-side search + paging. This screen used to request one capped page of
+  // 100 drivers with no search box and no way to reach anyone past row 100.
+  const [search, setSearch] = useState('');
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(20);
+  const debouncedSearch = useDebounced(search, 300);
+  useEffect(() => setPage(1), [debouncedSearch, pageSize]);
+
+  const { data, isLoading, isFetching } = useQuery({
+    queryKey: ['admin', 'drivers', debouncedSearch, page, pageSize],
+    queryFn: () =>
+      api.adminListDrivers({
+        page,
+        pageSize,
+        ...(debouncedSearch.trim() ? { search: debouncedSearch.trim() } : {}),
+      }),
+    placeholderData: (prev) => prev,
   });
+  const total = data?.pagination.total ?? 0;
 
   const updateStatusMut = useMutation({
     mutationFn: ({ id, status }: { id: string; status: 'AVAILABLE' | 'BUSY' | 'OFFLINE' }) =>
@@ -170,12 +187,21 @@ export function DriversPage() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-black text-brand-dark">السائقون</h1>
-          <p className="text-sm text-muted-foreground mt-1">{data?.pagination.total ?? 0} سائق</p>
+          <p className="text-sm text-muted-foreground mt-1">{total} سائق</p>
         </div>
         <Button onClick={() => setCreateOpen(true)}>
           <Plus className="w-4 h-4" />
           إضافة سائق
         </Button>
+      </div>
+
+      <div className="bg-white rounded-xl border border-border p-3">
+        <Input
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="ابحث بالاسم أو رقم الهاتف…"
+          className="w-full"
+        />
       </div>
 
       {isLoading ? (
@@ -271,6 +297,17 @@ export function DriversPage() {
             </div>
           ))}
         </div>
+      )}
+
+      {!isLoading && total > 0 && (
+        <Pagination
+          page={page}
+          pageSize={pageSize}
+          total={total}
+          onPageChange={setPage}
+          onPageSizeChange={setPageSize}
+          disabled={isFetching}
+        />
       )}
 
       {createOpen && <CreateDriverDialog onClose={() => setCreateOpen(false)} />}

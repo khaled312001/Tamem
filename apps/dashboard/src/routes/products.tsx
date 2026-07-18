@@ -42,11 +42,13 @@ import { Dialog, Drawer } from '../components/ui/Dialog.js';
 import { Field, Input, Textarea } from '../components/ui/Input.js';
 import { ProductHistoryDrawer } from '../components/ProductHistoryDrawer.js';
 import { PageHeader } from '../components/ui/PageHeader.js';
+import { Pagination } from '../components/ui/Pagination.js';
 import { EmptyState, TableSkeleton } from '../components/ui/Skeleton.js';
 import { StatCard } from '../components/ui/StatCard.js';
 import { ErrorState } from '../components/ui/States.js';
 import { api } from '../lib/api.js';
 import { formatCount, formatMoney } from '../lib/format.js';
+import { useListState } from '../lib/useListQuery.js';
 import type { ParsedSheet } from '../lib/productsSheet.js';
 import {
   buildArchiveWorkbook,
@@ -132,17 +134,32 @@ function readView(): ViewMode {
 
 export function ProductsPage() {
   const qc = useQueryClient();
-  // ── filters ──
-  const [merchantFilter, setMerchantFilter] = useState('');
-  const [search, setSearch] = useState('');
-  const [statusF, setStatusF] = useState<StatusFilter>('all');
-  const [stockF, setStockF] = useState<StockFilter>('all');
-  const [imageF, setImageF] = useState<ImageFilter>('all');
+  // ── filters + paging live in the URL ──
+  // Every filter, the page and the sort are query params, so opening a product
+  // and pressing back restores the exact view (and the view is shareable). The
+  // search box is debounced before it reaches the query key, and ALL filtering /
+  // sorting / paging now happens in SQL — this page used to pull 200 rows and
+  // filter them in the browser, which silently hid everything past row 200.
+  const ls = useListState(['merchantId', 'status', 'stock', 'image', 'sortBy', 'sortDir'], 50);
+  const merchantFilter = ls.get('merchantId');
+  const setMerchantFilter = (v: string) => ls.set('merchantId', v);
+  const search = ls.search;
+  const setSearch = ls.setSearch;
+  const statusF = (ls.get('status') || 'all') as StatusFilter;
+  const setStatusF = (v: StatusFilter) => ls.set('status', v === 'all' ? '' : v);
+  const stockF = (ls.get('stock') || 'all') as StockFilter;
+  const setStockF = (v: StockFilter) => ls.set('stock', v === 'all' ? '' : v);
+  const imageF = (ls.get('image') || 'all') as ImageFilter;
+  const setImageF = (v: ImageFilter) => ls.set('image', v === 'all' ? '' : v);
+  const sortBy = (ls.get('sortBy') || null) as SortKey;
+  const sortDir: 'asc' | 'desc' = ls.get('sortDir') === 'desc' ? 'desc' : 'asc';
+  const setSortBy = (v: SortKey) => ls.set('sortBy', v ?? '');
+  const setSortDir = (v: 'asc' | 'desc') => ls.set('sortDir', v);
+  const page = ls.page;
+  const setPage = ls.setPage;
+  const pageSize = ls.pageSize;
+  const setPageSize = ls.setPageSize;
   // ── table ──
-  const [sortBy, setSortBy] = useState<SortKey>(null);
-  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
-  const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(50);
   const [dense, setDense] = useState(false);
   const [view, setView] = useState<ViewMode>(readView);
   // ── selection + dialogs ──
@@ -173,54 +190,65 @@ export function ProductsPage() {
     (m) => m.id === merchantFilter,
   );
 
-  const { data, isLoading, isError, refetch, isFetching } = useQuery({
-    queryKey: ['admin', 'products', merchantFilter, search],
-    queryFn: () =>
-      api.adminListProducts({
-        pageSize: 200,
-        ...(merchantFilter ? { merchantId: merchantFilter } : {}),
-        ...(search.trim() ? { search: search.trim() } : {}),
-      }),
-  });
-
-  const all = (data?.items as Row[] | undefined) ?? [];
-
-  const stats = useMemo(
+  // Filters that the SQL understands. Kept in one object so the query key and
+  // the export-all walker always agree on what "the current view" means.
+  const queryFilters = useMemo(
     () => ({
-      total: all.length,
-      available: all.filter((p) => p.isAvailable).length,
-      disabled: all.filter((p) => !p.isAvailable).length,
-      out: all.filter((p) => stockState(p) === 'out').length,
-      low: all.filter((p) => stockState(p) === 'low').length,
-      noImage: all.filter((p) => !firstImage(p)).length,
+      ...(merchantFilter ? { merchantId: merchantFilter } : {}),
+      ...(ls.debouncedSearch.trim() ? { search: ls.debouncedSearch.trim() } : {}),
+      ...(statusF !== 'all' ? { isAvailable: statusF === 'available' } : {}),
+      ...(stockF !== 'all' ? { stock: stockF } : {}),
+      ...(imageF !== 'all' ? { hasImage: imageF === 'with' ? 'yes' : 'no' } : {}),
+      ...(sortBy ? { sortBy, sortDir } : {}),
     }),
-    [all],
+    [merchantFilter, ls.debouncedSearch, statusF, stockF, imageF, sortBy, sortDir],
   );
 
-  const filtered = useMemo(() => {
-    let r = all;
-    if (statusF !== 'all')
-      r = r.filter((p) => (statusF === 'available' ? p.isAvailable : !p.isAvailable));
-    if (stockF !== 'all') r = r.filter((p) => stockState(p) === stockF);
-    if (imageF !== 'all')
-      r = r.filter((p) => (imageF === 'with' ? !!firstImage(p) : !firstImage(p)));
-    if (sortBy) {
-      const dir = sortDir === 'asc' ? 1 : -1;
-      r = [...r].sort((a, b) => {
-        if (sortBy === 'name')
-          return dir * String(a.nameAr ?? '').localeCompare(String(b.nameAr ?? ''), 'ar');
-        if (sortBy === 'price') return dir * (Number(a.price || 0) - Number(b.price || 0));
-        return dir * (Number(a.stock ?? -1) - Number(b.stock ?? -1));
-      });
-    }
-    return r;
-  }, [all, statusF, stockF, imageF, sortBy, sortDir]);
+  const { data, isLoading, isError, refetch, isFetching } = useQuery({
+    queryKey: ['admin', 'products', { ...queryFilters, page, pageSize }],
+    queryFn: () => api.adminListProducts({ ...queryFilters, page, pageSize }),
+    // Keep the previous page on screen while the next one loads — no flash of
+    // skeleton on every page change.
+    placeholderData: (prev) => prev,
+  });
 
-  const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
-  const pageClamped = Math.min(page, totalPages);
-  const pageItems = filtered.slice((pageClamped - 1) * pageSize, pageClamped * pageSize);
-  const from = filtered.length === 0 ? 0 : (pageClamped - 1) * pageSize + 1;
-  const to = Math.min(pageClamped * pageSize, filtered.length);
+  // Stat cards come from a SQL aggregate over the whole filtered set, so they
+  // stay correct no matter which page is open (they used to count only the rows
+  // that happened to be loaded).
+  const { data: statsData } = useQuery({
+    queryKey: ['admin', 'products', 'stats', merchantFilter, ls.debouncedSearch],
+    queryFn: () =>
+      api.adminProductStats({
+        ...(merchantFilter ? { merchantId: merchantFilter } : {}),
+        ...(ls.debouncedSearch.trim() ? { search: ls.debouncedSearch.trim() } : {}),
+      }) as Promise<Row>,
+    staleTime: 30_000,
+  });
+  const stats = {
+    total: Number(statsData?.total ?? 0),
+    available: Number(statsData?.available ?? 0),
+    disabled: Number(statsData?.disabled ?? 0),
+    out: Number(statsData?.out ?? 0),
+    low: Number(statsData?.low ?? 0),
+    noImage: Number(statsData?.noImage ?? 0),
+  };
+
+  const pageItems = (data?.items as Row[] | undefined) ?? [];
+  const total = data?.pagination.total ?? 0;
+  // Legacy alias: the JSX below uses `filtered` for "rows on screen".
+  const filtered = pageItems;
+
+  /** Walk every page of the CURRENT filter set — used by export so it always
+   *  covers the whole result, not just the page being viewed. */
+  const fetchAllMatching = async (): Promise<Row[]> => {
+    const out: Row[] = [];
+    for (let p = 1; p <= 100; p++) {
+      const r = await api.adminListProducts({ ...queryFilters, page: p, pageSize: 200 });
+      out.push(...((r.items as Row[]) ?? []));
+      if (!r.items.length || p >= (r.pagination?.totalPages ?? 1)) break;
+    }
+    return out;
+  };
 
   const anyFilter =
     statusF !== 'all' ||
@@ -321,7 +349,7 @@ export function ProductsPage() {
   const [exportRows, setExportRows] = useState<Row[] | null>(null);
 
   const setSort = (key: Exclude<SortKey, null>) => {
-    if (sortBy === key) setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
+    if (sortBy === key) setSortDir(sortDir === 'asc' ? 'desc' : 'asc');
     else {
       setSortBy(key);
       setSortDir('asc');
@@ -334,7 +362,7 @@ export function ProductsPage() {
     <div className="space-y-4">
       <PageHeader
         title="إدارة المنتجات"
-        subtitle={`${formatCount(all.length)} منتج${merchantFilter ? ' لهذا التاجر' : ''}`}
+        subtitle={`${formatCount(total)} منتج${merchantFilter ? ' لهذا التاجر' : ''}`}
         icon={Package}
         actions={
           <>
@@ -345,8 +373,8 @@ export function ProductsPage() {
             <Button
               variant="outline"
               size="md"
-              onClick={() => setExportRows(filtered)}
-              disabled={!filtered.length}
+              onClick={async () => setExportRows(await fetchAllMatching())}
+              disabled={total === 0}
             >
               <Download className="w-4 h-4" />
               تصدير
@@ -612,7 +640,7 @@ export function ProductsPage() {
         <div className="bg-card rounded-xl border border-border">
           <ErrorState onRetry={() => refetch()} />
         </div>
-      ) : all.length === 0 ? (
+      ) : total === 0 ? (
         <div className="bg-card rounded-xl border border-border">
           <EmptyState
             icon={<Box className="w-10 h-10" />}
@@ -829,56 +857,26 @@ export function ProductsPage() {
             </>
           )}
 
-          {/* ── Pagination + density ── */}
-          <div className="flex flex-wrap items-center justify-between gap-3 text-sm">
-            <div className="flex items-center gap-2 text-muted-foreground">
-              <span>
-                عرض {formatCount(from)}–{formatCount(to)} من {formatCount(filtered.length)}
-              </span>
-              <select
-                value={pageSize}
-                onChange={(e) => {
-                  setPageSize(Number(e.target.value));
-                  resetPage();
-                }}
-                className="px-2 py-1 rounded border border-input bg-popover text-xs"
+          {/* ── Pagination (server-side) + density ── */}
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            {view === 'table' && (
+              <button
+                onClick={() => setDense((d) => !d)}
+                className="text-xs px-2 py-1 rounded border border-input hover:bg-muted"
               >
-                {[20, 50, 100].map((n) => (
-                  <option key={n} value={n}>
-                    {n}/صفحة
-                  </option>
-                ))}
-              </select>
-              {view === 'table' && (
-                <button
-                  onClick={() => setDense((d) => !d)}
-                  className="text-xs px-2 py-1 rounded border border-input hover:bg-muted"
-                >
-                  {dense ? 'كثافة مريحة' : 'كثافة مضغوطة'}
-                </button>
-              )}
-            </div>
-            {totalPages > 1 && (
-              <div className="flex items-center gap-1">
-                <button
-                  disabled={pageClamped <= 1}
-                  onClick={() => setPage(pageClamped - 1)}
-                  className="px-3 py-1.5 rounded-lg border border-input disabled:opacity-40 hover:bg-muted"
-                >
-                  السابق
-                </button>
-                <span className="px-2 text-muted-foreground">
-                  {formatCount(pageClamped)} / {formatCount(totalPages)}
-                </span>
-                <button
-                  disabled={pageClamped >= totalPages}
-                  onClick={() => setPage(pageClamped + 1)}
-                  className="px-3 py-1.5 rounded-lg border border-input disabled:opacity-40 hover:bg-muted"
-                >
-                  التالي
-                </button>
-              </div>
+                {dense ? 'كثافة مريحة' : 'كثافة مضغوطة'}
+              </button>
             )}
+            <div className="flex-1 min-w-[280px]">
+              <Pagination
+                page={page}
+                pageSize={pageSize}
+                total={total}
+                onPageChange={setPage}
+                onPageSizeChange={setPageSize}
+                disabled={isFetching}
+              />
+            </div>
           </div>
         </>
       )}
