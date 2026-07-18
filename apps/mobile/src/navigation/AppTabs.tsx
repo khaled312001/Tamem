@@ -69,6 +69,41 @@ function CartWithBadge({ color, count }: { color: string; count: number }) {
   );
 }
 
+/** The centre Home tab — a raised red circle ("دائرة الرئيسية") that anchors the
+ *  bar, per the approved design. Active or not it stays branded so it always
+ *  reads as "home base". */
+function HomeCircle({ focused }: { focused: boolean }) {
+  return (
+    <View style={[homeStyles.circle, focused && homeStyles.circleActive]}>
+      <Home size={24} color={colors.white} />
+    </View>
+  );
+}
+
+const homeStyles = StyleSheet.create({
+  circle: {
+    width: 52,
+    height: 52,
+    borderRadius: 26,
+    backgroundColor: colors.brand.red,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: -18, // lift it above the bar so it reads as a centre anchor
+    borderWidth: 4,
+    borderColor: colors.white,
+    ...(Platform.OS === 'web'
+      ? { boxShadow: '0 6px 16px rgba(224,48,30,0.4)' }
+      : {
+          shadowColor: '#E0301E',
+          shadowOpacity: 0.4,
+          shadowRadius: 10,
+          shadowOffset: { width: 0, height: 6 },
+          elevation: 10,
+        }),
+  },
+  circleActive: { backgroundColor: '#C42817' },
+});
+
 const badgeStyles = StyleSheet.create({
   wrap: { width: TAB_ICON_SIZE + 14, height: TAB_ICON_SIZE + 4, alignItems: 'center' },
   badge: {
@@ -134,6 +169,8 @@ export function AppTabs() {
             height: 68 + bottomInset,
             paddingTop: 6,
             paddingBottom: bottomInset,
+            // Let the raised centre Home circle spill above the bar edge.
+            overflow: 'visible',
           },
           tabBarItemStyle: { paddingVertical: 0 },
           tabBarIconStyle: { marginTop: 4, marginBottom: 0 },
@@ -147,24 +184,6 @@ export function AppTabs() {
           },
         }}
       >
-        <Tabs.Screen
-          name="HomeTab"
-          component={HomeStack}
-          listeners={({ navigation }) => ({
-            tabPress: (e) => {
-              const state = navigation.getState();
-              if (state?.routes[state.index]?.name === 'HomeTab') {
-                e.preventDefault();
-                // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                (navigation as any).navigate('HomeTab', { screen: 'Home' });
-              }
-            },
-          })}
-          options={{
-            title: 'الرئيسية',
-            tabBarIcon: ({ color }) => <Home size={TAB_ICON_SIZE} color={color} />,
-          }}
-        />
         {/* CartTab is a redirect — taps always send the user to HomeTab > Cart
             because CartScreen lives inside HomeStack (it shares product /
             checkout routes with the rest of the catalog). We still register
@@ -202,6 +221,26 @@ export function AppTabs() {
           options={{
             title: 'طلباتي',
             tabBarIcon: ({ color }) => <Package size={TAB_ICON_SIZE} color={color} />,
+          }}
+        />
+        {/* Home sits in the CENTRE as a raised red circle — the anchor of the
+            bar per the approved design. */}
+        <Tabs.Screen
+          name="HomeTab"
+          component={HomeStack}
+          listeners={({ navigation }) => ({
+            tabPress: (e) => {
+              const state = navigation.getState();
+              if (state?.routes[state.index]?.name === 'HomeTab') {
+                e.preventDefault();
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                (navigation as any).navigate('HomeTab', { screen: 'Home' });
+              }
+            },
+          })}
+          options={{
+            title: 'الرئيسية',
+            tabBarIcon: ({ focused }) => <HomeCircle focused={focused} />,
           }}
         />
         <Tabs.Screen
