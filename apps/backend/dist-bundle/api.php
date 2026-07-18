@@ -1184,10 +1184,10 @@ function notifyOrderParties(string $orderId, string $status, ?string $reason = n
         $drvName = trim((string) ($o['drv_name'] ?? ''));
         $sent = false;
 
-        // Admin-editable overrides. The rich messages below stay the DEFAULT;
-        // an admin can disable a (event,recipient) send, replace its text, add
-        // extra recipients, or route the oversight copy to a WhatsApp group —
-        // all without losing the detailed default when they leave it untouched.
+        // Admin-editable: every send is a catalog template (default OR the
+        // admin's saved override). The admin can disable a (event,recipient)
+        // pair, replace its text, add extra recipients, or route the oversight
+        // copy to a WhatsApp group — the editor is the single source of truth.
         $event = notifStatusToEvent($status);
         $ctx = [
             'orderNumber' => $no, 'customerName' => $custName,
@@ -1199,125 +1199,82 @@ function notifyOrderParties(string $orderId, string $status, ?string $reason = n
             'paymentMethod' => waPayMethodAr($o['paymentMethod'] ?? null),
             'reason' => (string) ($reason ?? ''),
         ];
-        // Resolve default-or-override text for a recipient, or null to SKIP
-        // (disabled). $default is the rich hardcoded message.
-        $resolve = function (string $recipient, ?string $default) use ($event, $ctx): ?string {
-            if ($default === null && $event === null) return null;
-            $rule = $event ? notifRule($event, $recipient) : ['enabled' => true, 'override' => null];
-            if (!$rule['enabled']) return null;
-            if ($rule['override'] !== null) { $r = notifRender($rule['override'], $ctx); return $r !== '' ? $r : null; }
-            return $default;
-        };
-
-        // Header + the customer's own order summary, reused across their messages.
-        $custSummary = "🧾 الطلب رقم *#{$no}*\nالخدمة: {$svc}"
+        // ─────────────────────────────────────────────────────────────────
+        // SINGLE SOURCE OF TRUTH: every message is the catalog template for
+        // (event, recipient) — the admin's saved override if present, else the
+        // rich default from notifDefaultCatalog(). No parallel hardcoded copies
+        // anymore: what the editor shows (and previews) is EXACTLY what is sent.
+        // These block variables let one template reproduce the full rich
+        // message; each is self-contained (carries its own icon/label) and is
+        // empty when not applicable, so an absent block leaves no dangling line.
+        $catAr = waCategoryAr($o['category'] ?? null);
+        $ctx['serviceFull']    = $svc . ($catAr && $catAr !== $svc ? " · {$catAr}" : '');
+        $ctx['customerLine']   = "👤 {$custName}" . (!empty($o['cust_phone']) ? " — {$o['cust_phone']}" : '');
+        $ctx['driverLine']     = $drvName ? ("🛵 السائق: {$drvName}" . (!empty($o['drv_phone']) ? " — {$o['drv_phone']}" : '')) : '';
+        $ctx['itemsBlock']     = $d['items'] ? "🛒 {$d['items']}" : '';
+        $ctx['shippingBlock']  = $d['shipping'] ? "📦 {$d['shipping']}" : '';
+        $ctx['locationsBlock'] = $d['locations'] ?: '';
+        $ctx['paymentLine']    = "💳 {$d['pay']}";
+        $ctx['payment']        = (string) $d['pay'];
+        $ctx['priceBlock']     = (string) $d['price'];
+        $ctx['summary']        = "🧾 الطلب رقم *#{$no}*\nالخدمة: {$svc}"
             . ($d['items'] ? "\n\n🛒 التفاصيل:\n{$d['items']}" : '')
             . ($d['shipping'] ? "\n\n📦 {$d['shipping']}" : '')
             . ($d['locations'] ? "\n\n{$d['locations']}" : '')
             . "\n\n💳 الدفع: {$d['pay']}\n{$d['price']}";
+        $ctx['collect']        = ($o['paymentStatus'] ?? '') === 'PAID'
+            ? 'مدفوع — لا تُحصّل شيئاً'
+            : ('حصّل *' . ($d['total'] ?? '') . '* (' . waPayMethodAr($o['paymentMethod'] ?? null) . ')');
 
-        // ── CUSTOMER ── friendly line + full order summary
-        $custMsg = null;
-        switch ($status) {
-            case 'PRICED':
-                $custMsg = "تميم للتوصيل 🚚\nتم تسعير طلبك — راجع التفاصيل ووافق من التطبيق:\n\n{$custSummary}";
-                break;
-            case 'ACCEPTED':
-                $custMsg = "تميم للتوصيل ✅\nتم قبول طلبك وجارٍ تجهيزه:\n\n{$custSummary}";
-                break;
-            case 'DRIVER_ASSIGNED':
-                $custMsg = "تميم للتوصيل 🚚\nالكابتن *" . ($drvName ?: 'المندوب') . "* في الطريق لطلبك"
-                    . (!empty($o['drv_phone']) ? " — للتواصل: {$o['drv_phone']}" : '') . "\n\n{$custSummary}";
-                break;
-            case 'PICKED_UP':
-                $custMsg = "تميم للتوصيل 🚚\nتم استلام طلبك *#{$no}* وهو في الطريق إليك."
-                    . ($d['total'] ? "\nالمطلوب دفعه: *{$d['total']}* ({$d['pay']})" : '');
-                break;
-            case 'IN_ROUTE':
-                $custMsg = "تميم للتوصيل 🚚\nمندوبك على وشك الوصول بطلب *#{$no}*. جهّز استلامك 😊"
-                    . ($d['total'] ? "\nالمطلوب: *{$d['total']}*" : '');
-                break;
-            case 'DELIVERED':
-            case 'COMPLETED':
-                $custMsg = "تميم للتوصيل ✅\nتم توصيل طلبك *#{$no}* بنجاح — شكراً لاختيارك تميم 🌟\nقيّم تجربتك من التطبيق.\n\n{$custSummary}";
-                break;
-            case 'CANCELLED':
-                $custMsg = "تميم للتوصيل\nنأسف، تم إلغاء طلبك *#{$no}*." . ($reason ? "\nالسبب: {$reason}" : '') . "\n\n{$custSummary}";
-                break;
-        }
-        $custMsg = $resolve('CUSTOMER', $custMsg);
+        // Resolve the template for a recipient → rendered text, or null to SKIP
+        // (event unmapped, recipient absent from catalog, disabled, or empty).
+        $render = function (string $recipient) use ($event, $ctx): ?string {
+            if ($event === null) return null;
+            $rule = notifRule($event, $recipient);
+            if (!$rule['enabled']) return null;
+            $tpl = $rule['override'];
+            if ($tpl === null) {
+                foreach (notifDefaultCatalog() as $t) {
+                    if ($t['event'] === $event && $t['recipient'] === $recipient) { $tpl = $t['default']; break; }
+                }
+            }
+            if ($tpl === null || $tpl === '') return null;
+            $r = notifRender($tpl, $ctx);
+            return $r !== '' ? $r : null;
+        };
+
+        // ── CUSTOMER ──
+        $custMsg = $render('CUSTOMER');
         if ($custMsg && !empty($o['cust_phone'])) { waEnqueue($o['cust_phone'], $custMsg); $sent = true; }
 
-        // ── DRIVER ── full operational packet (only the stages they act on)
-        $drvMsg = null;
-        if (in_array($status, ['DRIVER_ASSIGNED', 'CANCELLED'], true)) {
-            if ($status === 'DRIVER_ASSIGNED') {
-                $collect = ($o['paymentStatus'] ?? '') === 'PAID'
-                    ? 'مدفوع — لا تُحصّل شيئاً'
-                    : 'حصّل *' . ($d['total']) . '* (' . waPayMethodAr($o['paymentMethod'] ?? null) . ')';
-                $drvMsg = "🚚 *طلب جديد مُسند إليك* #{$no}\n"
-                    . "الخدمة: {$svc}\n"
-                    . "👤 العميل: {$custName}" . (!empty($o['cust_phone']) ? " — {$o['cust_phone']}" : '') . "\n"
-                    . ($d['locations'] ? "\n{$d['locations']}\n" : '')
-                    . ($d['items'] ? "\n🛒 المطلوب:\n{$d['items']}\n" : '')
-                    . ($d['shipping'] ? "\n📦 {$d['shipping']}\n" : '')
-                    . "\n💰 {$collect}"
-                    . (!empty($o['scheduledFor']) ? "\n🕒 موعد: {$o['scheduledFor']}" : '');
-            } else {
-                $drvMsg = "⛔ *أُلغي الطلب #{$no}* — لا حاجة للتوصيل." . ($reason ? "\nالسبب: {$reason}" : '');
-            }
-        }
-        $drvMsg = $resolve('DRIVER', $drvMsg);
+        // ── DRIVER ──
+        $drvMsg = $render('DRIVER');
         if ($drvMsg && !empty($o['drv_phone'])) { waEnqueue($o['drv_phone'], $drvMsg); $sent = true; }
 
-        // ── ADMIN ── full internal summary incl. financials
-        $admMsg = null;
-        $adminHead = [
-            'NEW' => '🆕 طلب جديد', 'PRICED' => '💲 تم تسعير طلب', 'DRIVER_ASSIGNED' => '🚚 تعيين سائق لطلب',
-            'DELIVERED' => '✅ اكتمل طلب', 'COMPLETED' => '✅ اكتمل طلب', 'CANCELLED' => '⛔ أُلغي طلب',
-        ][$status] ?? null;
-        if ($adminHead !== null) {
-            $fin = [];
-            if ($o['merchantPayout'] !== null && $o['merchantPayout'] !== '')     $fin[] = 'مستحق التاجر: ' . waMoney($o['merchantPayout']);
-            if ($o['platformCommission'] !== null && $o['platformCommission'] !== '') $fin[] = 'عمولة تميم: ' . waMoney($o['platformCommission']);
-            $catAr = waCategoryAr($o['category'] ?? null);
-            $admMsg = "{$adminHead} *#{$no}*\n"
-                . 'الخدمة: ' . $svc . ($catAr && $catAr !== $svc ? " · {$catAr}" : '') . "\n"
-                . "👤 {$custName}" . (!empty($o['cust_phone']) ? " — {$o['cust_phone']}" : '') . "\n"
-                . ($drvName ? "🛵 السائق: {$drvName}" . (!empty($o['drv_phone']) ? " — {$o['drv_phone']}" : '') . "\n" : '')
-                . ($d['items'] ? "\n🛒 {$d['items']}\n" : '')
-                . ($d['locations'] ? "\n{$d['locations']}\n" : '')
-                . "\n💳 {$d['pay']}\n{$d['price']}"
-                . ($fin ? "\n" . implode("\n", $fin) : '')
-                . ($status === 'CANCELLED' && $reason ? "\nسبب الإلغاء: {$reason}" : '');
-        }
-        // The oversight copy is the GROUP recipient. Disabling ORDER_x_GROUP in
-        // the editor silences it; an override replaces its text.
-        $admMsg = $resolve('GROUP', $admMsg);
+        // ── SUPERVISOR ── the business / admin oversight number
+        $supMsg = $render('SUPERVISOR');
         $adminNo = waAdminNumber();
-        if ($admMsg && $adminNo) { waEnqueue($adminNo, $admMsg); $sent = true; }
-        // Also deliver the oversight copy to a linked WhatsApp GROUP, when the
-        // admin has picked one and enabled it.
-        if ($admMsg) {
+        if ($supMsg && $adminNo) { waEnqueue($adminNo, $supMsg); $sent = true; }
+
+        // ── GROUP ── the linked WhatsApp group (when one is picked + enabled)
+        $grpMsg = $render('GROUP');
+        if ($grpMsg) {
             $grp = notifReadSetting('whatsapp_order_group');
-            if (!empty($grp['enabled']) && !empty($grp['groupId'])) {
-                waEnqueue((string) $grp['groupId'], $admMsg); $sent = true;
-            }
+            if (!empty($grp['enabled']) && !empty($grp['groupId'])) { waEnqueue((string) $grp['groupId'], $grpMsg); $sent = true; }
         }
 
-        // Extra per-event recipients (a second supervisor, the owner, …). Each
-        // enabled row gets its own text, or — when blank — the GROUP/admin copy.
+        // ── EXTRA per-event recipients ── each enabled row gets its own text,
+        // or — when left blank — the supervisor / group / customer copy.
         if ($event) {
             $extra = notifReadSetting('notification_recipients');
             foreach ((array) ($extra[$event] ?? []) as $r) {
                 $phone = trim((string) ($r['phone'] ?? ''));
                 if ($phone === '' || (array_key_exists('enabled', $r) && !$r['enabled'])) continue;
                 $txt = trim((string) ($r['text'] ?? ''));
-                $msg = $txt !== '' ? notifRender($txt, $ctx) : ($admMsg ?: $custMsg);
+                $msg = $txt !== '' ? notifRender($txt, $ctx) : ($supMsg ?: ($grpMsg ?: $custMsg));
                 if ($msg) { waEnqueue($phone, $msg); $sent = true; }
             }
         }
-
         if ($sent) {
             try { db()->prepare("UPDATE `Order` SET `whatsappSentAt` = NOW(3) WHERE id = ?")->execute([$orderId]); } catch (Throwable $e) {}
         }
@@ -1398,30 +1355,60 @@ function notifWriteSetting(string $key, array $value, ?string $uid): void {
 function notifDefaultCatalog(): array {
     $ev = fn($event, $recipient, $label, $default) => compact('event', 'recipient', 'label', 'default')
         + ['key' => $event . '_' . $recipient];
+    // Shared oversight body for the supervisor + the group: identical detail for
+    // both, each event supplying only its own header. Blocks collapse when empty.
+    $oversight = fn(string $header) => "{$header} *#{{orderNumber}}*\n"
+        . "الخدمة: {{serviceFull}}\n"
+        . "{{customerLine}}\n"
+        . "{{driverLine}}\n\n"
+        . "{{itemsBlock}}\n"
+        . "{{locationsBlock}}\n"
+        . "{{paymentLine}}\n"
+        . "{{priceBlock}}";
     return [
-        $ev('ORDER_NEW', 'SUPERVISOR', 'المشرف', "🆕 طلب جديد #{{orderNumber}} — {{customerName}}"),
-        $ev('ORDER_NEW', 'GROUP', 'جروب الإدارة', "🆕 طلب جديد #{{orderNumber}}\nالعميل: {{customerName}}\nالخدمة: {{serviceName}}"),
-        $ev('ORDER_PRICED', 'CUSTOMER', 'العميل', "تميم للتوصيل 🚚\nتم تسعير طلبك #{{orderNumber}} — راجع التفاصيل ووافق من التطبيق.\nالإجمالي: {{price}}"),
-        $ev('ORDER_PRICED', 'GROUP', 'جروب الإدارة', "💲 تم تسعير الطلب #{{orderNumber}} — {{price}}"),
-        $ev('ORDER_ACCEPTED', 'CUSTOMER', 'العميل', "تميم للتوصيل ✅\nتم قبول طلبك #{{orderNumber}} وجارٍ تجهيزه."),
-        $ev('DRIVER_ASSIGNED', 'CUSTOMER', 'العميل', "تميم للتوصيل 🚚\nالكابتن {{driverName}} في الطريق لطلبك #{{orderNumber}} — للتواصل: {{driverPhone}}"),
-        $ev('DRIVER_ASSIGNED', 'DRIVER', 'السائق', "🚚 طلب جديد مُسند إليك #{{orderNumber}}\nالعميل: {{customerName}} — {{customerPhone}}\nعنوان التسليم: {{deliveryAddress}}\nالمطلوب تحصيله: {{price}}"),
-        $ev('DRIVER_ASSIGNED', 'GROUP', 'جروب الإدارة', "🚚 تعيين سائق {{driverName}} للطلب #{{orderNumber}}"),
-        $ev('PICKED_UP', 'CUSTOMER', 'العميل', "تميم للتوصيل 🚚\nتم استلام طلبك #{{orderNumber}} وهو في الطريق إليك."),
-        $ev('IN_ROUTE', 'CUSTOMER', 'العميل', "تميم للتوصيل 🚚\nمندوبك على وشك الوصول بطلب #{{orderNumber}}. جهّز استلامك 😊"),
-        $ev('DELIVERED', 'CUSTOMER', 'العميل', "تميم للتوصيل ✅\nتم توصيل طلبك #{{orderNumber}} بنجاح — شكراً لاختيارك تميم 🌟\nقيّم تجربتك من التطبيق."),
-        $ev('DELIVERED', 'GROUP', 'جروب الإدارة', "✅ اكتمل الطلب #{{orderNumber}}"),
-        $ev('CANCELLED', 'CUSTOMER', 'العميل', "تميم للتوصيل\nنأسف، تم إلغاء طلبك #{{orderNumber}}.\nالسبب: {{reason}}"),
-        $ev('CANCELLED', 'DRIVER', 'السائق', "⛔ أُلغي الطلب #{{orderNumber}} — لا حاجة للتوصيل.\nالسبب: {{reason}}"),
-        $ev('CANCELLED', 'GROUP', 'جروب الإدارة', "⛔ أُلغي الطلب #{{orderNumber}}\nالسبب: {{reason}}"),
+        // ═══ ORDER_NEW ═══
+        $ev('ORDER_NEW', 'CUSTOMER', 'العميل', "تميم للتوصيل 🚚\nاستلمنا طلبك رقم *#{{orderNumber}}* وجارٍ مراجعته. هنطمنك على كل خطوة 😊"),
+        $ev('ORDER_NEW', 'SUPERVISOR', 'المشرف', $oversight('🆕 طلب جديد')),
+        $ev('ORDER_NEW', 'GROUP', 'جروب الإدارة', $oversight('🆕 طلب جديد')),
+        // ═══ ORDER_PRICED ═══
+        $ev('ORDER_PRICED', 'CUSTOMER', 'العميل', "تميم للتوصيل 🚚\nتم تسعير طلبك — راجع التفاصيل ووافق من التطبيق:\n\n{{summary}}"),
+        $ev('ORDER_PRICED', 'SUPERVISOR', 'المشرف', $oversight('💲 تم تسعير طلب')),
+        $ev('ORDER_PRICED', 'GROUP', 'جروب الإدارة', $oversight('💲 تم تسعير طلب')),
+        // ═══ ORDER_ACCEPTED ═══
+        $ev('ORDER_ACCEPTED', 'CUSTOMER', 'العميل', "تميم للتوصيل ✅\nتم قبول طلبك وجارٍ تجهيزه:\n\n{{summary}}"),
+        // ═══ DRIVER_ASSIGNED ═══
+        $ev('DRIVER_ASSIGNED', 'CUSTOMER', 'العميل', "تميم للتوصيل 🚚\nالكابتن *{{driverName}}* في الطريق لطلبك — للتواصل: {{driverPhone}}\n\n{{summary}}"),
+        $ev('DRIVER_ASSIGNED', 'DRIVER', 'السائق', "🚚 *طلب جديد مُسند إليك* #{{orderNumber}}\nالخدمة: {{serviceFull}}\n{{customerLine}}\n{{locationsBlock}}\n\n{{itemsBlock}}\n\n💰 {{collect}}"),
+        $ev('DRIVER_ASSIGNED', 'SUPERVISOR', 'المشرف', $oversight('🚚 تعيين سائق لطلب')),
+        $ev('DRIVER_ASSIGNED', 'GROUP', 'جروب الإدارة', $oversight('🚚 تعيين سائق لطلب')),
+        // ═══ PICKED_UP ═══
+        $ev('PICKED_UP', 'CUSTOMER', 'العميل', "تميم للتوصيل 🚚\nتم استلام طلبك *#{{orderNumber}}* وهو في الطريق إليك.\nالمطلوب دفعه: *{{price}}* ({{payment}})"),
+        // ═══ IN_ROUTE ═══
+        $ev('IN_ROUTE', 'CUSTOMER', 'العميل', "تميم للتوصيل 🚚\nمندوبك على وشك الوصول بطلب *#{{orderNumber}}*. جهّز استلامك 😊\nالمطلوب: *{{price}}*"),
+        // ═══ DELIVERED ═══
+        $ev('DELIVERED', 'CUSTOMER', 'العميل', "تميم للتوصيل ✅\nتم توصيل طلبك *#{{orderNumber}}* بنجاح — شكراً لاختيارك تميم 🌟\nقيّم تجربتك من التطبيق."),
+        $ev('DELIVERED', 'SUPERVISOR', 'المشرف', $oversight('✅ اكتمل طلب')),
+        $ev('DELIVERED', 'GROUP', 'جروب الإدارة', $oversight('✅ اكتمل طلب')),
+        // ═══ CANCELLED ═══
+        $ev('CANCELLED', 'CUSTOMER', 'العميل', "تميم للتوصيل\nنأسف، تم إلغاء طلبك *#{{orderNumber}}*.\nالسبب: {{reason}}"),
+        $ev('CANCELLED', 'DRIVER', 'السائق', "⛔ *أُلغي الطلب #{{orderNumber}}* — لا حاجة للتوصيل.\nالسبب: {{reason}}"),
+        $ev('CANCELLED', 'SUPERVISOR', 'المشرف', $oversight('⛔ أُلغي طلب') . "\nسبب الإلغاء: {{reason}}"),
+        $ev('CANCELLED', 'GROUP', 'جروب الإدارة', $oversight('⛔ أُلغي طلب') . "\nسبب الإلغاء: {{reason}}"),
     ];
 }
 function notifVariables(): array {
     return [
         'orderNumber' => 'رقم الطلب', 'customerName' => 'اسم العميل', 'customerPhone' => 'هاتف العميل',
         'driverName' => 'اسم المندوب', 'driverPhone' => 'هاتف المندوب', 'price' => 'الإجمالي',
-        'serviceName' => 'الخدمة', 'pickupAddress' => 'عنوان الاستلام', 'deliveryAddress' => 'عنوان التسليم',
-        'paymentMethod' => 'طريقة الدفع', 'reason' => 'سبب الإلغاء',
+        'serviceName' => 'الخدمة', 'serviceFull' => 'الخدمة + التصنيف', 'pickupAddress' => 'عنوان الاستلام',
+        'deliveryAddress' => 'عنوان التسليم', 'paymentMethod' => 'طريقة الدفع', 'payment' => 'حالة الدفع',
+        'reason' => 'سبب الإلغاء',
+        // Rich composed blocks (self-contained, empty when not applicable):
+        'summary' => 'ملخص الطلب الكامل للعميل', 'customerLine' => 'سطر العميل (👤 الاسم — الهاتف)',
+        'driverLine' => 'سطر السائق (🛵 الاسم — الهاتف)', 'itemsBlock' => 'المنتجات (🛒)',
+        'locationsBlock' => 'العناوين', 'shippingBlock' => 'تفاصيل الشحن (📦)',
+        'paymentLine' => 'سطر الدفع (💳)', 'priceBlock' => 'تفاصيل السعر والإجمالي',
+        'collect' => 'تعليمات التحصيل للسائق',
     ];
 }
 /** Render a template string against a context: replace {{var}}, drop dangling
@@ -2143,7 +2130,10 @@ if ($method === 'POST' && $path === '/admin/orders') {
     // its goods / delivery / commission / payout identically.
     computeOrderFinancials($id);
     alertNewOrder($id, (string) $orderNumber);
-    // WhatsApp the on-shift supervisor about the new order (+ record dispatch).
+    // Customer + group + extra recipients via the editable templates.
+    notifyOrderParties($id, 'NEW');
+    // Additionally dispatch to the on-shift supervisor(s) (+ record dispatch) —
+    // the Supervisor-table shift feature, distinct from the business number.
     try {
         [$dow, $mins] = nowCairo();
         foreach (db()->query("SELECT * FROM `Supervisor` WHERE isActive = 1")->fetchAll() as $sup) {
@@ -5014,19 +5004,9 @@ if ($method === 'POST' && $path === '/orders/cart') {
     // so app, dashboard and manual orders can never disagree.
     computeOrderFinancials($parentId);
     alertNewOrder($parentId, $parentNo);
-    // Best-effort side channels — never fail the order.
-    try {
-        $ph = db()->prepare('SELECT phone FROM `User` WHERE id = ?');
-        $ph->execute([$uid]);
-        $cu = $ph->fetch();
-        if ($cu) waEnqueue($cu['phone'], "تميم للتوصيل 🚚\nتم استلام طلبك رقم *#$parentNo*\nجاري المراجعة والتسعير، هنبعتلك التفاصيل حالاً.");
-        [$dow, $mins] = nowCairo();
-        foreach (db()->query('SELECT * FROM `Supervisor` WHERE isActive = 1')->fetchAll() as $sup) {
-            foreach (shiftsForSupervisor($sup['id']) as $sh) {
-                if (shiftCoversNow($sh, $dow, $mins)) { waEnqueue($sup['whatsappPhone'] ?? null, "🆕 طلب جديد *#$parentNo*\nالعنوان: $addr"); break; }
-            }
-        }
-    } catch (Throwable $e) { error_log('[api.php] order notify failed: ' . $e->getMessage()); }
+    // New-order WhatsApp fan-out — customer + supervisor + group + extras via
+    // the editable notification templates (single source of truth).
+    notifyOrderParties($parentId, 'NEW');
 
     $st = db()->prepare('SELECT * FROM `Order` WHERE id = ?');
     $st->execute([$parentId]);
@@ -5057,6 +5037,7 @@ if (preg_match('#^/orders/from/([^/]+)$#', $path, $mm) && $method === 'POST') {
     orderHistory($id, null, 'NEW', $uid, 'CUSTOMER', 'Reorder from ' . $src['orderNumber']);
     computeOrderFinancials($id);
     alertNewOrder($id, $no);
+    notifyOrderParties($id, 'NEW'); // customer + supervisor + group + extras via templates
     $st->execute([$id]);
     jsonOk(orderRow($st->fetch()), 201); // OrdersScreen toasts newOrder.orderNumber
 }
@@ -5166,18 +5147,10 @@ if ($method === 'POST' && $path === '/orders') {
     }
     orderHistory($id, null, 'NEW', $uid, 'CUSTOMER', 'Order placed');
     notifyUser($uid, 'ORDER_STATUS', 'Order received', 'تم استلام طلبك', "Order $no received", "طلبك رقم $no تم استلامه وجاري مراجعته", ['orderId' => $id, 'orderNumber' => $no]);
-    try {
-        $ph = db()->prepare('SELECT phone FROM `User` WHERE id = ?');
-        $ph->execute([$uid]);
-        $cu = $ph->fetch();
-        if ($cu) waEnqueue($cu['phone'], "تميم للتوصيل 🚚\nتم استلام طلبك رقم *#$no*\nجاري المراجعة والتسعير.");
-        [$dow, $mins] = nowCairo();
-        foreach (db()->query('SELECT * FROM `Supervisor` WHERE isActive = 1')->fetchAll() as $sup) {
-            foreach (shiftsForSupervisor($sup['id']) as $sh) {
-                if (shiftCoversNow($sh, $dow, $mins)) { waEnqueue($sup['whatsappPhone'] ?? null, "🆕 طلب جديد *#$no*"); break; }
-            }
-        }
-    } catch (Throwable $e) { error_log('[api.php] order notify failed: ' . $e->getMessage()); }
+    // New-order WhatsApp fan-out — customer + supervisor + group + extra
+    // recipients, all through the editable notification templates (one source
+    // of truth). Replaces the old hardcoded customer + on-shift supervisor sends.
+    notifyOrderParties($id, 'NEW');
     $st = db()->prepare('SELECT * FROM `Order` WHERE id = ?');
     $st->execute([$id]);
     jsonOk(orderRow($st->fetch()), 201);
