@@ -253,6 +253,12 @@ model DriverProfile {
   vehiclePlate    String
   nationalId      String?
   licenseImageUrl String?
+  /// Uploaded documents shown on the driver card + profile: a photo of the
+  /// vehicle and both sides of the national ID. The driver's own photo lives on
+  /// User.avatarUrl.
+  vehicleImageUrl String?         @db.VarChar(500)
+  idCardFrontUrl  String?         @db.VarChar(500)
+  idCardBackUrl   String?         @db.VarChar(500)
   currentLat      Decimal?     @db.Decimal(10, 7)
   currentLng      Decimal?     @db.Decimal(10, 7)
   lastLocationAt  DateTime?

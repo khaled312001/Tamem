@@ -1,5 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
+  IdCard,
+  ImagePlus,
   Loader2,
   MessageSquare,
   Pencil,
@@ -11,7 +13,8 @@ import {
   Truck,
   X,
 } from 'lucide-react';
-import { useState } from 'react';
+import { useId, useState } from 'react';
+import type { ReactNode } from 'react';
 import { toast } from 'sonner';
 
 import { DriverStatusBadge } from '../components/ui/Badge.js';
@@ -21,6 +24,7 @@ import { Field, Input } from '../components/ui/Input.js';
 import { PhoneInput } from '../components/ui/PhoneInput.js';
 import { EmptyState, TableSkeleton } from '../components/ui/Skeleton.js';
 import { api } from '../lib/api.js';
+import { uploadFile } from '../lib/uploadFile.js';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Row = any;
@@ -43,6 +47,90 @@ function ShareHint({ value }: { value: string }) {
       <span className="font-bold text-emerald-600">نسبة السائق: {d}%</span>
       <span className="text-muted-foreground">·</span>
       <span className="font-bold text-brand-red">نسبة الشركة: {c}%</span>
+    </div>
+  );
+}
+
+/** Grouped section wrapper for the driver forms — a titled block with a divider. */
+function FormSection({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <div className="space-y-3">
+      <div className="text-xs font-black text-brand-red border-b border-border pb-1">{title}</div>
+      {children}
+    </div>
+  );
+}
+
+/** Reusable image picker: click-to-upload with preview, spinner, and remove.
+ *  Uploads via POST /uploads and stores the returned URL. */
+function ImageUploadField({
+  label,
+  value,
+  onChange,
+  icon,
+  aspect = 'square',
+}: {
+  label: string;
+  value: string;
+  onChange: (url: string) => void;
+  icon?: ReactNode;
+  aspect?: 'square' | 'card';
+}) {
+  const inputId = useId();
+  const [busy, setBusy] = useState(false);
+  const box = aspect === 'card' ? 'aspect-[16/10]' : 'aspect-square';
+  const onFile = async (file?: File) => {
+    if (!file) return;
+    if (!file.type.startsWith('image/')) {
+      toast.error('من فضلك اختر صورة');
+      return;
+    }
+    setBusy(true);
+    try {
+      const r = await uploadFile(file);
+      onChange(r.url);
+    } catch (e) {
+      toast.error((e as Error).message || 'فشل رفع الصورة');
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div>
+      <div className="text-xs font-bold text-muted-foreground mb-1">{label}</div>
+      <label
+        htmlFor={inputId}
+        className={`relative ${box} w-full rounded-xl border-2 border-dashed border-border overflow-hidden flex items-center justify-center cursor-pointer bg-muted/30 hover:border-brand-red/60 transition`}
+      >
+        {value ? (
+          <img src={value} alt={label} className="w-full h-full object-cover" />
+        ) : (
+          <div className="flex flex-col items-center gap-1 text-muted-foreground">
+            {icon ?? <ImagePlus className="w-6 h-6" />}
+            <span className="text-[11px]">اضغط للرفع</span>
+          </div>
+        )}
+        {busy && (
+          <div className="absolute inset-0 bg-white/70 flex items-center justify-center">
+            <Loader2 className="w-5 h-5 animate-spin text-brand-red" />
+          </div>
+        )}
+        <input
+          id={inputId}
+          type="file"
+          accept="image/*"
+          className="hidden"
+          onChange={(e) => onFile(e.target.files?.[0])}
+        />
+      </label>
+      {value && (
+        <button
+          onClick={() => onChange('')}
+          className="mt-1 inline-flex items-center gap-1 text-[11px] text-destructive hover:underline"
+        >
+          <X className="w-3 h-3" /> إزالة
+        </button>
+      )}
     </div>
   );
 }
@@ -103,9 +191,17 @@ export function DriversPage() {
           {(data.items as Row[]).map((d) => (
             <div key={d.id} className="bg-white rounded-xl border border-border p-5">
               <div className="flex items-start gap-3">
-                <div className="w-12 h-12 rounded-full bg-brand-red text-white flex items-center justify-center font-bold">
-                  {d.name?.[0]?.toUpperCase() ?? '?'}
-                </div>
+                {d.avatarUrl ? (
+                  <img
+                    src={d.avatarUrl}
+                    alt={d.name}
+                    className="w-12 h-12 rounded-full object-cover border border-border"
+                  />
+                ) : (
+                  <div className="w-12 h-12 rounded-full bg-brand-red text-white flex items-center justify-center font-bold">
+                    {d.name?.[0]?.toUpperCase() ?? '?'}
+                  </div>
+                )}
                 <div className="flex-1">
                   <div className="font-bold">{d.name}</div>
                   <div className="text-xs text-muted-foreground" dir="ltr">
@@ -188,21 +284,24 @@ export function DriversPage() {
 
 function EditDriverDialog({ driver, onClose }: { driver: Row; onClose: () => void }) {
   const qc = useQueryClient();
-  const [name, setName] = useState<string>(driver.name ?? '');
-  const [phone, setPhone] = useState<string>(driver.phone ?? '');
-  const [governorate, setGovernorate] = useState<string>(driver.driverProfile?.governorate ?? '');
-  const [vehicleType, setVehicleType] = useState<string>(driver.driverProfile?.vehicleType ?? '');
-  const [vehiclePlate, setVehiclePlate] = useState<string>(
-    driver.driverProfile?.vehiclePlate ?? '',
-  );
-  const [nationalId, setNationalId] = useState<string>(driver.driverProfile?.nationalId ?? '');
-  const [notes, setNotes] = useState<string>(driver.driverProfile?.notes ?? '');
-  const [deliverySharePct, setDeliverySharePct] = useState<string>(
-    String(driver.driverProfile?.deliverySharePct ?? 0),
-  );
+  const [f, setF] = useState({
+    name: driver.name ?? '',
+    phone: driver.phone ?? '',
+    governorate: driver.driverProfile?.governorate ?? '',
+    vehicleType: driver.driverProfile?.vehicleType ?? '',
+    vehiclePlate: driver.driverProfile?.vehiclePlate ?? '',
+    nationalId: driver.driverProfile?.nationalId ?? '',
+    notes: driver.driverProfile?.notes ?? '',
+    deliverySharePct: String(driver.driverProfile?.deliverySharePct ?? 0),
+    avatarUrl: driver.avatarUrl ?? driver.driverProfile?.avatarUrl ?? '',
+    vehicleImageUrl: driver.driverProfile?.vehicleImageUrl ?? '',
+    idCardFrontUrl: driver.driverProfile?.idCardFrontUrl ?? '',
+    idCardBackUrl: driver.driverProfile?.idCardBackUrl ?? '',
+  });
   const [secondaryPhones, setSecondaryPhones] = useState<string[]>(
     Array.isArray(driver.secondaryPhones) ? driver.secondaryPhones : [],
   );
+  const set = (k: keyof typeof f) => (v: string) => setF((p) => ({ ...p, [k]: v }));
 
   const mut = useMutation({
     mutationFn: (data: Record<string, unknown>) => api.adminUpdateDriver(driver.id, data),
@@ -215,42 +314,160 @@ function EditDriverDialog({ driver, onClose }: { driver: Row; onClose: () => voi
   });
 
   return (
-    <Dialog open onOpenChange={(o) => !o && onClose()} title="تعديل بيانات السائق" size="md">
-      <div className="space-y-3">
-        <Field label="الاسم">
-          <Input value={name} onChange={(e) => setName(e.target.value)} />
-        </Field>
-        <Field label="رقم الهاتف الرئيسي (للدخول)">
-          <PhoneInput value={phone} onChange={setPhone} />
-        </Field>
-        <Field label="الرقم القومي">
-          <Input value={nationalId} onChange={(e) => setNationalId(e.target.value)} />
-        </Field>
-        <Field label="المحافظة">
-          <Input value={governorate} onChange={(e) => setGovernorate(e.target.value)} />
-        </Field>
-        <div className="grid grid-cols-2 gap-3">
-          <Field label="نوع المركبة">
-            <select
-              value={vehicleType}
-              onChange={(e) => setVehicleType(e.target.value)}
-              className="w-full px-3 py-2 border border-border rounded-lg text-sm"
-            >
-              <option value="">—</option>
-              {VEHICLE_TYPES.map((v) => (
-                <option key={v} value={v}>
-                  {v}
-                </option>
-              ))}
-            </select>
-          </Field>
-          <Field label="رقم اللوحة">
-            <Input value={vehiclePlate} onChange={(e) => setVehiclePlate(e.target.value)} />
-          </Field>
+    <Dialog open onOpenChange={(o) => !o && onClose()} title="تعديل بيانات السائق" size="lg">
+      <DriverForm
+        f={f}
+        set={set}
+        secondaryPhones={secondaryPhones}
+        setSecondaryPhones={setSecondaryPhones}
+        submitting={mut.isPending}
+        submitLabel="حفظ التغييرات"
+        onSubmit={() =>
+          mut.mutate({
+            name: f.name.trim() || undefined,
+            phone: f.phone.trim() || undefined,
+            nationalId: f.nationalId.trim() || undefined,
+            governorate: f.governorate.trim() || undefined,
+            vehicleType: f.vehicleType.trim() || undefined,
+            vehiclePlate: f.vehiclePlate.trim() || undefined,
+            notes: f.notes.trim() || undefined,
+            deliverySharePct: clampPct(f.deliverySharePct),
+            avatarUrl: f.avatarUrl,
+            vehicleImageUrl: f.vehicleImageUrl,
+            idCardFrontUrl: f.idCardFrontUrl,
+            idCardBackUrl: f.idCardBackUrl,
+            secondaryPhones: secondaryPhones.map((p) => p.trim()).filter(Boolean),
+          })
+        }
+      />
+    </Dialog>
+  );
+}
+
+/** Shared body for add + edit — the sectioned, image-friendly driver form. */
+type DriverFormState = {
+  name: string;
+  phone: string;
+  governorate: string;
+  vehicleType: string;
+  vehiclePlate: string;
+  nationalId: string;
+  notes: string;
+  deliverySharePct: string;
+  avatarUrl: string;
+  vehicleImageUrl: string;
+  idCardFrontUrl: string;
+  idCardBackUrl: string;
+};
+
+function DriverForm({
+  f,
+  set,
+  secondaryPhones,
+  setSecondaryPhones,
+  submitting,
+  submitLabel,
+  onSubmit,
+  usePhoneComponent = true,
+}: {
+  f: DriverFormState;
+  set: (k: keyof DriverFormState) => (v: string) => void;
+  secondaryPhones: string[];
+  setSecondaryPhones: (v: string[]) => void;
+  submitting: boolean;
+  submitLabel: string;
+  onSubmit: () => void;
+  usePhoneComponent?: boolean;
+}) {
+  return (
+    <div className="space-y-5">
+      {/* Basic info + driver photo */}
+      <FormSection title="البيانات الأساسية">
+        <div className="flex flex-col sm:flex-row gap-4">
+          <div className="w-28 shrink-0">
+            <ImageUploadField label="صورة السائق" value={f.avatarUrl} onChange={set('avatarUrl')} />
+          </div>
+          <div className="flex-1 grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <Field label="الاسم" required>
+              <Input value={f.name} onChange={(e) => set('name')(e.target.value)} />
+            </Field>
+            <Field label="رقم الهاتف (للدخول)" required>
+              {usePhoneComponent ? (
+                <PhoneInput value={f.phone} onChange={set('phone')} />
+              ) : (
+                <Input dir="ltr" value={f.phone} onChange={(e) => set('phone')(e.target.value)} />
+              )}
+            </Field>
+            <Field label="الرقم القومي">
+              <Input
+                dir="ltr"
+                value={f.nationalId}
+                onChange={(e) => set('nationalId')(e.target.value)}
+              />
+            </Field>
+            <Field label="المحافظة" required>
+              <Input value={f.governorate} onChange={(e) => set('governorate')(e.target.value)} />
+            </Field>
+          </div>
         </div>
-        <Field label="ملاحظات">
-          <Input value={notes} onChange={(e) => setNotes(e.target.value)} />
-        </Field>
+      </FormSection>
+
+      {/* Vehicle */}
+      <FormSection title="بيانات المركبة">
+        <div className="flex flex-col sm:flex-row gap-4">
+          <div className="flex-1 grid grid-cols-1 sm:grid-cols-2 gap-3 content-start">
+            <Field label="نوع المركبة" required>
+              <select
+                value={f.vehicleType}
+                onChange={(e) => set('vehicleType')(e.target.value)}
+                className="w-full px-3 py-2 border border-input rounded-lg text-sm bg-white"
+              >
+                <option value="">— اختر —</option>
+                {VEHICLE_TYPES.map((v) => (
+                  <option key={v} value={v}>
+                    {v}
+                  </option>
+                ))}
+              </select>
+            </Field>
+            <Field label="رقم اللوحة" required>
+              <Input value={f.vehiclePlate} onChange={(e) => set('vehiclePlate')(e.target.value)} />
+            </Field>
+          </div>
+          <div className="w-full sm:w-44 shrink-0">
+            <ImageUploadField
+              label="صورة المركبة"
+              value={f.vehicleImageUrl}
+              onChange={set('vehicleImageUrl')}
+              icon={<Truck className="w-6 h-6" />}
+              aspect="card"
+            />
+          </div>
+        </div>
+      </FormSection>
+
+      {/* ID documents */}
+      <FormSection title="صور البطاقة (وش وضهر)">
+        <div className="grid grid-cols-2 gap-3">
+          <ImageUploadField
+            label="البطاقة — الوجه"
+            value={f.idCardFrontUrl}
+            onChange={set('idCardFrontUrl')}
+            icon={<IdCard className="w-6 h-6" />}
+            aspect="card"
+          />
+          <ImageUploadField
+            label="البطاقة — الظهر"
+            value={f.idCardBackUrl}
+            onChange={set('idCardBackUrl')}
+            icon={<IdCard className="w-6 h-6" />}
+            aspect="card"
+          />
+        </div>
+      </FormSection>
+
+      {/* Revenue share */}
+      <FormSection title="نسبة السائق">
         <Field label="نسبة السائق من رسوم التوصيل (%)">
           <Input
             type="number"
@@ -258,13 +475,16 @@ function EditDriverDialog({ driver, onClose }: { driver: Row; onClose: () => voi
             min={0}
             max={100}
             step="0.01"
-            value={deliverySharePct}
-            onChange={(e) => setDeliverySharePct(e.target.value)}
+            value={f.deliverySharePct}
+            onChange={(e) => set('deliverySharePct')(e.target.value)}
             placeholder="0 - 100"
           />
-          <ShareHint value={deliverySharePct} />
+          <ShareHint value={f.deliverySharePct} />
         </Field>
+      </FormSection>
 
+      {/* Extra numbers + notes */}
+      <FormSection title="أرقام احتياطية وملاحظات">
         <div>
           <div className="flex items-center justify-between mb-2">
             <span className="text-xs font-bold text-muted-foreground">أرقام احتياطية</span>
@@ -300,31 +520,18 @@ function EditDriverDialog({ driver, onClose }: { driver: Row; onClose: () => voi
             </div>
           ))}
         </div>
+        <Field label="ملاحظات">
+          <Input value={f.notes} onChange={(e) => set('notes')(e.target.value)} />
+        </Field>
+      </FormSection>
 
-        <div className="flex justify-end pt-2 border-t border-border">
-          <button
-            onClick={() =>
-              mut.mutate({
-                name: name.trim() || undefined,
-                phone: phone.trim() || undefined,
-                nationalId: nationalId.trim() || undefined,
-                governorate: governorate.trim() || undefined,
-                vehicleType: vehicleType.trim() || undefined,
-                vehiclePlate: vehiclePlate.trim() || undefined,
-                notes: notes.trim() || undefined,
-                deliverySharePct: clampPct(deliverySharePct),
-                secondaryPhones: secondaryPhones.map((p) => p.trim()).filter(Boolean),
-              })
-            }
-            disabled={mut.isPending}
-            className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-brand-red text-white font-bold disabled:opacity-60"
-          >
-            <Save className="w-4 h-4" />
-            {mut.isPending ? 'جاري الحفظ…' : 'حفظ التغييرات'}
-          </button>
-        </div>
+      <div className="flex justify-end pt-2 border-t border-border sticky bottom-0 bg-white">
+        <Button onClick={onSubmit} disabled={submitting}>
+          {submitting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+          {submitting ? 'جاري الحفظ…' : submitLabel}
+        </Button>
       </div>
-    </Dialog>
+    </div>
   );
 }
 
@@ -452,19 +659,42 @@ function DriverReviewsDialog({ driver, onClose }: { driver: Row; onClose: () => 
 
 function CreateDriverDialog({ onClose }: { onClose: () => void }) {
   const qc = useQueryClient();
-  const [form, setForm] = useState({
+  const [f, setFState] = useState<DriverFormState>({
     name: '',
     phone: '+20',
-    password: '',
+    governorate: 'قنا',
     vehicleType: VEHICLE_TYPES[0]!,
     vehiclePlate: '',
     nationalId: '',
-    governorate: 'قنا',
+    notes: '',
     deliverySharePct: '0',
+    avatarUrl: '',
+    vehicleImageUrl: '',
+    idCardFrontUrl: '',
+    idCardBackUrl: '',
   });
+  const [secondaryPhones, setSecondaryPhones] = useState<string[]>([]);
+  const set = (k: keyof DriverFormState) => (v: string) => setFState((p) => ({ ...p, [k]: v }));
+
   const mut = useMutation({
+    // No password field: the backend auto-generates one; the driver signs in
+    // via OTP / reset. We just send the profile + uploaded image URLs.
     mutationFn: () =>
-      api.adminCreateDriver({ ...form, deliverySharePct: clampPct(form.deliverySharePct) }),
+      api.adminCreateDriver({
+        name: f.name.trim(),
+        phone: f.phone.trim(),
+        governorate: f.governorate.trim(),
+        vehicleType: f.vehicleType.trim(),
+        vehiclePlate: f.vehiclePlate.trim(),
+        nationalId: f.nationalId.trim() || undefined,
+        notes: f.notes.trim() || undefined,
+        deliverySharePct: clampPct(f.deliverySharePct),
+        avatarUrl: f.avatarUrl || undefined,
+        vehicleImageUrl: f.vehicleImageUrl || undefined,
+        idCardFrontUrl: f.idCardFrontUrl || undefined,
+        idCardBackUrl: f.idCardBackUrl || undefined,
+        secondaryPhones: secondaryPhones.map((p) => p.trim()).filter(Boolean),
+      }),
     onSuccess: () => {
       toast.success('تم إضافة السائق');
       qc.invalidateQueries({ queryKey: ['admin', 'drivers'] });
@@ -472,77 +702,29 @@ function CreateDriverDialog({ onClose }: { onClose: () => void }) {
     },
     onError: (err: Error) => toast.error(err.message),
   });
+
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()} title="إضافة سائق" size="lg">
-      <div className="grid grid-cols-2 gap-3">
-        <Field label="الاسم" required>
-          <Input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
-        </Field>
-        <Field label="الهاتف" required>
-          <PhoneInput value={form.phone} onChange={(v) => setForm({ ...form, phone: v })} />
-        </Field>
-        <Field label="كلمة المرور" required>
-          <Input
-            type="password"
-            value={form.password}
-            onChange={(e) => setForm({ ...form, password: e.target.value })}
-            autoComplete="new-password"
-          />
-        </Field>
-        <Field label="نوع المركبة" required>
-          <select
-            value={form.vehicleType}
-            onChange={(e) => setForm({ ...form, vehicleType: e.target.value })}
-            className="w-full px-3 py-2 rounded-lg border border-input bg-white text-sm"
-          >
-            {VEHICLE_TYPES.map((v) => (
-              <option key={v} value={v}>
-                {v}
-              </option>
-            ))}
-          </select>
-        </Field>
-        <Field label="رقم اللوحة" required>
-          <Input
-            value={form.vehiclePlate}
-            onChange={(e) => setForm({ ...form, vehiclePlate: e.target.value })}
-          />
-        </Field>
-        <Field label="الرقم القومي">
-          <Input
-            value={form.nationalId}
-            onChange={(e) => setForm({ ...form, nationalId: e.target.value })}
-          />
-        </Field>
-        <Field label="المحافظة" required>
-          <Input
-            value={form.governorate}
-            onChange={(e) => setForm({ ...form, governorate: e.target.value })}
-          />
-        </Field>
-        <Field label="نسبة السائق من رسوم التوصيل (%)">
-          <Input
-            type="number"
-            dir="ltr"
-            min={0}
-            max={100}
-            step="0.01"
-            value={form.deliverySharePct}
-            onChange={(e) => setForm({ ...form, deliverySharePct: e.target.value })}
-            placeholder="0 - 100"
-          />
-          <ShareHint value={form.deliverySharePct} />
-        </Field>
-      </div>
-      <div className="flex justify-end gap-2 mt-4">
-        <Button variant="outline" size="md" onClick={onClose}>
-          إلغاء
-        </Button>
-        <Button onClick={() => mut.mutate()} disabled={mut.isPending}>
-          {mut.isPending && <Loader2 className="w-4 h-4 animate-spin" />}
-          إضافة
-        </Button>
-      </div>
+      <DriverForm
+        f={f}
+        set={set}
+        secondaryPhones={secondaryPhones}
+        setSecondaryPhones={setSecondaryPhones}
+        submitting={mut.isPending}
+        submitLabel="إضافة السائق"
+        onSubmit={() => {
+          if (
+            !f.name.trim() ||
+            !f.phone.trim() ||
+            !f.vehicleType.trim() ||
+            !f.vehiclePlate.trim()
+          ) {
+            toast.error('الاسم، الهاتف، نوع المركبة، ورقم اللوحة مطلوبين');
+            return;
+          }
+          mut.mutate();
+        }}
+      />
     </Dialog>
   );
 }
