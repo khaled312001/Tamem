@@ -1109,8 +1109,14 @@ function waMoney($v): ?string {
 function orderDetailBlocks(array $o): array {
     $b = [];
     // Items — the app writes a ready human-readable bullet list into Order.notes
-    // for product orders; fall back to structured OrderItem rows if present.
+    // for product orders. For free-text delivery orders the customer's typed
+    // request lives in customData.order_text (the "تفاصيل الطلب" field). Fall
+    // back to structured OrderItem rows if neither is present.
     $items = trim((string) ($o['notes'] ?? ''));
+    if ($items === '') {
+        $cd = json_decode((string) ($o['customData'] ?? ''), true);
+        if (is_array($cd) && !empty($cd['order_text'])) $items = trim((string) $cd['order_text']);
+    }
     if ($items === '') {
         try {
             $st = db()->prepare('SELECT quantity, productNameSnapshot, unitPriceSnapshot FROM `OrderItem` WHERE orderId = ? ORDER BY id');
