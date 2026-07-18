@@ -5559,7 +5559,18 @@ if ($method === 'POST' && $path === '/orders/cart') {
     $merchants = (array) ($b['merchants'] ?? []);
     if (!$merchants) jsonErr('السلة فارغة', 422, 'VALIDATION_ERROR');
     $addr = trim((string) ($b['deliveryAddress'] ?? ''));
-    if ($addr === '' || !isset($b['deliveryLat'], $b['deliveryLng'])) jsonErr('حدد عنوان التوصيل على الخريطة', 422, 'VALIDATION_ERROR');
+    // A zoned address (city/village/area) is deliverable without a GPS pin — the
+    // zone prices + routes it. Require an address plus a zone OR a pin, matching
+    // the /orders create path. (This handler was missed by the pin-less fix, so
+    // cart orders on a saved zoned-but-pinless address were rejected here — the
+    // "adding an order fails" symptom.)
+    $cartHasZone = !empty($b['cityId']) || !empty($b['villageId']) || !empty($b['areaId']);
+    $cartHasPin = isset($b['deliveryLat'], $b['deliveryLng']) && $b['deliveryLat'] !== '' && $b['deliveryLng'] !== '';
+    if ($addr === '' || (!$cartHasZone && !$cartHasPin)) jsonErr('حدد منطقة التوصيل أو الموقع على الخريطة', 422, 'VALIDATION_ERROR');
+    // Null when there's no pin — never (float) null, which silently writes (0,0)
+    // "Null Island" coordinates onto the order.
+    $cartLat = $cartHasPin ? (float) $b['deliveryLat'] : null;
+    $cartLng = $cartHasPin ? (float) $b['deliveryLng'] : null;
     $svc = db()->query("SELECT * FROM `Service` WHERE category = 'MERCHANT' AND isActive = 1 ORDER BY sortOrder ASC LIMIT 1")->fetch();
     if (!$svc) jsonErr('الخدمة غير متاحة', 404, 'NOT_FOUND');
 
@@ -5635,7 +5646,7 @@ if ($method === 'POST' && $path === '/orders/cart') {
         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NOW(3),NOW(3))')
         ->execute([$parentId, $parentNo, $svc['id'], $uid, 'MERCHANT', 'NEW',
             $multi ? null : ($merchants[0]['merchantId'] ?? null),
-            $addr, (float) $b['deliveryLat'], (float) $b['deliveryLng'],
+            $addr, $cartLat, $cartLng,
             ($b['cityId'] ?? null) ?: null, ($b['villageId'] ?? null) ?: null, ($b['areaId'] ?? null) ?: null,
             $pm, 'PENDING', 'EGP', $coupon ? $coupon['code'] : null, $discount ?: null,
             $grandSub, $fee, $final, null, ($b['scheduledFor'] ?? null) ?: null]);
@@ -5647,7 +5658,7 @@ if ($method === 'POST' && $path === '/orders/cart') {
             db()->prepare('INSERT INTO `Order` (id, orderNumber, serviceId, customerId, category, status, merchantId, parentOrderId, deliveryAddress, deliveryLat, deliveryLng, paymentMethod, paymentStatus, currency, merchantSubtotal, notes, imageUrls, createdAt, updatedAt)
                 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NOW(3),NOW(3))')
                 ->execute([$childId, newOrderNumber($childId), $svc['id'], $uid, 'MERCHANT', 'NEW',
-                    $m['merchantId'] ?? null, $parentId, $addr, (float) $b['deliveryLat'], (float) $b['deliveryLng'],
+                    $m['merchantId'] ?? null, $parentId, $addr, $cartLat, $cartLng,
                     $pm, 'PENDING', 'EGP', $subtotals[$mi], ($m['notes'] ?? null) ?: null,
                     !empty($m['imageUrls']) ? json_encode($m['imageUrls'], JSON_UNESCAPED_UNICODE) : null]);
             orderHistory($childId, null, 'NEW', $uid, 'CUSTOMER', 'Sub-order of ' . $parentNo);
