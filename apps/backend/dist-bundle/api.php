@@ -3550,9 +3550,19 @@ function fetchMerchantApi(array $cfg): array {
     $body = !empty($cfg['requestBody']) ? (string)$cfg['requestBody'] : null;
     $pp = trim((string)($cfg['productsPath'] ?? ''));
     $drill = function ($json) use ($pp) {
+        // An error envelope ({success:false, message:...}) must never be mistaken
+        // for a product row — surface it so the admin sees the real reason
+        // (e.g. "Invalid token") instead of "1 منتج".
+        if (is_array($json) && array_key_exists('success', $json) && $json['success'] === false) {
+            return ['__error' => (string) ($json['message'] ?? 'الـ API رجّع success:false')];
+        }
         $items = $json;
-        if ($pp !== '') foreach (explode('.', $pp) as $seg) { $items = is_array($items) && array_key_exists($seg, $items) ? $items[$seg] : []; }
-        return normalizeProductRows($items);
+        if ($pp !== '') foreach (explode('.', $pp) as $seg) { $items = is_array($items) && array_key_exists($seg, $items) ? $items[$seg] : null; }
+        $rows = normalizeProductRows($items);
+        // Wrong productsPath (e.g. "products" when the API uses "data")? Auto-find
+        // the products list from the root so the user doesn't have to guess it.
+        if (!$rows) $rows = normalizeProductRows($json);
+        return $rows;
     };
     // If the caller didn't specify a page size, ask for a big one so a single
     // request returns the whole catalogue (perPage is capped server-side).
@@ -3569,6 +3579,11 @@ function fetchMerchantApi(array $cfg): array {
         if (!$r['ok']) { if ($allItems) break; return $r; }
         $httpCode = $r['httpCode']; $lastJson = $r['json'];
         $rows = $drill($r['json']);
+        // Surface an API error envelope (bad token, etc.) as a real failure.
+        if (is_array($rows) && isset($rows['__error'])) {
+            return ['ok' => false, 'reason' => 'الـ API رجّع خطأ: ' . $rows['__error']
+                . ($httpCode ? " (HTTP $httpCode)" : ''), 'httpCode' => $httpCode];
+        }
         if ($rows) $allItems = array_merge($allItems, $rows);
         // Stop unless the API explicitly says there's another page.
         $pg = $r['json']['pagination'] ?? ($r['json']['meta']['pagination'] ?? null);
