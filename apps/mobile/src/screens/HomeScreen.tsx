@@ -5,8 +5,6 @@ import { LinearGradient } from 'expo-linear-gradient';
 import {
   Bell,
   ChevronDown,
-  Copy,
-  Gift,
   MapPin,
   Package,
   Search,
@@ -22,6 +20,9 @@ import { HeartButton } from '../components/HeartButton';
 import { QuickOrderFAB } from '../components/QuickOrderFAB';
 import { BannerCarousel } from '../components/home/BannerCarousel';
 import { CategoriesStrip } from '../components/home/CategoriesStrip';
+import { CouponBanner } from '../components/home/CouponBanner';
+import { FeatureStrip } from '../components/home/FeatureStrip';
+import { ServiceCards, type HomeService } from '../components/home/ServiceCards';
 import { SearchOverlay } from '../components/home/SearchOverlay';
 import {
   AnimatedListItem,
@@ -30,7 +31,6 @@ import {
   MerchantSkeleton,
   Rating,
   SectionHeader,
-  ServiceTile,
   StatusPill,
 } from '../components/ui';
 import { api } from '../lib/api';
@@ -140,6 +140,17 @@ const SERVICES = [
     route: 'MerchantFlow' as const,
   },
 ] as const;
+
+// Short, card-friendly copy for the three headline service cards (the SERVICES
+// labels above are the longer nav-list wording). Keyed by service key.
+const SERVICE_CARD_COPY: Record<
+  'delivery' | 'shipping' | 'merchant',
+  { title: string; subtitle: string }
+> = {
+  delivery: { title: 'دليفري', subtitle: 'داخل المدينة' },
+  shipping: { title: 'شحن', subtitle: 'بين المناطق' },
+  merchant: { title: 'تاجر', subtitle: 'طلبات جملة' },
+};
 
 const ACTIVE_STATUSES: OrderStatus[] = [
   'NEW',
@@ -403,23 +414,23 @@ export function HomeScreen() {
           </Pressable>
         )}
 
-        {/* ─────── Services ─────── */}
-        <SectionHeader title="خدماتنا" subtitle="اختر نوع الطلب المناسب لك" compact />
-        <View style={styles.servicesRow}>
-          {visibleServices.map((s) => (
-            <ServiceTile
-              key={s.key}
-              label={s.label}
-              sublabel={s.sub}
-              Icon={s.Icon}
-              gradient={s.gradient}
-              onPress={() => {
+        {/* ─────── Services — the three headline cards (دليفري / شحن / تاجر) ─────── */}
+        <ServiceCards
+          services={visibleServices.map(
+            (s): HomeService => ({
+              key: s.key,
+              title: SERVICE_CARD_COPY[s.key].title,
+              subtitle: SERVICE_CARD_COPY[s.key].subtitle,
+              onPress: () => {
                 tickHaptic();
                 navigation.navigate(s.route);
-              }}
-            />
-          ))}
-        </View>
+              },
+            }),
+          )}
+        />
+
+        {/* ─────── Trust / feature strip ─────── */}
+        <FeatureStrip />
 
         {/* ─────── Promo banner — admin-controlled. Source priority:
               1. promoCoupon (admin picked from Coupons table — preferred)
@@ -439,27 +450,11 @@ export function HomeScreen() {
           const code = coupon?.code ?? homeConfig?.promoBannerCode ?? topOffer?.code ?? null;
           if (!title && !code) return null;
           return (
-            <Pressable onPress={onPromo} style={({ pressed }) => [pressed && { opacity: 0.92 }]}>
-              <LinearGradient
-                colors={gradients.promo}
-                start={{ x: 0, y: 0 }}
-                end={{ x: 1, y: 1 }}
-                style={[styles.banner, shadows.md]}
-              >
-                <View style={styles.bannerIcon}>
-                  <Gift size={22} color={colors.brand.gold} />
-                </View>
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.bannerTitle}>{title ?? ''}</Text>
-                  <Text style={styles.bannerSub}>
-                    كود الخصم: <Text style={styles.bannerCode}>{code ?? FALLBACK_PROMO_CODE}</Text>
-                  </Text>
-                </View>
-                <View style={styles.bannerCopy}>
-                  <Copy size={14} color={colors.brand.dark} />
-                </View>
-              </LinearGradient>
-            </Pressable>
+            <CouponBanner
+              title={title ?? 'خصم على أول طلب'}
+              code={code ?? FALLBACK_PROMO_CODE}
+              onPress={onPromo}
+            />
           );
         })()}
 
