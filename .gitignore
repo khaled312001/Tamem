@@ -108,3 +108,4 @@ tamem-acead-*.json
 # Built APKs and raw design assets (kept locally, not in git)
 *.apk
 /Home UI/
+apps/mobile/android/app/google-services.json
