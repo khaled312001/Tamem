@@ -142,13 +142,19 @@ export function DynamicServiceFlowScreen() {
     const formLng = typeof values.deliveryLng === 'number' ? values.deliveryLng : undefined;
 
     let finalAddress = address?.address ?? formAddress;
-    let finalLat: number | undefined = address && !address.isFreeText ? address.lat : formLat;
-    let finalLng: number | undefined = address && !address.isFreeText ? address.lng : formLng;
+    // lat/lng are OPTIONAL — a zoned address routes without a pin. Coerce the
+    // picker's `number | null` to `number | undefined` for the payload.
+    let finalLat: number | undefined =
+      address && !address.isFreeText ? (address.lat ?? undefined) : formLat;
+    let finalLng: number | undefined =
+      address && !address.isFreeText ? (address.lng ?? undefined) : formLng;
 
-    if (service.category === 'DELIVERY' && (!finalLat || !finalLng || !finalAddress)) {
+    const hasZone = !!(address?.zone?.cityId || address?.zone?.villageId || address?.zone?.areaId);
+    const hasPin = finalLat != null && finalLng != null;
+    if (service.category === 'DELIVERY' && (!finalAddress || (!hasZone && !hasPin))) {
       showToast({
-        title: 'أدخل عنوان التوصيل أولاً',
-        message: 'اختر عنوان محفوظ أو استخدم موقعك الحالي',
+        title: 'حدّد منطقة العنوان',
+        message: 'اختر منطقة التوصيل لهذا العنوان أو استخدم موقعك الحالي',
         tone: 'error',
       });
       return;

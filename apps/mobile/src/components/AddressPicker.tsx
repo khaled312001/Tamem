@@ -13,12 +13,16 @@ import { DeliveryZonePicker, type DeliveryZoneSelection } from './DeliveryZonePi
 
 export interface PickedAddress {
   address: string;
-  lat: number;
-  lng: number;
+  /** GPS pin — OPTIONAL. A zoned address with no pin is fully deliverable; the
+   *  zone is what prices and routes the order. Null when the address has no pin. */
+  lat: number | null;
+  lng: number | null;
   /** True when the user typed it freely. */
   isFreeText?: boolean;
   /** Delivery zone metadata — IDs and the advisory delivery fee. */
   zone?: DeliveryZoneSelection | null;
+  /** Saved-address id, so the active chip matches by identity not coordinates. */
+  savedId?: string;
 }
 
 interface SavedAddress {
@@ -28,6 +32,12 @@ interface SavedAddress {
   lat?: number | null;
   lng?: number | null;
   isDefault?: boolean;
+  // Zone now comes straight from /me/addresses (server-persisted), so a pin-less
+  // but zoned address is usable without any local cache.
+  cityId?: string | null;
+  villageId?: string | null;
+  areaId?: string | null;
+  zone?: DeliveryZoneSelection | null;
 }
 
 interface AddressPickerProps {
@@ -119,23 +129,26 @@ export function AddressPicker({ value, onChange }: AddressPickerProps) {
   };
 
   const pickSaved = async (a: SavedAddress): Promise<void> => {
-    if (typeof a.lat !== 'number' || typeof a.lng !== 'number') {
+    // Zone comes from the server record first (authoritative, survives
+    // reinstall), falling back to the local cache for older addresses. The GPS
+    // pin is optional — a zoned address with no pin is perfectly deliverable, so
+    // we no longer reject it as "incomplete".
+    const zone = a.zone ?? (await getAddressZone(a.id));
+    const hasPin = typeof a.lat === 'number' && typeof a.lng === 'number';
+    if (!zone && !hasPin) {
       showToast({
         title: 'العنوان غير مكتمل',
-        message: 'هذا العنوان مفقود الإحداثيات. ادخل عنوان آخر أو حدّث الإحداثيات.',
+        message: 'اختر المنطقة لهذا العنوان أو حدّد موقعه على الخريطة.',
         tone: 'error',
       });
       return;
     }
-    // Pull zone metadata cached when the user originally saved this address.
-    // If the cache is empty (app reinstall / address created on another
-    // device) the caller can prompt for it via the in-place zone picker.
-    const zone = await getAddressZone(a.id);
     const picked: PickedAddress = {
       address: a.address,
-      lat: a.lat,
-      lng: a.lng,
+      lat: hasPin ? (a.lat as number) : null,
+      lng: hasPin ? (a.lng as number) : null,
       zone,
+      savedId: a.id,
     };
     onChange(picked);
     setFreeText('');
@@ -148,10 +161,10 @@ export function AddressPicker({ value, onChange }: AddressPickerProps) {
       onChange(null);
       return;
     }
-    // Free-text uses a NULL location — the order screen MUST require a
-    // saved-address or current-location before allowing submit. See the
+    // Free-text has no location AND no zone — the order screen MUST require a
+    // saved-address (zoned) or current-location before allowing submit. See the
     // disabled-submit logic on each flow.
-    onChange({ address: text.trim(), lat: 0, lng: 0, isFreeText: true });
+    onChange({ address: text.trim(), lat: null, lng: null, isFreeText: true });
   };
 
   return (
@@ -160,7 +173,11 @@ export function AddressPicker({ value, onChange }: AddressPickerProps) {
       {saved && saved.length > 0 ? (
         <View style={styles.chipsRow}>
           {saved.map((a) => {
-            const active = value?.lat === a.lat && value?.lng === a.lng && !value?.isFreeText;
+            // Match by saved id (coords may be null), falling back to coords for
+            // addresses picked before savedId existed.
+            const active = value?.savedId
+              ? value.savedId === a.id
+              : value?.lat === a.lat && value?.lng === a.lng && !value?.isFreeText;
             return (
               <Pressable
                 key={a.id}
@@ -195,7 +212,7 @@ export function AddressPicker({ value, onChange }: AddressPickerProps) {
           <Text style={styles.currentLabel}>
             {busy ? 'جاري قراءة موقعك…' : 'استخدم موقعي الحالي'}
           </Text>
-          {value && !value.isFreeText && value.lat !== 0 ? (
+          {value && !value.isFreeText && value.address ? (
             <Text style={styles.currentSub} numberOfLines={1}>
               {value.address}
             </Text>
