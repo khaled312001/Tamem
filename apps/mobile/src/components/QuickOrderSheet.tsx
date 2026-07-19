@@ -304,9 +304,11 @@ export function QuickOrderSheet({ visible, onClose, initialMode }: QuickOrderShe
 
           <View style={styles.header}>
             <View style={{ flex: 1 }}>
-              <Text style={styles.title}>طلب سريع</Text>
+              <Text style={styles.title}>اطلب أي حاجة </Text>
               <Text style={styles.subtitle}>
-                {mode === 'menu' ? 'اختر الطريقة الأنسب ليك' : 'املأ التفاصيل وأرسل خلال ثواني'}
+                {mode === 'menu'
+                  ? 'اكتبها، صوّرها، أو قولها بصوتك — واحنا نجيبهالك'
+                  : 'املأ التفاصيل وأرسل خلال ثواني'}
               </Text>
             </View>
             <Pressable onPress={onClose} style={styles.closeBtn} hitSlop={8}>

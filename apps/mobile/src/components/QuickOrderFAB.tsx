@@ -137,7 +137,7 @@ export function QuickOrderFAB() {
           <Pressable
             onPress={onPress}
             accessibilityRole="button"
-            accessibilityLabel="طلب سريع"
+            accessibilityLabel="اطلب أي حاجة — المصباح السحري"
             style={({ pressed }) => [styles.pressable, pressed && { opacity: 0.96 }]}
           >
             <View style={styles.disc}>
@@ -147,7 +147,7 @@ export function QuickOrderFAB() {
         </Animated.View>
 
         <View style={[styles.labelBubble, { pointerEvents: 'none' }]}>
-          <Text style={styles.labelText}>طلب سريع</Text>
+          <Text style={styles.labelText}>اطلب أي حاجة</Text>
         </View>
       </View>
 
