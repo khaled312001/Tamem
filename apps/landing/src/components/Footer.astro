@@ -70,7 +70,7 @@ const year = new Date().getFullYear();
         <ul class="space-y-2.5 text-sm text-white/80">
           <li class="flex items-center gap-2">
             <Icon name="map-pin" size={14} class="text-brand-gold shrink-0" />
-            المقر الرئيسي — مركز قفط، محافظة قنا
+            <span data-site="address">المقر الرئيسي — مركز قفط، محافظة قنا</span>
           </li>
           {TAMEM_CONTACTS.map((c) => (
             <li class="flex flex-col gap-0.5 pt-1">
@@ -80,11 +80,13 @@ const year = new Date().getFullYear();
           ))}
           <li class="flex items-center gap-2 pt-1 border-t border-white/10 mt-2">
             <Icon name="mail" size={14} class="text-brand-gold shrink-0" />
-            <a href="mailto:info@deliverytamem.com" class="hover:text-white">info@deliverytamem.com</a>
+            <a href="mailto:info@deliverytamem.com" data-site="emailHref" class="hover:text-white"
+              ><span data-site="email">info@deliverytamem.com</span></a
+            >
           </li>
           <li class="flex items-center gap-2">
             <Icon name="clock" size={14} class="text-brand-gold shrink-0" />
-            يومياً 10 صباحاً - 1 بعد منتصف الليل
+            <span data-site="hours">يومياً 10 صباحاً - 1 بعد منتصف الليل</span>
           </li>
         </ul>
       </div>

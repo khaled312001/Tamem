@@ -566,6 +566,10 @@ export class TamemClient {
   async adminListCustomers(params?: Record<string, unknown>): Promise<Paginated<unknown>> {
     return this.requestPaginated({ method: 'GET', url: '/admin/customers', params });
   }
+  /** All distinct customer cities (server-wide, not just the current page). */
+  async adminCustomerCities(): Promise<string[]> {
+    return this.request({ method: 'GET', url: '/admin/customers/cities' });
+  }
   async adminGetCustomer(id: string): Promise<unknown> {
     return this.request({ method: 'GET', url: `/admin/customers/${id}` });
   }

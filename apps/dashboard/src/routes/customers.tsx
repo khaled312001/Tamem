@@ -157,11 +157,19 @@ export function CustomersPage() {
     (filters.from ? 1 : 0) +
     (filters.to ? 1 : 0);
 
-  // City options derived from the current page (no extra endpoint needed).
-  const cityOptions = useMemo(
-    () => Array.from(new Set(rows.map((r) => r.city).filter(Boolean))).sort() as string[],
-    [rows],
-  );
+  // City options come from a server-wide DISTINCT query so the dropdown lists
+  // every city, not just the ones on the current page. Falls back to
+  // page-derived cities if the endpoint is unavailable.
+  const { data: allCities } = useQuery({
+    queryKey: ['admin', 'customers', 'cities'],
+    queryFn: () => api.adminCustomerCities(),
+    staleTime: 5 * 60_000,
+  });
+  const cityOptions = useMemo(() => {
+    const set = new Set<string>((allCities ?? []) as string[]);
+    for (const r of rows) if (r.city) set.add(r.city);
+    return Array.from(set).sort();
+  }, [allCities, rows]);
 
   const invalidate = () => qc.invalidateQueries({ queryKey: ['admin', 'customers'] });
 

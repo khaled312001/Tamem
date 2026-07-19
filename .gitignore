@@ -109,3 +109,8 @@ tamem-acead-*.json
 *.apk
 /Home UI/
 apps/mobile/android/app/google-services.json
+
+# Google OAuth client secret — never commit
+client_secret_*.json
+apps/mobile/.env
+HANDOFF.md
