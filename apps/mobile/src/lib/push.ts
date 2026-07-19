@@ -184,6 +184,14 @@ function handle(resp: Notifications.NotificationResponse): void {
 }
 
 function routeByData(data: Record<string, unknown>): void {
+  // RootNavigator mounts exactly ONE screen depending on auth state, so `App`
+  // simply does not exist while the user is logged out (or is a merchant, who
+  // gets `MerchantApp` instead). Navigating to it then throws a red-box
+  // "not handled by any navigator". A tapped notification for a signed-out
+  // user has nowhere sensible to go, so drop it rather than crash the launch.
+  const rootRoutes = navigationRef.getRootState()?.routeNames ?? [];
+  if (!rootRoutes.includes('App')) return;
+
   if (typeof data.orderId === 'string' && data.orderId) {
     navigationRef.navigate('App', {
       screen: 'Orders',

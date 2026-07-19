@@ -39,6 +39,7 @@ import { copyToClipboard } from '../lib/clipboard';
 import { haptic } from '../lib/haptics';
 import type { HomeStackParamList } from '../navigation/HomeStack';
 import { useAuth } from '../stores/auth';
+import { ACTIVE_STATUSES, FALLBACK_PROMO_CODE, SERVICE_CARD_COPY } from './home/homeData';
 import {
   colors,
   fontFamilies,
@@ -141,31 +142,6 @@ const SERVICES = [
     route: 'MerchantFlow' as const,
   },
 ] as const;
-
-// Short, card-friendly copy for the three headline service cards (the SERVICES
-// labels above are the longer nav-list wording). Keyed by service key.
-const SERVICE_CARD_COPY: Record<
-  'delivery' | 'shipping' | 'merchant',
-  { title: string; subtitle: string }
-> = {
-  delivery: { title: 'دليفري', subtitle: 'داخل المدينة' },
-  shipping: { title: 'شحن', subtitle: 'بين المناطق' },
-  merchant: { title: 'تاجر', subtitle: 'طلبات جملة' },
-};
-
-const ACTIVE_STATUSES: OrderStatus[] = [
-  'NEW',
-  'UNDER_REVIEW',
-  'PRICED',
-  'AWAITING_CUSTOMER_APPROVAL',
-  'ACCEPTED',
-  'DRIVER_ASSIGNED',
-  'PICKED_UP',
-  'IN_ROUTE',
-];
-
-// Fallback when the backend hasn't returned a real code on the offer.
-const FALLBACK_PROMO_CODE = 'TAMEM20';
 
 const tickHaptic = () => haptic.tap();
 

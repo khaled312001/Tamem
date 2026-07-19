@@ -51,7 +51,8 @@ import {
   StatusPill,
 } from '../components/ui';
 import { api } from '../lib/api';
-import { connectSocket, subscribeToOrder, unsubscribeFromOrder } from '../lib/socket';
+import { subscribeToOrder, unsubscribeFromOrder } from '../lib/socket';
+import { useSocketEvents } from '../lib/useSocketEvents';
 import { shareReceipt } from '../lib/receipt';
 import { showToast } from '../lib/toast';
 import { useAuth } from '../stores/auth';
@@ -220,6 +221,9 @@ const TERMINAL_BAD: OrderStatus[] = ['CANCELLED', 'REJECTED'];
 // inventory.
 const CUSTOMER_CANCELLABLE: OrderStatus[] = ['NEW', 'UNDER_REVIEW'];
 
+/** Module-level so the array identity never changes across renders. */
+const TRACK_EVENTS = ['order:status', 'driver:location'];
+
 // Statuses where the customer THINKS they can still cancel but actually
 // need admin approval. We surface an explanatory banner instead of silently
 // hiding the cancel button.
@@ -277,31 +281,28 @@ export function OrderTrackingScreen() {
     enabled: !!orderId,
   });
 
+  useSocketEvents(TRACK_EVENTS, (payload) => {
+    const msg = payload as
+      | { orderId?: string; lat?: number; lng?: number; at?: string }
+      | undefined;
+    // `driver:location` carries coordinates; `order:status` doesn't. Telling
+    // them apart by shape keeps this to a single subscription.
+    if (msg && typeof msg.lat === 'number' && typeof msg.lng === 'number') {
+      if (msg.orderId === orderId || !msg.orderId) {
+        setDriverLoc({ lat: msg.lat, lng: msg.lng, at: msg.at ?? new Date().toISOString() });
+      }
+      return;
+    }
+    void qc.invalidateQueries({ queryKey: ['order', orderId] });
+  });
+
+  // Room membership is per-order, so it stays a separate effect keyed on it.
   useEffect(() => {
-    let mounted = true;
-    void (async () => {
-      const s = await connectSocket();
-      const refetchLocal = () => {
-        if (mounted) qc.invalidateQueries({ queryKey: ['order', orderId] });
-      };
-      const onLoc = (msg: { orderId?: string; lat: number; lng: number; at: string }) => {
-        if (msg.orderId === orderId || !msg.orderId) {
-          setDriverLoc({ lat: msg.lat, lng: msg.lng, at: msg.at });
-        }
-      };
-      s.on('order:status', refetchLocal);
-      s.on('driver:location', onLoc);
-      await subscribeToOrder(orderId);
-      return () => {
-        s.off('order:status', refetchLocal);
-        s.off('driver:location', onLoc);
-      };
-    })();
+    void subscribeToOrder(orderId);
     return () => {
-      mounted = false;
       void unsubscribeFromOrder(orderId);
     };
-  }, [orderId, qc]);
+  }, [orderId]);
 
   if (isLoading) {
     return (

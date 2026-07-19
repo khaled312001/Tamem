@@ -50,6 +50,8 @@ export function DynamicServiceFlowScreen() {
   const { data: services, isLoading: loadingServices } = useQuery<Service[]>({
     queryKey: ['services'],
     queryFn: () => api.raw.get('/services').then((r) => r.data.data),
+    // Service definitions are admin config — they change rarely.
+    staleTime: 10 * 60_000,
   });
 
   const sourceService = services?.find(

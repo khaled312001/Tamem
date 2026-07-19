@@ -35,6 +35,9 @@ export async function connectSocket(): Promise<Socket> {
   if (socket?.connected) return socket;
   const token = await getAccessTokenAsync();
   if (socket) socket.disconnect();
+  // The latch below is per-socket, not per-session. Without this reset a
+  // reconnect built a fresh socket that silently never got the sound handlers.
+  soundHandlersAttached = false;
   socket = io(wsUrl, {
     transports: ['websocket'],
     auth: { token },

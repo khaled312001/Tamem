@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { GripVertical, Loader2, Pencil, Plus, Store, Tag, Trash2 } from 'lucide-react';
+import { GripVertical, ImagePlus, Loader2, Pencil, Plus, Store, Tag, Trash2 } from 'lucide-react';
 import { useState } from 'react';
 import { toast } from 'sonner';
 
@@ -11,6 +11,7 @@ import { PageHeader } from '../components/ui/PageHeader.js';
 import { EmptyState, TableSkeleton } from '../components/ui/Skeleton.js';
 import { ErrorState } from '../components/ui/States.js';
 import { api } from '../lib/api.js';
+import { uploadFile } from '../lib/uploadFile.js';
 import { formatCount } from '../lib/format.js';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -368,14 +369,7 @@ function CategoryFormDialog({
             يمكن تغييره.
           </p>
         )}
-        <Field label="رابط الأيقونة (اختياري)">
-          <Input
-            value={iconUrl}
-            onChange={(e) => setIconUrl(e.target.value)}
-            placeholder="https://…"
-            dir="ltr"
-          />
-        </Field>
+        <CategoryImageField value={iconUrl} onChange={setIconUrl} />
         <Field label="الترتيب" hint="الأقل يظهر أولاً">
           <Input
             type="number"
@@ -396,5 +390,85 @@ function CategoryFormDialog({
         </div>
       </div>
     </Dialog>
+  );
+}
+
+/**
+ * Category artwork picker.
+ *
+ * This was a bare "paste a URL" text box, which meant an admin had to host the
+ * image somewhere else first — so in practice categories shipped with no
+ * artwork and the mobile home fell back to a generic icon for every one of
+ * them. Now it uploads through the same POST /uploads the rest of the
+ * dashboard uses.
+ *
+ * Square crop, because the home screen renders these in a square tile and a
+ * wide image would be centre-cropped with its subject cut off.
+ */
+function CategoryImageField({
+  value,
+  onChange,
+}: {
+  value: string;
+  onChange: (url: string) => void;
+}) {
+  const [busy, setBusy] = useState(false);
+
+  return (
+    <Field label="صورة التصنيف" hint="مربعة يفضّل 400×400 — تظهر في الصفحة الرئيسية للتطبيق">
+      <div className="flex items-center gap-3">
+        <label className="relative w-24 h-24 shrink-0 rounded-xl border-2 border-dashed border-border overflow-hidden flex items-center justify-center cursor-pointer bg-muted/30 hover:border-brand-red/60 transition">
+          {value ? (
+            <img src={value} alt="" className="w-full h-full object-cover" />
+          ) : (
+            <div className="flex flex-col items-center gap-1 text-muted-foreground">
+              <ImagePlus className="w-5 h-5" />
+              <span className="text-[10px]">اضغط للرفع</span>
+            </div>
+          )}
+          {busy && (
+            <div className="absolute inset-0 bg-white/70 flex items-center justify-center">
+              <Loader2 className="w-5 h-5 animate-spin text-brand-red" />
+            </div>
+          )}
+          <input
+            type="file"
+            accept="image/*"
+            className="hidden"
+            onChange={async (e) => {
+              const file = e.target.files?.[0];
+              if (!file) return;
+              setBusy(true);
+              try {
+                const r = await uploadFile(file);
+                onChange(r.url);
+              } catch (err) {
+                toast.error((err as Error).message || 'فشل رفع الصورة');
+              } finally {
+                setBusy(false);
+              }
+            }}
+          />
+        </label>
+
+        <div className="flex-1 min-w-0 space-y-1">
+          <Input
+            value={value}
+            onChange={(e) => onChange(e.target.value)}
+            placeholder="أو الصق رابط صورة…"
+            dir="ltr"
+          />
+          {!!value && (
+            <button
+              type="button"
+              onClick={() => onChange('')}
+              className="text-xs text-red-600 hover:underline"
+            >
+              إزالة الصورة
+            </button>
+          )}
+        </div>
+      </div>
+    </Field>
   );
 }

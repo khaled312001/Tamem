@@ -1,4 +1,4 @@
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, useRoute, type RouteProp } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useQuery } from '@tanstack/react-query';
 import { ArrowDownUp, Search, Star, Store } from 'lucide-react-native';
@@ -10,6 +10,8 @@ import { GradientHeader } from '../components/GradientHeader';
 import { HeartButton } from '../components/HeartButton';
 import { CardListSkeleton, EmptyState } from '../components/ui';
 import { api } from '../lib/api';
+import { LIST_PERF } from '../lib/listPerf';
+import { useDebouncedValue } from '../lib/useDebouncedValue';
 import type { HomeStackParamList } from '../navigation/HomeStack';
 import { colors, fontFamilies, fontSizes, radii, spacing } from '../theme/tokens';
 
@@ -25,30 +27,53 @@ interface Merchant {
   category?: { id: string; nameAr: string };
 }
 
-const FILTERS = [
-  { key: 'all', label: 'الكل', categoryId: null },
-  { key: 'restaurants', label: 'مطاعم', categoryId: 'restaurants' },
-  { key: 'supermarkets', label: 'ماركت', categoryId: 'supermarkets' },
-  { key: 'pharmacies', label: 'صيدليات', categoryId: 'pharmacies' },
-  { key: 'sweets', label: 'حلويات', categoryId: 'sweets' },
-];
+interface Category {
+  id: string;
+  nameAr: string;
+  sortOrder: number;
+}
 
 export function StoresListScreen() {
   const navigation = useNavigation<Nav>();
-  const [activeFilter, setActiveFilter] = useState<string>('all');
-  const [search, setSearch] = useState('');
+  const route = useRoute<RouteProp<HomeStackParamList, 'StoresList'>>();
+
+  // Honour the category the caller navigated with. The home screen has always
+  // passed `categoryId`, but this screen ignored it and filtered by its own
+  // hardcoded chip list instead — so tapping a category opened an unfiltered
+  // list. Also seeds the search box from `params.search` for the same reason.
+  const [activeCategory, setActiveCategory] = useState<string | null>(
+    route.params?.categoryId ?? null,
+  );
+  const [search, setSearch] = useState(route.params?.search ?? '');
   const [sortKey, setSortKey] = useState<SortKey>('recommended');
 
+  // Chips come from the Categories table now, not a hardcoded list of four
+  // slugs that silently stopped matching whatever the admin actually created.
+  // Same query key the home screen uses, so this costs no extra request.
+  const { data: categories } = useQuery<Category[]>({
+    queryKey: ['home-categories'],
+    queryFn: () => api.raw.get('/categories').then((r) => r.data.data),
+    staleTime: 5 * 60_000,
+  });
+
+  // The input stays instant; only the query waits. Previously `search` went
+  // straight into the key, so one word = one request per letter.
+  const debouncedSearch = useDebouncedValue(search, 300);
+
   const { data: merchants, isLoading } = useQuery<Merchant[]>({
-    queryKey: ['merchants', activeFilter, search],
+    queryKey: ['merchants', activeCategory, debouncedSearch],
     queryFn: () => {
-      const filter = FILTERS.find((f) => f.key === activeFilter);
       const params: Record<string, string> = {};
-      if (filter?.categoryId) params.categoryId = filter.categoryId;
-      if (search) params.search = search;
+      if (activeCategory) params.categoryId = activeCategory;
+      if (debouncedSearch) params.search = debouncedSearch;
       return api.raw.get('/merchants', { params }).then((r) => r.data.data);
     },
+    // Browsing back and forth shouldn't refetch the same store list.
+    staleTime: 60_000,
+    placeholderData: (prev) => prev,
   });
+
+  const activeCategoryName = categories?.find((c) => c.id === activeCategory)?.nameAr ?? null;
 
   const sorted = useMemo(() => {
     const list = (merchants ?? []).slice();
@@ -68,7 +93,7 @@ export function StoresListScreen() {
 
   return (
     <SafeAreaView edges={['top']} style={styles.container}>
-      <GradientHeader greeting="المحلات والمطاعم" location="قفط — قنا" />
+      <GradientHeader greeting={activeCategoryName ?? 'المحلات والمطاعم'} location="قفط — قنا" />
 
       <View style={styles.searchWrap}>
         <Search size={16} color={colors.text.muted} />
@@ -87,15 +112,21 @@ export function StoresListScreen() {
           showsHorizontalScrollIndicator={false}
           contentContainerStyle={styles.chipsRow}
         >
-          {FILTERS.map((f) => {
-            const isOn = activeFilter === f.key;
+          <Pressable
+            onPress={() => setActiveCategory(null)}
+            style={[styles.chip, !activeCategory && styles.chipOn]}
+          >
+            <Text style={[styles.chipText, !activeCategory && styles.chipTextOn]}>الكل</Text>
+          </Pressable>
+          {(categories ?? []).map((c) => {
+            const isOn = activeCategory === c.id;
             return (
               <Pressable
-                key={f.key}
-                onPress={() => setActiveFilter(f.key)}
+                key={c.id}
+                onPress={() => setActiveCategory(isOn ? null : c.id)}
                 style={[styles.chip, isOn && styles.chipOn]}
               >
-                <Text style={[styles.chipText, isOn && styles.chipTextOn]}>{f.label}</Text>
+                <Text style={[styles.chipText, isOn && styles.chipTextOn]}>{c.nameAr}</Text>
               </Pressable>
             );
           })}
@@ -117,6 +148,7 @@ export function StoresListScreen() {
         </View>
       ) : (
         <FlatList
+          {...LIST_PERF}
           data={sorted}
           keyExtractor={(m) => m.id}
           contentContainerStyle={[
@@ -126,14 +158,9 @@ export function StoresListScreen() {
           ListEmptyComponent={
             <EmptyState
               icon={<Store size={36} color={colors.brand.red} />}
-              title={
-                'لا توجد محلات' +
-                (activeFilter !== 'all'
-                  ? ` في "${FILTERS.find((f) => f.key === activeFilter)?.label}"`
-                  : '')
-              }
+              title={'لا توجد محلات' + (activeCategoryName ? ` في "${activeCategoryName}"` : '')}
               subtitle={
-                activeFilter !== 'all' || search
+                activeCategory || search
                   ? 'جرّب فلتر مختلف أو امسح البحث'
                   : 'مفيش محلات متاحة حالياً'
               }

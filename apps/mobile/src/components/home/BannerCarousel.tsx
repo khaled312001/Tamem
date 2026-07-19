@@ -21,7 +21,7 @@ import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useQuery } from '@tanstack/react-query';
 import { LinearGradient } from 'expo-linear-gradient';
 import { ArrowLeft, Gift, Sparkles, Tag, Truck, type LucideIcon } from 'lucide-react-native';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Animated,
   Dimensions,
@@ -142,8 +142,19 @@ export function BannerCarousel() {
   const userInteractingRef = useRef(false);
   const resumeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // The resume timer was cleared on re-entry but never on unmount — swiping
+  // then leaving within a second fired setState on a torn-down component.
+  useEffect(
+    () => () => {
+      if (resumeTimerRef.current) clearTimeout(resumeTimerRef.current);
+    },
+    [],
+  );
+
+  // Key must match useHomeData's `['offers']` — under its own `['home-offers']`
+  // key the home screen fetched /offers twice on every load.
   const { data: offers } = useQuery<ServerOffer[]>({
-    queryKey: ['home-offers'],
+    queryKey: ['offers'],
     queryFn: () => api.raw.get('/offers').then((r) => r.data.data),
     staleTime: 5 * 60_000,
   });
@@ -152,7 +163,10 @@ export function BannerCarousel() {
   // brand defaults so the carousel always has at least 3 cards rotating.
   // A single TAMEM20 server offer on its own makes the carousel feel dead;
   // padding to 3 keeps the "روح في التطبيق" the user asked for.
-  const slides: BannerSlide[] = (() => {
+  // Memoised: this ran as a bare IIFE in the render body, so the map + Set +
+  // filter + spread re-allocated on every auto-rotate tick (every 3s), which in
+  // turn changed `slides.length` and tore down/rebuilt the rotation interval.
+  const slides: BannerSlide[] = useMemo(() => {
     const fromServer = offers && offers.length > 0 ? offers.map(offerToSlide) : [];
     if (fromServer.length >= 3) return fromServer;
     const serverIds = new Set(fromServer.map((s) => s.id));
@@ -161,7 +175,7 @@ export function BannerCarousel() {
       3 - fromServer.length,
     );
     return [...fromServer, ...padding];
-  })();
+  }, [offers]);
 
   // Auto-rotate. Disabled when there's only one slide (no rotation makes
   // sense) and when the user is mid-drag.
@@ -430,8 +444,12 @@ const styles = StyleSheet.create({
   badgeText: { color: colors.white, fontFamily: fontFamilies.bodyExtraBold, fontSize: 10 },
   content: {
     position: 'absolute',
-    insetInlineStart: 0,
-    insetInlineEnd: 0,
+    // left/right, not insetInline*: pinning BOTH logical sides did not
+    // stretch the element on this RN version — it collapsed to its content
+    // width and drifted to one edge. A full-bleed bar is symmetric, so the
+    // physical props are also RTL-safe here.
+    left: 0,
+    right: 0,
     bottom: 0,
     padding: spacing.md,
     flexDirection: 'row',
