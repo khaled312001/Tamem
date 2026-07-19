@@ -52,15 +52,29 @@ const CategoryTile = memo(function CategoryTile({
     >
       <View style={[styles.tile, { backgroundColor: bg }]}>
         {c.iconUrl ? (
-          <Image source={{ uri: c.iconUrl }} style={styles.tileImg} resizeMode="cover" />
+          <>
+            <Image source={{ uri: c.iconUrl }} style={styles.tileImg} resizeMode="cover" />
+            {/* Scrim so the white label stays readable over a bright photo. */}
+            <View style={styles.scrim} />
+          </>
         ) : (
           <Icon size={40} color={fg} strokeWidth={1.6} />
         )}
+
+        {/* With artwork the name sits ON the tile, like the reference. Without
+            it, the tile is just an icon and the name goes underneath. */}
+        {!!c.iconUrl && (
+          <Text style={styles.overlayLabel} numberOfLines={1}>
+            {c.nameAr}
+          </Text>
+        )}
       </View>
 
-      <Text style={styles.label} numberOfLines={1}>
-        {c.nameAr}
-      </Text>
+      {!c.iconUrl && (
+        <Text style={styles.label} numberOfLines={1}>
+          {c.nameAr}
+        </Text>
+      )}
       <Text style={styles.count} numberOfLines={1}>
         {c.count} محل
       </Text>
@@ -151,7 +165,18 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
     ...shadows.sm,
   },
-  tileImg: { width: '100%', height: '100%' },
+  tileImg: { ...StyleSheet.absoluteFillObject, width: '100%', height: '100%' },
+  scrim: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(36,19,16,0.32)' },
+  overlayLabel: {
+    position: 'absolute',
+    bottom: 8,
+    left: 6,
+    right: 6,
+    color: colors.white,
+    fontSize: 13,
+    fontFamily: fontFamilies.bodyExtraBold,
+    textAlign: 'center',
+  },
   label: {
     marginTop: 6,
     fontSize: 13,

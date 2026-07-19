@@ -3,7 +3,7 @@ import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useCallback, useMemo, useState } from 'react';
-import { Phone, Search, Store } from 'lucide-react-native';
+import { Phone, Search, Store, X } from 'lucide-react-native';
 import {
   ActivityIndicator,
   FlatList,
@@ -338,21 +338,55 @@ export function MerchantDetailScreen() {
             {productCount > 0 && (
               <View style={styles.section}>
                 <View style={styles.productsHeaderRow}>
-                  <Text style={styles.sectionTitle}>المنتجات المتاحة</Text>
-                  <Text style={styles.productsCount}>{productCount} منتج</Text>
+                  <Text style={styles.sectionTitle}>المنتجات</Text>
+                  {/* A count chip rather than loose grey text — it reads as a
+                      value, and it reflects the SEARCH result once filtering,
+                      so the number never contradicts the list under it. */}
+                  <View style={styles.countChip}>
+                    <Text style={styles.countChipText}>
+                      {debouncedProductSearch ? `${products.length} نتيجة` : `${productCount} صنف`}
+                    </Text>
+                  </View>
                 </View>
+
                 {/* Server-side search across the WHOLE catalogue, not just the
                     pages loaded so far — /merchants/{id}/products accepts `q`. */}
                 <View style={styles.searchBox}>
-                  <Search size={16} color={colors.text.muted} />
+                  <Search size={18} color={colors.text.muted} />
                   <TextInput
                     value={productSearch}
                     onChangeText={setProductSearch}
                     placeholder="ابحث داخل منتجات المتجر…"
                     placeholderTextColor={colors.text.muted}
                     style={styles.searchInput}
+                    returnKeyType="search"
                   />
+                  {!!productSearch && (
+                    <Pressable
+                      onPress={() => setProductSearch('')}
+                      hitSlop={10}
+                      accessibilityLabel="مسح البحث"
+                      style={styles.clearBtn}
+                    >
+                      <X size={13} color={colors.white} />
+                    </Pressable>
+                  )}
                 </View>
+
+                {/* Searching a 2,500-item catalogue can take a moment; without
+                    this the previous results just sit there looking stale. */}
+                {productsQ.isFetching && !productsQ.isFetchingNextPage && (
+                  <View style={styles.searchingRow}>
+                    <ActivityIndicator size="small" color={colors.brand.red} />
+                    <Text style={styles.searchingText}>جاري البحث…</Text>
+                  </View>
+                )}
+
+                {!!debouncedProductSearch && !productsQ.isFetching && products.length === 0 && (
+                  <Text style={styles.noResults}>
+                    لا توجد منتجات تطابق «{debouncedProductSearch}»
+                  </Text>
+                )}
               </View>
             )}
           </>
@@ -394,6 +428,39 @@ export function MerchantDetailScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.surface },
+  countChip: {
+    backgroundColor: '#FFF1F0',
+    borderRadius: radii.pill,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+  },
+  countChipText: {
+    fontSize: 12,
+    color: colors.brand.red,
+    fontFamily: fontFamilies.bodyExtraBold,
+  },
+  clearBtn: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    backgroundColor: colors.text.muted,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  searchingRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    marginTop: spacing.sm,
+  },
+  searchingText: { fontSize: 12, color: colors.brand.gray, fontFamily: fontFamilies.body },
+  noResults: {
+    marginTop: spacing.md,
+    fontSize: 13,
+    color: colors.brand.gray,
+    fontFamily: fontFamilies.body,
+    textAlign: 'center',
+  },
   searchBox: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -546,12 +613,15 @@ const styles = StyleSheet.create({
     fontSize: fontSizes.lg,
     fontFamily: fontFamilies.headingBlack,
     color: colors.ink,
+    textAlign: 'auto',
   },
   productsHeaderRow: {
     flexDirection: 'row',
-    alignItems: 'baseline',
+    // 'center' not 'baseline': the count is a chip now, and baseline alignment
+    // pushed it visually below the title.
+    alignItems: 'center',
     justifyContent: 'space-between',
-    marginBottom: 4,
+    marginBottom: spacing.sm,
   },
   productsCount: {
     fontSize: fontSizes.xs,
