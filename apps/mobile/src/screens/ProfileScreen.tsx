@@ -55,7 +55,14 @@ interface UserExt {
 }
 
 interface OrdersListResponse {
-  meta?: { total?: number };
+  /**
+   * The server nests this under `meta.pagination` (see jsonList in api.php).
+   * Reading `meta.total` silently missed it and fell through to
+   * `data.length` — which is 1, because this query asks for pageSize:1 to
+   * avoid downloading the orders just to count them. So a customer with
+   * dozens of orders saw "1".
+   */
+  meta?: { pagination?: { total?: number } };
   data: Array<{ id: string }>;
 }
 
@@ -107,7 +114,7 @@ export function ProfileScreen() {
 
   const user = (meQuery.data ?? storedUser) as UserExt | null;
 
-  // Total orders count — pageSize 1 so we only fetch the meta.total counter.
+  // Total orders count — pageSize 1 so we fetch the counter, not the orders.
   // staleTime 0 so coming back to this tab always refetches; the count needs
   // to be current after a new order or cancellation.
   const ordersQuery = useQuery({
@@ -115,7 +122,7 @@ export function ProfileScreen() {
     queryFn: async () => {
       const res = await api.raw.get('/orders/mine', { params: { pageSize: 1 } });
       const body = res.data as OrdersListResponse;
-      return body.meta?.total ?? body.data?.length ?? 0;
+      return body.meta?.pagination?.total ?? body.data?.length ?? 0;
     },
     staleTime: 0,
   });
