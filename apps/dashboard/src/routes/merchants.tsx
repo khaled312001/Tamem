@@ -1741,15 +1741,15 @@ function CreateMerchantDialog({ onClose }: { onClose: () => void }) {
   const [store, setStore] = useState<StoreFields>(BLANK_STORE);
   const [ownerName, setOwnerName] = useState('');
   const [phone, setPhone] = useState('+20');
-  const [password, setPassword] = useState('');
-
   const mut = useMutation({
     mutationFn: () =>
       api.adminCreateMerchant({
         ...storePayload(store),
         ownerName: ownerName.trim(),
         phone,
-        password,
+        // No password field: the backend auto-generates one; the merchant signs
+        // in via OTP / reset-password, so there is no secret for the admin to
+        // invent or relay.
       }),
     onSuccess: () => {
       toast.success('تم إضافة التاجر');
@@ -1787,14 +1787,6 @@ function CreateMerchantDialog({ onClose }: { onClose: () => void }) {
         </Field>
         <Field label="هاتف المالك" required>
           <PhoneInput value={phone} onChange={setPhone} />
-        </Field>
-        <Field label="كلمة المرور" required>
-          <Input
-            type="password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            autoComplete="new-password"
-          />
         </Field>
         <Field label="رقم هاتف المتجر (اختياري)" hint="لو مختلف عن رقم المالك">
           <Input

@@ -4459,12 +4459,20 @@ if ($method === 'POST' && $path === '/admin/merchants') {
     $b = readJsonBody();
     $ownerName = trim((string)($b['ownerName'] ?? $b['name'] ?? ''));
     $phone = trim((string)($b['phone'] ?? ''));
+    // Password is optional: honoured when supplied (older clients still send
+    // one), otherwise auto-generated. The merchant signs in via OTP /
+    // reset-password, so making an admin invent a secret — and then relay it —
+    // adds a step and a thing to leak without adding security. Same rule the
+    // driver route already uses.
     $pass = (string)($b['password'] ?? '');
+    if ($pass !== '' && strlen($pass) < 6) jsonErr('كلمة المرور قصيرة (6 أحرف على الأقل)', 422, 'WEAK_PASSWORD');
+    if ($pass === '') $pass = bin2hex(random_bytes(9));
+
     $storeNameAr = trim((string)($b['storeNameAr'] ?? ''));
     $storeName = trim((string)($b['storeName'] ?? '')) ?: $storeNameAr;
     $categoryId = trim((string)($b['categoryId'] ?? ''));
-    if ($ownerName === '' || $phone === '' || strlen($pass) < 6 || $storeNameAr === '' || $categoryId === '') {
-        jsonErr('بيانات ناقصة: اسم المالك، الهاتف، كلمة المرور، اسم المتجر، والتصنيف مطلوبين', 422, 'MISSING');
+    if ($ownerName === '' || $phone === '' || $storeNameAr === '' || $categoryId === '') {
+        jsonErr('بيانات ناقصة: اسم المالك، الهاتف، اسم المتجر، والتصنيف مطلوبين', 422, 'MISSING');
     }
     $clean = preg_replace('/[\s\-()]/', '', $phone);
     if (preg_match('/^(?:\+?20|0)?(1[0125]\d{8})$/', $clean, $mm)) $phone = '+20' . $mm[1];
