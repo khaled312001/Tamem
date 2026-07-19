@@ -555,6 +555,17 @@ export class TamemClient {
   async adminCreateMerchant(data: unknown): Promise<unknown> {
     return this.request({ method: 'POST', url: '/admin/merchants', data });
   }
+  /**
+   * Preparation window shown on the store page. Lives behind its own route
+   * because it is not a MerchantProfile column yet; see prepTimes() in api.php.
+   * Passing both values as null clears it.
+   */
+  async adminSetMerchantPrepTime(
+    id: string,
+    data: { min: number | null; max: number | null },
+  ): Promise<unknown> {
+    return this.request({ method: 'PUT', url: `/admin/merchants/${id}/prep-time`, data });
+  }
   async adminUpdateMerchant(id: string, data: unknown): Promise<unknown> {
     return this.request({ method: 'PATCH', url: `/admin/merchants/${id}`, data });
   }

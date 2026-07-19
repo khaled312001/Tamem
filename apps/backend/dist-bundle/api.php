@@ -2122,7 +2122,7 @@ if ($method === 'GET' && $path === '/admin/home-config') {
     $row = $rows[0] ?? null;
     // Prisma stores longtext JSON columns as raw strings — decode them
     // before sending so `.join()` / `.length` / `.map()` work client-side.
-    $jsonFields = ['heroGradient', 'visibleServiceKeys', 'featuredMerchantIds', 'featuredOfferIds'];
+    $jsonFields = ['heroGradient', 'visibleServiceKeys', 'featuredMerchantIds', 'featuredOfferIds', 'featuredProductIds'];
     if ($row) {
         foreach ($jsonFields as $f) {
             if (isset($row[$f]) && is_string($row[$f]) && $row[$f] !== '') {
@@ -4308,6 +4308,32 @@ if ($method === 'DELETE' && preg_match('#^/admin/offers/([^/]+)$#', $path, $m)) 
     jsonOk(['deleted' => true]);
 }
 
+// PUT /admin/merchants/{id}/prep-time — set or clear a store's prep window.
+if ($method === 'PUT' && preg_match('#^/admin/merchants/([^/]+)/prep-time$#', $path, $m)) {
+    $u = authUser();
+    if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
+    $id = $m[1];
+    $b = readJsonBody();
+
+    $min = isset($b['min']) && $b['min'] !== '' && $b['min'] !== null ? (int) $b['min'] : null;
+    $max = isset($b['max']) && $b['max'] !== '' && $b['max'] !== null ? (int) $b['max'] : null;
+
+    if ($min !== null || $max !== null) {
+        // Tolerate a single value or a reversed pair rather than rejecting —
+        // an admin typing "30" means "about 30 minutes".
+        if ($min === null) $min = $max;
+        if ($max === null) $max = $min;
+        if ($min > $max) [$min, $max] = [$max, $min];
+        $min = max(0, min(600, $min));
+        $max = max(0, min(600, $max));
+    }
+
+    db()->prepare('UPDATE `MerchantProfile` SET prepMinutesMin = ?, prepMinutesMax = ? WHERE id = ?')
+        ->execute([$min, $max, $id]);
+
+    jsonOk(['merchantId' => $id, 'prepMinutes' => $min === null ? null : ['min' => $min, 'max' => $max]]);
+}
+
 // POST /admin/supervisors — insert into Supervisor.
 if ($method === 'POST' && $path === '/admin/supervisors') {
     $u = authUser();
@@ -4384,15 +4410,6 @@ if ($method === 'PATCH' && $path === '/admin/home-config') {
     $stringFields = ['heroGreeting', 'heroSubtitle', 'trustStripTitle', 'trustStripSubtitle', 'promoBannerCouponId', 'promoBannerTitle', 'promoBannerCode'];
     $jsonFields = ['heroGradient', 'visibleServiceKeys', 'featuredMerchantIds', 'featuredOfferIds'];
     $boolFields = ['showPromoBanner', 'showTrustStrip'];
-
-    // Stored in `Setting` — see the note on the GET route above.
-    if (array_key_exists('featuredProductIds', $b)) {
-        $ids = is_array($b['featuredProductIds']) ? array_values(array_filter(
-            array_map(fn($v) => is_string($v) ? trim($v) : '', $b['featuredProductIds']),
-            fn($v) => $v !== ''
-        )) : [];
-        notifWriteSetting('home_featured_product_ids', $ids, $u['sub'] ?? null);
-    }
 
     $sets = [];
     $args = [];
@@ -5157,7 +5174,7 @@ function merchantOpenness(array $m, array $hours): array {
 // the admin list already uses (see the /admin/merchants SELECT), but filters to
 // what a customer can actually see — the admin count deliberately includes
 // hidden and unavailable rows.
-const MERCHANT_SEL = 'm.id, m.storeName, m.storeNameAr, m.phone, m.description, m.logoUrl, m.coverUrl, m.menuImages, m.addressLine, m.lat, m.lng, m.governorate, m.city, m.rating, m.isOpen, m.manualStatus, m.timezone, m.categoryId, m.createdAt, (SELECT COUNT(*) FROM `Product` p WHERE p.merchantId = m.id AND p.isAvailable = 1 AND p.isHidden = 0) AS product_count, c.name AS c_name, c.nameAr AS c_nameAr, c.iconUrl AS c_iconUrl';
+const MERCHANT_SEL = 'm.id, m.storeName, m.storeNameAr, m.phone, m.description, m.logoUrl, m.coverUrl, m.menuImages, m.addressLine, m.lat, m.lng, m.governorate, m.city, m.rating, m.isOpen, m.manualStatus, m.timezone, m.categoryId, m.createdAt, m.prepMinutesMin, m.prepMinutesMax, (SELECT COUNT(*) FROM `Product` p WHERE p.merchantId = m.id AND p.isAvailable = 1 AND p.isHidden = 0) AS product_count, c.name AS c_name, c.nameAr AS c_nameAr, c.iconUrl AS c_iconUrl';
 function hoursFor(array $ids): array {
     if (!$ids) return [];
     $in = implode(',', array_fill(0, count($ids), '?'));
@@ -5189,6 +5206,15 @@ function merchantShape(array $r, array $hours): array {
         $m['productCount'] = (int) $r['product_count'];
         unset($m['product_count']);
     }
+
+    // Preparation time — null when the admin hasn't set one, so the client can
+    // hide the stat rather than invent a number.
+    $pmin = $r['prepMinutesMin'] ?? null;
+    $pmax = $r['prepMinutesMax'] ?? null;
+    $m['prepMinutes'] = ($pmin !== null || $pmax !== null)
+        ? ['min' => (int) ($pmin ?? $pmax), 'max' => (int) ($pmax ?? $pmin)]
+        : null;
+    unset($m['prepMinutesMin'], $m['prepMinutesMax']);
 
     // "New store" is decided server-side so the rule lives in one place rather
     // than being re-derived from createdAt by every client.
@@ -6654,19 +6680,9 @@ if ($method === 'GET' && $path === '/home-config') {
     $cfg = boolCast(jsonizeRow($cfg), ['showPromoBanner', 'showTrustStrip']);
     // heroGradient / visibleServiceKeys / featuredMerchantIds / featuredOfferIds
     // are spread + .includes()-ed client-side — must be arrays or null, never {}.
-    foreach (['heroGradient', 'visibleServiceKeys', 'featuredMerchantIds', 'featuredOfferIds'] as $k) {
+    foreach (['heroGradient', 'visibleServiceKeys', 'featuredMerchantIds', 'featuredOfferIds', 'featuredProductIds'] as $k) {
         if (!array_key_exists($k, $cfg) || !is_array($cfg[$k] ?? null)) $cfg[$k] = $cfg[$k] ?? null;
     }
-    /*
-     * featuredProductIds lives in `Setting`, not in a HomeConfig column.
-     *
-     * The column would be the natural home, but the DB credentials on hand are
-     * stale so the ALTER could not be run. The API deliberately presents it as
-     * a normal home-config field anyway: when the column does get added, only
-     * these few lines change and neither the dashboard nor the app notices.
-     */
-    $cfg['featuredProductIds'] = homeListSetting('home_featured_product_ids');
-
     $cfg['promoCoupon'] = null;
     if (!empty($cfg['promoBannerCouponId'])) {
         // validTo checked in SQL — see the couponCheck() timezone note.
