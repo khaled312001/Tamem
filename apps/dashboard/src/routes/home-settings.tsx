@@ -12,6 +12,8 @@ import {
   EyeOff,
   Gift,
   Images,
+  Package,
+  Search,
   Loader2,
   Palette,
   Save,
@@ -42,6 +44,7 @@ interface HomeConfig {
   visibleServiceKeys: string[] | null;
   featuredMerchantIds: string[] | null;
   featuredOfferIds: string[] | null;
+  featuredProductIds: string[] | null;
   showPromoBanner: boolean;
   showTrustStrip: boolean;
 }
@@ -72,7 +75,7 @@ interface Coupon {
   maxDiscount?: number | string | null;
 }
 
-type TabKey = 'hero' | 'slider' | 'promo' | 'services' | 'merchants' | 'trust';
+type TabKey = 'hero' | 'slider' | 'promo' | 'services' | 'merchants' | 'products' | 'trust';
 
 const TABS: { key: TabKey; label: string; Icon: typeof Smartphone }[] = [
   { key: 'hero', label: 'الرأس', Icon: Palette },
@@ -80,6 +83,7 @@ const TABS: { key: TabKey; label: string; Icon: typeof Smartphone }[] = [
   { key: 'promo', label: 'بانر العروض', Icon: Gift },
   { key: 'services', label: 'الخدمات', Icon: Sparkles },
   { key: 'merchants', label: 'المتاجر', Icon: Store },
+  { key: 'products', label: 'الأكثر طلباً', Icon: Package },
   { key: 'trust', label: 'شريط الثقة', Icon: ShieldCheck },
 ];
 
@@ -221,6 +225,12 @@ export function HomeSettingsPage() {
           merchants={merchants}
           onToggle={(id) => toggleInArray('featuredMerchantIds', id)}
           onClear={() => update('featuredMerchantIds', null)}
+        />
+      )}
+      {tab === 'products' && (
+        <FeaturedProductsTab
+          selected={form.featuredProductIds ?? []}
+          onChange={(ids) => update('featuredProductIds', ids.length ? ids : null)}
         />
       )}
       {tab === 'slider' && <SliderTab />}
@@ -922,6 +932,156 @@ function OfferImageField({ value, onChange }: { value: string; onChange: (url: s
           }}
         />
       </label>
+    </div>
+  );
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// "الأكثر طلباً" — the curated product rail on the mobile home.
+//
+// Pinned by hand rather than derived from sales, because the point is to
+// promote what the business WANTS to sell, which is not always what already
+// sells. The neighbouring "عروض اليوم" rail needs no picker at all: it shows
+// whatever currently has a sale price, so it maintains itself.
+// ────────────────────────────────────────────────────────────────────────────
+
+interface PickerProduct {
+  id: string;
+  nameAr: string;
+  price: number | string;
+  imageUrl?: string | null;
+  merchant?: { storeNameAr?: string } | null;
+}
+
+function FeaturedProductsTab({
+  selected,
+  onChange,
+}: {
+  selected: string[];
+  onChange: (ids: string[]) => void;
+}) {
+  const [term, setTerm] = useState('');
+  const [debounced, setDebounced] = useState('');
+
+  // Search hits the server; a catalogue here runs to thousands of rows, so
+  // filtering a downloaded page would only ever search that page.
+  useEffect(() => {
+    const t = setTimeout(() => setDebounced(term), 300);
+    return () => clearTimeout(t);
+  }, [term]);
+
+  const { data, isLoading } = useQuery({
+    queryKey: ['admin', 'products', 'picker', debounced],
+    queryFn: () =>
+      api.adminListProducts({
+        pageSize: 20,
+        ...(debounced ? { search: debounced } : {}),
+      }) as Promise<{
+        items: PickerProduct[];
+      }>,
+  });
+
+  // The chosen products may not be in the current search page, so they are
+  // fetched separately — otherwise the list of what you picked would blank out
+  // the moment you typed.
+  const { data: chosen } = useQuery({
+    queryKey: ['admin', 'products', 'chosen', selected],
+    queryFn: () =>
+      api.adminListProducts({ ids: selected.join(','), pageSize: 50 }) as Promise<{
+        items: PickerProduct[];
+      }>,
+    enabled: selected.length > 0,
+  });
+
+  const toggle = (id: string) =>
+    onChange(selected.includes(id) ? selected.filter((x) => x !== id) : [...selected, id]);
+
+  const results = data?.items ?? [];
+
+  return (
+    <div className="space-y-4">
+      <div>
+        <div className="font-black">منتجات قسم «الأكثر طلباً»</div>
+        <div className="text-xs text-muted-foreground">
+          تظهر في الصفحة الرئيسية بالترتيب اللي تختاره. لو مفيش اختيار، القسم بيختفي من التطبيق.
+        </div>
+      </div>
+
+      {selected.length > 0 && (
+        <div className="rounded-xl border border-border p-3 space-y-2">
+          <div className="text-xs font-bold text-muted-foreground">المختار ({selected.length})</div>
+          <div className="flex flex-wrap gap-2">
+            {(chosen?.items ?? []).map((p) => (
+              <button
+                key={p.id}
+                type="button"
+                onClick={() => toggle(p.id)}
+                className="inline-flex items-center gap-2 bg-brand-red/10 text-brand-red rounded-full ps-2 pe-3 py-1 text-xs font-bold hover:bg-brand-red/20"
+                title="إزالة"
+              >
+                {p.imageUrl && (
+                  <img src={p.imageUrl} alt="" className="w-5 h-5 rounded-full object-cover" />
+                )}
+                {p.nameAr}
+                <span aria-hidden>×</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <div className="relative">
+        <Search className="w-4 h-4 absolute top-1/2 -translate-y-1/2 start-3 text-muted-foreground" />
+        <Input
+          value={term}
+          onChange={(e) => setTerm(e.target.value)}
+          placeholder="ابحث عن منتج بالاسم…"
+          className="ps-9"
+        />
+      </div>
+
+      {isLoading ? (
+        <CardSkeleton />
+      ) : results.length === 0 ? (
+        <div className="text-sm text-muted-foreground text-center py-6">
+          {debounced ? `لا توجد منتجات تطابق «${debounced}»` : 'ابحث للعثور على منتجات'}
+        </div>
+      ) : (
+        <div className="space-y-2">
+          {results.map((p) => {
+            const on = selected.includes(p.id);
+            return (
+              <button
+                key={p.id}
+                type="button"
+                onClick={() => toggle(p.id)}
+                className={`w-full flex items-center gap-3 rounded-xl border p-2 text-start transition ${
+                  on ? 'border-brand-red bg-brand-red/5' : 'border-border hover:bg-muted/40'
+                }`}
+              >
+                <div className="w-12 h-12 rounded-lg bg-muted overflow-hidden shrink-0">
+                  {p.imageUrl && (
+                    <img src={p.imageUrl} alt="" className="w-full h-full object-cover" />
+                  )}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="font-bold truncate">{p.nameAr}</div>
+                  <div className="text-xs text-muted-foreground truncate">
+                    {p.merchant?.storeNameAr ?? '—'} · {p.price} ج.م
+                  </div>
+                </div>
+                <div
+                  className={`w-5 h-5 rounded-md border flex items-center justify-center text-xs ${
+                    on ? 'bg-brand-red border-brand-red text-white' : 'border-border'
+                  }`}
+                >
+                  {on ? '✓' : ''}
+                </div>
+              </button>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }

@@ -125,8 +125,12 @@ export function FloatingCartBar({ bottomOffset = 0 }: Props) {
 const styles = StyleSheet.create({
   wrap: {
     position: 'absolute',
-    insetInlineStart: 0,
-    insetInlineEnd: 0,
+    // left/right, not insetInline*: pinning BOTH logical sides did not
+    // stretch the element on this RN version — it collapsed to its content
+    // width and drifted to one edge. A full-bleed bar is symmetric, so the
+    // physical props are also RTL-safe here.
+    left: 0,
+    right: 0,
   },
   bar: {
     flexDirection: 'row',

@@ -34,14 +34,16 @@ import { MainServicesSection, type HomeServiceItem } from './components/MainServ
 import { OffersCarousel } from './components/OffersCarousel';
 import { NearbyStoresSection, type StoreFilter } from './components/NearbyStoresSection';
 import { PopularStoresSection } from './components/PopularStoresSection';
+import { ProductRail } from './components/ProductRail';
 import { PromoCardsRow } from './components/PromoCardsRow';
 import { QuickActionsSection, type QuickAction } from './components/QuickActionsSection';
-import {
-  type HomeCategory,
-  type Merchant,
-  type Offer,
-  type ServiceKey,
-  type ServiceRoute,
+import type {
+  HomeCategory,
+  HomeProduct,
+  Merchant,
+  Offer,
+  ServiceKey,
+  ServiceRoute,
 } from './homeData';
 import { useHomeData } from './useHomeData';
 
@@ -74,6 +76,8 @@ export function HomeV2Screen() {
     user,
     bannerOffers,
     featuredMerchants,
+    featuredProducts,
+    dealProducts,
     nearbyMerchants,
     merchantsTotal,
     hasLocation,
@@ -130,6 +134,14 @@ export function HomeV2Screen() {
     (m: Merchant) => {
       tick();
       navigation.navigate('MerchantDetail', { merchantId: m.id });
+    },
+    [navigation, tick],
+  );
+
+  const onPressProduct = useCallback(
+    (p: HomeProduct) => {
+      tick();
+      navigation.navigate('ProductDetail', { productId: p.id });
     },
     [navigation, tick],
   );
@@ -314,6 +326,25 @@ export function HomeV2Screen() {
             />
           </View>
         )}
+
+        {/* Admin-curated products. Renders nothing until someone pins some. */}
+        <View style={styles.section}>
+          <ProductRail
+            title="الأكثر طلباً"
+            products={featuredProducts}
+            onPressProduct={onPressProduct}
+          />
+        </View>
+
+        {/* Self-maintaining: appears only while something is actually on sale. */}
+        <View style={styles.section}>
+          <ProductRail
+            title="عروض اليوم"
+            subtitle="خصومات سارية الآن"
+            products={dealProducts}
+            onPressProduct={onPressProduct}
+          />
+        </View>
 
         <View style={styles.section}>
           <PopularStoresSection

@@ -146,8 +146,9 @@ export function AppTabs() {
           tabBarStyle: {
             borderTopColor: colors.line,
             backgroundColor: colors.white,
-            height: 68 + bottomInset,
-            paddingTop: 6,
+            // Grown with the label line-height so the taller text still fits.
+            height: 74 + bottomInset,
+            paddingTop: 8,
             paddingBottom: bottomInset,
             // Let the raised centre Home circle spill above the bar edge.
             overflow: 'visible',
@@ -157,9 +158,11 @@ export function AppTabs() {
           tabBarLabelStyle: {
             fontFamily: fontFamilies.bodyBold,
             fontSize: 12,
-            lineHeight: 14,
+            // 14 was a 1.17 ratio and clipped the bottom of every Arabic label
+            // — "السلة" and "طلباتي" were visibly cut. Arabic needs ~1.5x.
+            lineHeight: 18,
             marginTop: 2,
-            marginBottom: 2,
+            marginBottom: 0,
             includeFontPadding: false,
           },
         }}

@@ -60,8 +60,12 @@ const styles = StyleSheet.create({
   bar: {
     position: 'absolute',
     bottom: spacing.md,
-    insetInlineStart: spacing.lg,
-    insetInlineEnd: spacing.lg,
+    // left/right, not insetInline*: pinning BOTH logical sides did not
+    // stretch the element on this RN version — it collapsed to its content
+    // width and drifted to one edge. A full-bleed bar is symmetric, so the
+    // physical props are also RTL-safe here.
+    left: spacing.lg,
+    right: spacing.lg,
     flexDirection: ROW,
     alignItems: 'center',
     gap: spacing.sm,

@@ -1585,6 +1585,15 @@ function notifReadSetting(string $key): array {
     } catch (Throwable $e) { /* fall through */ }
     return [];
 }
+/**
+ * Read a Setting that holds a JSON array of strings, e.g. the home screen's
+ * curated product list. Always returns a list — never null or an object — so
+ * clients can spread and .includes() it without guarding.
+ */
+function homeListSetting(string $key): array {
+    $v = notifReadSetting($key);
+    return array_values(array_filter($v, 'is_string'));
+}
 function notifWriteSetting(string $key, array $value, ?string $uid): void {
     db()->prepare('INSERT INTO `Setting` (`key`,`value`,`description`,`updatedAt`,`updatedById`) VALUES (?,?,NULL,NOW(3),?) ON DUPLICATE KEY UPDATE `value`=VALUES(`value`), `updatedAt`=VALUES(`updatedAt`), `updatedById`=VALUES(`updatedById`)')
         ->execute([$key, json_encode($value, JSON_UNESCAPED_UNICODE), $uid]);
@@ -2729,6 +2738,15 @@ if ($method === 'GET' && $path === '/admin/products') {
     $where = '1=1';
     $args = [];
     if (!empty($_GET['merchantId'])) { $where .= ' AND p.merchantId = ?'; $args[] = $_GET['merchantId']; }
+    // ids=a,b,c — lets the dashboard's product picker show what is already
+    // selected even when it isn't on the current search page.
+    $idsRaw = trim((string) ($_GET['ids'] ?? ''));
+    if ($idsRaw !== '') {
+        $ids = array_slice(array_values(array_filter(array_map('trim', explode(',', $idsRaw)))), 0, 100);
+        if (!$ids) jsonList([], 1, 0, 0);
+        $where .= ' AND p.id IN (' . implode(',', array_fill(0, count($ids), '?')) . ')';
+        foreach ($ids as $id) $args[] = $id;
+    }
     $q = trim((string) ($_GET['search'] ?? ''));
     if ($q !== '') {
         $where .= ' AND (p.name LIKE ? OR p.nameAr LIKE ? OR p.sku LIKE ?)';
@@ -4366,6 +4384,16 @@ if ($method === 'PATCH' && $path === '/admin/home-config') {
     $stringFields = ['heroGreeting', 'heroSubtitle', 'trustStripTitle', 'trustStripSubtitle', 'promoBannerCouponId', 'promoBannerTitle', 'promoBannerCode'];
     $jsonFields = ['heroGradient', 'visibleServiceKeys', 'featuredMerchantIds', 'featuredOfferIds'];
     $boolFields = ['showPromoBanner', 'showTrustStrip'];
+
+    // Stored in `Setting` — see the note on the GET route above.
+    if (array_key_exists('featuredProductIds', $b)) {
+        $ids = is_array($b['featuredProductIds']) ? array_values(array_filter(
+            array_map(fn($v) => is_string($v) ? trim($v) : '', $b['featuredProductIds']),
+            fn($v) => $v !== ''
+        )) : [];
+        notifWriteSetting('home_featured_product_ids', $ids, $u['sub'] ?? null);
+    }
+
     $sets = [];
     $args = [];
     foreach ($stringFields as $f) if (array_key_exists($f, $b)) { $sets[] = "`$f` = ?"; $args[] = $b[$f]; }
@@ -5770,6 +5798,24 @@ if ($method === 'GET' && $path === '/products') {
     if (!empty($_GET['merchantId'])) { $where .= ' AND p.merchantId = ?'; $args[] = $_GET['merchantId']; }
     $q = trim((string) ($_GET['q'] ?? $_GET['search'] ?? ''));
     if ($q !== '') { $where .= ' AND (p.name LIKE ? OR p.nameAr LIKE ?)'; $args[] = "%$q%"; $args[] = "%$q%"; }
+
+    // ids=a,b,c — fetch a curated set in one round trip. Capped so a crafted
+    // query can't turn this into an unbounded IN(...) scan.
+    $idsRaw = trim((string) ($_GET['ids'] ?? ''));
+    if ($idsRaw !== '') {
+        $ids = array_slice(array_values(array_filter(array_map('trim', explode(',', $idsRaw)))), 0, 50);
+        if (!$ids) jsonList([], 1, 0, 0);
+        $where .= ' AND p.id IN (' . implode(',', array_fill(0, count($ids), '?')) . ')';
+        foreach ($ids as $id) $args[] = $id;
+    }
+
+    // onSale=1 — anything the merchant actually discounted. Both knobs count:
+    // salePrice must undercut the list price to be a real discount, and
+    // discount is a percentage.
+    if (!empty($_GET['onSale'])) {
+        $where .= ' AND ((p.salePrice IS NOT NULL AND p.salePrice > 0 AND p.salePrice < p.price)'
+                . ' OR (p.discount IS NOT NULL AND p.discount > 0))';
+    }
     $cst = db()->prepare('SELECT COUNT(*) n FROM `Product` p WHERE ' . $where);
     $cst->execute($args);
     $total = (int) $cst->fetch()['n'];
@@ -6611,6 +6657,16 @@ if ($method === 'GET' && $path === '/home-config') {
     foreach (['heroGradient', 'visibleServiceKeys', 'featuredMerchantIds', 'featuredOfferIds'] as $k) {
         if (!array_key_exists($k, $cfg) || !is_array($cfg[$k] ?? null)) $cfg[$k] = $cfg[$k] ?? null;
     }
+    /*
+     * featuredProductIds lives in `Setting`, not in a HomeConfig column.
+     *
+     * The column would be the natural home, but the DB credentials on hand are
+     * stale so the ALTER could not be run. The API deliberately presents it as
+     * a normal home-config field anyway: when the column does get added, only
+     * these few lines change and neither the dashboard nor the app notices.
+     */
+    $cfg['featuredProductIds'] = homeListSetting('home_featured_product_ids');
+
     $cfg['promoCoupon'] = null;
     if (!empty($cfg['promoBannerCouponId'])) {
         // validTo checked in SQL — see the couponCheck() timezone note.
