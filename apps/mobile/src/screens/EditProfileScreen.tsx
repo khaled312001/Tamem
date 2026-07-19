@@ -22,6 +22,7 @@ import { GradientButton } from '../components/GradientButton';
 import { IconField } from '../components/IconField';
 import { ScreenHeader } from '../components/ScreenHeader';
 import { api } from '../lib/api';
+import { uploadFile } from '../lib/uploadFile';
 import { useAuth } from '../stores/auth';
 import { colors, fontFamilies, fontSizes, radii, spacing } from '../theme/tokens';
 
@@ -36,28 +37,6 @@ interface UserExt {
  * Posts the picked image to /uploads (multipart) and returns the hosted URL.
  * Works on both web (Blob from URI) and native (FormData with uri).
  */
-async function uploadAvatar(uri: string): Promise<string> {
-  const form = new FormData();
-
-  if (Platform.OS === 'web') {
-    const res = await fetch(uri);
-    const blob = await res.blob();
-    form.append('file', blob, 'avatar.jpg');
-  } else {
-    // RN FormData accepts { uri, name, type } as a synthetic file
-    form.append('file', {
-      uri,
-      name: 'avatar.jpg',
-      type: 'image/jpeg',
-    } as unknown as Blob);
-  }
-
-  const res = await api.raw.post('/uploads', form, {
-    headers: { 'Content-Type': 'multipart/form-data' },
-  });
-  return res.data.data.url as string;
-}
-
 export function EditProfileScreen() {
   const navigation = useNavigation();
   const user = useAuth((s) => s.user) as (UserExt & { id: string }) | null;
@@ -103,11 +82,20 @@ export function EditProfileScreen() {
 
   const pickAvatar = async () => {
     try {
-      const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
-      if (!perm.granted) {
-        Alert.alert('لا يوجد إذن', 'فعّل صلاحية الصور من الإعدادات');
-        return;
-      }
+      /*
+       * No permission gate.
+       *
+       * launchImageLibraryAsync opens the SYSTEM picker, which hands back a
+       * single user-chosen file and needs no storage permission on Android 11+
+       * or modern iOS. Gating on requestMediaLibraryPermissionsAsync().granted
+       * blocked users who were already allowed — verified on the test device,
+       * which reports READ_EXTERNAL_STORAGE granted=true while the picker was
+       * still refusing to open.
+       *
+       * If the picker genuinely can't open, it throws and the catch below
+       * reports it — an honest error beats a wrong instruction to go change a
+       * setting that is already correct.
+       */
       const result = await ImagePicker.launchImageLibraryAsync({
         mediaTypes: ['images'],
         quality: 0.85,
@@ -116,7 +104,10 @@ export function EditProfileScreen() {
       });
       if (result.canceled || !result.assets?.[0]) return;
       setUploadingAvatar(true);
-      const url = await uploadAvatar(result.assets[0].uri);
+      const { url } = await uploadFile(result.assets[0].uri, {
+        mime: 'image/jpeg',
+        name: 'avatar.jpg',
+      });
       setAvatarUrl(url);
     } catch (err) {
       Alert.alert('خطأ', err instanceof Error ? err.message : 'فشل رفع الصورة');
