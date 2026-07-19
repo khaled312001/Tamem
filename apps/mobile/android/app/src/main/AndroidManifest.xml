@@ -31,6 +31,15 @@
         <data android:scheme="tamem"/>
         <data android:scheme="com.tamem.delivery"/>
       </intent-filter>
+      <!-- Google OAuth (expo-auth-session browser flow) redirects back to the app
+           via the reverse of the Android OAuth client ID. Without this the browser
+           opens, the user signs in, but the redirect never returns to the app. -->
+      <intent-filter>
+        <action android:name="android.intent.action.VIEW"/>
+        <category android:name="android.intent.category.DEFAULT"/>
+        <category android:name="android.intent.category.BROWSABLE"/>
+        <data android:scheme="com.googleusercontent.apps.718814135093-ej2un68fjt1g777hgko10l8a3pnrkmmj"/>
+      </intent-filter>
     </activity>
   </application>
 </manifest>

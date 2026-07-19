@@ -9,6 +9,7 @@ import {
   ChevronLeft,
   ChevronRight,
   DollarSign,
+  Download,
   Eye,
   LayoutGrid,
   Loader2,
@@ -233,6 +234,24 @@ export function OrdersPage() {
     },
     onError: (err: Error) => toast.error(err.message),
   });
+
+  // Export the selected orders to Excel. Always available in the bulk bar, even
+  // when the selected orders share no valid status transition.
+  const [exporting, setExporting] = useState(false);
+  const handleExportSelected = async () => {
+    if (selectedOrders.length === 0) return;
+    setExporting(true);
+    try {
+      const { exportOrders } = await import('../lib/ordersExport.js');
+      const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
+      await exportOrders(selectedOrders, stamp);
+      toast.success(`تم تصدير ${selectedOrders.length} طلب`);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'فشل تصدير الطلبات');
+    } finally {
+      setExporting(false);
+    }
+  };
 
   // Helper: best "next status" suggestion for one-click advance
   const nextStatusFor = (o: OrderRow): OrderStatus | null => {
@@ -554,7 +573,7 @@ export function OrdersPage() {
           </div>
           <div className="flex items-center gap-2 flex-wrap justify-end">
             {bulkTargets.length === 0 ? (
-              <span className="text-xs opacity-80">لا توجد حالة مشتركة متاحة</span>
+              <span className="text-xs opacity-80">لا توجد حالة مشتركة للتحديث</span>
             ) : (
               bulkTargets.map((target) => (
                 <button
@@ -572,6 +591,20 @@ export function OrdersPage() {
                 </button>
               ))
             )}
+            {/* Export is always available — a useful action even when the
+                selection shares no valid status transition. */}
+            <button
+              onClick={handleExportSelected}
+              disabled={exporting}
+              className="px-3 py-1.5 rounded-lg bg-white text-brand-red hover:bg-white/90 text-xs font-bold inline-flex items-center gap-1 transition disabled:opacity-60"
+            >
+              {exporting ? (
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              ) : (
+                <Download className="w-3.5 h-3.5" />
+              )}
+              تصدير Excel
+            </button>
           </div>
         </div>
       )}

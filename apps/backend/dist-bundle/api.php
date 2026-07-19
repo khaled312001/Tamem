@@ -290,6 +290,52 @@ function smtpSend(array $to, string $subject, string $textBody, ?string $htmlBod
     return ['ok' => str_starts_with(trim($r), '250'), 'reply' => $r];
 }
 
+// ─── 7a. Deferred, branded email — sent AFTER the HTTP response is flushed ─
+// SMTP is synchronous and slow (~1-3s). Emails queued during a request are
+// flushed in a shutdown handler that first calls fastcgi_finish_request()
+// where the SAPI supports it, so the client never waits on the mail server.
+$GLOBALS['__deferred_mail'] = [];
+function mailDefer(string $toAddr, string $subject, string $textBody, ?string $htmlBody = null): void {
+    $toAddr = trim($toAddr);
+    if ($toAddr === '' || !filter_var($toAddr, FILTER_VALIDATE_EMAIL)) return;
+    $GLOBALS['__deferred_mail'][] = [$toAddr, $subject, $textBody, $htmlBody];
+}
+/** Look up a user's email and queue a message to them (best-effort). */
+function mailToUser(string $userId, string $subject, string $textBody, ?string $htmlBody = null): void {
+    if ($userId === '') return;
+    try {
+        $st = db()->prepare('SELECT email FROM `User` WHERE id = ? LIMIT 1');
+        $st->execute([$userId]);
+        $email = (string) ($st->fetchColumn() ?: '');
+        if ($email !== '') mailDefer($email, $subject, $textBody, $htmlBody);
+    } catch (Throwable $e) { error_log('[mail] mailToUser: ' . $e->getMessage()); }
+}
+/** Branded RTL HTML wrapper so every email looks like Tamem. */
+function emailShell(string $titleAr, string $bodyHtml, ?string $ctaText = null, ?string $ctaUrl = null): string {
+    $cta = ($ctaText && $ctaUrl)
+        ? '<div style="text-align:center;margin:24px 0"><a href="' . htmlspecialchars($ctaUrl) . '" style="display:inline-block;background:#E0301E;color:#fff;text-decoration:none;font-weight:700;padding:12px 30px;border-radius:10px">' . htmlspecialchars($ctaText) . '</a></div>'
+        : '';
+    return '<!doctype html><html lang="ar" dir="rtl"><body style="margin:0;font-family:Tahoma,Arial,sans-serif;background:#f5f6f8;padding:20px">'
+        . '<div style="max-width:560px;margin:auto;background:#fff;border-radius:14px;overflow:hidden;border:1px solid #eee">'
+        . '<div style="background:#E0301E;padding:20px 28px"><span style="color:#fff;font-size:20px;font-weight:800">تميم للتوصيل 🚚</span></div>'
+        . '<div style="padding:28px">'
+        . '<h2 style="color:#241310;margin:0 0 12px;font-size:19px">' . htmlspecialchars($titleAr) . '</h2>'
+        . '<div style="color:#555;font-size:15px;line-height:1.9">' . $bodyHtml . '</div>'
+        . $cta
+        . '</div>'
+        . '<div style="background:#faf7f2;padding:16px 28px;text-align:center;color:#999;font-size:12px">© تميم للتوصيل — رسالة تلقائية، لا داعي للرد عليها</div>'
+        . '</div></body></html>';
+}
+register_shutdown_function(function () {
+    if (empty($GLOBALS['__deferred_mail'])) return;
+    if (function_exists('fastcgi_finish_request')) { @fastcgi_finish_request(); }
+    foreach ($GLOBALS['__deferred_mail'] as $m) {
+        try { smtpSend([$m[0]], $m[1], $m[2], $m[3]); }
+        catch (Throwable $e) { error_log('[mail] deferred send: ' . $e->getMessage()); }
+    }
+    $GLOBALS['__deferred_mail'] = [];
+});
+
 // ─── 7b. Auth guard: read Bearer token from Authorization header ────────
 function authUser(): array {
     $auth = $_SERVER['HTTP_AUTHORIZATION'] ?? $_SERVER['REDIRECT_HTTP_AUTHORIZATION'] ?? '';
@@ -4995,10 +5041,12 @@ if ($method === 'POST' && $path === '/auth/register') {
     $phone = normPhoneEg((string) ($b['phone'] ?? ''));
     $password = (string) ($b['password'] ?? '');
     $city = trim((string) ($b['city'] ?? ''));
+    $email = strtolower(trim((string) ($b['email'] ?? '')));
     if (mb_strlen($name) < 2 || mb_strlen($name) > 100) jsonErr('الاسم مطلوب (حرفين على الأقل)', 422, 'VALIDATION_ERROR');
     if (!$phone) jsonErr('رقم هاتف مصري غير صحيح', 422, 'VALIDATION_ERROR');
     if (strlen($password) < 8 || strlen($password) > 72) jsonErr('كلمة السر 8 أحرف على الأقل', 422, 'VALIDATION_ERROR');
     if (mb_strlen($city) < 2) jsonErr('المدينة مطلوبة', 422, 'VALIDATION_ERROR');
+    if ($email !== '' && !filter_var($email, FILTER_VALIDATE_EMAIL)) jsonErr('البريد الإلكتروني غير صحيح', 422, 'VALIDATION_ERROR');
     $role = ((string) ($b['role'] ?? '')) === 'MERCHANT' ? 'MERCHANT' : 'CUSTOMER';
 
     $st = db()->prepare('SELECT id FROM `User` WHERE phone = ? LIMIT 1');
@@ -5009,9 +5057,27 @@ if ($method === 'POST' && $path === '/auth/register') {
         echo json_encode(['error' => ['code' => 'CONFLICT', 'message' => 'Phone already registered', 'messageAr' => 'هذا الرقم مسجل بالفعل']], JSON_UNESCAPED_UNICODE);
         exit;
     }
+    if ($email !== '') {
+        $ec = db()->prepare('SELECT id FROM `User` WHERE email = ? LIMIT 1');
+        $ec->execute([$email]);
+        if ($ec->fetch()) {
+            http_response_code(409);
+            echo json_encode(['error' => ['code' => 'CONFLICT', 'message' => 'Email already registered', 'messageAr' => 'هذا البريد مسجل بالفعل']], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+    }
     $id = newId();
-    db()->prepare('INSERT INTO `User` (id, phone, passwordHash, name, role, city, defaultAddress, isPhoneVerified, isActive, createdAt, updatedAt) VALUES (?,?,?,?,?,?,?,0,1,NOW(3),NOW(3))')
-        ->execute([$id, $phone, password_hash($password, PASSWORD_BCRYPT), $name, $role, $city, ($b['address'] ?? null) ?: null]);
+    db()->prepare('INSERT INTO `User` (id, phone, email, passwordHash, name, role, city, defaultAddress, isPhoneVerified, isActive, createdAt, updatedAt) VALUES (?,?,?,?,?,?,?,?,0,1,NOW(3),NOW(3))')
+        ->execute([$id, $phone, ($email !== '' ? $email : null), password_hash($password, PASSWORD_BCRYPT), $name, $role, $city, ($b['address'] ?? null) ?: null]);
+    // Welcome email (best-effort, deferred) — only when they gave an email.
+    if ($email !== '') {
+        mailDefer($email, 'أهلاً بك في تميم للتوصيل 🎉',
+            "مرحباً {$name}،\nتم إنشاء حسابك في تطبيق تميم للتوصيل بنجاح.\nيسعدنا انضمامك إلينا!",
+            emailShell('أهلاً بك في تميم للتوصيل 🎉',
+                '<p>مرحباً <b>' . htmlspecialchars($name) . '</b>،</p>'
+                . '<p>تم إنشاء حسابك في تطبيق <b>تميم للتوصيل</b> بنجاح. يسعدنا انضمامك إلينا! 🚚</p>'
+                . '<p>يمكنك الآن طلب التوصيل ومتابعة طلباتك لحظة بلحظة من داخل التطبيق.</p>'));
+    }
 
     if ($role === 'MERCHANT') {
         // Placeholder profile so the merchant tabs render (mirrors auth.controller).
@@ -5092,29 +5158,55 @@ if ($method === 'POST' && $path === '/auth/otp/verify') {
 
 if ($method === 'POST' && $path === '/auth/forgot-password') {
     $b = readJsonBody();
-    $phone = normPhoneEg((string) ($b['phone'] ?? '')) ?? trim((string) ($b['phone'] ?? ''));
-    $st = db()->prepare('SELECT id FROM `User` WHERE phone = ? LIMIT 1');
-    $st->execute([$phone]);
+    $raw = trim((string) ($b['identifier'] ?? $b['phone'] ?? $b['email'] ?? ''));
+    // Accept an email OR an Egyptian phone.
+    if (str_contains($raw, '@')) {
+        $st = db()->prepare('SELECT id, phone, email FROM `User` WHERE email = ? LIMIT 1');
+        $st->execute([strtolower($raw)]);
+    } else {
+        $phone = normPhoneEg($raw) ?? $raw;
+        $st = db()->prepare('SELECT id, phone, email FROM `User` WHERE phone = ? LIMIT 1');
+        $st->execute([$phone]);
+    }
     $u = $st->fetch();
     if ($u) {
         $code = str_pad((string) random_int(0, 999999), 6, '0', STR_PAD_LEFT);
         db()->prepare('UPDATE `User` SET passwordResetHash = ?, passwordResetExpiresAt = DATE_ADD(NOW(3), INTERVAL 10 MINUTE), updatedAt = NOW(3) WHERE id = ?')
             ->execute([hash('sha256', $code), $u['id']]);
-        waEnqueue($phone, "تميم للتوصيل 🚚\nكود إعادة تعيين كلمة السر: *$code*\nصالح لمدة 10 دقائق.");
+        // WhatsApp (real phones only — Google users carry a g_… placeholder).
+        if (!empty($u['phone']) && !str_starts_with((string) $u['phone'], 'g_')) {
+            waEnqueue((string) $u['phone'], "تميم للتوصيل 🚚\nكود إعادة تعيين كلمة السر: *$code*\nصالح لمدة 10 دقائق.");
+        }
+        // Email the code too, if we have one on file.
+        if (!empty($u['email'])) {
+            mailDefer((string) $u['email'], 'كود إعادة تعيين كلمة السر — تميم',
+                "كود إعادة تعيين كلمة السر في تميم: $code\nصالح لمدة 10 دقائق.\nلو لم تطلب ذلك، تجاهل هذه الرسالة.",
+                emailShell('إعادة تعيين كلمة السر',
+                    '<p>استخدم الكود التالي لإعادة تعيين كلمة السر الخاصة بحسابك في تميم:</p>'
+                    . '<div style="font-family:monospace;font-size:34px;font-weight:800;letter-spacing:8px;text-align:center;background:#241310;color:#F2A93B;padding:18px;border-radius:10px;margin:14px 0">' . htmlspecialchars($code) . '</div>'
+                    . '<p style="color:#666;font-size:13px">صالح لمدة <b>10 دقائق</b>. لو لم تطلب ذلك، تجاهل هذه الرسالة.</p>'));
+        }
     }
-    jsonOk(['sent' => true]); // anti-enumeration: same body for unknown phones
+    jsonOk(['sent' => true]); // anti-enumeration: same body for unknown identifiers
 }
 
 if ($method === 'POST' && $path === '/auth/reset-password') {
     $b = readJsonBody();
-    $phone = normPhoneEg((string) ($b['phone'] ?? '')) ?? trim((string) ($b['phone'] ?? ''));
+    $raw = trim((string) ($b['identifier'] ?? $b['phone'] ?? $b['email'] ?? ''));
     $code = trim((string) ($b['code'] ?? ''));
     $new = (string) ($b['newPassword'] ?? '');
     if (!preg_match('/^\d{6}$/', $code)) jsonErr('كود التحقق غير صحيح', 401, 'UNAUTHORIZED');
     if (strlen($new) < 8) jsonErr('كلمة السر 8 أحرف على الأقل', 422, 'VALIDATION_ERROR');
     // Expiry compared in SQL (NOW(3)) — see the OTP cooldown note above.
-    $st = db()->prepare('SELECT id, name, phone, role, passwordResetHash, (passwordResetExpiresAt IS NOT NULL AND passwordResetExpiresAt < NOW(3)) AS isExpired FROM `User` WHERE phone = ? LIMIT 1');
-    $st->execute([$phone]);
+    // Look up by email or phone, matching how forgot-password was requested.
+    if (str_contains($raw, '@')) {
+        $st = db()->prepare('SELECT id, name, phone, role, passwordResetHash, (passwordResetExpiresAt IS NOT NULL AND passwordResetExpiresAt < NOW(3)) AS isExpired FROM `User` WHERE email = ? LIMIT 1');
+        $st->execute([strtolower($raw)]);
+    } else {
+        $phone = normPhoneEg($raw) ?? $raw;
+        $st = db()->prepare('SELECT id, name, phone, role, passwordResetHash, (passwordResetExpiresAt IS NOT NULL AND passwordResetExpiresAt < NOW(3)) AS isExpired FROM `User` WHERE phone = ? LIMIT 1');
+        $st->execute([$phone]);
+    }
     $u = $st->fetch();
     if (!$u || !$u['passwordResetHash']) jsonErr('كود التحقق غير صحيح أو منتهي', 401, 'UNAUTHORIZED');
     if ((int) $u['isExpired']) jsonErr('انتهت صلاحية كود التحقق — اطلب كوداً جديداً', 401, 'UNAUTHORIZED');
@@ -5156,6 +5248,13 @@ if ($method === 'POST' && $path === '/auth/google') {
             db()->prepare('INSERT INTO `User` (id, phone, name, email, googleId, role, avatarUrl, isPhoneVerified, isActive, createdAt, updatedAt) VALUES (?,?,?,?,?,?,?,0,1,NOW(3),NOW(3))')
                 ->execute([$id, 'g_' . $sub, (string) ($tk['name'] ?? $email), $email, $sub, $role, ($tk['picture'] ?? null) ?: null]);
             $u = ['id' => $id, 'name' => (string) ($tk['name'] ?? $email), 'phone' => 'g_' . $sub, 'email' => $email, 'role' => $role];
+            // Welcome email for the brand-new Google user.
+            $gname = (string) ($tk['name'] ?? $email);
+            mailDefer($email, 'أهلاً بك في تميم للتوصيل 🎉',
+                "مرحباً {$gname}،\nتم إنشاء حسابك في تطبيق تميم للتوصيل عبر Google بنجاح.\nيسعدنا انضمامك إلينا!",
+                emailShell('أهلاً بك في تميم للتوصيل 🎉',
+                    '<p>مرحباً <b>' . htmlspecialchars($gname) . '</b>،</p>'
+                    . '<p>تم إنشاء حسابك في تطبيق <b>تميم للتوصيل</b> عبر Google بنجاح. يسعدنا انضمامك إلينا! 🚚</p>'));
         }
     }
     jsonOk(['user' => ['id' => $u['id'], 'name' => $u['name'], 'phone' => $u['phone'], 'email' => $u['email'], 'role' => $u['role']], 'tokens' => issueTokens($u['id'], (string) $u['role'])]);
@@ -5781,6 +5880,14 @@ function notifyUser(string $userId, string $type, string $title, string $titleAr
         pushToUser($userId, $titleAr ?: $title, $bodyAr ?: $body,
             array_merge(is_array($data) ? $data : [], ['type' => $type]));
     } catch (Throwable $e) { error_log('[fcm] notifyUser push: ' . $e->getMessage()); }
+    // Email copy — deferred (post-response) so it never slows the request, and
+    // only for users who actually have an email on file.
+    try {
+        $t = $titleAr ?: $title;
+        $bd = $bodyAr ?: $body;
+        mailToUser($userId, $t, $bd,
+            emailShell($t, '<p style="margin:0">' . nl2br(htmlspecialchars($bd)) . '</p>'));
+    } catch (Throwable $e) { error_log('[mail] notifyUser: ' . $e->getMessage()); }
 }
 
 if ($method === 'GET' && $path === '/orders/mine') {
@@ -6480,6 +6587,17 @@ if ($method === 'POST' && $path === '/auth/login') {
     $accessTtl = 15 * 60;
     $access = jwtSign(['sub' => $user['id'], 'role' => $role], $accessSecret, $accessTtl);
     $refresh = jwtSign(['sub' => $user['id'], 'typ' => 'refresh'], $refreshSecret, 30 * 24 * 3600);
+    // Login-alert email (best-effort, deferred). Only if the user has an email.
+    if (!empty($user['email'])) {
+        $when = gmdate('Y-m-d H:i') . ' UTC';
+        $nm = (string) $user['name'];
+        mailDefer((string) $user['email'], 'تسجيل دخول جديد إلى حسابك في تميم',
+            "مرحباً {$nm}،\nتم تسجيل الدخول إلى حسابك في تطبيق تميم بتاريخ {$when}.\nلو لم تكن أنت، غيّر كلمة المرور فوراً.",
+            emailShell('تسجيل دخول جديد إلى حسابك',
+                '<p>مرحباً <b>' . htmlspecialchars($nm) . '</b>،</p>'
+                . '<p>تم تسجيل الدخول إلى حسابك في تطبيق تميم بتاريخ <b style="direction:ltr;display:inline-block">' . $when . '</b>.</p>'
+                . '<p style="color:#999;font-size:13px">لو لم تكن أنت من قام بذلك، غيّر كلمة المرور فوراً.</p>'));
+    }
     jsonOk([
         'requiresOtp' => false,
         'user' => [

@@ -63,12 +63,13 @@ const EMAIL = 'info@deliverytamem.com';
         </div>
         <div>
           <div class="font-black text-white">ساعات العمل</div>
-          <div class="text-sm text-white/65">يومياً 10:00 ص — 1:00 بعد منتصف الليل</div>
+          <div class="text-sm text-white/65" data-site="hours">يومياً 10:00 ص — 1:00 بعد منتصف الليل</div>
         </div>
       </div>
 
       <a
         href={`mailto:${EMAIL}`}
+        data-site="emailHref"
         class="rounded-2xl p-5 flex items-center gap-4 border hover:-translate-y-1 transition-all"
         style="background: rgba(255,255,255,0.04); border-color: rgba(255,255,255,0.08);"
       >
@@ -77,7 +78,7 @@ const EMAIL = 'info@deliverytamem.com';
         </div>
         <div class="min-w-0">
           <div class="font-black text-white">البريد الإلكتروني</div>
-          <div class="text-sm text-white/65 break-all" dir="ltr">{EMAIL}</div>
+          <div class="text-sm text-white/65 break-all" dir="ltr" data-site="email">{EMAIL}</div>
         </div>
       </a>
     </div>
@@ -88,7 +89,7 @@ const EMAIL = 'info@deliverytamem.com';
       </div>
       <div>
         <div class="font-black text-white">المقر الرئيسي</div>
-        <div class="text-sm text-white/65">{TAMEM_ADDRESS_AR}</div>
+        <div class="text-sm text-white/65" data-site="address">{TAMEM_ADDRESS_AR}</div>
       </div>
     </div>
   </div>

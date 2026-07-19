@@ -82,15 +82,9 @@ export const useAuth = create<AuthState>((set) => ({
     } catch {
       /* best-effort */
     }
-    // Release the Google account too, so the next sign-in shows the account
-    // chooser instead of silently re-using the previous user's account on a
-    // shared phone. Native module: absent on web, and a no-op if never used.
-    try {
-      const { GoogleSignin } = await import('@react-native-google-signin/google-signin');
-      await GoogleSignin.signOut();
-    } catch {
-      /* not signed in with Google, or web */
-    }
+    // Google sign-in uses the browser-based expo-auth-session flow, which keeps
+    // no persistent native session to clear here — the account chooser shows on
+    // every sign-in on its own.
     await Promise.all([
       secureStorage.deleteItem(ACCESS_KEY),
       secureStorage.deleteItem(REFRESH_KEY),

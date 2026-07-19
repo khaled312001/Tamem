@@ -147,7 +147,44 @@ const DEFAULTS: Record<string, string> = {
   stat4Value: '3',
   stat4Suffix: 'طرق دفع',
   stat4Label: 'كاش · فودافون كاش · إنستاباي',
+  // العنوان والمواعيد — the live values currently on the site (Contact/Footer).
+  addressAr: 'المقر الرئيسي — مركز قفط، محافظة قنا',
+  email: 'info@deliverytamem.com',
+  workingHoursAr: 'يومياً 10:00 ص — 1:00 بعد منتصف الليل',
 };
+
+/** The four real Tamem lines — used to seed the contacts tab when the backend
+ *  has none saved yet, so the admin edits the live numbers, not a blank list. */
+const DEFAULT_CONTACTS: ContactLine[] = [
+  {
+    key: 'delivery1',
+    phone: '+201070750167',
+    labelAr: 'خدمة الدليفري — خط 1',
+    descAr: 'طلبات داخل المدينة (مطاعم، صيدليات، سوبر ماركت)',
+    whatsappMessage: 'أهلاً، أريد طلب توصيل',
+  },
+  {
+    key: 'delivery2',
+    phone: '+201070750168',
+    labelAr: 'خدمة الدليفري — خط 2',
+    descAr: 'خط بديل لخدمة التوصيل داخل المدينة',
+    whatsappMessage: 'أهلاً، أريد طلب توصيل',
+  },
+  {
+    key: 'shipping',
+    phone: '+201070750165',
+    labelAr: 'خدمة الشحن',
+    descAr: 'الشحن بين المحافظات والمناطق',
+    whatsappMessage: 'أهلاً، أريد طلب شحن',
+  },
+  {
+    key: 'support',
+    phone: '+201070750169',
+    labelAr: 'الشكاوى والتواصل مع الإدارة',
+    descAr: 'لأي استفسار أو شكوى أو تواصل إداري',
+    whatsappMessage: 'أهلاً، عندي شكوى/استفسار للإدارة',
+  },
+];
 
 const ALL_TEXT_KEYS = Object.values(SECTIONS).flatMap((groups) =>
   groups.flatMap((g) => g.fields.map((f) => f.key)),
@@ -178,8 +215,11 @@ export function SiteSettingsPage() {
           contacts = [];
         }
       }
+      const savedContacts = Array.isArray(contacts) ? (contacts as ContactLine[]) : [];
       const next: SiteConfig = {
-        contacts: Array.isArray(contacts) ? (contacts as ContactLine[]) : [],
+        // Seed with the real four lines when nothing is saved yet, so the tab is
+        // never an empty list the admin has to rebuild from scratch.
+        contacts: savedContacts.length ? savedContacts : DEFAULT_CONTACTS.map((c) => ({ ...c })),
       };
       // Pre-fill each field with the SAVED override if there is one, else the
       // text currently live on the site (DEFAULTS). Admins edit real text, never
