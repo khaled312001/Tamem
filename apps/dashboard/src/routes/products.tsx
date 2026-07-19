@@ -2221,6 +2221,7 @@ interface ProductFormState {
   price: number;
   unit: string;
   sku: string;
+  categoryName: string; // in-store section, e.g. بيتزا / مشويات
   discount: string; // kept as string so the field can be empty
   availableFrom: string;
   availableTo: string;
@@ -2238,6 +2239,7 @@ function initialFromProduct(product: Row | undefined, merchants: Row[]): Product
       price: 0,
       unit: '',
       sku: '',
+      categoryName: '',
       discount: '',
       availableFrom: '',
       availableTo: '',
@@ -2259,6 +2261,7 @@ function initialFromProduct(product: Row | undefined, merchants: Row[]): Product
     price: Number(product.price ?? 0),
     unit: product.unit ?? '',
     sku: product.sku ?? '',
+    categoryName: product.categoryName ?? '',
     discount: product.discount == null ? '' : String(product.discount),
     availableFrom: product.availableFrom ?? '',
     availableTo: product.availableTo ?? '',
@@ -2295,6 +2298,9 @@ function ProductFormDialog({ mode, product, merchants, onClose }: ProductFormDia
     if (form.description.trim()) out.description = form.description.trim();
     if (form.unit.trim()) out.unit = form.unit.trim();
     if (form.sku.trim()) out.sku = form.sku.trim();
+    // Always sent (even empty) so clearing the box actually removes the
+    // section — a truthy-only check would make it un-clearable.
+    out.categoryName = form.categoryName.trim() || null;
     if (form.discount !== '') {
       const n = Number(form.discount);
       if (Number.isFinite(n)) out.discount = n;
@@ -2329,6 +2335,21 @@ function ProductFormDialog({ mode, product, merchants, onClose }: ProductFormDia
     }
     return null;
   }, [form.availableFrom, form.availableTo]);
+
+  /**
+   * Section names this merchant already uses, for the datalist below.
+   *
+   * Uses the same public endpoint the mobile store page filters with, so the
+   * suggestions are exactly the chips a customer will see — no chance of
+   * offering a name the app doesn't render.
+   */
+  const { data: sections } = useQuery({
+    queryKey: ['merchant-sections', form.merchantId],
+    queryFn: () => api.getMerchantProductSections(form.merchantId) as Promise<{ name: string }[]>,
+    enabled: !!form.merchantId,
+    staleTime: 5 * 60_000,
+  });
+  const sectionSuggestions = (sections ?? []).map((x) => x.name);
 
   const discountNum = form.discount === '' ? 0 : Number(form.discount);
   const afterDiscount =
@@ -2404,6 +2425,27 @@ function ProductFormDialog({ mode, product, merchants, onClose }: ProductFormDia
             />
           </Field>
         </div>
+
+        {/* In-store section. Free text with suggestions drawn from what this
+            merchant already uses — typing "بيتزا" when "بيتزا " exists would
+            create a second chip in the app, so the datalist nudges toward
+            reusing a name rather than inventing one. */}
+        <Field
+          label="القسم داخل المتجر"
+          hint="يظهر كفلتر في صفحة المتجر بالتطبيق — مثال: بيتزا، كريب، مشويات"
+        >
+          <Input
+            list="product-sections"
+            value={form.categoryName}
+            onChange={(e) => setForm({ ...form, categoryName: e.target.value })}
+            placeholder="اتركه فارغاً لو المتجر مفيهوش أقسام"
+          />
+          <datalist id="product-sections">
+            {sectionSuggestions.map((n) => (
+              <option key={n} value={n} />
+            ))}
+          </datalist>
+        </Field>
 
         <div className="grid grid-cols-2 gap-3">
           <Field

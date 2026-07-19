@@ -1329,12 +1329,19 @@ function ItemsByMerchantCard({ items }: { items: any[] }) {
   const groupArr = Array.from(groups.values());
   const isMulti = groupArr.length > 1;
 
+  // Single-merchant orders are the common case, and the header used to read
+  // just "المنتجات (3)" — the store never appeared anywhere, so an admin
+  // couldn't tell where to buy from without opening the order's merchant tab.
+  const soleMerchant = !isMulti ? (groupArr[0]?.merchant?.storeNameAr ?? null) : null;
+
   return (
     <Card
       title={
         isMulti
           ? `🛒 المنتجات — من ${groupArr.length} متاجر (${items.length})`
-          : `المنتجات (${items.length})`
+          : soleMerchant
+            ? `🏪 ${soleMerchant} — المنتجات (${items.length})`
+            : `المنتجات (${items.length})`
       }
       icon={<MessageSquare className="w-4 h-4" />}
     >
@@ -1594,14 +1601,27 @@ function PriceDialog({
   // priced before this existed has no lines, so it starts with one blank row
   // the admin has to fill — which is the whole point.
   const [lines, setLines] = useState<MerchantLine[]>(() => {
-    const seeded = (initialItems ?? [])
-      .filter((it) => it?.merchantId)
-      .map((it) =>
-        newLine(
-          String(it.merchantId),
-          String(Number(it.unitPriceSnapshot ?? 0) * (it.quantity ?? 1)),
-        ),
-      );
+    /*
+     * One row PER MERCHANT, not per item.
+     *
+     * This used to map over items directly, so three products from the same
+     * restaurant seeded three identical rows — which the duplicate-merchant
+     * check below then rejected, blocking the save on an order the admin had
+     * done nothing wrong with. Sum the line totals per merchant instead.
+     */
+    const totals = new Map<string, number>();
+    for (const it of initialItems ?? []) {
+      if (!it?.merchantId) continue;
+      const id = String(it.merchantId);
+      const lineTotal = Number(it.unitPriceSnapshot ?? 0) * (it.quantity ?? 1);
+      totals.set(id, (totals.get(id) ?? 0) + lineTotal);
+    }
+
+    const seeded = Array.from(totals.entries()).map(([id, total]) =>
+      // Rounded to piastres: summing decimals accumulates float error, and the
+      // field is money.
+      newLine(id, String(Math.round(total * 100) / 100)),
+    );
     return seeded.length ? seeded : [newLine()];
   });
   const [fee, setFee] = useState(initialFee != null ? String(initialFee) : '');

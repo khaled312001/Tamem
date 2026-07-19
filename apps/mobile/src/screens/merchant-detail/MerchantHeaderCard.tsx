@@ -7,9 +7,9 @@
  * store), so rather than invent numbers the row renders only the stats that
  * exist and stays balanced whether that's two or four.
  */
-import { Clock, MapPin, Package, Phone, Share2, Star } from 'lucide-react-native';
+import { Clock, MapPin, Package, Share2, Star } from 'lucide-react-native';
 import { memo } from 'react';
-import { Image, Linking, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Image, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { colors, fontFamilies, radii, shadows, spacing } from '../../theme/tokens';
 
@@ -75,9 +75,6 @@ function MerchantHeaderCardBase({ data: d, onPressMap, onPressShare }: Props) {
       label: 'المسافة',
     });
   }
-  if (d.phone) {
-    stats.push({ key: 'phone', Icon: Phone, value: 'اتصل', label: 'بالمتجر' });
-  }
 
   return (
     <View style={[styles.card, shadows.md]}>
@@ -117,16 +114,7 @@ function MerchantHeaderCardBase({ data: d, onPressMap, onPressShare }: Props) {
       {stats.length > 0 && (
         <View style={[styles.stats, { flexDirection: ROW }]}>
           {stats.map((s, i) => (
-            <Pressable
-              key={s.key}
-              disabled={s.key !== 'phone'}
-              onPress={
-                s.key === 'phone' && d.phone
-                  ? () => void Linking.openURL(`tel:${d.phone}`)
-                  : undefined
-              }
-              style={[styles.stat, i > 0 && styles.statDivider]}
-            >
+            <View key={s.key} style={[styles.stat, i > 0 && styles.statDivider]}>
               <s.Icon
                 size={18}
                 color={s.key === 'rating' ? colors.brand.gold : colors.brand.red}
@@ -138,7 +126,7 @@ function MerchantHeaderCardBase({ data: d, onPressMap, onPressShare }: Props) {
               <Text style={styles.statLabel} numberOfLines={1}>
                 {s.label}
               </Text>
-            </Pressable>
+            </View>
           ))}
         </View>
       )}

@@ -3,8 +3,8 @@ import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   AlertCircle,
-  CheckCircle2,
   CheckCheck,
+  CheckCircle2,
   ClipboardCheck,
   Clock,
   CreditCard,
@@ -17,12 +17,13 @@ import {
   Receipt,
   RotateCcw,
   ShieldCheck,
+  ShoppingBag,
   Star,
   Truck,
   UserCheck,
   X as XIcon,
 } from 'lucide-react-native';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -68,6 +69,20 @@ interface StatusHistoryItem {
   reason?: string | null;
   createdAt: string;
   changedByRole: string;
+}
+
+interface OrderItemRow {
+  productNameSnapshot: string;
+  quantity: number;
+  unitPriceSnapshot?: string | number | null;
+  merchantId?: string | null;
+  merchant?: { storeNameAr?: string } | null;
+}
+
+interface GroupedItem {
+  name: string;
+  quantity: number;
+  unitPrice: number | null;
 }
 
 interface OrderDetail {
@@ -303,6 +318,40 @@ export function OrderTrackingScreen() {
       void unsubscribeFromOrder(orderId);
     };
   }, [orderId]);
+
+  /**
+   * Order lines, grouped by store.
+   *
+   * `merchant` is nested on each item by the API; when it's missing the group
+   * still renders — just without a store heading — so an item is never hidden
+   * because its merchant link is broken.
+   */
+  const orderedItems = useMemo(() => {
+    const raw = (order as unknown as { items?: OrderItemRow[] } | undefined)?.items;
+    return Array.isArray(raw) ? raw : [];
+  }, [order]);
+
+  const itemGroups = useMemo(() => {
+    const map = new Map<
+      string,
+      { key: string; merchantName: string | null; items: GroupedItem[] }
+    >();
+    for (const it of orderedItems) {
+      const key = it.merchantId ?? '__none__';
+      const g = map.get(key) ?? {
+        key,
+        merchantName: it.merchant?.storeNameAr ?? null,
+        items: [],
+      };
+      g.items.push({
+        name: it.productNameSnapshot,
+        quantity: it.quantity,
+        unitPrice: it.unitPriceSnapshot != null ? Number(it.unitPriceSnapshot) : null,
+      });
+      map.set(key, g);
+    }
+    return Array.from(map.values());
+  }, [orderedItems]);
 
   if (isLoading) {
     return (
@@ -584,6 +633,46 @@ export function OrderTrackingScreen() {
                 <MapPin size={16} color={colors.text.muted} />
               </View>
             ) : null}
+          </View>
+        )}
+
+        {/*
+          ─────── Ordered items ───────
+          The API has always returned `items`, but this screen only ever used
+          them to build the PDF receipt — so a customer who ordered through the
+          cart saw a tracking page with no idea WHAT they'd ordered or from
+          which store. Grouped by merchant, because a cart order can span
+          several and "where is this coming from" is the question being asked.
+        */}
+        {orderedItems.length > 0 && (
+          <View style={[styles.section, shadows.sm]}>
+            <View style={styles.sectionTitleRow}>
+              <ShoppingBag size={16} color={colors.text.secondary} />
+              <Text style={styles.sectionTitle}>المنتجات المطلوبة</Text>
+            </View>
+
+            {itemGroups.map((g) => (
+              <View key={g.key} style={styles.itemGroup}>
+                {!!g.merchantName && (
+                  <Text style={styles.itemStore} numberOfLines={1}>
+                    🏪 {g.merchantName}
+                  </Text>
+                )}
+                {g.items.map((it, i) => (
+                  <View key={`${g.key}-${i}`} style={styles.itemRow}>
+                    <Text style={styles.itemQty}>{it.quantity}×</Text>
+                    <Text style={styles.itemName} numberOfLines={2}>
+                      {it.name}
+                    </Text>
+                    {it.unitPrice != null && (
+                      <Text style={styles.itemPrice}>
+                        {(it.unitPrice * it.quantity).toLocaleString('ar-EG')} ج.م
+                      </Text>
+                    )}
+                  </View>
+                ))}
+              </View>
+            ))}
           </View>
         )}
 
@@ -1555,6 +1644,42 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
   // Notes
+  itemGroup: { marginTop: spacing.sm },
+  itemStore: {
+    fontSize: fontSizes.xs,
+    fontFamily: fontFamilies.bodyBold,
+    color: colors.brand.red,
+    marginBottom: 4,
+    textAlign: 'auto',
+  },
+  itemRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    paddingVertical: 6,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: colors.line,
+  },
+  itemQty: {
+    fontSize: fontSizes.sm,
+    fontFamily: fontFamilies.bodyExtraBold,
+    color: colors.brand.red,
+    minWidth: 26,
+  },
+  itemName: {
+    flex: 1,
+    fontSize: fontSizes.sm,
+    fontFamily: fontFamilies.body,
+    color: colors.ink,
+    lineHeight: 21,
+    includeFontPadding: false,
+    textAlign: 'auto',
+  },
+  itemPrice: {
+    fontSize: fontSizes.sm,
+    fontFamily: fontFamilies.bodyBold,
+    color: colors.ink,
+  },
   notesText: {
     fontSize: fontSizes.sm,
     color: colors.text.primary,
