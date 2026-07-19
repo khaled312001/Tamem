@@ -444,8 +444,12 @@ const styles = StyleSheet.create({
   badgeText: { color: colors.white, fontFamily: fontFamilies.bodyExtraBold, fontSize: 10 },
   content: {
     position: 'absolute',
-    insetInlineStart: 0,
-    insetInlineEnd: 0,
+    // left/right, not insetInline*: pinning BOTH logical sides did not
+    // stretch the element on this RN version — it collapsed to its content
+    // width and drifted to one edge. A full-bleed bar is symmetric, so the
+    // physical props are also RTL-safe here.
+    left: 0,
+    right: 0,
     bottom: 0,
     padding: spacing.md,
     flexDirection: 'row',

@@ -104,7 +104,7 @@ function PopularStoresSectionBase({ merchants, onPressMerchant, onPressSeeAll }:
   return (
     <View>
       <View style={[styles.header, { flexDirection: ROW }]}>
-        <Text style={styles.sectionTitle}>الأكثر طلباً</Text>
+        <Text style={styles.sectionTitle}>متاجر مختارة</Text>
         <Pressable onPress={onPressSeeAll} hitSlop={8} accessibilityRole="button">
           <Text style={styles.seeAll}>عرض الكل</Text>
         </Pressable>

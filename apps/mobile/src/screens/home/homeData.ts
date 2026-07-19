@@ -54,6 +54,19 @@ export interface ActiveOrder {
   service?: { nameAr: string };
 }
 
+/** Product card on the home rails. Shape matches GET /products. */
+export interface HomeProduct {
+  id: string;
+  nameAr: string;
+  price: number | string;
+  /** Set when the merchant discounted this item. */
+  salePrice?: number | string | null;
+  /** Percentage discount, an alternative knob to salePrice. */
+  discount?: number | string | null;
+  imageUrl?: string | null;
+  merchant?: { id: string; storeNameAr: string };
+}
+
 /** Category tile on the home grid. Shape matches GET /categories. */
 export interface HomeCategory {
   id: string;
@@ -90,6 +103,8 @@ export interface HomeConfig {
   visibleServiceKeys: string[] | null;
   featuredMerchantIds: string[] | null;
   featuredOfferIds: string[] | null;
+  /** Admin-curated products for the "الأكثر طلباً" rail. */
+  featuredProductIds: string[] | null;
   showPromoBanner: boolean;
   showTrustStrip: boolean;
 }

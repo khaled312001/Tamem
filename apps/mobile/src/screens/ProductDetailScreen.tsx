@@ -28,15 +28,15 @@ import {
 import { Image as ImageIcon } from 'lucide-react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { EmptyState, MoneyText, PrimaryButton } from '../components/ui';
+import { EmptyState, MoneyText } from '../components/ui';
 import { api } from '../lib/api';
-import { navigationRef } from '../lib/push';
 import { showToast } from '../lib/toast';
 import type { HomeStackParamList } from '../navigation/HomeStack';
 import type { NativeScrollEvent, NativeSyntheticEvent } from 'react-native';
 
 import { ImageViewer } from '../components/ImageViewer';
-import { addToCart, useCart } from '../stores/cart';
+import { productPrice } from '../lib/productPrice';
+import { addToCart } from '../stores/cart';
 import { BackChevron } from '../theme/rtl';
 import { colors, fontFamilies, fontSizes, radii, shadows, spacing } from '../theme/tokens';
 
@@ -52,6 +52,8 @@ interface ProductDetail {
   imageUrls?: string[] | null;
   price: number | string;
   salePrice?: number | string | null;
+  /** Percentage knob — independent of salePrice. */
+  discount?: number | string | null;
   stock?: number | null;
   isAvailable: boolean;
   isHidden: boolean;
@@ -79,12 +81,6 @@ export function ProductDetailScreen() {
   const [quantity, setQuantity] = useState(1);
   const [viewerAt, setViewerAt] = useState<number | null>(null);
   const [heroIndex, setHeroIndex] = useState(0);
-  // Reactive cart state. MUST be called unconditionally, above the early
-  // returns below — placing it after them meant it ran only once `data` loaded,
-  // adding hooks that didn't exist on the loading render → React threw
-  // "Rendered more hooks than during the previous render" and crashed the screen
-  // on EVERY product open. (This is the bug: "opening any product closes the app".)
-  const cart = useCart();
 
   const { data, isLoading, error, refetch } = useQuery<ProductDetail>({
     queryKey: ['product', productId],
@@ -134,11 +130,15 @@ export function ProductDetailScreen() {
     );
   }
 
-  const priceNum = Number(data.price ?? 0);
-  const saleNum = data.salePrice != null ? Number(data.salePrice) : null;
-  const hasSale = saleNum != null && saleNum > 0 && saleNum < priceNum;
-  const discountPct = hasSale ? Math.round(((priceNum - saleNum!) / priceNum) * 100) : 0;
-  const effectivePrice = hasSale ? saleNum! : priceNum;
+  // Shared with the home rails so the same product can never show two prices.
+  // This screen previously handled only `salePrice`, so a percentage-discounted
+  // product displayed — and charged — its full list price here.
+  const {
+    now: effectivePrice,
+    was: listPrice,
+    off: discountPct,
+    hasDiscount: hasSale,
+  } = productPrice(data);
 
   // Guard `data.merchant` itself (not just openness) — an orphaned merchantId
   // would otherwise throw here.
@@ -146,11 +146,6 @@ export function ProductDetailScreen() {
   const productInStock =
     data.isAvailable && !data.isHidden && (data.stock == null || data.stock > 0);
   const canAdd = productInStock && merchantOpen;
-
-  const openCart = () => {
-    if (!navigationRef.isReady()) return;
-    navigationRef.navigate('App', { screen: 'HomeTab', params: { screen: 'Cart' } });
-  };
 
   const onAddToCart = () => {
     if (!canAdd) return;
@@ -185,8 +180,9 @@ export function ProductDetailScreen() {
   return (
     <SafeAreaView edges={[]} style={styles.container}>
       <ScrollView
+        style={{ flex: 1 }}
         showsVerticalScrollIndicator={false}
-        contentContainerStyle={{ paddingBottom: 140 }}
+        contentContainerStyle={{ paddingBottom: spacing.lg }}
       >
         {/* ─────── Big image + back button ─────── */}
         <View style={styles.imageWrap}>
@@ -202,7 +198,16 @@ export function ProductDetailScreen() {
                   setHeroIndex(Math.round(e.nativeEvent.contentOffset.x / SCREEN_W))
                 }
                 renderItem={({ item, index }: { item: string; index: number }) => (
-                  <Pressable onPress={() => setViewerAt(index)} accessibilityLabel="تكبير الصورة">
+                  // Explicit page size. Inside a horizontal FlatList there is no
+                  // parent width for `100%` to resolve against, so the page
+                  // collapsed to zero — the image never drew and the tap never
+                  // landed. This is why the product page looked image-less even
+                  // though the same URL rendered fine in the store list.
+                  <Pressable
+                    onPress={() => setViewerAt(index)}
+                    style={{ width: SCREEN_W, height: IMAGE_HEIGHT }}
+                    accessibilityLabel="تكبير الصورة"
+                  >
                     <Image source={{ uri: item }} style={styles.image} resizeMode="cover" />
                   </Pressable>
                 )}
@@ -283,7 +288,13 @@ export function ProductDetailScreen() {
             <MoneyText amount={effectivePrice} tone="brand" size="xl" />
             {hasSale && (
               <View style={{ marginStart: spacing.sm }}>
-                <MoneyText amount={priceNum} tone="muted" size="sm" strikethrough showCurrency />
+                <MoneyText
+                  amount={listPrice ?? 0}
+                  tone="muted"
+                  size="sm"
+                  strikethrough
+                  showCurrency
+                />
               </View>
             )}
             {data.unit ? <Text style={styles.unitText}>/ {data.unit}</Text> : null}
@@ -316,88 +327,93 @@ export function ProductDetailScreen() {
               <Text style={styles.description}>{data.description}</Text>
             </View>
           ) : null}
+
+          {/* Quantity — in the page body, not the bottom bar, so the bar has a
+              single action. */}
+          <View style={styles.qtyRow}>
+            <Text style={styles.qtyLabel}>الكمية</Text>
+            <View style={styles.qtyWrap}>
+              <Pressable
+                onPress={() => setQuantity((q) => Math.max(1, q - 1))}
+                disabled={quantity <= 1 || !canAdd}
+                hitSlop={6}
+                style={({ pressed }) => [
+                  styles.qtyBtn,
+                  (quantity <= 1 || !canAdd) && styles.qtyBtnDisabled,
+                  pressed && { opacity: 0.7 },
+                ]}
+                accessibilityLabel="نقصان"
+              >
+                <Minus
+                  size={17}
+                  color={quantity <= 1 || !canAdd ? colors.text.muted : colors.white}
+                />
+              </Pressable>
+
+              <Text style={styles.qtyValue}>{quantity}</Text>
+
+              <Pressable
+                onPress={() => setQuantity((q) => Math.min(data.stock ?? 99, q + 1))}
+                disabled={!canAdd || (data.stock != null && quantity >= data.stock)}
+                hitSlop={6}
+                style={({ pressed }) => [
+                  styles.qtyBtn,
+                  (!canAdd || (data.stock != null && quantity >= data.stock)) &&
+                    styles.qtyBtnDisabled,
+                  pressed && { opacity: 0.7 },
+                ]}
+                accessibilityLabel="زيادة"
+              >
+                <Plus
+                  size={17}
+                  color={
+                    !canAdd || (data.stock != null && quantity >= data.stock)
+                      ? colors.text.muted
+                      : colors.white
+                  }
+                />
+              </Pressable>
+            </View>
+          </View>
         </View>
       </ScrollView>
 
-      {/* ─────── Sticky bottom bar: quantity + Add to cart ─────── */}
-      <SafeAreaView edges={['bottom']} style={styles.bottomBar}>
-        {/* "View cart" shortcut — appears the moment the user has anything
-            in the cart, so they don't need to leave the product page to
-            find the checkout. */}
-        {cart.count > 0 && (
+      {/* ─────── Sticky bottom bar ─────── */}
+      {/*
+        One row, one primary action. The previous version stacked a green
+        "عرض السلة" gradient bar ON TOP of a row holding the stepper and the
+        add button — three competing calls to action in the same 120px.
+        The stepper moved up into the page body (where the reference puts it),
+        leaving the bar to do one job.
+      */}
+      <View style={styles.bottomBar}>
+        <View style={styles.bottomInner}>
           <Pressable
-            onPress={openCart}
-            style={({ pressed }) => [styles.viewCart, pressed && { opacity: 0.92 }]}
+            onPress={onAddToCart}
+            disabled={!canAdd}
+            style={({ pressed }) => [styles.addWrap, pressed && { opacity: 0.92 }]}
             accessibilityRole="button"
-            accessibilityLabel={`فتح السلة، ${cart.count} منتج`}
+            accessibilityLabel="أضف إلى السلة"
           >
             <LinearGradient
-              colors={['#1FA463', '#0F6B3C']}
+              colors={canAdd ? ['#E0301E', '#EC7A2C'] : ['#D9D2CE', '#D9D2CE']}
               start={{ x: 0, y: 0 }}
               end={{ x: 1, y: 0 }}
-              style={styles.viewCartBar}
+              style={styles.addBar}
             >
-              <View style={styles.viewCartIcon}>
-                <ShoppingCart size={16} color={colors.white} />
-                <View style={styles.viewCartBadge}>
-                  <Text style={styles.viewCartBadgeText}>
-                    {cart.count > 99 ? '99+' : cart.count}
-                  </Text>
-                </View>
-              </View>
-              <Text style={styles.viewCartLabel}>عرض السلة وإتمام الطلب</Text>
-              <MoneyText amount={cart.subtotal} tone="inverse" size="sm" showCurrency />
+              {canAdd && <ShoppingCart size={20} color={colors.white} />}
+              <Text style={styles.addLabel} numberOfLines={1}>
+                {!productInStock ? 'غير متاح' : !merchantOpen ? 'المتجر مغلق' : 'أضف إلى السلة'}
+              </Text>
+              {canAdd && (
+                <Text style={styles.addPrice}>
+                  {(effectivePrice * quantity).toLocaleString('ar-EG')} ج.م
+                </Text>
+              )}
             </LinearGradient>
           </Pressable>
-        )}
-        <View style={styles.bottomInner}>
-          {/* Quantity stepper */}
-          <View style={styles.qtyWrap}>
-            <Pressable
-              onPress={() => setQuantity((q) => Math.max(1, q - 1))}
-              disabled={quantity <= 1 || !canAdd}
-              style={({ pressed }) => [
-                styles.qtyBtn,
-                (quantity <= 1 || !canAdd) && styles.qtyBtnDisabled,
-                pressed && { opacity: 0.7 },
-              ]}
-              accessibilityLabel="نقصان"
-            >
-              <Minus size={16} color={quantity <= 1 || !canAdd ? colors.text.muted : colors.ink} />
-            </Pressable>
-            <Text style={styles.qtyValue}>{quantity}</Text>
-            <Pressable
-              onPress={() => setQuantity((q) => Math.min(data.stock ?? 99, q + 1))}
-              disabled={!canAdd || (data.stock != null && quantity >= data.stock)}
-              style={({ pressed }) => [
-                styles.qtyBtn,
-                (!canAdd || (data.stock != null && quantity >= data.stock)) &&
-                  styles.qtyBtnDisabled,
-                pressed && { opacity: 0.7 },
-              ]}
-              accessibilityLabel="زيادة"
-            >
-              <Plus size={16} color={!canAdd ? colors.text.muted : colors.ink} />
-            </Pressable>
-          </View>
-
-          {/* CTA — flex:1 so it stretches to fill the row */}
-          <View style={{ flex: 1 }}>
-            <PrimaryButton
-              label={
-                !productInStock
-                  ? 'غير متاح'
-                  : !merchantOpen
-                    ? 'المتجر مغلق'
-                    : `إضافة (${(effectivePrice * quantity).toLocaleString('ar-EG')} ج.م)`
-              }
-              Icon={ShoppingCart}
-              disabled={!canAdd}
-              onPress={onAddToCart}
-            />
-          </View>
         </View>
-      </SafeAreaView>
+      </View>
 
       {/* Shared with the store menu: pages through every product photo. */}
       <ImageViewer images={gallery} startIndex={viewerAt} onClose={() => setViewerAt(null)} />
@@ -468,8 +484,12 @@ const styles = StyleSheet.create({
   floatingHeader: {
     position: 'absolute',
     top: 0,
-    insetInlineStart: 0,
-    insetInlineEnd: 0,
+    // left/right, not insetInline*: pinning BOTH logical sides did not
+    // stretch the element on this RN version — it collapsed to its content
+    // width and drifted to one edge. A full-bleed bar is symmetric, so the
+    // physical props are also RTL-safe here.
+    left: 0,
+    right: 0,
     paddingHorizontal: spacing.md,
     flexDirection: 'row',
     alignItems: 'center',
@@ -537,7 +557,14 @@ const styles = StyleSheet.create({
     fontSize: fontSizes.xxl,
     fontFamily: fontFamilies.headingBlack,
     color: colors.ink,
-    lineHeight: 32,
+    // Arabic ascenders and the hamza sit high; at 28pt a 32 lineHeight (1.14x)
+    // clipped the tops of letters. 1.5x is the minimum that clears them.
+    lineHeight: Math.round(fontSizes.xxl * 1.5),
+    textAlign: 'auto',
+    // Android reserves extra glyph padding that fights an explicit lineHeight
+    // and shifts the text up inside its box.
+    includeFontPadding: false,
+    paddingTop: 2,
   },
   // Merchant strip
   merchantRow: {
@@ -627,12 +654,54 @@ const styles = StyleSheet.create({
     fontFamily: fontFamilies.body,
     lineHeight: 22,
   },
+  qtyRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginTop: spacing.lg,
+    paddingTop: spacing.md,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: colors.line,
+  },
+  qtyLabel: {
+    fontSize: fontSizes.md,
+    fontFamily: fontFamilies.bodyBold,
+    color: colors.ink,
+  },
+  addWrap: { flex: 1 },
+  addBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing.sm,
+    height: 56,
+    borderRadius: radii.lg,
+    paddingHorizontal: spacing.lg,
+  },
+  addLabel: {
+    flex: 1,
+    color: colors.white,
+    fontSize: fontSizes.md,
+    fontFamily: fontFamilies.bodyExtraBold,
+    textAlign: 'center',
+    // Same Arabic clipping rule as the title: an implicit lineHeight crops
+    // ascenders inside a fixed-height button.
+    lineHeight: Math.round(fontSizes.md * 1.6),
+    includeFontPadding: false,
+  },
+  addPrice: {
+    color: colors.white,
+    fontSize: fontSizes.md,
+    fontFamily: fontFamilies.bodyExtraBold,
+    lineHeight: Math.round(fontSizes.md * 1.6),
+    includeFontPadding: false,
+  },
   // Bottom bar
+  // Laid out in flow after the ScrollView (which takes flex:1) rather than
+  // absolutely positioned. Absolute meant guessing the tab bar's height, and
+  // being a few pixels off left a white gap under the button that read as it
+  // floating. In flow it always sits flush above the tab bar.
   bottomBar: {
-    position: 'absolute',
-    insetInlineStart: 0,
-    insetInlineEnd: 0,
-    bottom: 0,
     backgroundColor: colors.white,
     borderTopWidth: 1,
     borderTopColor: colors.line,
@@ -654,60 +723,14 @@ const styles = StyleSheet.create({
     width: 36,
     height: 36,
     borderRadius: radii.md,
-    backgroundColor: colors.white,
+    // Solid brand fill: as pale outlined squares these read as decoration
+    // rather than controls.
+    backgroundColor: colors.brand.red,
     alignItems: 'center',
     justifyContent: 'center',
   },
   qtyBtnDisabled: { backgroundColor: colors.line },
   // "View cart" shortcut bar — sits above the qty+add row
-  viewCart: {
-    paddingHorizontal: spacing.md,
-    paddingTop: spacing.sm,
-  },
-  viewCartBar: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.sm,
-    height: 44,
-    paddingHorizontal: spacing.md,
-    borderRadius: radii.lg,
-  },
-  viewCartIcon: {
-    width: 28,
-    height: 28,
-    borderRadius: radii.sm,
-    backgroundColor: 'rgba(255,255,255,0.20)',
-    alignItems: 'center',
-    justifyContent: 'center',
-    position: 'relative',
-  },
-  viewCartBadge: {
-    position: 'absolute',
-    top: -5,
-    insetInlineEnd: -5,
-    minWidth: 16,
-    height: 16,
-    borderRadius: 8,
-    backgroundColor: colors.brand.gold,
-    paddingHorizontal: 3,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 1.5,
-    borderColor: '#0F6B3C',
-  },
-  viewCartBadgeText: {
-    color: colors.brand.dark,
-    fontFamily: fontFamilies.headingBlack,
-    fontSize: 10,
-    lineHeight: 12,
-    includeFontPadding: false,
-  },
-  viewCartLabel: {
-    flex: 1,
-    color: colors.white,
-    fontFamily: fontFamilies.headingBold,
-    fontSize: fontSizes.sm,
-  },
   qtyValue: {
     width: 32,
     textAlign: 'center',

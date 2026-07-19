@@ -18,6 +18,7 @@ import {
   type ActiveOrder,
   type HomeCategory,
   type HomeConfig,
+  type HomeProduct,
   type Merchant,
   type Offer,
   type SavedAddress,
@@ -117,6 +118,33 @@ export function useHomeData() {
     enabled: authReady,
   });
 
+  /**
+   * "الأكثر طلباً" — the products an admin pinned in صفحة التطبيق.
+   *
+   * Keyed on the id list so re-picking in the dashboard refreshes it, and
+   * disabled entirely when nothing is pinned so we don't fire a request that
+   * can only return an empty list.
+   */
+  const featuredIds = homeConfigQ.data?.featuredProductIds ?? [];
+  const featuredProductsQ = useQuery<HomeProduct[]>({
+    queryKey: ['home-featured-products', featuredIds],
+    queryFn: () =>
+      api.raw
+        .get('/products', { params: { ids: featuredIds.join(','), pageSize: 50 } })
+        .then((r) => r.data.data),
+    enabled: authReady && featuredIds.length > 0,
+    staleTime: 5 * 60_000,
+  });
+
+  /** "عروض اليوم" — self-maintaining: whatever is discounted right now. */
+  const dealProductsQ = useQuery<HomeProduct[]>({
+    queryKey: ['home-deal-products'],
+    queryFn: () =>
+      api.raw.get('/products', { params: { onSale: 1, pageSize: 20 } }).then((r) => r.data.data),
+    enabled: authReady,
+    staleTime: 5 * 60_000,
+  });
+
   const categories = categoriesQ.data;
   const offers = offersQ.data;
   const merchants = merchantsQ.data?.items;
@@ -192,6 +220,7 @@ export function useHomeData() {
       addressesQ.refetch(),
       homeConfigQ.refetch(),
       categoriesQ.refetch(),
+      dealProductsQ.refetch(),
     ]);
 
   const isRefreshing = offersQ.isRefetching || merchantsQ.isRefetching || homeConfigQ.isRefetching;
@@ -204,6 +233,8 @@ export function useHomeData() {
     topOffer,
     merchants,
     featuredMerchants,
+    featuredProducts: featuredProductsQ.data ?? [],
+    dealProducts: dealProductsQ.data ?? [],
     nearbyMerchants,
     merchantsTotal: merchantsQ.data?.total ?? 0,
     hasLocation: !!userLoc,
