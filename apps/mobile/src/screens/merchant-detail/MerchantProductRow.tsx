@@ -14,6 +14,7 @@ import { memo } from 'react';
 import { Image, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { MoneyText } from '../../components/ui';
+import { productPrice } from '../../lib/productPrice';
 import { colors, fontFamilies, radii, shadows, spacing } from '../../theme/tokens';
 
 const ROW = 'row' as const;
@@ -23,6 +24,8 @@ export interface RowProduct {
   id: string;
   nameAr: string;
   price: number | string;
+  salePrice?: number | string | null;
+  discount?: number | string | null;
   imageUrl?: string | null;
   description?: string | null;
 }
@@ -45,6 +48,8 @@ function MerchantProductRowBase({
   onAdd,
   onRemove,
 }: Props) {
+  const price = productPrice(p);
+
   return (
     <Pressable
       onPress={onPress}
@@ -69,7 +74,19 @@ function MerchantProductRowBase({
             {p.description}
           </Text>
         )}
-        <MoneyText amount={Number(p.price)} tone="brand" size="sm" />
+        {/* Same helper the product page and home rails use, so one product
+            can never show two prices. */}
+        <View style={[styles.priceRow, { flexDirection: ROW }]}>
+          <MoneyText amount={price.now} tone="brand" size="sm" />
+          {price.was != null && (
+            <Text style={styles.wasPrice}>{Math.round(price.was).toLocaleString('ar-EG')}</Text>
+          )}
+          {price.off > 0 && (
+            <View style={styles.offPill}>
+              <Text style={styles.offPillText}>-{price.off}%</Text>
+            </View>
+          )}
+        </View>
       </View>
 
       {quantity > 0 ? (
@@ -139,6 +156,21 @@ const styles = StyleSheet.create({
     fontFamily: fontFamilies.body,
     textAlign: 'auto',
   },
+
+  priceRow: { alignItems: 'center', gap: 6 },
+  wasPrice: {
+    fontSize: 11,
+    color: colors.brand.gray,
+    fontFamily: fontFamilies.body,
+    textDecorationLine: 'line-through',
+  },
+  offPill: {
+    backgroundColor: '#FDECEA',
+    borderRadius: radii.sm,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+  },
+  offPillText: { fontSize: 10, color: colors.brand.red, fontFamily: fontFamilies.bodyExtraBold },
 
   addBtn: {
     width: 36,

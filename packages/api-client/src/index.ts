@@ -566,6 +566,13 @@ export class TamemClient {
   ): Promise<unknown> {
     return this.request({ method: 'PUT', url: `/admin/merchants/${id}/prep-time`, data });
   }
+  /**
+   * In-store sections for a merchant (Product.categoryName + counts). Public
+   * route — it's the same list the mobile store page filters by.
+   */
+  async getMerchantProductSections(merchantId: string): Promise<unknown[]> {
+    return this.request({ method: 'GET', url: `/merchants/${merchantId}/product-sections` });
+  }
   async adminUpdateMerchant(id: string, data: unknown): Promise<unknown> {
     return this.request({ method: 'PATCH', url: `/admin/merchants/${id}`, data });
   }

@@ -1315,17 +1315,51 @@ function orderDetailBlocks(array $o): array {
     }
     if ($items === '') {
         try {
-            $st = db()->prepare('SELECT quantity, productNameSnapshot, unitPriceSnapshot FROM `OrderItem` WHERE orderId = ? ORDER BY id');
+            // Grouped by store. The dispatcher reads this to know WHERE to buy
+            // the items, and a cart order can span several merchants — a flat
+            // list of product names left them guessing.
+            $st = db()->prepare(
+                'SELECT oi.quantity, oi.productNameSnapshot, oi.unitPriceSnapshot,'
+                . ' oi.merchantId, mp.storeNameAr'
+                . ' FROM `OrderItem` oi'
+                . ' LEFT JOIN `MerchantProfile` mp ON mp.id = oi.merchantId'
+                . ' WHERE oi.orderId = ? ORDER BY oi.merchantId, oi.id'
+            );
             $st->execute([$o['id']]);
-            $lines = [];
+
+            $groups = [];
             foreach ($st->fetchAll() as $it) {
+                $key = (string) ($it['merchantId'] ?? '');
+                $groups[$key]['name'] = trim((string) ($it['storeNameAr'] ?? ''));
                 $pl = waMoney($it['unitPriceSnapshot']);
-                $lines[] = '• ' . (int) $it['quantity'] . '× ' . trim((string) $it['productNameSnapshot']) . ($pl ? " ({$pl})" : '');
+                $groups[$key]['lines'][] = '• ' . (int) $it['quantity'] . '× '
+                    . trim((string) $it['productNameSnapshot']) . ($pl ? " ({$pl})" : '');
             }
-            $items = implode("\n", $lines);
+
+            $blocks = [];
+            foreach ($groups as $g) {
+                // Label the store only when the message would otherwise be
+                // ambiguous — repeating one shop name above a single list adds
+                // noise without adding information.
+                $head = ($g['name'] !== '' && count($groups) > 1) ? '🏪 ' . $g['name'] . "\n" : '';
+                $blocks[] = $head . implode("\n", $g['lines']);
+            }
+            $items = implode("\n\n", $blocks);
         } catch (Throwable $e) { $items = ''; }
     }
     $b['items'] = $items;
+
+    // Store the order belongs to, for the {{merchantName}} template variable.
+    // Empty for free-text orders that aren't tied to a merchant — the templates
+    // drop empty lines, so nothing renders in that case.
+    $b['merchantName'] = '';
+    if (!empty($o['merchantId'])) {
+        try {
+            $ms = db()->prepare('SELECT storeNameAr FROM `MerchantProfile` WHERE id = ? LIMIT 1');
+            $ms->execute([$o['merchantId']]);
+            $b['merchantName'] = trim((string) ($ms->fetchColumn() ?: ''));
+        } catch (Throwable $e) { /* leave blank */ }
+    }
 
     // Locations — attach a Google-Maps pin from lat/lng where we have one.
     $pin = static fn ($lat, $lng) => ($lat !== null && $lng !== null && $lat !== '' && $lng !== '')
@@ -1613,6 +1647,7 @@ function notifDefaultCatalog(): array {
         . "👤 العميل: {{customerName}}\n"
         . "📞 الهاتف: {{customerPhone}}\n"
         . "🛵 السائق: {{driverName}}\n"
+        . "🏪 المتجر: {{merchantName}}\n"
         . "🛒 المطلوب: {{items}}\n"
         . "{{locations}}\n"
         . "💳 الدفع: {{payment}}\n"
@@ -1630,7 +1665,7 @@ function notifDefaultCatalog(): array {
         $ev('ORDER_ACCEPTED', 'CUSTOMER', 'العميل', "تميم للتوصيل ✅\nتم قبول طلبك وجارٍ تجهيزه:\n\n{{summary}}"),
         // ═══ DRIVER_ASSIGNED ═══
         $ev('DRIVER_ASSIGNED', 'CUSTOMER', 'العميل', "تميم للتوصيل 🚚\nالكابتن *{{driverName}}* في الطريق لطلبك — للتواصل: {{driverPhone}}\n\n{{summary}}"),
-        $ev('DRIVER_ASSIGNED', 'DRIVER', 'السائق', "🚚 *طلب جديد مُسند إليك* #{{orderNumber}}\nالخدمة: {{serviceName}}\n👤 العميل: {{customerName}}\n📞 الهاتف: {{customerPhone}}\n🛒 المطلوب: {{items}}\n{{locations}}\n💰 التحصيل: {{collect}}"),
+        $ev('DRIVER_ASSIGNED', 'DRIVER', 'السائق', "🚚 *طلب جديد مُسند إليك* #{{orderNumber}}\nالخدمة: {{serviceName}}\n👤 العميل: {{customerName}}\n📞 الهاتف: {{customerPhone}}\n🏪 المتجر: {{merchantName}}\n🛒 المطلوب: {{items}}\n{{locations}}\n💰 التحصيل: {{collect}}"),
         $ev('DRIVER_ASSIGNED', 'SUPERVISOR', 'المشرف', $oversight('🚚 تعيين سائق لطلب')),
         $ev('DRIVER_ASSIGNED', 'GROUP', 'جروب الإدارة', $oversight('🚚 تعيين سائق لطلب')),
         // ═══ PICKED_UP ═══
@@ -5192,6 +5227,37 @@ function hoursFor(array $ids): array {
     foreach ($st->fetchAll() as $h) { $out[$h['merchantId']][] = boolCast($h, ['isClosed']); }
     return $out;
 }
+/**
+ * What a product actually costs, server-side. THIS is the number charged — the
+ * client's price is never trusted.
+ *
+ * Product carries two independent discount knobs and an admin may use either:
+ *   salePrice — an absolute replacement price
+ *   discount  — a percentage off the list price
+ *
+ * This used to read salePrice only, with a comment reasoning that the app
+ * derived its badge from (price - salePrice) so honouring `discount` would
+ * undercharge. That stopped being true once the app started rendering the
+ * percentage too: the customer saw the discounted price and was billed the
+ * full one. Mirrors apps/mobile/src/lib/productPrice.ts exactly — if one
+ * changes, change both.
+ */
+function effectiveUnitPrice(array $p): float {
+    $list = (float) ($p['price'] ?? 0);
+    if ($list <= 0) return 0.0;
+
+    // salePrice wins when both are set: an explicit number the admin typed
+    // beats a percentage rule.
+    $sale = $p['salePrice'] !== null ? (float) $p['salePrice'] : null;
+    if ($sale !== null && $sale > 0 && $sale < $list) return round($sale, 2);
+
+    $pct = $p['discount'] !== null ? (float) $p['discount'] : 0.0;
+    // Clamped like the client: a bad row must never produce a negative price.
+    if ($pct > 0) return round($list * (1 - min(90.0, $pct) / 100), 2);
+
+    return round($list, 2);
+}
+
 /** A store counts as "new" for this many days after it is created. */
 const NEW_MERCHANT_DAYS = 30;
 
@@ -5778,6 +5844,13 @@ if (preg_match('#^/merchants/([^/]+)/products$#', $path, $mm) && $method === 'GE
             $args[] = "%$q%";
             $args[] = "%$q%";
         }
+        // In-store section, e.g. بيتزا / كريب. Exact match: these come from the
+        // same column the section list is built from, so they always line up.
+        $section = trim((string) ($_GET['section'] ?? ''));
+        if ($section !== '') {
+            $where .= ' AND categoryName = ?';
+            $args[] = $section;
+        }
 
         $cst = db()->prepare('SELECT COUNT(*) n FROM `Product` WHERE ' . $where);
         $cst->execute($args);
@@ -5794,6 +5867,24 @@ if (preg_match('#^/merchants/([^/]+)/products$#', $path, $mm) && $method === 'GE
     $st = db()->prepare($sql);
     $st->execute($args);
     jsonOk(array_map('productShape', $st->fetchAll()));
+}
+
+// GET /merchants/{id}/product-sections — the in-store sections a customer can
+// filter by, with counts so the UI can drop empty ones and show sizes.
+// Sourced from Product.categoryName, which the API sync already populates and
+// an admin can edit per product — no separate taxonomy to keep in step.
+if (preg_match('#^/merchants/([^/]+)/product-sections$#', $path, $mm) && $method === 'GET') {
+    $st = db()->prepare(
+        'SELECT categoryName AS name, COUNT(*) AS n FROM `Product`'
+        . ' WHERE merchantId = ? AND isAvailable = 1 AND isHidden = 0'
+        . " AND categoryName IS NOT NULL AND categoryName <> ''"
+        . ' GROUP BY categoryName ORDER BY n DESC, categoryName ASC'
+    );
+    $st->execute([$mm[1]]);
+    jsonOk(array_map(
+        fn($r) => ['name' => (string) $r['name'], 'count' => (int) $r['n']],
+        $st->fetchAll()
+    ));
 }
 
 if (preg_match('#^/merchants/([^/]+)$#', $path, $mm) && $method === 'GET') {
@@ -6239,7 +6330,7 @@ if ($method === 'POST' && $path === '/orders/cart') {
     foreach ($merchants as $mi => $m) {
         $sum = 0.0; $lines[$mi] = [];
         foreach ((array) ($m['items'] ?? []) as $it) {
-            $ps = db()->prepare('SELECT id, merchantId, nameAr, price, salePrice, isAvailable, isHidden, stock FROM `Product` WHERE id = ? LIMIT 1');
+            $ps = db()->prepare('SELECT id, merchantId, nameAr, price, salePrice, discount, isAvailable, isHidden, stock FROM `Product` WHERE id = ? LIMIT 1');
             $ps->execute([$it['productId'] ?? '']);
             $p = $ps->fetch();
             if (!$p) conflictErr('PRODUCT_UNAVAILABLE', 'أحد المنتجات لم يعد متاحاً');
@@ -6254,10 +6345,7 @@ if ($method === 'POST' && $path === '/orders/cart') {
             if (!(int) $p['isAvailable'] || (int) $p['isHidden']) conflictErr('PRODUCT_UNAVAILABLE', 'المنتج ' . $p['nameAr'] . ' غير متاح حالياً');
             $qty = max(1, (int) ($it['quantity'] ?? 1));
             if ($p['stock'] !== null && (int) $p['stock'] < $qty) conflictErr('INSUFFICIENT_STOCK', 'الكمية المطلوبة من ' . $p['nameAr'] . ' غير متوفرة');
-            // salePrice ?? price — deliberately NOT compounding Product.discount:
-            // the app derives its badge from (price - salePrice), so applying
-            // `discount` here would charge less than the customer was shown.
-            $unit = round($p['salePrice'] !== null ? (float) $p['salePrice'] : (float) $p['price'], 2);
+            $unit = effectiveUnitPrice($p);
             $sum += $unit * $qty;
             $lines[$mi][] = ['productId' => $p['id'], 'name' => $p['nameAr'], 'qty' => $qty, 'unit' => $unit, 'notes' => $it['notes'] ?? null];
         }

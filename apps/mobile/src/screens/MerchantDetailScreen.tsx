@@ -23,10 +23,12 @@ import { HeartButton } from '../components/HeartButton';
 import { EmptyState, PrimaryButton } from '../components/ui';
 import { api } from '../lib/api';
 import { LIST_PERF } from '../lib/listPerf';
+import { productPrice } from '../lib/productPrice';
 import { useDebouncedValue } from '../lib/useDebouncedValue';
 import { addToCart, setItemQuantity, useCart } from '../stores/cart';
 import { CartBar } from './merchant-detail/CartBar';
 import { MenuImagesSection } from './merchant-detail/MenuImagesSection';
+import { SectionChips, type ProductSection } from './merchant-detail/SectionChips';
 import { MerchantHeaderCard } from './merchant-detail/MerchantHeaderCard';
 import { MerchantProductRow } from './merchant-detail/MerchantProductRow';
 import type { HomeStackParamList } from '../navigation/HomeStack';
@@ -82,6 +84,7 @@ export function MerchantDetailScreen() {
   const navigation = useNavigation<NavProp>();
   const { merchantId } = route.params;
   const [productSearch, setProductSearch] = useState('');
+  const [section, setSection] = useState<string | null>(null);
   const debouncedProductSearch = useDebouncedValue(productSearch, 300);
   const cart = useCart();
 
@@ -116,8 +119,19 @@ export function MerchantDetailScreen() {
   // second time.
   const backendPaginates = data?.productsTotal !== undefined;
 
+  /**
+   * Section list. Separate from the products query on purpose: it depends only
+   * on the merchant, so searching or switching sections must not refetch it.
+   */
+  const sectionsQ = useQuery<ProductSection[]>({
+    queryKey: ['merchant-sections', merchantId],
+    queryFn: () =>
+      api.raw.get(`/merchants/${merchantId}/product-sections`).then((r) => r.data.data ?? []),
+    staleTime: 5 * 60_000,
+  });
+
   const productsQ = useInfiniteQuery({
-    queryKey: ['merchant-products', merchantId, debouncedProductSearch],
+    queryKey: ['merchant-products', merchantId, debouncedProductSearch, section],
     enabled: backendPaginates,
     initialPageParam: 1,
     queryFn: async ({ pageParam }) => {
@@ -126,6 +140,7 @@ export function MerchantDetailScreen() {
           page: pageParam,
           pageSize: PRODUCTS_PAGE_SIZE,
           ...(debouncedProductSearch ? { q: debouncedProductSearch } : {}),
+          ...(section ? { section } : {}),
         },
       });
       return {
@@ -231,7 +246,10 @@ export function MerchantDetailScreen() {
             product: {
               id: item.id,
               nameAr: item.nameAr,
-              price: Number(item.price),
+              // The discounted price, matching what the row displays and what
+              // the server will charge. Sending the raw list price here made
+              // the cart total disagree with the product page.
+              price: productPrice(item).now,
               imageUrl: item.imageUrl ?? null,
             },
             merchantId,
@@ -421,6 +439,13 @@ export function MerchantDetailScreen() {
                     </Pressable>
                   )}
                 </View>
+
+                <SectionChips
+                  sections={sectionsQ.data ?? []}
+                  active={section}
+                  onChange={setSection}
+                  totalCount={productCount}
+                />
 
                 {/* Searching a 2,500-item catalogue can take a moment; without
                     this the previous results just sit there looking stale. */}
