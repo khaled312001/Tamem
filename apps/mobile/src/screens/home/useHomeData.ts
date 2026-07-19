@@ -10,6 +10,7 @@ import { useQuery } from '@tanstack/react-query';
 import { useMemo } from 'react';
 
 import { api } from '../../lib/api';
+import { useUserLocation } from '../../lib/useUserLocation';
 import { useAuth } from '../../stores/auth';
 
 import {
@@ -22,12 +23,28 @@ import {
   type SavedAddress,
 } from './homeData';
 
+/**
+ * Deliberately the server's maximum, not a tight radius.
+ *
+ * The geo branch DROPS any store outside the radius, so a small number would
+ * hide real stores — a customer in Luxor would see nothing from Qift — and any
+ * merchant saved without coordinates computes as thousands of km away and
+ * disappears entirely. 100km keeps the list complete; distance is used for
+ * labelling and sorting, not for gating.
+ */
+const NEARBY_RADIUS_KM = 100;
+
 export function useHomeData() {
   const user = useAuth((s) => s.user);
   // Defer every authenticated query until the auth store has hydrated and a
   // user is present — otherwise a cold-start race fires these before the token
   // loads from secure storage and the backend rejects them with 401.
   const authReady = !!user;
+
+  // When granted, this turns the merchant list into a *nearby* list: the
+  // backend computes distanceKm server-side and we can sort and label by it.
+  // Null until (and unless) it resolves — the screen never waits on it.
+  const userLoc = useUserLocation(authReady);
 
   const offersQ = useQuery<Offer[]>({
     queryKey: ['offers'],
@@ -38,13 +55,30 @@ export function useHomeData() {
     staleTime: 5 * 60_000,
   });
 
-  const merchantsQ = useQuery<Merchant[]>({
-    queryKey: ['merchants'],
-    queryFn: () => api.raw.get('/merchants').then((r) => r.data.data),
+  // Location is part of the key: once it arrives the list is refetched with
+  // distances, and the location-less result stays cached for users who never
+  // grant permission.
+  const merchantsQ = useQuery<{ items: Merchant[]; total: number }>({
+    queryKey: ['merchants', userLoc],
+    queryFn: async () => {
+      const params: Record<string, number> = { pageSize: 50 };
+      if (userLoc) {
+        params.lat = userLoc.lat;
+        params.lng = userLoc.lng;
+        params.radiusKm = NEARBY_RADIUS_KM;
+      }
+      const r = await api.raw.get('/merchants', { params });
+      return {
+        items: (r.data?.data ?? []) as Merchant[],
+        // Servers that predate pagination meta simply report what they sent.
+        total: Number(r.data?.meta?.pagination?.total ?? (r.data?.data ?? []).length),
+      };
+    },
     enabled: authReady,
     // The largest payload on the home screen. Under the global 15s staleTime it
     // refetched on virtually every return to the tab.
     staleTime: 5 * 60_000,
+    placeholderData: (prev) => prev,
   });
 
   const ordersQ = useQuery<ActiveOrder[]>({
@@ -85,7 +119,7 @@ export function useHomeData() {
 
   const categories = categoriesQ.data;
   const offers = offersQ.data;
-  const merchants = merchantsQ.data;
+  const merchants = merchantsQ.data?.items;
   const addresses = addressesQ.data;
   const homeConfig = homeConfigQ.data;
 
@@ -118,6 +152,18 @@ export function useHomeData() {
       .sort((a, b) => rank.get(a.id)! - rank.get(b.id)!);
     return pinned.length ? pinned : all;
   }, [offers, homeConfig?.featuredOfferIds]);
+
+  /**
+   * Every nearby store, closest first. This is the list the vertical
+   * "المحلات اللي حواليك" section renders — distinct from `featuredMerchants`,
+   * which is the small admin-curated rail.
+   */
+  const nearbyMerchants = useMemo(() => {
+    const list = (merchants ?? []).slice();
+    // Only meaningful once we have a fix; otherwise keep the server's order.
+    if (userLoc) list.sort((a, b) => (a.distanceKm ?? 1e9) - (b.distanceKm ?? 1e9));
+    return list;
+  }, [merchants, userLoc]);
 
   // Featured merchants: admin-pinned in order > top slice.
   const featuredMerchants = useMemo(() => {
@@ -158,6 +204,9 @@ export function useHomeData() {
     topOffer,
     merchants,
     featuredMerchants,
+    nearbyMerchants,
+    merchantsTotal: merchantsQ.data?.total ?? 0,
+    hasLocation: !!userLoc,
     categories,
     loadingCategories: categoriesQ.isLoading,
     loadingMerchants: merchantsQ.isLoading,

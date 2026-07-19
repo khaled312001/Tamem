@@ -63,6 +63,12 @@ interface AppliedCoupon {
 interface QuickOrderSheetProps {
   visible: boolean;
   onClose: () => void;
+  /**
+   * Which mode to land on when opened. Defaults to the menu. The home search
+   * bar's mic passes 'voice' so tapping it starts recording immediately
+   * instead of making the customer pick from the menu first.
+   */
+  initialMode?: Mode;
 }
 
 /**
@@ -74,11 +80,11 @@ interface QuickOrderSheetProps {
  * Submits silently to POST /orders with category=DELIVERY + customData.
  * Then navigates to OrderTracking — no WhatsApp prompt.
  */
-export function QuickOrderSheet({ visible, onClose }: QuickOrderSheetProps) {
+export function QuickOrderSheet({ visible, onClose, initialMode }: QuickOrderSheetProps) {
   const navigation = useNavigation<{
     getParent: () => { navigate: (...a: unknown[]) => void } | undefined;
   }>();
-  const [mode, setMode] = useState<Mode>('menu');
+  const [mode, setMode] = useState<Mode>(initialMode ?? 'menu');
   const [submitting, setSubmitting] = useState(false);
   const [coupon, setCoupon] = useState<AppliedCoupon | null>(null);
 
@@ -97,14 +103,17 @@ export function QuickOrderSheet({ visible, onClose }: QuickOrderSheetProps) {
       easing: Easing.out(Easing.cubic),
       useNativeDriver: Platform.OS !== 'web',
     }).start();
-    if (!visible) {
-      // Cleared on re-run/unmount: rapid open/close used to stack these timers,
-      // each firing setMode on a possibly-unmounted sheet.
-      const t = setTimeout(() => setMode('menu'), 250);
-      return () => clearTimeout(t);
+    if (visible) {
+      // Re-assert on each open: the sheet is kept mounted, so without this a
+      // previous session's mode would persist.
+      if (initialMode) setMode(initialMode);
+      return undefined;
     }
-    return undefined;
-  }, [visible, slide]);
+    // Cleared on re-run/unmount: rapid open/close used to stack these timers,
+    // each firing setMode on a possibly-unmounted sheet.
+    const t = setTimeout(() => setMode(initialMode ?? 'menu'), 250);
+    return () => clearTimeout(t);
+  }, [visible, slide, initialMode]);
 
   const translateY = slide.interpolate({ inputRange: [0, 1], outputRange: [600, 0] });
   const opacity = slide.interpolate({ inputRange: [0, 1], outputRange: [0, 1] });

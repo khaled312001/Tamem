@@ -18,6 +18,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { SearchOverlay } from '../../components/home/SearchOverlay';
 import { QuickOrderFAB } from '../../components/QuickOrderFAB';
+import { QuickOrderSheet } from '../../components/QuickOrderSheet';
 import { haptic } from '../../lib/haptics';
 import { useUnreadCount } from '../../lib/useUnreadCount';
 import type { HomeStackParamList } from '../../navigation/HomeStack';
@@ -31,6 +32,7 @@ import { HomeSearchBar } from './components/HomeSearchBar';
 import { HomeSkeleton } from './components/HomeSkeleton';
 import { MainServicesSection, type HomeServiceItem } from './components/MainServicesSection';
 import { OffersCarousel } from './components/OffersCarousel';
+import { NearbyStoresSection, type StoreFilter } from './components/NearbyStoresSection';
 import { PopularStoresSection } from './components/PopularStoresSection';
 import { PromoCardsRow } from './components/PromoCardsRow';
 import { QuickActionsSection, type QuickAction } from './components/QuickActionsSection';
@@ -55,9 +57,16 @@ const SERVICE_DEFS: { key: ServiceKey; Icon: typeof ShoppingBag; route: ServiceR
 // Clears the tab bar (and later the floating button) at the end of the scroll.
 const BOTTOM_GAP = 130;
 
+/** Store cards rendered per "عرض المزيد" press. */
+const STORES_PAGE = 6;
+
 export function HomeV2Screen() {
   const navigation = useNavigation<NavProp>();
   const [searchOpen, setSearchOpen] = useState(false);
+  const [voiceOpen, setVoiceOpen] = useState(false);
+  const [storeFilter, setStoreFilter] = useState<StoreFilter>('all');
+  // Grows on "عرض المزيد" so the first paint stays cheap on a long list.
+  const [storesShown, setStoresShown] = useState(STORES_PAGE);
   // Same query key as the tab bar's bell — one fetch feeds both badges.
   const unreadCount = useUnreadCount();
 
@@ -65,6 +74,9 @@ export function HomeV2Screen() {
     user,
     bannerOffers,
     featuredMerchants,
+    nearbyMerchants,
+    merchantsTotal,
+    hasLocation,
     categories,
     activeOrder,
     defaultAddress,
@@ -258,7 +270,13 @@ export function HomeV2Screen() {
         />
 
         <View style={styles.section}>
-          <HomeSearchBar onPress={() => setSearchOpen(true)} />
+          <HomeSearchBar
+            onPress={() => setSearchOpen(true)}
+            onPressVoice={() => {
+              tick();
+              setVoiceOpen(true);
+            }}
+          />
         </View>
 
         {isError && (
@@ -309,6 +327,19 @@ export function HomeV2Screen() {
           <PromoCardsRow onPressTrack={goTracking} onPressFastDelivery={goFastDelivery} />
         </View>
 
+        <View style={styles.section}>
+          <NearbyStoresSection
+            merchants={nearbyMerchants}
+            total={merchantsTotal}
+            hasLocation={hasLocation}
+            filter={storeFilter}
+            onChangeFilter={setStoreFilter}
+            onPressMerchant={onPressMerchant}
+            visibleCount={storesShown}
+            onShowMore={() => setStoresShown((n) => n + STORES_PAGE)}
+          />
+        </View>
+
         {/* Not in the reference design, kept below the fold: both are live
             navigation paths (category browsing, wallet/favourites/coupons) that
             would otherwise be unreachable from home. */}
@@ -330,6 +361,13 @@ export function HomeV2Screen() {
 
       {/* Owns the TextInput, the 300ms debounce and the live suggestions. */}
       <SearchOverlay visible={searchOpen} onClose={() => setSearchOpen(false)} />
+
+      {/* The mic opens the existing voice-order flow directly. */}
+      <QuickOrderSheet
+        visible={voiceOpen}
+        initialMode="voice"
+        onClose={() => setVoiceOpen(false)}
+      />
     </SafeAreaView>
   );
 }
