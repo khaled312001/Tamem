@@ -36,6 +36,7 @@ import {
 
 import { createRecorder, formatDuration, type Recorder } from '../lib/audioRecorder';
 import { api } from '../lib/api';
+import { useDebouncedValue } from '../lib/useDebouncedValue';
 import { showToast } from '../lib/toast';
 import { uploadFile } from '../lib/uploadFile';
 import { colors, fontFamilies, fontSizes, gradients, radii, spacing } from '../theme/tokens';
@@ -62,6 +63,12 @@ interface AppliedCoupon {
 interface QuickOrderSheetProps {
   visible: boolean;
   onClose: () => void;
+  /**
+   * Which mode to land on when opened. Defaults to the menu. The home search
+   * bar's mic passes 'voice' so tapping it starts recording immediately
+   * instead of making the customer pick from the menu first.
+   */
+  initialMode?: Mode;
 }
 
 /**
@@ -73,11 +80,11 @@ interface QuickOrderSheetProps {
  * Submits silently to POST /orders with category=DELIVERY + customData.
  * Then navigates to OrderTracking — no WhatsApp prompt.
  */
-export function QuickOrderSheet({ visible, onClose }: QuickOrderSheetProps) {
+export function QuickOrderSheet({ visible, onClose, initialMode }: QuickOrderSheetProps) {
   const navigation = useNavigation<{
     getParent: () => { navigate: (...a: unknown[]) => void } | undefined;
   }>();
-  const [mode, setMode] = useState<Mode>('menu');
+  const [mode, setMode] = useState<Mode>(initialMode ?? 'menu');
   const [submitting, setSubmitting] = useState(false);
   const [coupon, setCoupon] = useState<AppliedCoupon | null>(null);
 
@@ -96,10 +103,17 @@ export function QuickOrderSheet({ visible, onClose }: QuickOrderSheetProps) {
       easing: Easing.out(Easing.cubic),
       useNativeDriver: Platform.OS !== 'web',
     }).start();
-    if (!visible) {
-      setTimeout(() => setMode('menu'), 250);
+    if (visible) {
+      // Re-assert on each open: the sheet is kept mounted, so without this a
+      // previous session's mode would persist.
+      if (initialMode) setMode(initialMode);
+      return undefined;
     }
-  }, [visible, slide]);
+    // Cleared on re-run/unmount: rapid open/close used to stack these timers,
+    // each firing setMode on a possibly-unmounted sheet.
+    const t = setTimeout(() => setMode(initialMode ?? 'menu'), 250);
+    return () => clearTimeout(t);
+  }, [visible, slide, initialMode]);
 
   const translateY = slide.interpolate({ inputRange: [0, 1], outputRange: [600, 0] });
   const opacity = slide.interpolate({ inputRange: [0, 1], outputRange: [0, 1] });
@@ -290,9 +304,11 @@ export function QuickOrderSheet({ visible, onClose }: QuickOrderSheetProps) {
 
           <View style={styles.header}>
             <View style={{ flex: 1 }}>
-              <Text style={styles.title}>طلب سريع</Text>
+              <Text style={styles.title}>اطلب أي حاجة </Text>
               <Text style={styles.subtitle}>
-                {mode === 'menu' ? 'اختر الطريقة الأنسب ليك' : 'املأ التفاصيل وأرسل خلال ثواني'}
+                {mode === 'menu'
+                  ? 'اكتبها، صوّرها، أو قولها بصوتك — واحنا نجيبهالك'
+                  : 'املأ التفاصيل وأرسل خلال ثواني'}
               </Text>
             </View>
             <Pressable onPress={onClose} style={styles.closeBtn} hitSlop={8}>
@@ -760,46 +776,66 @@ function ProductsMode({
   const [notes, setNotes] = useState('');
   const [search, setSearch] = useState('');
 
+  // Search on the server. `/products` returns one page (20 by default), so the
+  // old client-side `.filter()` was only ever searching that first page — a
+  // product that existed but sat on page 2 returned "no results".
+  const debouncedSearch = useDebouncedValue(search, 300);
+
   const { data, isLoading } = useQuery<CatalogProduct[]>({
-    queryKey: ['catalog-products'],
-    queryFn: () => api.raw.get('/products').then((r) => r.data.data),
+    queryKey: ['catalog-products', debouncedSearch],
+    queryFn: () => {
+      // Matches what the list renders — asking for more than we show would
+      // silently drop results the user searched for.
+      const params: Record<string, string | number> = { pageSize: 30 };
+      const q = debouncedSearch.trim();
+      if (q) params.search = q;
+      return api.raw.get('/products', { params }).then((r) => r.data.data);
+    },
+    staleTime: 60_000,
+    // Keep the current rows on screen while the next search lands.
+    placeholderData: (prev) => prev,
   });
 
-  const filtered = useMemo(() => {
-    if (!data) return [];
-    const q = search.trim().toLowerCase();
-    if (!q) return data;
-    return data.filter(
-      (p) =>
-        p.nameAr.toLowerCase().includes(q) ||
-        p.merchant?.storeNameAr.toLowerCase().includes(q) ||
-        p.category?.nameAr.toLowerCase().includes(q),
-    );
-  }, [data, search]);
+  /**
+   * Every product the sheet has ever shown, by id.
+   *
+   * The cart holds ids, and the price/label for a line is looked up here rather
+   * than in `data`. That matters now that `data` changes with the search term:
+   * add an item, search for something else, and it would otherwise vanish from
+   * `data` — silently pricing that line at zero.
+   */
+  const seenRef = useRef<Map<string, CatalogProduct>>(new Map());
+  if (data) for (const p of data) seenRef.current.set(p.id, p);
+  const seen = seenRef.current;
 
-  const totalItems = Object.values(cart).reduce((s, q) => s + q, 0);
-  const totalPrice = useMemo(() => {
-    if (!data) return 0;
-    return Object.entries(cart).reduce((sum, [id, qty]) => {
-      const p = data.find((x) => x.id === id);
-      return sum + (p ? Number(p.price) * qty : 0);
-    }, 0);
-  }, [data, cart]);
+  const filtered = data ?? [];
 
-  const lines = useMemo(() => {
-    if (!data) return [];
-    return Object.entries(cart)
-      .filter(([, q]) => q > 0)
-      .map(([id, q]) => {
-        const p = data.find((x) => x.id === id);
-        return {
-          productId: id,
-          nameAr: p?.nameAr ?? '',
-          quantity: q,
-          price: Number(p?.price ?? 0),
-        };
-      });
-  }, [data, cart]);
+  const totalItems = useMemo(() => Object.values(cart).reduce((s, q) => s + q, 0), [cart]);
+
+  const totalPrice = useMemo(
+    () =>
+      Object.entries(cart).reduce((sum, [id, qty]) => {
+        const p = seen.get(id);
+        return sum + (p ? Number(p.price) * qty : 0);
+      }, 0),
+    [cart, seen],
+  );
+
+  const lines = useMemo(
+    () =>
+      Object.entries(cart)
+        .filter(([, q]) => q > 0)
+        .map(([id, q]) => {
+          const p = seen.get(id);
+          return {
+            productId: id,
+            nameAr: p?.nameAr ?? '',
+            quantity: q,
+            price: Number(p?.price ?? 0),
+          };
+        }),
+    [cart, seen],
+  );
 
   const inc = (id: string) => setCart((c) => ({ ...c, [id]: (c[id] ?? 0) + 1 }));
   const dec = (id: string) =>
@@ -837,7 +873,7 @@ function ProductsMode({
         </View>
       ) : (
         <View style={styles.productsList}>
-          {filtered.slice(0, 30).map((p) => {
+          {filtered.map((p) => {
             const qty = cart[p.id] ?? 0;
             return (
               <View key={p.id} style={styles.productRow}>

@@ -1,12 +1,11 @@
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
-import { useQuery } from '@tanstack/react-query';
 import { Bell, Home, Package, ShoppingCart, User } from 'lucide-react-native';
 import { Platform, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { CartScreen } from '../screens/CartScreen';
 import { NotificationsScreen } from '../screens/NotificationsScreen';
-import { api } from '../lib/api';
+import { useUnreadCount } from '../lib/useUnreadCount';
 import { clearAppBadge } from '../lib/push';
 import { useCart } from '../stores/cart';
 
@@ -127,25 +126,6 @@ const badgeStyles = StyleSheet.create({
   },
 });
 
-/** Polls the unread notifications count so the bell tab can show a badge. */
-function useUnreadCount(): number {
-  const { data } = useQuery({
-    queryKey: ['notifications', 'unread-count'],
-    queryFn: async () => {
-      try {
-        const r = await api.raw.get('/notifications', { params: { pageSize: 100 } });
-        const list = (r.data.data ?? []) as Array<{ isRead?: boolean }>;
-        return list.filter((n) => !n.isRead).length;
-      } catch {
-        return 0;
-      }
-    },
-    refetchInterval: 60_000,
-    staleTime: 30_000,
-  });
-  return data ?? 0;
-}
-
 export function AppTabs() {
   const insets = useSafeAreaInsets();
   const bottomInset = Platform.OS === 'web' ? 8 : Math.max(insets.bottom, 8);
@@ -166,8 +146,9 @@ export function AppTabs() {
           tabBarStyle: {
             borderTopColor: colors.line,
             backgroundColor: colors.white,
-            height: 68 + bottomInset,
-            paddingTop: 6,
+            // Grown with the label line-height so the taller text still fits.
+            height: 74 + bottomInset,
+            paddingTop: 8,
             paddingBottom: bottomInset,
             // Let the raised centre Home circle spill above the bar edge.
             overflow: 'visible',
@@ -177,9 +158,11 @@ export function AppTabs() {
           tabBarLabelStyle: {
             fontFamily: fontFamilies.bodyBold,
             fontSize: 12,
-            lineHeight: 14,
+            // 14 was a 1.17 ratio and clipped the bottom of every Arabic label
+            // — "السلة" and "طلباتي" were visibly cut. Arabic needs ~1.5x.
+            lineHeight: 18,
             marginTop: 2,
-            marginBottom: 2,
+            marginBottom: 0,
             includeFontPadding: false,
           },
         }}

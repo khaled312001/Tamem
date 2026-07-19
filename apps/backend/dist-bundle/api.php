@@ -1585,6 +1585,15 @@ function notifReadSetting(string $key): array {
     } catch (Throwable $e) { /* fall through */ }
     return [];
 }
+/**
+ * Read a Setting that holds a JSON array of strings, e.g. the home screen's
+ * curated product list. Always returns a list — never null or an object — so
+ * clients can spread and .includes() it without guarding.
+ */
+function homeListSetting(string $key): array {
+    $v = notifReadSetting($key);
+    return array_values(array_filter($v, 'is_string'));
+}
 function notifWriteSetting(string $key, array $value, ?string $uid): void {
     db()->prepare('INSERT INTO `Setting` (`key`,`value`,`description`,`updatedAt`,`updatedById`) VALUES (?,?,NULL,NOW(3),?) ON DUPLICATE KEY UPDATE `value`=VALUES(`value`), `updatedAt`=VALUES(`updatedAt`), `updatedById`=VALUES(`updatedById`)')
         ->execute([$key, json_encode($value, JSON_UNESCAPED_UNICODE), $uid]);
@@ -2729,6 +2738,15 @@ if ($method === 'GET' && $path === '/admin/products') {
     $where = '1=1';
     $args = [];
     if (!empty($_GET['merchantId'])) { $where .= ' AND p.merchantId = ?'; $args[] = $_GET['merchantId']; }
+    // ids=a,b,c — lets the dashboard's product picker show what is already
+    // selected even when it isn't on the current search page.
+    $idsRaw = trim((string) ($_GET['ids'] ?? ''));
+    if ($idsRaw !== '') {
+        $ids = array_slice(array_values(array_filter(array_map('trim', explode(',', $idsRaw)))), 0, 100);
+        if (!$ids) jsonList([], 1, 0, 0);
+        $where .= ' AND p.id IN (' . implode(',', array_fill(0, count($ids), '?')) . ')';
+        foreach ($ids as $id) $args[] = $id;
+    }
     $q = trim((string) ($_GET['search'] ?? ''));
     if ($q !== '') {
         $where .= ' AND (p.name LIKE ? OR p.nameAr LIKE ? OR p.sku LIKE ?)';
@@ -4201,6 +4219,95 @@ if ($method === 'DELETE' && preg_match('#^/admin/categories/([^/]+)$#', $path, $
     jsonOk(['deleted' => true]);
 }
 
+// ── Offers (home slider) ───────────────────────────────────────────────────
+// The public GET /offers has existed since launch, but nothing in the system
+// ever wrote to the Offer table — so the home slider could never be filled.
+// These four routes are that missing half.
+
+if ($method === 'GET' && $path === '/admin/offers') {
+    authUser();
+    // Unlike the public route this returns inactive and expired rows too —
+    // an admin needs to see and re-enable them.
+    $rows = db()->query('SELECT * FROM `Offer` ORDER BY sortOrder ASC, createdAt DESC')->fetchAll();
+    jsonOk(array_map(fn($r) => boolCast(jsonizeRow($r), ['isActive']), $rows));
+}
+
+if ($method === 'POST' && $path === '/admin/offers') {
+    $u = authUser();
+    if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
+    $b = readJsonBody();
+
+    $imageUrl = trim((string) ($b['imageUrl'] ?? ''));
+    // imageUrl is NOT NULL in the schema, and a slide with no image is just an
+    // invisible row — reject it here rather than let MySQL throw.
+    if ($imageUrl === '') jsonErr('صورة العرض مطلوبة', 400, 'VALIDATION_ERROR');
+
+    $titleAr = trim((string) ($b['titleAr'] ?? $b['title'] ?? ''));
+    if ($titleAr === '') jsonErr('عنوان العرض مطلوب', 400, 'VALIDATION_ERROR');
+
+    $id = newId();
+    $st = db()->prepare(
+        'INSERT INTO `Offer` (id, title, titleAr, imageUrl, linkType, linkValue, sortOrder, isActive, startsAt, endsAt, createdAt, updatedAt)'
+        . ' VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(3), NOW(3))'
+    );
+    $st->execute([
+        $id,
+        (string) ($b['title'] ?? $titleAr),
+        $titleAr,
+        $imageUrl,
+        (string) ($b['linkType'] ?? 'NONE'),
+        isset($b['linkValue']) && $b['linkValue'] !== '' ? (string) $b['linkValue'] : null,
+        (int) ($b['sortOrder'] ?? 0),
+        array_key_exists('isActive', $b) ? (!empty($b['isActive']) ? 1 : 0) : 1,
+        !empty($b['startsAt']) ? (string) $b['startsAt'] : null,
+        !empty($b['endsAt']) ? (string) $b['endsAt'] : null,
+    ]);
+    $sel = db()->prepare('SELECT * FROM `Offer` WHERE id = ?');
+    $sel->execute([$id]);
+    jsonOk(boolCast(jsonizeRow($sel->fetch()), ['isActive']), 201);
+}
+
+if ($method === 'PATCH' && preg_match('#^/admin/offers/([^/]+)$#', $path, $m)) {
+    $u = authUser();
+    if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
+    $id = $m[1];
+    $b = readJsonBody();
+    $sets = [];
+    $args = [];
+    foreach (['title', 'titleAr', 'imageUrl', 'linkType', 'sortOrder'] as $f) {
+        if (array_key_exists($f, $b)) { $sets[] = "`$f`=?"; $args[] = $b[$f]; }
+    }
+    // Nullable columns: an empty string from a cleared form field means NULL,
+    // not the literal "".
+    foreach (['linkValue', 'startsAt', 'endsAt'] as $f) {
+        if (array_key_exists($f, $b)) {
+            $sets[] = "`$f`=?";
+            $args[] = ($b[$f] === '' || $b[$f] === null) ? null : (string) $b[$f];
+        }
+    }
+    if (array_key_exists('isActive', $b)) { $sets[] = '`isActive`=?'; $args[] = !empty($b['isActive']) ? 1 : 0; }
+    if ($sets) {
+        $sets[] = '`updatedAt`=NOW(3)';
+        $args[] = $id;
+        db()->prepare('UPDATE `Offer` SET ' . implode(',', $sets) . ' WHERE id = ?')->execute($args);
+    }
+    $sel = db()->prepare('SELECT * FROM `Offer` WHERE id = ?');
+    $sel->execute([$id]);
+    $row = $sel->fetch();
+    if (!$row) jsonErr('العرض غير موجود', 404, 'NOT_FOUND');
+    jsonOk(boolCast(jsonizeRow($row), ['isActive']));
+}
+
+if ($method === 'DELETE' && preg_match('#^/admin/offers/([^/]+)$#', $path, $m)) {
+    $u = authUser();
+    if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
+    // Offer has no inbound foreign keys, so a hard delete is safe here.
+    // HomeConfig.featuredOfferIds may still name it; the home screen already
+    // falls back to "all offers" when a pinned id resolves to nothing.
+    db()->prepare('DELETE FROM `Offer` WHERE id = ?')->execute([$m[1]]);
+    jsonOk(['deleted' => true]);
+}
+
 // POST /admin/supervisors — insert into Supervisor.
 if ($method === 'POST' && $path === '/admin/supervisors') {
     $u = authUser();
@@ -4277,6 +4384,16 @@ if ($method === 'PATCH' && $path === '/admin/home-config') {
     $stringFields = ['heroGreeting', 'heroSubtitle', 'trustStripTitle', 'trustStripSubtitle', 'promoBannerCouponId', 'promoBannerTitle', 'promoBannerCode'];
     $jsonFields = ['heroGradient', 'visibleServiceKeys', 'featuredMerchantIds', 'featuredOfferIds'];
     $boolFields = ['showPromoBanner', 'showTrustStrip'];
+
+    // Stored in `Setting` — see the note on the GET route above.
+    if (array_key_exists('featuredProductIds', $b)) {
+        $ids = is_array($b['featuredProductIds']) ? array_values(array_filter(
+            array_map(fn($v) => is_string($v) ? trim($v) : '', $b['featuredProductIds']),
+            fn($v) => $v !== ''
+        )) : [];
+        notifWriteSetting('home_featured_product_ids', $ids, $u['sub'] ?? null);
+    }
+
     $sets = [];
     $args = [];
     foreach ($stringFields as $f) if (array_key_exists($f, $b)) { $sets[] = "`$f` = ?"; $args[] = $b[$f]; }
@@ -4966,6 +5083,10 @@ function merchantNextOpenMsg(array $hours, int $dow, int $mins): ?string {
             $hh = intdiv($best, 60) % 24; $mm = $best % 60;
             $h12 = $hh % 12; if ($h12 === 0) $h12 = 12;
             $t = sprintf('%d:%02d %s', $h12, $mm, $hh < 12 ? 'ص' : 'م');
+            // Hand the caller the structured slot too — the day offset and the
+            // minutes-into-day are exactly what an ISO nextOpenAt needs, and
+            // they were being discarded into a string.
+            $GLOBALS['__next_open_slot'] = ['dayOffset' => $i, 'minutes' => $best];
             if ($i === 0) return "يفتح اليوم الساعة $t";
             if ($i === 1) return "يفتح غداً الساعة $t";
             return 'يفتح ' . $DAYS[$d] . " الساعة $t";
@@ -5001,12 +5122,42 @@ function merchantOpenness(array $m, array $hours): array {
         $c = (int) $h['closeMin'];
         if ($c > 1440 && $mins < ($c - 1440)) return ['isOpenNow' => true, 'reason' => null, 'nextOpenAt' => null, 'message' => null];
     }
-    return ['isOpenNow' => false, 'reason' => 'OUT_OF_HOURS', 'nextOpenAt' => null, 'message' => merchantNextOpenMsg($hours, $dow, $mins) ?? 'المتجر مغلق حالياً'];
+    // merchantNextOpenMsg parks the structured slot in a global as a side
+    // effect; clear it first so a merchant with no upcoming window can't
+    // inherit the previous merchant's value inside a list loop.
+    $GLOBALS['__next_open_slot'] = null;
+    $msg = merchantNextOpenMsg($hours, $dow, $mins);
+    $slot = $GLOBALS['__next_open_slot'] ?? null;
+
+    // Build an ISO timestamp in the MERCHANT's zone so a client can show a
+    // countdown or re-localise instead of parsing the Arabic sentence.
+    $nextOpenAt = null;
+    if ($slot) {
+        try {
+            $tz = new DateTimeZone((string) ($m['timezone'] ?? '') ?: 'Africa/Cairo');
+            $dt = new DateTime('now', $tz);
+            $dt->setTime(0, 0, 0);
+            // `minutes` can exceed 1440 for windows that run past midnight —
+            // adding it as minutes rolls the date forward correctly.
+            $dt->modify('+' . (int) $slot['dayOffset'] . ' day');
+            $dt->modify('+' . (int) $slot['minutes'] . ' minute');
+            $nextOpenAt = $dt->format(DateTime::ATOM);
+        } catch (Throwable $e) {
+            $nextOpenAt = null;
+        }
+    }
+
+    return ['isOpenNow' => false, 'reason' => 'OUT_OF_HOURS', 'nextOpenAt' => $nextOpenAt, 'message' => $msg ?? 'المتجر مغلق حالياً'];
 }
 // menuImages mirrors catalog.controller's merchantSelect: a merchant with no
 // structured products can instead publish photos of their paper menu, and the
 // app's MerchantDetailScreen renders them in place of the product list.
-const MERCHANT_SEL = 'm.id, m.storeName, m.storeNameAr, m.phone, m.description, m.logoUrl, m.coverUrl, m.menuImages, m.addressLine, m.lat, m.lng, m.governorate, m.city, m.rating, m.isOpen, m.manualStatus, m.timezone, m.categoryId, c.name AS c_name, c.nameAr AS c_nameAr, c.iconUrl AS c_iconUrl';
+// `createdAt` powers the "جديد على تميم" rail on the mobile home; the product
+// subquery gives each store card an item count. The subquery mirrors the one
+// the admin list already uses (see the /admin/merchants SELECT), but filters to
+// what a customer can actually see — the admin count deliberately includes
+// hidden and unavailable rows.
+const MERCHANT_SEL = 'm.id, m.storeName, m.storeNameAr, m.phone, m.description, m.logoUrl, m.coverUrl, m.menuImages, m.addressLine, m.lat, m.lng, m.governorate, m.city, m.rating, m.isOpen, m.manualStatus, m.timezone, m.categoryId, m.createdAt, (SELECT COUNT(*) FROM `Product` p WHERE p.merchantId = m.id AND p.isAvailable = 1 AND p.isHidden = 0) AS product_count, c.name AS c_name, c.nameAr AS c_nameAr, c.iconUrl AS c_iconUrl';
 function hoursFor(array $ids): array {
     if (!$ids) return [];
     $in = implode(',', array_fill(0, count($ids), '?'));
@@ -5016,6 +5167,9 @@ function hoursFor(array $ids): array {
     foreach ($st->fetchAll() as $h) { $out[$h['merchantId']][] = boolCast($h, ['isClosed']); }
     return $out;
 }
+/** A store counts as "new" for this many days after it is created. */
+const NEW_MERCHANT_DAYS = 30;
+
 function merchantShape(array $r, array $hours): array {
     $m = boolCast($r, ['isOpen']);
     // MUST decode: the column is longtext, so PDO hands back the raw JSON string.
@@ -5027,6 +5181,22 @@ function merchantShape(array $r, array $hours): array {
     foreach (['c_name', 'c_nameAr', 'c_iconUrl'] as $k) unset($m[$k]);
     $m['businessHours'] = $hours;
     $m['openness'] = merchantOpenness($r, $hours);
+
+    // Item count as an int — PDO hands numeric columns back as strings here
+    // (the connection sets no STRINGIFY_FETCHES override), and the client
+    // renders this directly.
+    if (array_key_exists('product_count', $r)) {
+        $m['productCount'] = (int) $r['product_count'];
+        unset($m['product_count']);
+    }
+
+    // "New store" is decided server-side so the rule lives in one place rather
+    // than being re-derived from createdAt by every client.
+    if (!empty($r['createdAt'])) {
+        $age = time() - strtotime((string) $r['createdAt']);
+        $m['isNew'] = $age >= 0 && $age < NEW_MERCHANT_DAYS * 86400;
+    }
+
     return $m;
 }
 function productShape(array $p): array {
@@ -5554,8 +5724,41 @@ if ($method === 'POST' && $path === '/merchants/openness') {
 }
 
 if (preg_match('#^/merchants/([^/]+)/products$#', $path, $mm) && $method === 'GET') {
-    $st = db()->prepare('SELECT * FROM `Product` WHERE merchantId = ? AND isAvailable = 1 AND isHidden = 0 ORDER BY sortOrder ASC');
-    $st->execute([$mm[1]]);
+    // Pagination is OPT-IN. A merchant with a synced catalogue returns ~2,900
+    // products (~3.1 MB) here, so the app should always send pageSize — but
+    // older installed builds don't, and silently truncating their catalogue
+    // would be worse than the payload. No params => previous behaviour.
+    $wantsPage = isset($_GET['pageSize']) || isset($_GET['page']);
+    $sql = 'SELECT * FROM `Product` WHERE merchantId = ? AND isAvailable = 1 AND isHidden = 0 ORDER BY sortOrder ASC';
+    $args = [$mm[1]];
+
+    if ($wantsPage) {
+        $page = max(1, (int) ($_GET['page'] ?? 1));
+        $pageSize = min(100, max(1, (int) ($_GET['pageSize'] ?? 30)));
+        $q = trim((string) ($_GET['q'] ?? $_GET['search'] ?? ''));
+
+        $where = 'merchantId = ? AND isAvailable = 1 AND isHidden = 0';
+        $args = [$mm[1]];
+        if ($q !== '') {
+            $where .= ' AND (name LIKE ? OR nameAr LIKE ?)';
+            $args[] = "%$q%";
+            $args[] = "%$q%";
+        }
+
+        $cst = db()->prepare('SELECT COUNT(*) n FROM `Product` WHERE ' . $where);
+        $cst->execute($args);
+        $total = (int) $cst->fetch()['n'];
+
+        $st = db()->prepare(
+            'SELECT * FROM `Product` WHERE ' . $where . ' ORDER BY sortOrder ASC'
+            . ' LIMIT ' . $pageSize . ' OFFSET ' . (($page - 1) * $pageSize)
+        );
+        $st->execute($args);
+        jsonList(array_map('productShape', $st->fetchAll()), $page, $pageSize, $total);
+    }
+
+    $st = db()->prepare($sql);
+    $st->execute($args);
     jsonOk(array_map('productShape', $st->fetchAll()));
 }
 
@@ -5567,9 +5770,24 @@ if (preg_match('#^/merchants/([^/]+)$#', $path, $mm) && $method === 'GET') {
     $hrs = hoursFor([$mm[1]]);
     $m = merchantShape($r, $hrs[$mm[1]] ?? []);
     $m['openHours'] = is_string($r['openHours'] ?? null) ? json_decode((string) $r['openHours'], true) : ($r['openHours'] ?? null);
-    $ps = db()->prepare('SELECT * FROM `Product` WHERE merchantId = ? ORDER BY sortOrder ASC');
+    // Embedded products are opt-in limited, for the same reason as the
+    // /products route above: this endpoint is what the store page calls, and
+    // it was returning the merchant's ENTIRE catalogue — hidden and
+    // unavailable rows included — on every open.
+    $embedLimit = isset($_GET['productsPageSize'])
+        ? min(100, max(1, (int) $_GET['productsPageSize']))
+        : null;
+    $psSql = 'SELECT * FROM `Product` WHERE merchantId = ? ORDER BY sortOrder ASC';
+    if ($embedLimit !== null) $psSql .= ' LIMIT ' . $embedLimit;
+    $ps = db()->prepare($psSql);
     $ps->execute([$mm[1]]);
     $m['products'] = array_map('productShape', $ps->fetchAll());
+
+    // Total count so the client knows whether to paginate, regardless of limit.
+    $pc = db()->prepare('SELECT COUNT(*) n FROM `Product` WHERE merchantId = ?');
+    $pc->execute([$mm[1]]);
+    $m['productsTotal'] = (int) $pc->fetch()['n'];
+
     jsonOk($m);
 }
 
@@ -5580,6 +5798,24 @@ if ($method === 'GET' && $path === '/products') {
     if (!empty($_GET['merchantId'])) { $where .= ' AND p.merchantId = ?'; $args[] = $_GET['merchantId']; }
     $q = trim((string) ($_GET['q'] ?? $_GET['search'] ?? ''));
     if ($q !== '') { $where .= ' AND (p.name LIKE ? OR p.nameAr LIKE ?)'; $args[] = "%$q%"; $args[] = "%$q%"; }
+
+    // ids=a,b,c — fetch a curated set in one round trip. Capped so a crafted
+    // query can't turn this into an unbounded IN(...) scan.
+    $idsRaw = trim((string) ($_GET['ids'] ?? ''));
+    if ($idsRaw !== '') {
+        $ids = array_slice(array_values(array_filter(array_map('trim', explode(',', $idsRaw)))), 0, 50);
+        if (!$ids) jsonList([], 1, 0, 0);
+        $where .= ' AND p.id IN (' . implode(',', array_fill(0, count($ids), '?')) . ')';
+        foreach ($ids as $id) $args[] = $id;
+    }
+
+    // onSale=1 — anything the merchant actually discounted. Both knobs count:
+    // salePrice must undercut the list price to be a real discount, and
+    // discount is a percentage.
+    if (!empty($_GET['onSale'])) {
+        $where .= ' AND ((p.salePrice IS NOT NULL AND p.salePrice > 0 AND p.salePrice < p.price)'
+                . ' OR (p.discount IS NOT NULL AND p.discount > 0))';
+    }
     $cst = db()->prepare('SELECT COUNT(*) n FROM `Product` p WHERE ' . $where);
     $cst->execute($args);
     $total = (int) $cst->fetch()['n'];
@@ -6421,6 +6657,16 @@ if ($method === 'GET' && $path === '/home-config') {
     foreach (['heroGradient', 'visibleServiceKeys', 'featuredMerchantIds', 'featuredOfferIds'] as $k) {
         if (!array_key_exists($k, $cfg) || !is_array($cfg[$k] ?? null)) $cfg[$k] = $cfg[$k] ?? null;
     }
+    /*
+     * featuredProductIds lives in `Setting`, not in a HomeConfig column.
+     *
+     * The column would be the natural home, but the DB credentials on hand are
+     * stale so the ALTER could not be run. The API deliberately presents it as
+     * a normal home-config field anyway: when the column does get added, only
+     * these few lines change and neither the dashboard nor the app notices.
+     */
+    $cfg['featuredProductIds'] = homeListSetting('home_featured_product_ids');
+
     $cfg['promoCoupon'] = null;
     if (!empty($cfg['promoBannerCouponId'])) {
         // validTo checked in SQL — see the couponCheck() timezone note.

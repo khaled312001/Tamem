@@ -10,6 +10,7 @@ import { ScreenHeader } from '../components/ScreenHeader';
 import { AnimatedListItem, CardListSkeleton, EmptyState, MoneyText } from '../components/ui';
 import { useFavoriteIds, useFavoriteIdsOf } from '../lib/favorites';
 import { api } from '../lib/api';
+import { LIST_PERF } from '../lib/listPerf';
 import { colors, fontFamilies, fontSizes, palette, radii, shadows, spacing } from '../theme/tokens';
 
 interface Merchant {
@@ -110,6 +111,7 @@ export function FavoritesScreen() {
         </View>
       ) : tab === 'merchants' ? (
         <FlatList
+          {...LIST_PERF}
           data={favorites}
           keyExtractor={(m) => m.id}
           contentContainerStyle={[
@@ -178,6 +180,7 @@ export function FavoritesScreen() {
         />
       ) : (
         <FlatList
+          {...LIST_PERF}
           data={wishlist}
           keyExtractor={(p) => p.id}
           contentContainerStyle={[

@@ -41,7 +41,14 @@ SplashScreen.preventAutoHideAsync().catch(() => undefined);
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
-      retry: 1,
+      // Never retry a 4xx: the server already gave its verdict, and retrying
+      // doubled every 401/404/422 app-wide. Only transient failures (network
+      // drop, 5xx) are worth a second attempt.
+      retry: (failureCount, error) => {
+        const status = (error as { response?: { status?: number } })?.response?.status;
+        if (status && status >= 400 && status < 500) return false;
+        return failureCount < 1;
+      },
       // Shorter freshness so screens live-update without a manual pull: data is
       // considered stale after 15s, so any refetch trigger (screen focus, app
       // foreground, reconnect, or a screen's own interval) actually refetches.

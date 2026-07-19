@@ -1,0 +1,31 @@
+RewriteEngine On
+RewriteBase /super_admin/
+
+# Correct ES module MIME (LiteSpeed defaults to application/x-javascript).
+AddType text/javascript .js .mjs
+AddType text/css .css
+AddType application/json .json
+AddType image/svg+xml .svg
+AddType font/woff .woff
+AddType font/woff2 .woff2
+AddType application/wasm .wasm
+
+# Fingerprinted assets: cache forever.
+<FilesMatch "\.(js|mjs|css|woff2?|png|jpe?g|gif|svg|ico)$">
+    Header set Cache-Control "public, max-age=31536000, immutable"
+</FilesMatch>
+
+# index.html and any generic HTML: NEVER cache — the file is what points at
+# the current fingerprinted bundle. Stale caching here is exactly what caused
+# "cannot load module script (text/html)" errors after a redeploy.
+<FilesMatch "\.html?$">
+    Header set Cache-Control "no-store, must-revalidate"
+    Header set Pragma "no-cache"
+    Header set Expires "0"
+</FilesMatch>
+
+# SPA fallback last: any URL that isn't a file/dir -> index.html
+RewriteRule ^index\.html$ - [L]
+RewriteCond %{REQUEST_FILENAME} !-f
+RewriteCond %{REQUEST_FILENAME} !-d
+RewriteRule . /super_admin/index.html [L]

@@ -32,6 +32,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { api } from '../../lib/api';
+import { LIST_PERF } from '../../lib/listPerf';
 import { showToast } from '../../lib/toast';
 import { colors, fontFamilies, fontSizes, radii, shadows, spacing } from '../../theme/tokens';
 
@@ -205,6 +206,7 @@ export function MerchantProductsScreen() {
       </View>
 
       <FlatList
+        {...LIST_PERF}
         data={products}
         keyExtractor={(p) => p.id}
         contentContainerStyle={[

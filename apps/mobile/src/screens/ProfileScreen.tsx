@@ -35,12 +35,15 @@ import { Divider, ListItem, SecondaryButton } from '../components/ui';
 import { api } from '../lib/api';
 import { confirm, notify } from '../lib/confirm';
 import { isNotificationSoundMuted, setNotificationSoundMuted } from '../lib/notificationSound';
-import { connectSocket } from '../lib/socket';
+import { useSocketEvents } from '../lib/useSocketEvents';
 import type { ProfileStackParamList } from '../navigation/ProfileStack';
 import { useAuth } from '../stores/auth';
 import { colors, fontFamilies, fontSizes, radii, shadows, spacing } from '../theme/tokens';
 
 type Nav = NativeStackNavigationProp<ProfileStackParamList, 'Profile'>;
+
+/** Module-level so the array identity never changes across renders. */
+const SOCKET_EVENTS = ['order:new', 'order:status'];
 
 interface UserExt {
   id?: string;
@@ -52,7 +55,14 @@ interface UserExt {
 }
 
 interface OrdersListResponse {
-  meta?: { total?: number };
+  /**
+   * The server nests this under `meta.pagination` (see jsonList in api.php).
+   * Reading `meta.total` silently missed it and fell through to
+   * `data.length` — which is 1, because this query asks for pageSize:1 to
+   * avoid downloading the orders just to count them. So a customer with
+   * dozens of orders saw "1".
+   */
+  meta?: { pagination?: { total?: number } };
   data: Array<{ id: string }>;
 }
 
@@ -104,7 +114,7 @@ export function ProfileScreen() {
 
   const user = (meQuery.data ?? storedUser) as UserExt | null;
 
-  // Total orders count — pageSize 1 so we only fetch the meta.total counter.
+  // Total orders count — pageSize 1 so we fetch the counter, not the orders.
   // staleTime 0 so coming back to this tab always refetches; the count needs
   // to be current after a new order or cancellation.
   const ordersQuery = useQuery({
@@ -112,7 +122,7 @@ export function ProfileScreen() {
     queryFn: async () => {
       const res = await api.raw.get('/orders/mine', { params: { pageSize: 1 } });
       const body = res.data as OrdersListResponse;
-      return body.meta?.total ?? body.data?.length ?? 0;
+      return body.meta?.pagination?.total ?? body.data?.length ?? 0;
     },
     staleTime: 0,
   });
@@ -149,26 +159,10 @@ export function ProfileScreen() {
 
   // Live updates: when a new order arrives or a status changes anywhere in
   // the app, the count/balance becomes stale — invalidate the trio.
-  useEffect(() => {
-    let cancelled = false;
-    void (async () => {
-      const s = await connectSocket();
-      const refresh = () => {
-        if (cancelled) return;
-        void qc.invalidateQueries({ queryKey: ['profile', 'orders-count'] });
-        void qc.invalidateQueries({ queryKey: ['profile', 'wallet'] });
-      };
-      s.on('order:new', refresh);
-      s.on('order:status', refresh);
-      return () => {
-        s.off('order:new', refresh);
-        s.off('order:status', refresh);
-      };
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [qc]);
+  useSocketEvents(SOCKET_EVENTS, () => {
+    void qc.invalidateQueries({ queryKey: ['profile', 'orders-count'] });
+    void qc.invalidateQueries({ queryKey: ['profile', 'wallet'] });
+  });
 
   const refetchAll = () => {
     void meQuery.refetch();

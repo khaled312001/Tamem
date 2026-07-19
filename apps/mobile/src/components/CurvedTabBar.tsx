@@ -240,8 +240,12 @@ const fabStyles = StyleSheet.create({
     position: 'absolute',
     top: -FAB_GLOW_PAD,
     bottom: -FAB_GLOW_PAD,
-    insetInlineStart: -FAB_GLOW_PAD,
-    insetInlineEnd: -FAB_GLOW_PAD,
+    // left/right, not insetInline*: pinning BOTH logical sides did not
+    // stretch the element on this RN version — it collapsed to its content
+    // width and drifted to one edge. A full-bleed bar is symmetric, so the
+    // physical props are also RTL-safe here.
+    left: -FAB_GLOW_PAD,
+    right: -FAB_GLOW_PAD,
     borderRadius: (FAB_SIZE + FAB_GLOW_PAD * 2) / 2,
     backgroundColor: '#F2A93B',
     ...(Platform.OS === 'web'
@@ -383,8 +387,12 @@ export function CurvedTabBar({ slotsBuilder, ...props }: Props) {
 const styles = StyleSheet.create({
   container: {
     position: 'absolute',
-    insetInlineStart: 0,
-    insetInlineEnd: 0,
+    // left/right, not insetInline*: pinning BOTH logical sides did not
+    // stretch the element on this RN version — it collapsed to its content
+    // width and drifted to one edge. A full-bleed bar is symmetric, so the
+    // physical props are also RTL-safe here.
+    left: 0,
+    right: 0,
     bottom: 0,
     ...(Platform.OS === 'web'
       ? { boxShadow: '0 -10px 24px -10px rgba(0,0,0,0.18)' }
@@ -393,8 +401,12 @@ const styles = StyleSheet.create({
   accentLine: {
     position: 'absolute',
     top: 0,
-    insetInlineStart: '15%',
-    insetInlineEnd: '15%',
+    // left/right, not insetInline*: pinning BOTH logical sides did not
+    // stretch the element on this RN version — it collapsed to its content
+    // width and drifted to one edge. A full-bleed bar is symmetric, so the
+    // physical props are also RTL-safe here.
+    left: '15%',
+    right: '15%',
     height: 3,
     borderRadius: 99,
     backgroundColor: 'rgba(242,169,59,0.35)',

@@ -24,12 +24,17 @@ export function SplashScreen({ onStart }: SplashScreenProps = {}) {
   const ctaScale = useRef(new Animated.Value(1)).current;
 
   useEffect(() => {
-    Animated.loop(
-      Animated.sequence([
-        Animated.timing(pulse, { toValue: 1.05, duration: 1400, useNativeDriver: useNative }),
-        Animated.timing(pulse, { toValue: 0.85, duration: 1400, useNativeDriver: useNative }),
-      ]),
-    ).start();
+    // Collected so every loop can be stopped on unmount. This screen doubles as
+    // the auth-hydration state, so it unmounts on every cold start — leaving
+    // five loops running behind the app.
+    const loops: Animated.CompositeAnimation[] = [
+      Animated.loop(
+        Animated.sequence([
+          Animated.timing(pulse, { toValue: 1.05, duration: 1400, useNativeDriver: useNative }),
+          Animated.timing(pulse, { toValue: 0.85, duration: 1400, useNativeDriver: useNative }),
+        ]),
+      ),
+    ];
 
     const seq = (val: Animated.Value, delay: number) =>
       Animated.loop(
@@ -39,19 +44,22 @@ export function SplashScreen({ onStart }: SplashScreenProps = {}) {
           Animated.timing(val, { toValue: 0.4, duration: 350, useNativeDriver: useNative }),
         ]),
       );
-    seq(dot1, 0).start();
-    seq(dot2, 200).start();
-    seq(dot3, 400).start();
+    loops.push(seq(dot1, 0), seq(dot2, 200), seq(dot3, 400));
 
     // Subtle CTA bounce
     if (onStart) {
-      Animated.loop(
-        Animated.sequence([
-          Animated.timing(ctaScale, { toValue: 1.03, duration: 900, useNativeDriver: useNative }),
-          Animated.timing(ctaScale, { toValue: 1, duration: 900, useNativeDriver: useNative }),
-        ]),
-      ).start();
+      loops.push(
+        Animated.loop(
+          Animated.sequence([
+            Animated.timing(ctaScale, { toValue: 1.03, duration: 900, useNativeDriver: useNative }),
+            Animated.timing(ctaScale, { toValue: 1, duration: 900, useNativeDriver: useNative }),
+          ]),
+        ),
+      );
     }
+
+    loops.forEach((l) => l.start());
+    return () => loops.forEach((l) => l.stop());
   }, [pulse, dot1, dot2, dot3, ctaScale, onStart]);
 
   return (
