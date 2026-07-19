@@ -17,14 +17,15 @@ import { useState } from 'react';
 import {
   ActivityIndicator,
   Image,
-  Modal,
+  Dimensions,
+  FlatList,
   Pressable,
   ScrollView,
   StyleSheet,
   Text,
   View,
 } from 'react-native';
-import { X } from 'lucide-react-native';
+import { Image as ImageIcon } from 'lucide-react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { EmptyState, MoneyText, PrimaryButton } from '../components/ui';
@@ -32,9 +33,15 @@ import { api } from '../lib/api';
 import { navigationRef } from '../lib/push';
 import { showToast } from '../lib/toast';
 import type { HomeStackParamList } from '../navigation/HomeStack';
+import type { NativeScrollEvent, NativeSyntheticEvent } from 'react-native';
+
+import { ImageViewer } from '../components/ImageViewer';
 import { addToCart, useCart } from '../stores/cart';
 import { BackChevron } from '../theme/rtl';
 import { colors, fontFamilies, fontSizes, radii, shadows, spacing } from '../theme/tokens';
+
+/** Hero pager pages by full screen width. */
+const SCREEN_W = Dimensions.get('window').width;
 
 interface ProductDetail {
   id: string;
@@ -70,7 +77,8 @@ export function ProductDetailScreen() {
   const navigation = useNavigation<NavProp>();
   const { productId } = route.params;
   const [quantity, setQuantity] = useState(1);
-  const [viewerOpen, setViewerOpen] = useState(false);
+  const [viewerAt, setViewerAt] = useState<number | null>(null);
+  const [heroIndex, setHeroIndex] = useState(0);
   // Reactive cart state. MUST be called unconditionally, above the early
   // returns below — placing it after them meant it ran only once `data` loaded,
   // adding hooks that didn't exist on the loading render → React threw
@@ -162,6 +170,18 @@ export function ProductDetailScreen() {
 
   const rating = data.merchant?.rating != null ? Number(data.merchant.rating) : null;
 
+  /**
+   * Every image for this product, primary first.
+   *
+   * `imageUrls` is populated by the external-API sync and was declared on the
+   * type but never rendered — extra photos were fetched and thrown away.
+   * De-duplicated because a synced feed often repeats the primary image inside
+   * the extras array.
+   */
+  const gallery = Array.from(
+    new Set([data.imageUrl, ...(data.imageUrls ?? [])].filter(Boolean) as string[]),
+  );
+
   return (
     <SafeAreaView edges={[]} style={styles.container}>
       <ScrollView
@@ -170,10 +190,32 @@ export function ProductDetailScreen() {
       >
         {/* ─────── Big image + back button ─────── */}
         <View style={styles.imageWrap}>
-          {data.imageUrl ? (
-            <Pressable onPress={() => setViewerOpen(true)} accessibilityLabel="تكبير الصورة">
-              <Image source={{ uri: data.imageUrl }} style={styles.image} resizeMode="cover" />
-            </Pressable>
+          {gallery.length > 0 ? (
+            <>
+              <FlatList
+                data={gallery}
+                keyExtractor={(uri: string, i: number) => `${uri}-${i}`}
+                horizontal
+                pagingEnabled
+                showsHorizontalScrollIndicator={false}
+                onMomentumScrollEnd={(e: NativeSyntheticEvent<NativeScrollEvent>) =>
+                  setHeroIndex(Math.round(e.nativeEvent.contentOffset.x / SCREEN_W))
+                }
+                renderItem={({ item, index }: { item: string; index: number }) => (
+                  <Pressable onPress={() => setViewerAt(index)} accessibilityLabel="تكبير الصورة">
+                    <Image source={{ uri: item }} style={styles.image} resizeMode="cover" />
+                  </Pressable>
+                )}
+              />
+              {gallery.length > 1 && (
+                <View style={styles.galleryCounter}>
+                  <ImageIcon size={13} color={colors.white} />
+                  <Text style={styles.galleryCounterText}>
+                    {heroIndex + 1}/{gallery.length}
+                  </Text>
+                </View>
+              )}
+            </>
           ) : (
             <LinearGradient
               colors={['#FDE5DC', '#FFE9D7']}
@@ -357,31 +399,8 @@ export function ProductDetailScreen() {
         </View>
       </SafeAreaView>
 
-      {/* Full-screen image viewer — tap the product image to open. */}
-      <Modal
-        visible={viewerOpen}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setViewerOpen(false)}
-      >
-        <Pressable style={styles.viewerBackdrop} onPress={() => setViewerOpen(false)}>
-          <Pressable
-            onPress={() => setViewerOpen(false)}
-            style={styles.viewerClose}
-            hitSlop={10}
-            accessibilityLabel="إغلاق"
-          >
-            <X size={26} color={colors.white} />
-          </Pressable>
-          {data.imageUrl ? (
-            <Image
-              source={{ uri: data.imageUrl }}
-              style={styles.viewerImage}
-              resizeMode="contain"
-            />
-          ) : null}
-        </Pressable>
-      </Modal>
+      {/* Shared with the store menu: pages through every product photo. */}
+      <ImageViewer images={gallery} startIndex={viewerAt} onClose={() => setViewerAt(null)} />
     </SafeAreaView>
   );
 }
@@ -464,6 +483,23 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     ...shadows.sm,
+  },
+  galleryCounter: {
+    position: 'absolute',
+    bottom: 14,
+    insetInlineStart: 14,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    backgroundColor: 'rgba(0,0,0,0.55)',
+    borderRadius: radii.pill,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+  },
+  galleryCounterText: {
+    color: colors.white,
+    fontSize: 12,
+    fontFamily: fontFamilies.bodyExtraBold,
   },
   discountBadge: {
     backgroundColor: colors.brand.red,

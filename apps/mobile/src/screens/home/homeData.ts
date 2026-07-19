@@ -22,7 +22,9 @@ export interface Merchant {
   storeNameAr: string;
   rating?: number | null;
   isOpen: boolean;
-  category?: { nameAr: string };
+  /// `id` is returned by /merchants (merchantShape builds the nested object);
+  /// it's what lets the categories row count stores without another request.
+  category?: { id?: string; nameAr: string };
   /// Server-computed openness — preferred over the raw isOpen toggle.
   /// `message` is human copy like "يفتح غداً 10ص"; showing it instead of a bare
   /// "مغلق" keeps a closed store useful rather than a dead end.
