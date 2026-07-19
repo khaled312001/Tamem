@@ -5055,6 +5055,10 @@ function merchantNextOpenMsg(array $hours, int $dow, int $mins): ?string {
             $hh = intdiv($best, 60) % 24; $mm = $best % 60;
             $h12 = $hh % 12; if ($h12 === 0) $h12 = 12;
             $t = sprintf('%d:%02d %s', $h12, $mm, $hh < 12 ? 'ص' : 'م');
+            // Hand the caller the structured slot too — the day offset and the
+            // minutes-into-day are exactly what an ISO nextOpenAt needs, and
+            // they were being discarded into a string.
+            $GLOBALS['__next_open_slot'] = ['dayOffset' => $i, 'minutes' => $best];
             if ($i === 0) return "يفتح اليوم الساعة $t";
             if ($i === 1) return "يفتح غداً الساعة $t";
             return 'يفتح ' . $DAYS[$d] . " الساعة $t";
@@ -5090,12 +5094,42 @@ function merchantOpenness(array $m, array $hours): array {
         $c = (int) $h['closeMin'];
         if ($c > 1440 && $mins < ($c - 1440)) return ['isOpenNow' => true, 'reason' => null, 'nextOpenAt' => null, 'message' => null];
     }
-    return ['isOpenNow' => false, 'reason' => 'OUT_OF_HOURS', 'nextOpenAt' => null, 'message' => merchantNextOpenMsg($hours, $dow, $mins) ?? 'المتجر مغلق حالياً'];
+    // merchantNextOpenMsg parks the structured slot in a global as a side
+    // effect; clear it first so a merchant with no upcoming window can't
+    // inherit the previous merchant's value inside a list loop.
+    $GLOBALS['__next_open_slot'] = null;
+    $msg = merchantNextOpenMsg($hours, $dow, $mins);
+    $slot = $GLOBALS['__next_open_slot'] ?? null;
+
+    // Build an ISO timestamp in the MERCHANT's zone so a client can show a
+    // countdown or re-localise instead of parsing the Arabic sentence.
+    $nextOpenAt = null;
+    if ($slot) {
+        try {
+            $tz = new DateTimeZone((string) ($m['timezone'] ?? '') ?: 'Africa/Cairo');
+            $dt = new DateTime('now', $tz);
+            $dt->setTime(0, 0, 0);
+            // `minutes` can exceed 1440 for windows that run past midnight —
+            // adding it as minutes rolls the date forward correctly.
+            $dt->modify('+' . (int) $slot['dayOffset'] . ' day');
+            $dt->modify('+' . (int) $slot['minutes'] . ' minute');
+            $nextOpenAt = $dt->format(DateTime::ATOM);
+        } catch (Throwable $e) {
+            $nextOpenAt = null;
+        }
+    }
+
+    return ['isOpenNow' => false, 'reason' => 'OUT_OF_HOURS', 'nextOpenAt' => $nextOpenAt, 'message' => $msg ?? 'المتجر مغلق حالياً'];
 }
 // menuImages mirrors catalog.controller's merchantSelect: a merchant with no
 // structured products can instead publish photos of their paper menu, and the
 // app's MerchantDetailScreen renders them in place of the product list.
-const MERCHANT_SEL = 'm.id, m.storeName, m.storeNameAr, m.phone, m.description, m.logoUrl, m.coverUrl, m.menuImages, m.addressLine, m.lat, m.lng, m.governorate, m.city, m.rating, m.isOpen, m.manualStatus, m.timezone, m.categoryId, c.name AS c_name, c.nameAr AS c_nameAr, c.iconUrl AS c_iconUrl';
+// `createdAt` powers the "جديد على تميم" rail on the mobile home; the product
+// subquery gives each store card an item count. The subquery mirrors the one
+// the admin list already uses (see the /admin/merchants SELECT), but filters to
+// what a customer can actually see — the admin count deliberately includes
+// hidden and unavailable rows.
+const MERCHANT_SEL = 'm.id, m.storeName, m.storeNameAr, m.phone, m.description, m.logoUrl, m.coverUrl, m.menuImages, m.addressLine, m.lat, m.lng, m.governorate, m.city, m.rating, m.isOpen, m.manualStatus, m.timezone, m.categoryId, m.createdAt, (SELECT COUNT(*) FROM `Product` p WHERE p.merchantId = m.id AND p.isAvailable = 1 AND p.isHidden = 0) AS product_count, c.name AS c_name, c.nameAr AS c_nameAr, c.iconUrl AS c_iconUrl';
 function hoursFor(array $ids): array {
     if (!$ids) return [];
     $in = implode(',', array_fill(0, count($ids), '?'));
@@ -5105,6 +5139,9 @@ function hoursFor(array $ids): array {
     foreach ($st->fetchAll() as $h) { $out[$h['merchantId']][] = boolCast($h, ['isClosed']); }
     return $out;
 }
+/** A store counts as "new" for this many days after it is created. */
+const NEW_MERCHANT_DAYS = 30;
+
 function merchantShape(array $r, array $hours): array {
     $m = boolCast($r, ['isOpen']);
     // MUST decode: the column is longtext, so PDO hands back the raw JSON string.
@@ -5116,6 +5153,22 @@ function merchantShape(array $r, array $hours): array {
     foreach (['c_name', 'c_nameAr', 'c_iconUrl'] as $k) unset($m[$k]);
     $m['businessHours'] = $hours;
     $m['openness'] = merchantOpenness($r, $hours);
+
+    // Item count as an int — PDO hands numeric columns back as strings here
+    // (the connection sets no STRINGIFY_FETCHES override), and the client
+    // renders this directly.
+    if (array_key_exists('product_count', $r)) {
+        $m['productCount'] = (int) $r['product_count'];
+        unset($m['product_count']);
+    }
+
+    // "New store" is decided server-side so the rule lives in one place rather
+    // than being re-derived from createdAt by every client.
+    if (!empty($r['createdAt'])) {
+        $age = time() - strtotime((string) $r['createdAt']);
+        $m['isNew'] = $age >= 0 && $age < NEW_MERCHANT_DAYS * 86400;
+    }
+
     return $m;
 }
 function productShape(array $p): array {

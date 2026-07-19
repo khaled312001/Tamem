@@ -24,7 +24,15 @@ export interface Merchant {
   isOpen: boolean;
   category?: { nameAr: string };
   /// Server-computed openness — preferred over the raw isOpen toggle.
-  openness?: { isOpenNow: boolean; message: string | null };
+  /// `message` is human copy like "يفتح غداً 10ص"; showing it instead of a bare
+  /// "مغلق" keeps a closed store useful rather than a dead end.
+  openness?: { isOpenNow: boolean; message: string | null; nextOpenAt?: string | null };
+  /// Only present when the merchant list was queried with lat/lng.
+  distanceKm?: number;
+  /// Customer-visible product count (excludes hidden/unavailable rows).
+  productCount?: number;
+  /// Server-decided (30-day window) so the rule lives in one place.
+  isNew?: boolean;
   /// Optional presentation fields. The list endpoint returns them for merchants
   /// that have them set; every consumer must treat each as absent-by-default.
   logoUrl?: string | null;

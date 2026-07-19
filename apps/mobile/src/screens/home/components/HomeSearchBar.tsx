@@ -3,7 +3,7 @@
  * already owns the TextInput, the 300ms debounce and the live merchant/product
  * suggestions — so no query is issued from here and no keystroke hits the API.
  */
-import { Search, SlidersHorizontal } from 'lucide-react-native';
+import { Mic, Search } from 'lucide-react-native';
 import { memo } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
@@ -18,14 +18,18 @@ const ROW = 'row' as const;
 
 interface Props {
   onPress: () => void;
-  /** Opens the same overlay; kept separate so filters can deep-link later. */
-  onPressFilters?: () => void;
+  /**
+   * Voice ordering. The app already records and uploads audio (the voice mode
+   * inside QuickOrderSheet), so this is a shortcut into an existing flow rather
+   * than speech-to-text.
+   */
+  onPressVoice?: () => void;
   placeholder?: string;
 }
 
 function HomeSearchBarBase({
   onPress,
-  onPressFilters,
+  onPressVoice,
   placeholder = 'ابحث عن مطعم، محل، منتج أو خدمة...',
 }: Props) {
   return (
@@ -43,15 +47,17 @@ function HomeSearchBarBase({
         {placeholder}
       </Text>
 
-      <Pressable
-        onPress={onPressFilters ?? onPress}
-        hitSlop={10}
-        style={({ pressed }) => [styles.iconBox, pressed && styles.pressed]}
-        accessibilityRole="button"
-        accessibilityLabel="تصفية"
-      >
-        <SlidersHorizontal size={20} color={colors.brand.dark} />
-      </Pressable>
+      {!!onPressVoice && (
+        <Pressable
+          onPress={onPressVoice}
+          hitSlop={10}
+          style={({ pressed }) => [styles.micBox, pressed && styles.pressed]}
+          accessibilityRole="button"
+          accessibilityLabel="اطلب بالصوت"
+        >
+          <Mic size={18} color={colors.white} />
+        </Pressable>
+      )}
     </Pressable>
   );
 }
@@ -71,6 +77,14 @@ const styles = StyleSheet.create({
     ...shadows.sm,
   },
   iconBox: { width: 32, alignItems: 'center', justifyContent: 'center' },
+  micBox: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: colors.brand.red,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   placeholder: {
     flex: 1,
     fontSize: 14,
