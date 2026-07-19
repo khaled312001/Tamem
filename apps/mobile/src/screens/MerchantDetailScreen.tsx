@@ -6,10 +6,12 @@ import { useCallback, useMemo, useState } from 'react';
 import { Phone, Search, Store, X } from 'lucide-react-native';
 import {
   ActivityIndicator,
+  Alert,
   FlatList,
   Image,
   Linking,
   Pressable,
+  Share,
   StyleSheet,
   Text,
   TextInput,
@@ -53,6 +55,8 @@ interface MerchantDetail {
   /// Total catalogue size, independent of how many rows were embedded above.
   /// Absent on backends that predate the paginated product endpoints.
   productsTotal?: number;
+  /** Admin-set preparation window; null when not configured. */
+  prepMinutes?: { min: number; max: number } | null;
   /// Server-computed openness verdict. Includes the next opening so we can
   /// render "يفتح غداً 10ص" instead of just "مغلق".
   openness?: {
@@ -153,6 +157,54 @@ export function MerchantDetailScreen() {
    * that same old backend is the whole catalogue anyway.
    */
   const productCount = data?.productsTotal ?? products.length;
+
+  const hasCoords = typeof data?.lat === 'number' && typeof data?.lng === 'number';
+
+  /**
+   * Location: ask rather than assume.
+   *
+   * Google Maps is what most people want for directions, but the app has its
+   * own nearby map and some devices have no Maps app at all — so offer both
+   * and fall back to the in-app screen if the external link can't open.
+   */
+  const openLocation = useCallback(() => {
+    if (!data || !hasCoords) return;
+    const { lat, lng } = data;
+    Alert.alert(data.storeNameAr, 'اختر طريقة عرض الموقع', [
+      {
+        text: 'خرائط جوجل',
+        onPress: () => {
+          const url = `https://www.google.com/maps/search/?api=1&query=${lat},${lng}`;
+          void Linking.openURL(url).catch(() =>
+            navigation.navigate('NearbyMap', { search: data.storeNameAr }),
+          );
+        },
+      },
+      {
+        text: 'داخل التطبيق',
+        onPress: () => navigation.navigate('NearbyMap', { search: data.storeNameAr }),
+      },
+      { text: 'إلغاء', style: 'cancel' },
+    ]);
+  }, [data, hasCoords, navigation]);
+
+  /**
+   * Share. There is no public web page per store yet, so the message carries
+   * the store name, its address and a maps pin — everything the recipient needs
+   * without a link that would 404.
+   */
+  const shareStore = useCallback(() => {
+    if (!data) return;
+    const lines = [
+      `🏪 ${data.storeNameAr}`,
+      data.category?.nameAr ?? '',
+      data.addressLine ?? '',
+      hasCoords ? `📍 https://maps.google.com/?q=${data.lat},${data.lng}` : '',
+      '',
+      'اطلب منه على تطبيق تميم للتوصيل 🚚',
+    ].filter(Boolean);
+    void Share.share({ message: lines.join('\n') }).catch(() => undefined);
+  }, [data, hasCoords]);
 
   // Derived from `data`, so these must come after the query above.
   const isClosed = !(data?.openness?.isOpenNow ?? data?.isOpen ?? true);
@@ -313,17 +365,14 @@ export function MerchantDetailScreen() {
                 rating: data.rating,
                 categoryName: data.category?.nameAr ?? null,
                 productCount,
+                prepMinutes: data.prepMinutes,
+                lat: data.lat,
+                lng: data.lng,
                 isOpenNow: data.openness?.isOpenNow ?? data.isOpen,
                 opennessMessage: data.openness?.message,
               }}
-              onPressMap={
-                typeof data.lat === 'number' && typeof data.lng === 'number'
-                  ? () =>
-                      void Linking.openURL(
-                        `https://www.google.com/maps/search/?api=1&query=${data.lat},${data.lng}`,
-                      )
-                  : undefined
-              }
+              onPressMap={hasCoords ? openLocation : undefined}
+              onPressShare={shareStore}
             />
 
             {!!data.description && <Text style={styles.description}>{data.description}</Text>}
