@@ -1,89 +1,120 @@
 /**
- * Category grid (4 per row).
+ * "بتفكر في إيه النهاردة؟" — the category picker.
  *
- * Reuses `iconFor` from the existing CategoriesStrip so a category with no
- * uploaded artwork falls back to the exact same Arabic-keyword icon it does
- * today — no second heuristic to keep in sync.
+ * Two things make this useful rather than decorative:
+ *
+ * 1. Each tile shows how many stores are actually behind it, counted from the
+ *    merchant list the screen has already loaded — no extra request.
+ * 2. Categories with no stores are dropped. Tapping through to an empty list is
+ *    worse than not offering the tile, and with a young catalogue most
+ *    categories have nothing in them yet.
+ *
+ * Falls back to `iconFor` (the existing Arabic-keyword icon picker) when a
+ * category has no uploaded artwork, so a tile is never blank.
  */
-import { memo, useCallback } from 'react';
+import { memo, useCallback, useMemo } from 'react';
 import { FlatList, Image, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { iconFor } from '../../../components/home/CategoriesStrip';
-import { colors, fontFamilies, radii, spacing } from '../../../theme/tokens';
-import type { HomeCategory } from '../homeData';
+import { colors, fontFamilies, radii, shadows, spacing } from '../../../theme/tokens';
+import type { HomeCategory, Merchant } from '../homeData';
 
-// React Native already lays `flexDirection: 'row'` out right-to-left when
-// I18nManager RTL is on. Adding 'row-reverse' on top of that flips it a
-// SECOND time, back to left-to-right — which is why the header rendered
-// mirrored. Plain 'row' is correct on native; the web build gets its
-// direction from the document's dir="rtl".
 const ROW = 'row' as const;
+const TILE = 104;
 
-interface Props {
-  categories: HomeCategory[];
-  onPressCategory: (c: HomeCategory) => void;
-  onPressSeeAll: () => void;
+/** Rotating tints so a row of icon-only tiles doesn't read as one grey block. */
+const TINTS = ['#FFF1F0', '#FFF4E8', '#FFF8DF', '#EFFAF3', '#F1F4FF', '#FDF0F7'];
+const FGS = ['#E0301E', '#EC7A2C', '#D49316', '#20A85B', '#3B6FE0', '#C2418B'];
+
+interface CategoryWithCount extends HomeCategory {
+  count: number;
 }
 
 const CategoryTile = memo(function CategoryTile({
   c,
+  index,
   onPress,
 }: {
-  c: HomeCategory;
+  c: CategoryWithCount;
+  index: number;
   onPress: () => void;
 }) {
   const Icon = iconFor(c.nameAr);
+  const bg = TINTS[index % TINTS.length];
+  const fg = FGS[index % FGS.length];
+
   return (
     <Pressable
       onPress={onPress}
       style={({ pressed }) => [styles.tileWrap, pressed && styles.pressed]}
       accessibilityRole="button"
-      accessibilityLabel={c.nameAr}
+      accessibilityLabel={`${c.nameAr} — ${c.count} محل`}
     >
-      <View style={styles.tile}>
+      <View style={[styles.tile, { backgroundColor: bg }]}>
         {c.iconUrl ? (
-          <Image source={{ uri: c.iconUrl }} style={styles.tileImg} resizeMode="contain" />
+          <Image source={{ uri: c.iconUrl }} style={styles.tileImg} resizeMode="cover" />
         ) : (
-          <Icon size={26} color={colors.brand.red} strokeWidth={1.8} />
+          <Icon size={40} color={fg} strokeWidth={1.6} />
         )}
       </View>
+
       <Text style={styles.label} numberOfLines={1}>
         {c.nameAr}
+      </Text>
+      <Text style={styles.count} numberOfLines={1}>
+        {c.count} محل
       </Text>
     </Pressable>
   );
 });
 
-function CategoriesSectionBase({ categories, onPressCategory, onPressSeeAll }: Props) {
+interface Props {
+  categories: HomeCategory[];
+  /** Used only to count stores per category — no extra fetch. */
+  merchants: Merchant[];
+  onPressCategory: (c: HomeCategory) => void;
+  onPressSeeAll: () => void;
+}
+
+function CategoriesSectionBase({ categories, merchants, onPressCategory, onPressSeeAll }: Props) {
+  const withCounts = useMemo<CategoryWithCount[]>(() => {
+    const counts = new Map<string, number>();
+    for (const m of merchants) {
+      const id = m.category?.id;
+      if (id) counts.set(id, (counts.get(id) ?? 0) + 1);
+    }
+    return categories
+      .map((c) => ({ ...c, count: counts.get(c.id) ?? 0 }))
+      .filter((c) => c.count > 0)
+      .sort((a, b) => b.count - a.count);
+  }, [categories, merchants]);
+
   const renderItem = useCallback(
-    ({ item }: { item: HomeCategory }) => (
-      <CategoryTile c={item} onPress={() => onPressCategory(item)} />
+    ({ item, index }: { item: CategoryWithCount; index: number }) => (
+      <CategoryTile c={item} index={index} onPress={() => onPressCategory(item)} />
     ),
     [onPressCategory],
   );
-  const keyExtractor = useCallback((c: HomeCategory) => c.id, []);
+  const keyExtractor = useCallback((c: CategoryWithCount) => c.id, []);
 
-  if (!categories.length) return null;
+  if (!withCounts.length) return null;
 
   return (
     <View>
       <View style={[styles.header, { flexDirection: ROW }]}>
-        <Text style={styles.sectionTitle}>التصنيفات</Text>
+        <Text style={styles.sectionTitle}>بتفكر في إيه النهاردة؟</Text>
         <Pressable onPress={onPressSeeAll} hitSlop={8} accessibilityRole="button">
           <Text style={styles.seeAll}>عرض الكل</Text>
         </Pressable>
       </View>
 
       <FlatList
-        data={categories}
+        data={withCounts}
         keyExtractor={keyExtractor}
         renderItem={renderItem}
-        numColumns={4}
-        // Nested inside the page's ScrollView: this grid is short and fully
-        // rendered, so it must not try to scroll on its own.
-        scrollEnabled={false}
-        columnWrapperStyle={styles.column}
-        contentContainerStyle={styles.grid}
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        contentContainerStyle={styles.list}
       />
     </View>
   );
@@ -101,31 +132,37 @@ const styles = StyleSheet.create({
     fontSize: 18,
     color: colors.brand.dark,
     fontFamily: fontFamilies.bodyExtraBold,
-    textAlign: 'right',
-    writingDirection: 'rtl',
+    textAlign: 'auto',
   },
   seeAll: {
     fontSize: 13,
     color: colors.brand.red,
     fontFamily: fontFamilies.bodyBold,
   },
-  grid: { gap: spacing.md },
-  column: { gap: spacing.md },
 
-  tileWrap: { flex: 1, alignItems: 'center', gap: 6 },
+  list: { gap: spacing.md, paddingVertical: 2 },
+  tileWrap: { width: TILE, alignItems: 'center' },
   tile: {
-    width: '100%',
-    aspectRatio: 1,
-    borderRadius: radii.md,
-    backgroundColor: '#FFF5F2',
+    width: TILE,
+    height: TILE,
+    borderRadius: radii.lg,
     alignItems: 'center',
     justifyContent: 'center',
+    overflow: 'hidden',
+    ...shadows.sm,
   },
-  tileImg: { width: '58%', height: '58%' },
+  tileImg: { width: '100%', height: '100%' },
   label: {
-    fontSize: 12,
+    marginTop: 6,
+    fontSize: 13,
     color: colors.brand.dark,
-    fontFamily: fontFamilies.bodyBold,
+    fontFamily: fontFamilies.bodyExtraBold,
+    textAlign: 'center',
+  },
+  count: {
+    fontSize: 11,
+    color: colors.brand.gray,
+    fontFamily: fontFamilies.body,
     textAlign: 'center',
   },
   pressed: { opacity: 0.75 },

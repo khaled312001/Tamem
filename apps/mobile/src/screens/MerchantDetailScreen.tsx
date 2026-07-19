@@ -2,8 +2,8 @@ import { useNavigation, useRoute, type RouteProp } from '@react-navigation/nativ
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
 import { LinearGradient } from 'expo-linear-gradient';
-import { memo, useCallback, useMemo } from 'react';
-import { Clock, MapPin, Phone, Star, Store } from 'lucide-react-native';
+import { useCallback, useMemo, useState } from 'react';
+import { Phone, Search, Store } from 'lucide-react-native';
 import {
   ActivityIndicator,
   FlatList,
@@ -12,15 +12,21 @@ import {
   Pressable,
   StyleSheet,
   Text,
+  TextInput,
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { HeartButton } from '../components/HeartButton';
-import { EmptyState, ForwardChevron, MoneyText, PrimaryButton, StatusPill } from '../components/ui';
+import { EmptyState, PrimaryButton } from '../components/ui';
 import { api } from '../lib/api';
 import { LIST_PERF } from '../lib/listPerf';
-import { formatEta } from '../lib/eta';
+import { useDebouncedValue } from '../lib/useDebouncedValue';
+import { addToCart, setItemQuantity, useCart } from '../stores/cart';
+import { CartBar } from './merchant-detail/CartBar';
+import { MenuImagesSection } from './merchant-detail/MenuImagesSection';
+import { MerchantHeaderCard } from './merchant-detail/MerchantHeaderCard';
+import { MerchantProductRow } from './merchant-detail/MerchantProductRow';
 import type { HomeStackParamList } from '../navigation/HomeStack';
 import { BackChevron } from '../theme/rtl';
 import { colors, fontFamilies, fontSizes, radii, shadows, spacing } from '../theme/tokens';
@@ -65,45 +71,15 @@ type MerchantProduct = NonNullable<MerchantDetail['products']>[number];
 /** Rows per page for the catalogue list. */
 const PRODUCTS_PAGE_SIZE = 30;
 
-/**
- * One product row. Memoised because the list can be thousands of rows long —
- * without it, any re-render of the screen re-renders every mounted row.
- */
-const ProductRow = memo(function ProductRow({
-  product,
-  onPress,
-}: {
-  product: MerchantProduct;
-  onPress: (id: string) => void;
-}) {
-  return (
-    <Pressable
-      onPress={() => onPress(product.id)}
-      style={({ pressed }) => [styles.productRow, shadows.sm, pressed && { opacity: 0.9 }]}
-    >
-      <View style={styles.productImg}>
-        {product.imageUrl ? (
-          <Image source={{ uri: product.imageUrl }} style={{ width: '100%', height: '100%' }} />
-        ) : (
-          <Store size={20} color={colors.brand.red} />
-        )}
-      </View>
-      <View style={{ flex: 1 }}>
-        <Text style={styles.productName}>{product.nameAr}</Text>
-        <MoneyText amount={Number(product.price)} tone="brand" size="sm" />
-      </View>
-      <HeartButton collection="product" id={product.id} merchantName={product.nameAr} size="sm" />
-      <ForwardChevron size={16} color={colors.text.muted} />
-    </Pressable>
-  );
-});
-
 const productKey = (p: MerchantProduct) => p.id;
 
 export function MerchantDetailScreen() {
   const route = useRoute<RouteParam>();
   const navigation = useNavigation<NavProp>();
   const { merchantId } = route.params;
+  const [productSearch, setProductSearch] = useState('');
+  const debouncedProductSearch = useDebouncedValue(productSearch, 300);
+  const cart = useCart();
 
   // Opening a product works even when the merchant is closed so the customer
   // can still browse; the add-to-cart button is what's actually disabled.
@@ -112,15 +88,6 @@ export function MerchantDetailScreen() {
     [navigation],
   );
 
-  const renderProduct = useCallback(
-    ({ item }: { item: MerchantProduct }) => <ProductRow product={item} onPress={openProduct} />,
-    [openProduct],
-  );
-
-  // `productsPageSize` caps the products embedded in the merchant payload —
-  // the catalogue itself is paged separately below. On a backend that predates
-  // this parameter the field is ignored and the full list comes back, which is
-  // exactly the old behaviour, so this is safe to ship ahead of the deploy.
   const { data, isLoading, error, refetch } = useQuery<MerchantDetail>({
     queryKey: ['merchant', merchantId],
     queryFn: () =>
@@ -146,12 +113,16 @@ export function MerchantDetailScreen() {
   const backendPaginates = data?.productsTotal !== undefined;
 
   const productsQ = useInfiniteQuery({
-    queryKey: ['merchant-products', merchantId],
+    queryKey: ['merchant-products', merchantId, debouncedProductSearch],
     enabled: backendPaginates,
     initialPageParam: 1,
     queryFn: async ({ pageParam }) => {
       const r = await api.raw.get(`/merchants/${merchantId}/products`, {
-        params: { page: pageParam, pageSize: PRODUCTS_PAGE_SIZE },
+        params: {
+          page: pageParam,
+          pageSize: PRODUCTS_PAGE_SIZE,
+          ...(debouncedProductSearch ? { q: debouncedProductSearch } : {}),
+        },
       });
       return {
         items: (r.data?.data ?? []) as MerchantProduct[],
@@ -182,6 +153,49 @@ export function MerchantDetailScreen() {
    * that same old backend is the whole catalogue anyway.
    */
   const productCount = data?.productsTotal ?? products.length;
+
+  // Derived from `data`, so these must come after the query above.
+  const isClosed = !(data?.openness?.isOpenNow ?? data?.isOpen ?? true);
+  const merchantName = data?.storeNameAr ?? '';
+
+  /** productId -> quantity, for this store only. */
+  const qtyById = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const it of cart.items) {
+      if (it.merchantId === merchantId) m.set(it.productId, it.quantity);
+    }
+    return m;
+  }, [cart.items, merchantId]);
+
+  const renderProduct = useCallback(
+    ({ item }: { item: MerchantProduct }) => (
+      <MerchantProductRow
+        product={item}
+        quantity={qtyById.get(item.id) ?? 0}
+        disabled={isClosed}
+        onPress={() => openProduct(item.id)}
+        onAdd={() =>
+          addToCart({
+            product: {
+              id: item.id,
+              nameAr: item.nameAr,
+              price: Number(item.price),
+              imageUrl: item.imageUrl ?? null,
+            },
+            merchantId,
+            merchantNameAr: merchantName,
+          })
+        }
+        onRemove={() => setItemQuantity(item.id, (qtyById.get(item.id) ?? 1) - 1, merchantId)}
+      />
+    ),
+    [openProduct, qtyById, isClosed, merchantId, merchantName],
+  );
+
+  // `productsPageSize` caps the products embedded in the merchant payload —
+  // the catalogue itself is paged separately below. On a backend that predates
+  // this parameter the field is ignored and the full list comes back, which is
+  // exactly the old behaviour, so this is safe to ship ahead of the deploy.
 
   const loadMore = useCallback(() => {
     if (productsQ.hasNextPage && !productsQ.isFetchingNextPage) void productsQ.fetchNextPage();
@@ -290,88 +304,33 @@ export function MerchantDetailScreen() {
               </SafeAreaView>
             </View>
 
-            {/* ─────── Info card ─────── */}
-            <View style={[styles.card, shadows.md]}>
-              <View style={styles.titleRow}>
-                <Text style={styles.title}>{data.storeNameAr}</Text>
-                <StatusPill
-                  label={(data.openness?.isOpenNow ?? data.isOpen) ? 'مفتوح الآن' : 'مغلق الآن'}
-                  color={
-                    (data.openness?.isOpenNow ?? data.isOpen) ? colors.success : colors.text.muted
-                  }
-                  dot
-                />
-              </View>
-              {/* Closed-state banner — surfaces "يفتح غداً 10ص" so the customer
-              doesn't bounce off without knowing when to come back. */}
-              {!(data.openness?.isOpenNow ?? data.isOpen) && (
-                <View style={styles.closedBanner}>
-                  <Clock size={14} color={colors.danger} />
-                  <Text style={styles.closedBannerText}>
-                    {data.openness?.message ?? 'هذا المتجر مغلق حالياً'}
-                  </Text>
-                </View>
-              )}
-              {data.category && <Text style={styles.subtitle}>{data.category.nameAr}</Text>}
+            <MerchantHeaderCard
+              data={{
+                storeNameAr: data.storeNameAr,
+                logoUrl: data.logoUrl,
+                addressLine: data.addressLine,
+                phone: data.phone,
+                rating: data.rating,
+                categoryName: data.category?.nameAr ?? null,
+                productCount,
+                isOpenNow: data.openness?.isOpenNow ?? data.isOpen,
+                opennessMessage: data.openness?.message,
+              }}
+              onPressMap={
+                typeof data.lat === 'number' && typeof data.lng === 'number'
+                  ? () =>
+                      void Linking.openURL(
+                        `https://www.google.com/maps/search/?api=1&query=${data.lat},${data.lng}`,
+                      )
+                  : undefined
+              }
+            />
 
-              <View style={styles.metaRow}>
-                <View style={styles.metaItem}>
-                  <Star size={14} color={colors.brand.gold} fill={colors.brand.gold} />
-                  <Text style={styles.metaText}>{Number(data.rating ?? 0).toFixed(1)}</Text>
-                </View>
-                <View style={styles.metaDivider} />
-                <View style={styles.metaItem}>
-                  <Clock size={14} color={colors.text.muted} />
-                  <Text style={styles.metaText}>
-                    {/* ETA computed from the merchant's distance if known, never
-                    the old hard-coded "20-40 دقيقة". */}
-                    {formatEta(typeof data.lat === 'number' ? 4 : null)}
-                  </Text>
-                </View>
-                <View style={styles.metaDivider} />
-                <View style={[styles.metaItem, { flex: 1 }]}>
-                  <MapPin size={14} color={colors.text.muted} />
-                  <Text style={styles.metaText} numberOfLines={1}>
-                    {data.addressLine}
-                  </Text>
-                </View>
-              </View>
+            {!!data.description && <Text style={styles.description}>{data.description}</Text>}
 
-              {/* Tap-to-call merchant — silent before. */}
-              {data.phone ? (
-                <Pressable
-                  onPress={() => void Linking.openURL(`tel:${data.phone}`)}
-                  style={({ pressed }) => [styles.phoneRow, pressed && { opacity: 0.85 }]}
-                >
-                  <View style={styles.phoneIcon}>
-                    <Phone size={14} color={colors.brand.red} />
-                  </View>
-                  <Text style={styles.phoneText}>اتصل بالمتجر</Text>
-                  <Text style={styles.phoneNumber}>{data.phone}</Text>
-                </Pressable>
-              ) : null}
-
-              {data.description && <Text style={styles.description}>{data.description}</Text>}
-            </View>
-
-            {/* ─────── Menu images (menu-image mode) ─────── */}
-            {data.menuImages && data.menuImages.length > 0 && (
+            {!!data.menuImages && data.menuImages.length > 0 && (
               <View style={styles.section}>
-                <View style={styles.productsHeaderRow}>
-                  <Text style={styles.sectionTitle}>المنيو</Text>
-                  <Text style={styles.productsCount}>{data.menuImages.length} صورة</Text>
-                </View>
-                <Text style={styles.productsHint}>
-                  اضغط "اطلب الآن" بالأسفل واكتب طلبك من المنيو — هنوصّله لك من المتجر.
-                </Text>
-                {data.menuImages.map((uri, i) => (
-                  <Image
-                    key={`${uri}-${i}`}
-                    source={{ uri }}
-                    style={styles.menuImage}
-                    resizeMode="contain"
-                  />
-                ))}
+                <MenuImagesSection images={data.menuImages} />
               </View>
             )}
 
@@ -382,40 +341,78 @@ export function MerchantDetailScreen() {
                   <Text style={styles.sectionTitle}>المنتجات المتاحة</Text>
                   <Text style={styles.productsCount}>{productCount} منتج</Text>
                 </View>
-                <Text style={styles.productsHint}>
-                  اضغط "اطلب الآن" بالأسفل، أو افتح الطلب السريع من الصفحة الرئيسية لإضافة المنتجات.
-                </Text>
+                {/* Server-side search across the WHOLE catalogue, not just the
+                    pages loaded so far — /merchants/{id}/products accepts `q`. */}
+                <View style={styles.searchBox}>
+                  <Search size={16} color={colors.text.muted} />
+                  <TextInput
+                    value={productSearch}
+                    onChangeText={setProductSearch}
+                    placeholder="ابحث داخل منتجات المتجر…"
+                    placeholderTextColor={colors.text.muted}
+                    style={styles.searchInput}
+                  />
+                </View>
               </View>
             )}
           </>
         }
       />
 
-      {/* ─────── Sticky Order CTA ─────── */}
-      <SafeAreaView edges={['bottom']} style={styles.ctaBar}>
-        <View style={styles.ctaInner}>
-          <PrimaryButton
-            label={
-              (data.openness?.isOpenNow ?? data.isOpen)
-                ? 'اطلب الآن'
-                : (data.openness?.message ?? 'المتجر مغلق حالياً')
-            }
-            disabled={!(data.openness?.isOpenNow ?? data.isOpen)}
-            onPress={() => {
-              navigation.navigate('DynamicServiceFlow', {
-                serviceKey: 'delivery-supermarket',
-                merchantId: data.id,
-              });
-            }}
-          />
-        </View>
-      </SafeAreaView>
+      {/* ─────── Sticky bottom bar ─────── */}
+      {/* Once anything is in the cart, checking out beats starting a free-text
+          order — so the cart bar replaces the CTA rather than stacking on it. */}
+      {cart.count > 0 ? (
+        <CartBar
+          count={cart.count}
+          subtotal={cart.subtotal}
+          onPress={() => navigation.navigate('Cart')}
+        />
+      ) : (
+        <SafeAreaView edges={['bottom']} style={styles.ctaBar}>
+          <View style={styles.ctaInner}>
+            <PrimaryButton
+              label={
+                (data.openness?.isOpenNow ?? data.isOpen)
+                  ? 'اطلب الآن'
+                  : (data.openness?.message ?? 'المتجر مغلق حالياً')
+              }
+              disabled={!(data.openness?.isOpenNow ?? data.isOpen)}
+              onPress={() => {
+                navigation.navigate('DynamicServiceFlow', {
+                  serviceKey: 'delivery-supermarket',
+                  merchantId: data.id,
+                });
+              }}
+            />
+          </View>
+        </SafeAreaView>
+      )}
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.surface },
+  searchBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    backgroundColor: colors.white,
+    borderRadius: radii.lg,
+    borderWidth: 1,
+    borderColor: '#EFE7E2',
+    paddingHorizontal: spacing.md,
+    paddingVertical: 10,
+    marginTop: spacing.sm,
+  },
+  searchInput: {
+    flex: 1,
+    fontSize: fontSizes.sm,
+    color: colors.text.primary,
+    textAlign: 'auto',
+    padding: 0,
+  },
   errorHeader: {
     padding: spacing.lg,
   },

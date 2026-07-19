@@ -346,6 +346,7 @@ export function HomeV2Screen() {
         <View style={styles.section}>
           <CategoriesSection
             categories={categories ?? []}
+            merchants={nearbyMerchants}
             onPressCategory={onPressCategory}
             onPressSeeAll={goNearbyMap}
           />
