@@ -135,7 +135,14 @@ export function CartCheckoutScreen() {
       const extra = getExtras(g.merchantId);
       return {
         merchantId: g.merchantId,
-        items: g.items.map((i) => ({ productId: i.productId, quantity: i.quantity })),
+        // ids only — the server looks up every name and price itself, so the
+        // size the customer sees is the size they're charged for.
+        items: g.items.map((i) => ({
+          productId: i.productId,
+          quantity: i.quantity,
+          ...(i.variantId ? { variantId: i.variantId } : {}),
+          ...(i.addons?.length ? { addonIds: i.addons.map((a) => a.id) } : {}),
+        })),
         notes: extra.notes.trim() || undefined,
         imageUrls: extra.imageUrls.length > 0 ? extra.imageUrls : undefined,
       };
@@ -202,7 +209,7 @@ export function CartCheckoutScreen() {
 
               {/* Items snapshot */}
               {group.items.map((item) => (
-                <View key={item.productId} style={[styles.lineItem, shadows.sm]}>
+                <View key={item.lineId} style={[styles.lineItem, shadows.sm]}>
                   <View style={styles.thumb}>
                     {item.imageUrl ? (
                       <Image
@@ -216,7 +223,13 @@ export function CartCheckoutScreen() {
                   <View style={{ flex: 1, gap: 2 }}>
                     <Text style={styles.itemName} numberOfLines={2}>
                       {item.nameAr}
+                      {item.variantNameAr ? ` — ${item.variantNameAr}` : ''}
                     </Text>
+                    {!!item.addons?.length && (
+                      <Text style={styles.itemExtras} numberOfLines={2}>
+                        + {item.addons.map((a) => a.nameAr).join('، ')}
+                      </Text>
+                    )}
                     <View style={styles.itemMeta}>
                       <MoneyText amount={item.price} size="sm" />
                       <Text style={styles.itemMultiplier}>× {item.quantity}</Text>
@@ -465,6 +478,14 @@ const styles = StyleSheet.create({
   },
   itemName: { fontFamily: fontFamilies.bodyBold, color: colors.ink, fontSize: fontSizes.sm },
   itemMeta: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
+  itemExtras: {
+    fontSize: 11,
+    color: colors.brand.gray,
+    fontFamily: fontFamilies.body,
+    lineHeight: 18,
+    includeFontPadding: false,
+    textAlign: 'auto',
+  },
   itemMultiplier: {
     color: colors.text.muted,
     fontFamily: fontFamilies.bodyBold,

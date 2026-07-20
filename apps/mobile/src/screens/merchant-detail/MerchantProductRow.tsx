@@ -9,11 +9,12 @@
  * the order would be rejected at checkout anyway, so refusing here with a
  * visible reason beats failing later.
  */
-import { Minus, Plus, Store } from 'lucide-react-native';
+import { ChevronLeft, Minus, Plus, Store } from 'lucide-react-native';
 import { memo } from 'react';
 import { Image, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { MoneyText } from '../../components/ui';
+import { productPrice } from '../../lib/productPrice';
 import { colors, fontFamilies, radii, shadows, spacing } from '../../theme/tokens';
 
 const ROW = 'row' as const;
@@ -23,8 +24,14 @@ export interface RowProduct {
   id: string;
   nameAr: string;
   price: number | string;
+  salePrice?: number | string | null;
+  discount?: number | string | null;
   imageUrl?: string | null;
   description?: string | null;
+  /** Has sizes or extras — quick-add can't price it, so the row opens the page. */
+  hasOptions?: boolean;
+  /** Cheapest size, when the product has sizes. */
+  fromPrice?: number | null;
 }
 
 interface Props {
@@ -45,6 +52,12 @@ function MerchantProductRowBase({
   onAdd,
   onRemove,
 }: Props) {
+  const price = productPrice(p);
+  // A sized product's base price is not payable — the cheapest size is. Show
+  // that as "من X" so the row and the product page agree.
+  const from = p.fromPrice != null ? Number(p.fromPrice) : null;
+  const showFrom = from != null && Number.isFinite(from) && from > 0;
+
   return (
     <Pressable
       onPress={onPress}
@@ -69,10 +82,26 @@ function MerchantProductRowBase({
             {p.description}
           </Text>
         )}
-        <MoneyText amount={Number(p.price)} tone="brand" size="sm" />
+        {/* Same helper the product page and home rails use, so one product
+            can never show two prices. */}
+        <View style={[styles.priceRow, { flexDirection: ROW }]}>
+          {showFrom && <Text style={styles.fromLabel}>من</Text>}
+          <MoneyText amount={showFrom ? from : price.now} tone="brand" size="sm" />
+          {!showFrom && price.was != null && (
+            <Text style={styles.wasPrice}>{Math.round(price.was).toLocaleString('ar-EG')}</Text>
+          )}
+          {!showFrom && price.off > 0 && (
+            <View style={styles.offPill}>
+              <Text style={styles.offPillText}>-{price.off}%</Text>
+            </View>
+          )}
+        </View>
       </View>
 
-      {quantity > 0 ? (
+      {/* No inline stepper for a product with options: "minus one" is
+          ambiguous once the same product sits in the cart as two different
+          sizes. Those rows always open the picker instead. */}
+      {quantity > 0 && !p.hasOptions ? (
         <View style={[styles.stepper, { flexDirection: ROW }]}>
           <Pressable onPress={onRemove} hitSlop={6} style={styles.stepBtn}>
             <Minus size={15} color={colors.brand.red} />
@@ -93,9 +122,13 @@ function MerchantProductRowBase({
             pressed && { opacity: 0.7 },
           ]}
           accessibilityRole="button"
-          accessibilityLabel={`أضف ${p.nameAr}`}
+          accessibilityLabel={p.hasOptions ? `اختر حجم ${p.nameAr}` : `أضف ${p.nameAr}`}
         >
-          <Plus size={18} color={disabled ? colors.brand.gray : colors.white} />
+          {p.hasOptions ? (
+            <ChevronLeft size={18} color={disabled ? colors.brand.gray : colors.white} />
+          ) : (
+            <Plus size={18} color={disabled ? colors.brand.gray : colors.white} />
+          )}
         </Pressable>
       )}
     </Pressable>
@@ -139,6 +172,28 @@ const styles = StyleSheet.create({
     fontFamily: fontFamilies.body,
     textAlign: 'auto',
   },
+
+  priceRow: { alignItems: 'center', gap: 6 },
+  fromLabel: {
+    fontSize: 11,
+    color: colors.brand.gray,
+    fontFamily: fontFamilies.body,
+    lineHeight: 18,
+    includeFontPadding: false,
+  },
+  wasPrice: {
+    fontSize: 11,
+    color: colors.brand.gray,
+    fontFamily: fontFamilies.body,
+    textDecorationLine: 'line-through',
+  },
+  offPill: {
+    backgroundColor: '#FDECEA',
+    borderRadius: radii.sm,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+  },
+  offPillText: { fontSize: 10, color: colors.brand.red, fontFamily: fontFamilies.bodyExtraBold },
 
   addBtn: {
     width: 36,

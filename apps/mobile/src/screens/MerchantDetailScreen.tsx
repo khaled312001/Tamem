@@ -6,10 +6,12 @@ import { useCallback, useMemo, useState } from 'react';
 import { Phone, Search, Store, X } from 'lucide-react-native';
 import {
   ActivityIndicator,
+  Alert,
   FlatList,
   Image,
   Linking,
   Pressable,
+  Share,
   StyleSheet,
   Text,
   TextInput,
@@ -21,10 +23,12 @@ import { HeartButton } from '../components/HeartButton';
 import { EmptyState, PrimaryButton } from '../components/ui';
 import { api } from '../lib/api';
 import { LIST_PERF } from '../lib/listPerf';
+import { productPrice } from '../lib/productPrice';
 import { useDebouncedValue } from '../lib/useDebouncedValue';
 import { addToCart, setItemQuantity, useCart } from '../stores/cart';
 import { CartBar } from './merchant-detail/CartBar';
 import { MenuImagesSection } from './merchant-detail/MenuImagesSection';
+import { SectionChips, type ProductSection } from './merchant-detail/SectionChips';
 import { MerchantHeaderCard } from './merchant-detail/MerchantHeaderCard';
 import { MerchantProductRow } from './merchant-detail/MerchantProductRow';
 import type { HomeStackParamList } from '../navigation/HomeStack';
@@ -49,10 +53,20 @@ interface MerchantDetail {
   /// Menu-image mode: photos of the merchant's paper menu. When present the
   /// customer views these and orders via the free-text "اطلب الآن" flow.
   menuImages?: string[] | null;
-  products?: Array<{ id: string; nameAr: string; price: number; imageUrl?: string }>;
+  products?: Array<{
+    id: string;
+    nameAr: string;
+    price: number;
+    imageUrl?: string;
+    /// True when the product has sizes or extras, i.e. quick-add can't price
+    /// it and the customer must open the detail page to choose.
+    hasOptions?: boolean;
+  }>;
   /// Total catalogue size, independent of how many rows were embedded above.
   /// Absent on backends that predate the paginated product endpoints.
   productsTotal?: number;
+  /** Admin-set preparation window; null when not configured. */
+  prepMinutes?: { min: number; max: number } | null;
   /// Server-computed openness verdict. Includes the next opening so we can
   /// render "يفتح غداً 10ص" instead of just "مغلق".
   openness?: {
@@ -78,6 +92,7 @@ export function MerchantDetailScreen() {
   const navigation = useNavigation<NavProp>();
   const { merchantId } = route.params;
   const [productSearch, setProductSearch] = useState('');
+  const [section, setSection] = useState<string | null>(null);
   const debouncedProductSearch = useDebouncedValue(productSearch, 300);
   const cart = useCart();
 
@@ -112,8 +127,19 @@ export function MerchantDetailScreen() {
   // second time.
   const backendPaginates = data?.productsTotal !== undefined;
 
+  /**
+   * Section list. Separate from the products query on purpose: it depends only
+   * on the merchant, so searching or switching sections must not refetch it.
+   */
+  const sectionsQ = useQuery<ProductSection[]>({
+    queryKey: ['merchant-sections', merchantId],
+    queryFn: () =>
+      api.raw.get(`/merchants/${merchantId}/product-sections`).then((r) => r.data.data ?? []),
+    staleTime: 5 * 60_000,
+  });
+
   const productsQ = useInfiniteQuery({
-    queryKey: ['merchant-products', merchantId, debouncedProductSearch],
+    queryKey: ['merchant-products', merchantId, debouncedProductSearch, section],
     enabled: backendPaginates,
     initialPageParam: 1,
     queryFn: async ({ pageParam }) => {
@@ -122,6 +148,7 @@ export function MerchantDetailScreen() {
           page: pageParam,
           pageSize: PRODUCTS_PAGE_SIZE,
           ...(debouncedProductSearch ? { q: debouncedProductSearch } : {}),
+          ...(section ? { section } : {}),
         },
       });
       return {
@@ -154,15 +181,70 @@ export function MerchantDetailScreen() {
    */
   const productCount = data?.productsTotal ?? products.length;
 
+  const hasCoords = typeof data?.lat === 'number' && typeof data?.lng === 'number';
+
+  /**
+   * Location: ask rather than assume.
+   *
+   * Google Maps is what most people want for directions, but the app has its
+   * own nearby map and some devices have no Maps app at all — so offer both
+   * and fall back to the in-app screen if the external link can't open.
+   */
+  const openLocation = useCallback(() => {
+    if (!data || !hasCoords) return;
+    const { lat, lng } = data;
+    Alert.alert(data.storeNameAr, 'اختر طريقة عرض الموقع', [
+      {
+        text: 'خرائط جوجل',
+        onPress: () => {
+          const url = `https://www.google.com/maps/search/?api=1&query=${lat},${lng}`;
+          void Linking.openURL(url).catch(() =>
+            navigation.navigate('NearbyMap', { search: data.storeNameAr }),
+          );
+        },
+      },
+      {
+        text: 'داخل التطبيق',
+        onPress: () => navigation.navigate('NearbyMap', { search: data.storeNameAr }),
+      },
+      { text: 'إلغاء', style: 'cancel' },
+    ]);
+  }, [data, hasCoords, navigation]);
+
+  /**
+   * Share. There is no public web page per store yet, so the message carries
+   * the store name, its address and a maps pin — everything the recipient needs
+   * without a link that would 404.
+   */
+  const shareStore = useCallback(() => {
+    if (!data) return;
+    const lines = [
+      `🏪 ${data.storeNameAr}`,
+      data.category?.nameAr ?? '',
+      data.addressLine ?? '',
+      hasCoords ? `📍 https://maps.google.com/?q=${data.lat},${data.lng}` : '',
+      '',
+      'اطلب منه على تطبيق تميم للتوصيل 🚚',
+    ].filter(Boolean);
+    void Share.share({ message: lines.join('\n') }).catch(() => undefined);
+  }, [data, hasCoords]);
+
   // Derived from `data`, so these must come after the query above.
   const isClosed = !(data?.openness?.isOpenNow ?? data?.isOpen ?? true);
   const merchantName = data?.storeNameAr ?? '';
 
-  /** productId -> quantity, for this store only. */
+  /**
+   * productId -> quantity, for this store only.
+   *
+   * Summed, not assigned: one product can now occupy several cart lines (small
+   * pizza + large pizza), and this row shows one badge for the product.
+   */
   const qtyById = useMemo(() => {
     const m = new Map<string, number>();
     for (const it of cart.items) {
-      if (it.merchantId === merchantId) m.set(it.productId, it.quantity);
+      if (it.merchantId === merchantId) {
+        m.set(it.productId, (m.get(it.productId) ?? 0) + it.quantity);
+      }
     }
     return m;
   }, [cart.items, merchantId]);
@@ -174,18 +256,28 @@ export function MerchantDetailScreen() {
         quantity={qtyById.get(item.id) ?? 0}
         disabled={isClosed}
         onPress={() => openProduct(item.id)}
-        onAdd={() =>
+        onAdd={() => {
+          // A product with sizes has no single "the" price — the size replaces
+          // the base one — so quick-add would put a price in the cart that the
+          // server won't honour. Send them to pick instead.
+          if (item.hasOptions) {
+            openProduct(item.id);
+            return;
+          }
           addToCart({
             product: {
               id: item.id,
               nameAr: item.nameAr,
-              price: Number(item.price),
+              // The discounted price, matching what the row displays and what
+              // the server will charge. Sending the raw list price here made
+              // the cart total disagree with the product page.
+              price: productPrice(item).now,
               imageUrl: item.imageUrl ?? null,
             },
             merchantId,
             merchantNameAr: merchantName,
-          })
-        }
+          });
+        }}
         onRemove={() => setItemQuantity(item.id, (qtyById.get(item.id) ?? 1) - 1, merchantId)}
       />
     ),
@@ -313,17 +405,14 @@ export function MerchantDetailScreen() {
                 rating: data.rating,
                 categoryName: data.category?.nameAr ?? null,
                 productCount,
+                prepMinutes: data.prepMinutes,
+                lat: data.lat,
+                lng: data.lng,
                 isOpenNow: data.openness?.isOpenNow ?? data.isOpen,
                 opennessMessage: data.openness?.message,
               }}
-              onPressMap={
-                typeof data.lat === 'number' && typeof data.lng === 'number'
-                  ? () =>
-                      void Linking.openURL(
-                        `https://www.google.com/maps/search/?api=1&query=${data.lat},${data.lng}`,
-                      )
-                  : undefined
-              }
+              onPressMap={hasCoords ? openLocation : undefined}
+              onPressShare={shareStore}
             />
 
             {!!data.description && <Text style={styles.description}>{data.description}</Text>}
@@ -372,6 +461,13 @@ export function MerchantDetailScreen() {
                     </Pressable>
                   )}
                 </View>
+
+                <SectionChips
+                  sections={sectionsQ.data ?? []}
+                  active={section}
+                  onChange={setSection}
+                  totalCount={productCount}
+                />
 
                 {/* Searching a 2,500-item catalogue can take a moment; without
                     this the previous results just sit there looking stale. */}

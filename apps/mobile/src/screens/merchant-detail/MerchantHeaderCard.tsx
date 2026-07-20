@@ -7,9 +7,9 @@
  * store), so rather than invent numbers the row renders only the stats that
  * exist and stays balanced whether that's two or four.
  */
-import { MapPin, Package, Phone, Star } from 'lucide-react-native';
+import { Clock, MapPin, Package, Share2, Star } from 'lucide-react-native';
 import { memo } from 'react';
-import { Image, Linking, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Image, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { colors, fontFamilies, radii, shadows, spacing } from '../../theme/tokens';
 
@@ -26,6 +26,10 @@ export interface MerchantHeaderData {
   productCount?: number;
   distanceKm?: number;
   isOpenNow: boolean;
+  /** Admin-set preparation window, null when not configured. */
+  prepMinutes?: { min: number; max: number } | null;
+  lat?: number | null;
+  lng?: number | null;
   /** Server copy, e.g. "يفتح غداً الساعة 10:00 ص". */
   opennessMessage?: string | null;
 }
@@ -33,12 +37,24 @@ export interface MerchantHeaderData {
 interface Props {
   data: MerchantHeaderData;
   onPressMap?: () => void;
+  onPressShare?: () => void;
 }
 
-function MerchantHeaderCardBase({ data: d, onPressMap }: Props) {
+function MerchantHeaderCardBase({ data: d, onPressMap, onPressShare }: Props) {
   const rating = Number(d.rating ?? 0);
 
   const stats: { key: string; Icon: typeof Star; value: string; label: string }[] = [];
+
+  if (d.prepMinutes) {
+    const { min, max } = d.prepMinutes;
+    stats.push({
+      key: 'prep',
+      Icon: Clock,
+      value: min === max ? `${min}` : `${min}-${max}`,
+      label: 'دقيقة للتجهيز',
+    });
+  }
+
   if (rating > 0) {
     stats.push({ key: 'rating', Icon: Star, value: rating.toFixed(1), label: 'التقييم' });
   }
@@ -58,9 +74,6 @@ function MerchantHeaderCardBase({ data: d, onPressMap }: Props) {
         d.distanceKm < 1 ? `${Math.round(d.distanceKm * 1000)} م` : `${d.distanceKm.toFixed(1)} كم`,
       label: 'المسافة',
     });
-  }
-  if (d.phone) {
-    stats.push({ key: 'phone', Icon: Phone, value: 'اتصل', label: 'بالمتجر' });
   }
 
   return (
@@ -101,16 +114,7 @@ function MerchantHeaderCardBase({ data: d, onPressMap }: Props) {
       {stats.length > 0 && (
         <View style={[styles.stats, { flexDirection: ROW }]}>
           {stats.map((s, i) => (
-            <Pressable
-              key={s.key}
-              disabled={s.key !== 'phone'}
-              onPress={
-                s.key === 'phone' && d.phone
-                  ? () => void Linking.openURL(`tel:${d.phone}`)
-                  : undefined
-              }
-              style={[styles.stat, i > 0 && styles.statDivider]}
-            >
+            <View key={s.key} style={[styles.stat, i > 0 && styles.statDivider]}>
               <s.Icon
                 size={18}
                 color={s.key === 'rating' ? colors.brand.gold : colors.brand.red}
@@ -122,7 +126,7 @@ function MerchantHeaderCardBase({ data: d, onPressMap }: Props) {
               <Text style={styles.statLabel} numberOfLines={1}>
                 {s.label}
               </Text>
-            </Pressable>
+            </View>
           ))}
         </View>
       )}
@@ -133,13 +137,31 @@ function MerchantHeaderCardBase({ data: d, onPressMap }: Props) {
           <Text style={styles.address} numberOfLines={2}>
             {d.addressLine}
           </Text>
+        </View>
+      )}
+
+      {(!!onPressMap || !!onPressShare) && (
+        <View style={[styles.actions, { flexDirection: ROW }]}>
           {!!onPressMap && (
             <Pressable
               onPress={onPressMap}
-              style={({ pressed }) => [styles.mapBtn, pressed && { opacity: 0.7 }]}
+              style={({ pressed }) => [styles.action, pressed && { opacity: 0.7 }]}
               accessibilityRole="button"
+              accessibilityLabel="عرض الموقع على الخريطة"
             >
-              <Text style={styles.mapBtnText}>على الخريطة</Text>
+              <MapPin size={16} color={colors.brand.red} />
+              <Text style={styles.actionText}>الموقع</Text>
+            </Pressable>
+          )}
+          {!!onPressShare && (
+            <Pressable
+              onPress={onPressShare}
+              style={({ pressed }) => [styles.action, pressed && { opacity: 0.7 }]}
+              accessibilityRole="button"
+              accessibilityLabel="مشاركة المتجر"
+            >
+              <Share2 size={16} color={colors.brand.red} />
+              <Text style={styles.actionText}>مشاركة</Text>
             </Pressable>
           )}
         </View>
@@ -247,12 +269,27 @@ const styles = StyleSheet.create({
     fontFamily: fontFamilies.body,
     textAlign: 'auto',
   },
-  mapBtn: {
-    borderWidth: 1,
-    borderColor: colors.brand.red,
-    borderRadius: radii.pill,
-    paddingHorizontal: 12,
-    paddingVertical: 6,
+  actions: {
+    marginTop: spacing.md,
+    gap: spacing.sm,
   },
-  mapBtnText: { fontSize: 12, color: colors.brand.red, fontFamily: fontFamilies.bodyExtraBold },
+  action: {
+    flex: 1,
+    flexDirection: ROW,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    borderWidth: 1,
+    borderColor: '#EFE7E2',
+    backgroundColor: '#FFF8F6',
+    borderRadius: radii.md,
+    paddingVertical: 11,
+  },
+  actionText: {
+    fontSize: 13,
+    color: colors.brand.red,
+    fontFamily: fontFamilies.bodyExtraBold,
+    lineHeight: 20,
+    includeFontPadding: false,
+  },
 });

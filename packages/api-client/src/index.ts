@@ -555,6 +555,46 @@ export class TamemClient {
   async adminCreateMerchant(data: unknown): Promise<unknown> {
     return this.request({ method: 'POST', url: '/admin/merchants', data });
   }
+  /**
+   * Preparation window shown on the store page. Lives behind its own route
+   * because it is not a MerchantProfile column yet; see prepTimes() in api.php.
+   * Passing both values as null clears it.
+   */
+  async adminSetMerchantPrepTime(
+    id: string,
+    data: { min: number | null; max: number | null },
+  ): Promise<unknown> {
+    return this.request({ method: 'PUT', url: `/admin/merchants/${id}/prep-time`, data });
+  }
+  /**
+   * In-store sections for a merchant (Product.categoryName + counts). Public
+   * route — it's the same list the mobile store page filters by.
+   */
+  async getMerchantProductSections(merchantId: string): Promise<unknown[]> {
+    return this.request({ method: 'GET', url: `/merchants/${merchantId}/product-sections` });
+  }
+  // ===== Product sizes + merchant add-ons =====
+  // Both writers replace the whole list; see the api.php routes for why.
+  async adminGetMerchantAddons(merchantId: string): Promise<unknown[]> {
+    return this.request({ method: 'GET', url: `/admin/merchants/${merchantId}/addons` });
+  }
+  async adminSaveMerchantAddons(merchantId: string, addons: unknown[]): Promise<unknown> {
+    return this.request({
+      method: 'PUT',
+      url: `/admin/merchants/${merchantId}/addons`,
+      data: { addons },
+    });
+  }
+  async adminGetProductOptions(productId: string): Promise<unknown> {
+    return this.request({ method: 'GET', url: `/admin/products/${productId}/options` });
+  }
+  async adminSaveProductOptions(
+    productId: string,
+    data: { variants?: unknown[]; linkedAddonIds?: string[] },
+  ): Promise<unknown> {
+    return this.request({ method: 'PUT', url: `/admin/products/${productId}/options`, data });
+  }
+
   async adminUpdateMerchant(id: string, data: unknown): Promise<unknown> {
     return this.request({ method: 'PATCH', url: `/admin/merchants/${id}`, data });
   }

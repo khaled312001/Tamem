@@ -1315,17 +1315,62 @@ function orderDetailBlocks(array $o): array {
     }
     if ($items === '') {
         try {
-            $st = db()->prepare('SELECT quantity, productNameSnapshot, unitPriceSnapshot FROM `OrderItem` WHERE orderId = ? ORDER BY id');
+            // Grouped by store. The dispatcher reads this to know WHERE to buy
+            // the items, and a cart order can span several merchants — a flat
+            // list of product names left them guessing.
+            $st = db()->prepare(
+                'SELECT oi.quantity, oi.productNameSnapshot, oi.unitPriceSnapshot,'
+                . ' oi.variantNameSnapshot, oi.addonsSnapshot,'
+                . ' oi.merchantId, mp.storeNameAr'
+                . ' FROM `OrderItem` oi'
+                . ' LEFT JOIN `MerchantProfile` mp ON mp.id = oi.merchantId'
+                . ' WHERE oi.orderId = ? ORDER BY oi.merchantId, oi.id'
+            );
             $st->execute([$o['id']]);
-            $lines = [];
+
+            $groups = [];
             foreach ($st->fetchAll() as $it) {
+                $key = (string) ($it['merchantId'] ?? '');
+                $groups[$key]['name'] = trim((string) ($it['storeNameAr'] ?? ''));
                 $pl = waMoney($it['unitPriceSnapshot']);
-                $lines[] = '• ' . (int) $it['quantity'] . '× ' . trim((string) $it['productNameSnapshot']) . ($pl ? " ({$pl})" : '');
+                // Size inline with the name, extras on a sub-line — the
+                // dispatcher has to buy exactly this, so it can't be implied.
+                $nm = trim((string) $it['productNameSnapshot']);
+                if (!empty($it['variantNameSnapshot'])) $nm .= ' — ' . $it['variantNameSnapshot'];
+                $line = '• ' . (int) $it['quantity'] . '× ' . $nm . ($pl ? " ({$pl})" : '');
+
+                $ex = json_decode((string) ($it['addonsSnapshot'] ?? ''), true);
+                if (is_array($ex) && $ex) {
+                    $names = array_map(fn($a) => (string) ($a['nameAr'] ?? ''), $ex);
+                    $line .= "\n     + " . implode('، ', array_filter($names));
+                }
+                $groups[$key]['lines'][] = $line;
             }
-            $items = implode("\n", $lines);
+
+            $blocks = [];
+            foreach ($groups as $g) {
+                // Label the store only when the message would otherwise be
+                // ambiguous — repeating one shop name above a single list adds
+                // noise without adding information.
+                $head = ($g['name'] !== '' && count($groups) > 1) ? '🏪 ' . $g['name'] . "\n" : '';
+                $blocks[] = $head . implode("\n", $g['lines']);
+            }
+            $items = implode("\n\n", $blocks);
         } catch (Throwable $e) { $items = ''; }
     }
     $b['items'] = $items;
+
+    // Store the order belongs to, for the {{merchantName}} template variable.
+    // Empty for free-text orders that aren't tied to a merchant — the templates
+    // drop empty lines, so nothing renders in that case.
+    $b['merchantName'] = '';
+    if (!empty($o['merchantId'])) {
+        try {
+            $ms = db()->prepare('SELECT storeNameAr FROM `MerchantProfile` WHERE id = ? LIMIT 1');
+            $ms->execute([$o['merchantId']]);
+            $b['merchantName'] = trim((string) ($ms->fetchColumn() ?: ''));
+        } catch (Throwable $e) { /* leave blank */ }
+    }
 
     // Locations — attach a Google-Maps pin from lat/lng where we have one.
     $pin = static fn ($lat, $lng) => ($lat !== null && $lng !== null && $lat !== '' && $lng !== '')
@@ -1613,6 +1658,7 @@ function notifDefaultCatalog(): array {
         . "👤 العميل: {{customerName}}\n"
         . "📞 الهاتف: {{customerPhone}}\n"
         . "🛵 السائق: {{driverName}}\n"
+        . "🏪 المتجر: {{merchantName}}\n"
         . "🛒 المطلوب: {{items}}\n"
         . "{{locations}}\n"
         . "💳 الدفع: {{payment}}\n"
@@ -1630,7 +1676,7 @@ function notifDefaultCatalog(): array {
         $ev('ORDER_ACCEPTED', 'CUSTOMER', 'العميل', "تميم للتوصيل ✅\nتم قبول طلبك وجارٍ تجهيزه:\n\n{{summary}}"),
         // ═══ DRIVER_ASSIGNED ═══
         $ev('DRIVER_ASSIGNED', 'CUSTOMER', 'العميل', "تميم للتوصيل 🚚\nالكابتن *{{driverName}}* في الطريق لطلبك — للتواصل: {{driverPhone}}\n\n{{summary}}"),
-        $ev('DRIVER_ASSIGNED', 'DRIVER', 'السائق', "🚚 *طلب جديد مُسند إليك* #{{orderNumber}}\nالخدمة: {{serviceName}}\n👤 العميل: {{customerName}}\n📞 الهاتف: {{customerPhone}}\n🛒 المطلوب: {{items}}\n{{locations}}\n💰 التحصيل: {{collect}}"),
+        $ev('DRIVER_ASSIGNED', 'DRIVER', 'السائق', "🚚 *طلب جديد مُسند إليك* #{{orderNumber}}\nالخدمة: {{serviceName}}\n👤 العميل: {{customerName}}\n📞 الهاتف: {{customerPhone}}\n🏪 المتجر: {{merchantName}}\n🛒 المطلوب: {{items}}\n{{locations}}\n💰 التحصيل: {{collect}}"),
         $ev('DRIVER_ASSIGNED', 'SUPERVISOR', 'المشرف', $oversight('🚚 تعيين سائق لطلب')),
         $ev('DRIVER_ASSIGNED', 'GROUP', 'جروب الإدارة', $oversight('🚚 تعيين سائق لطلب')),
         // ═══ PICKED_UP ═══
@@ -2122,7 +2168,7 @@ if ($method === 'GET' && $path === '/admin/home-config') {
     $row = $rows[0] ?? null;
     // Prisma stores longtext JSON columns as raw strings — decode them
     // before sending so `.join()` / `.length` / `.map()` work client-side.
-    $jsonFields = ['heroGradient', 'visibleServiceKeys', 'featuredMerchantIds', 'featuredOfferIds'];
+    $jsonFields = ['heroGradient', 'visibleServiceKeys', 'featuredMerchantIds', 'featuredOfferIds', 'featuredProductIds'];
     if ($row) {
         foreach ($jsonFields as $f) {
             if (isset($row[$f]) && is_string($row[$f]) && $row[$f] !== '') {
@@ -2452,7 +2498,11 @@ if ($method === 'GET' && $path === '/admin/orders/stats') {
 if ($method === 'GET' && $path === '/admin/orders') {
     authUser();
     $page = max(1, (int)($_GET['page'] ?? 1)); $size = min(100, max(1, (int)($_GET['pageSize'] ?? 20))); $off = ($page - 1) * $size;
-    $where = '1=1'; $args = [];
+    // Children of a multi-merchant cart are nested under their parent below,
+    // never listed on their own — otherwise one purchase reads as N orders.
+    // `includeSubOrders=1` opts out for anything that genuinely needs them flat.
+    $where = empty($_GET['includeSubOrders']) ? 'o.parentOrderId IS NULL' : '1=1';
+    $args = [];
     $status = (string)($_GET['status'] ?? '');
     if ($status !== '' && $status !== 'all') {
         // The status tabs send a CSV set (e.g. "DRIVER_ASSIGNED,PICKED_UP,IN_ROUTE").
@@ -2490,6 +2540,73 @@ if ($method === 'GET' && $path === '/admin/orders') {
     $st = db()->prepare("SELECT " . ORDER_LIST_COLS . " " . ORDER_JOIN . " WHERE $where ORDER BY $sortCol $sortDir LIMIT $size OFFSET $off");
     $st->execute($args);
     $rows = array_map('orderNest', $st->fetchAll());
+
+    /*
+     * Attach each parent's per-merchant sub-orders.
+     *
+     * A two-merchant cart creates a parent plus one child per store. The list
+     * used to return all three as separate top-level rows, so one purchase
+     * looked like three orders. The children are now excluded from the top
+     * level (see the WHERE clause) and nested here instead — which is what the
+     * dashboard's expand chevron already expected to find.
+     *
+     * One extra query for the whole page, not one per row.
+     */
+    $parentIds = array_values(array_filter(array_map(fn($r) => $r['id'] ?? null, $rows)));
+    if ($parentIds) {
+        $in = implode(',', array_fill(0, count($parentIds), '?'));
+        $ss = db()->prepare(
+            'SELECT o.id, o.orderNumber, o.status, o.parentOrderId, o.merchantSubtotal,'
+            . ' o.quotedPrice, o.finalPrice, o.merchantId, mp.storeNameAr,'
+            . ' d.name AS driverName'
+            . ' FROM `Order` o'
+            . ' LEFT JOIN `MerchantProfile` mp ON mp.id = o.merchantId'
+            . ' LEFT JOIN `User` d ON d.id = o.assignedDriverId'
+            . " WHERE o.parentOrderId IN ($in) ORDER BY o.createdAt ASC"
+        );
+        $ss->execute($parentIds);
+        $subsByParent = [];
+        foreach ($ss->fetchAll() as $sub) {
+            $subsByParent[$sub['parentOrderId']][] = [
+                'id' => $sub['id'],
+                'orderNumber' => $sub['orderNumber'],
+                'status' => $sub['status'],
+                'merchantSubtotal' => $sub['merchantSubtotal'] !== null ? (float) $sub['merchantSubtotal'] : null,
+                'quotedPrice' => $sub['quotedPrice'] !== null ? (float) $sub['quotedPrice'] : null,
+                'finalPrice' => $sub['finalPrice'] !== null ? (float) $sub['finalPrice'] : null,
+                'merchant' => $sub['merchantId'] ? ['id' => $sub['merchantId'], 'storeNameAr' => $sub['storeNameAr']] : null,
+                'assignedDriver' => $sub['driverName'] ? ['name' => $sub['driverName']] : null,
+                'items' => [],
+            ];
+        }
+
+        // Item lines for every sub-order on this page, in one go.
+        if ($subsByParent) {
+            $subIds = [];
+            foreach ($subsByParent as $list) foreach ($list as $sub) $subIds[] = $sub['id'];
+            $iin = implode(',', array_fill(0, count($subIds), '?'));
+            $is = db()->prepare("SELECT orderId, productNameSnapshot, quantity, variantNameSnapshot FROM `OrderItem` WHERE orderId IN ($iin) ORDER BY id");
+            $is->execute($subIds);
+            $itemsByOrder = [];
+            foreach ($is->fetchAll() as $it) {
+                $itemsByOrder[$it['orderId']][] = [
+                    'productNameSnapshot' => $it['productNameSnapshot'],
+                    'quantity' => (int) $it['quantity'],
+                ];
+            }
+            foreach ($subsByParent as &$list) {
+                foreach ($list as &$sub) $sub['items'] = $itemsByOrder[$sub['id']] ?? [];
+            }
+            unset($list, $sub);
+        }
+
+        foreach ($rows as &$r) {
+            $subs = $subsByParent[$r['id']] ?? [];
+            $r['subOrders'] = $subs;
+            $r['_count'] = ['subOrders' => count($subs)];
+        }
+        unset($r);
+    }
     http_response_code(200);
     echo json_encode(['data' => $rows, 'meta' => ['pagination' => ['page' => $page, 'pageSize' => $size, 'total' => $total, 'totalPages' => (int) ceil($total / max(1, $size))]]], JSON_UNESCAPED_UNICODE);
     exit;
@@ -2500,8 +2617,86 @@ if ($method === 'GET' && preg_match('#^/admin/orders/([^/]+)$#', $path, $m)) {
     $r = $st->fetch();
     if (!$r) jsonErr('الطلب غير موجود', 404, 'NOT_FOUND');
     $o = orderNest($r);
+    /*
+     * Items, including those on child orders — same reason as the customer
+     * route: a multi-merchant cart writes its OrderItems onto the per-merchant
+     * CHILD orders, so reading `orderId = parent` returns nothing. The admin
+     * opened a "سلة من 2 متاجر" order and saw neither the products nor the
+     * stores.
+     *
+     * Each line carries its own merchant so ItemsByMerchantCard can group them.
+     */
     $o['items'] = [];
-    try { $it = db()->prepare('SELECT * FROM `OrderItem` WHERE orderId = ?'); $it->execute([$m[1]]); $o['items'] = array_map('jsonizeRow', $it->fetchAll()); } catch (Throwable $e) {}
+    try {
+        $it = db()->prepare(
+            'SELECT oi.*, mp.storeNameAr AS merchantNameAr'
+            . ' FROM `OrderItem` oi'
+            . ' LEFT JOIN `MerchantProfile` mp ON mp.id = oi.merchantId'
+            . ' WHERE oi.orderId = ?'
+            . ' OR oi.orderId IN (SELECT id FROM `Order` WHERE parentOrderId = ?)'
+            . ' ORDER BY oi.merchantId, oi.id'
+        );
+        $it->execute([$m[1], $m[1]]);
+        $o['items'] = array_map(function ($row) {
+            $row = jsonizeRow($row);
+            $row['merchant'] = $row['merchantNameAr'] !== null
+                ? ['id' => $row['merchantId'], 'storeNameAr' => $row['merchantNameAr']]
+                : null;
+            unset($row['merchantNameAr']);
+            return $row;
+        }, $it->fetchAll());
+    } catch (Throwable $e) { /* leave empty */ }
+
+    // Per-merchant child orders, for the multi-merchant banner and the
+    // per-store subtotal breakdown.
+    $o['subOrders'] = [];
+    try {
+        $so = db()->prepare(
+            'SELECT o.id, o.orderNumber, o.status, o.merchantSubtotal, o.quotedPrice,'
+            . ' o.finalPrice, o.paymentStatus, o.merchantId, mp.storeNameAr, mp.logoUrl,'
+            . ' d.name AS driverName, d.phone AS driverPhone'
+            . ' FROM `Order` o'
+            . ' LEFT JOIN `MerchantProfile` mp ON mp.id = o.merchantId'
+            . ' LEFT JOIN `User` d ON d.id = o.assignedDriverId'
+            . ' WHERE o.parentOrderId = ? ORDER BY o.createdAt ASC'
+        );
+        $so->execute([$m[1]]);
+        $subRows = $so->fetchAll();
+
+        // Item lines per sub-order, in ONE query. The dashboard renders
+        // `sub.items.map(...)` unconditionally, so this key must always exist —
+        // omitting it crashes the whole order page, not just that section.
+        $itemsBySub = [];
+        if ($subRows) {
+            $sids = array_column($subRows, 'id');
+            $iin = implode(',', array_fill(0, count($sids), '?'));
+            $iq = db()->prepare("SELECT orderId, productNameSnapshot, quantity, variantNameSnapshot FROM `OrderItem` WHERE orderId IN ($iin) ORDER BY id");
+            $iq->execute($sids);
+            foreach ($iq->fetchAll() as $it) {
+                $itemsBySub[$it['orderId']][] = [
+                    'productNameSnapshot' => $it['productNameSnapshot'],
+                    'quantity' => (int) $it['quantity'],
+                ];
+            }
+        }
+
+        $o['subOrders'] = array_map(fn($s) => [
+            'id' => $s['id'],
+            'orderNumber' => $s['orderNumber'],
+            'status' => $s['status'],
+            'merchantSubtotal' => $s['merchantSubtotal'] !== null ? (float) $s['merchantSubtotal'] : null,
+            'quotedPrice' => $s['quotedPrice'] !== null ? (float) $s['quotedPrice'] : null,
+            'finalPrice' => $s['finalPrice'] !== null ? (float) $s['finalPrice'] : null,
+            'paymentStatus' => $s['paymentStatus'],
+            'assignedDriver' => $s['driverName']
+                ? ['name' => $s['driverName'], 'phone' => $s['driverPhone']]
+                : null,
+            'items' => $itemsBySub[$s['id']] ?? [],
+            'merchant' => $s['merchantId']
+                ? ['id' => $s['merchantId'], 'storeNameAr' => $s['storeNameAr'], 'logoUrl' => $s['logoUrl']]
+                : null,
+        ], $subRows);
+    } catch (Throwable $e) { /* leave empty */ }
     $o['statusHistory'] = [];
     try { $sh = db()->prepare('SELECT * FROM `OrderStatusHistory` WHERE orderId = ? ORDER BY createdAt ASC'); $sh->execute([$m[1]]); $o['statusHistory'] = array_map('jsonizeRow', $sh->fetchAll()); } catch (Throwable $e) {}
     jsonOk($o);
@@ -4308,6 +4503,162 @@ if ($method === 'DELETE' && preg_match('#^/admin/offers/([^/]+)$#', $path, $m)) 
     jsonOk(['deleted' => true]);
 }
 
+// PUT /admin/merchants/{id}/prep-time — set or clear a store's prep window.
+if ($method === 'PUT' && preg_match('#^/admin/merchants/([^/]+)/prep-time$#', $path, $m)) {
+    $u = authUser();
+    if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
+    $id = $m[1];
+    $b = readJsonBody();
+
+    $min = isset($b['min']) && $b['min'] !== '' && $b['min'] !== null ? (int) $b['min'] : null;
+    $max = isset($b['max']) && $b['max'] !== '' && $b['max'] !== null ? (int) $b['max'] : null;
+
+    if ($min !== null || $max !== null) {
+        // Tolerate a single value or a reversed pair rather than rejecting —
+        // an admin typing "30" means "about 30 minutes".
+        if ($min === null) $min = $max;
+        if ($max === null) $max = $min;
+        if ($min > $max) [$min, $max] = [$max, $min];
+        $min = max(0, min(600, $min));
+        $max = max(0, min(600, $max));
+    }
+
+    db()->prepare('UPDATE `MerchantProfile` SET prepMinutesMin = ?, prepMinutesMax = ? WHERE id = ?')
+        ->execute([$min, $max, $id]);
+
+    jsonOk(['merchantId' => $id, 'prepMinutes' => $min === null ? null : ['min' => $min, 'max' => $max]]);
+}
+
+// ── Product sizes + merchant add-ons (admin) ───────────────────────────────
+//
+// Both writers REPLACE the whole list rather than exposing per-row CRUD: the
+// admin edits these as a list in one form, so a single atomic save matches what
+// they actually do and removes the need to track per-row create/update/delete.
+
+// GET /admin/merchants/{id}/addons — the merchant's reusable extras.
+if ($method === 'GET' && preg_match('#^/admin/merchants/([^/]+)/addons$#', $path, $m)) {
+    authUser();
+    $st = db()->prepare('SELECT id, nameAr, price, sortOrder, isActive FROM `MerchantAddon` WHERE merchantId = ? ORDER BY sortOrder ASC, nameAr ASC');
+    $st->execute([$m[1]]);
+    jsonOk(array_map(fn($r) => [
+        'id' => $r['id'], 'nameAr' => $r['nameAr'], 'price' => (float) $r['price'],
+        'sortOrder' => (int) $r['sortOrder'], 'isActive' => (bool) (int) $r['isActive'],
+    ], $st->fetchAll()));
+}
+
+// PUT /admin/merchants/{id}/addons — replace the list.
+if ($method === 'PUT' && preg_match('#^/admin/merchants/([^/]+)/addons$#', $path, $m)) {
+    $u = authUser();
+    if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
+    $merchantId = $m[1];
+    $rows = (array) (readJsonBody()['addons'] ?? []);
+
+    /*
+     * Rows that still carry an id are UPDATED, not recreated.
+     *
+     * ProductAddonLink points at these ids, and ON DELETE CASCADE would take
+     * the links with them — so a delete-then-insert would silently unlink an
+     * add-on from every product the moment the admin edited its price.
+     */
+    $keep = [];
+    $pos = 0;
+    foreach ($rows as $r) {
+        $name = trim((string) ($r['nameAr'] ?? ''));
+        if ($name === '') continue;
+        $price = round((float) ($r['price'] ?? 0), 2);
+        $active = array_key_exists('isActive', $r) ? (!empty($r['isActive']) ? 1 : 0) : 1;
+        $id = trim((string) ($r['id'] ?? ''));
+
+        if ($id !== '') {
+            db()->prepare('UPDATE `MerchantAddon` SET nameAr = ?, price = ?, sortOrder = ?, isActive = ? WHERE id = ? AND merchantId = ?')
+                ->execute([$name, $price, $pos, $active, $id, $merchantId]);
+        } else {
+            $id = newId();
+            db()->prepare('INSERT INTO `MerchantAddon` (id, merchantId, nameAr, price, sortOrder, isActive, createdAt) VALUES (?,?,?,?,?,?,NOW(3))')
+                ->execute([$id, $merchantId, $name, $price, $pos, $active]);
+        }
+        $keep[] = $id;
+        $pos++;
+    }
+
+    // Anything the admin removed from the form.
+    if ($keep) {
+        $in = implode(',', array_fill(0, count($keep), '?'));
+        db()->prepare("DELETE FROM `MerchantAddon` WHERE merchantId = ? AND id NOT IN ($in)")
+            ->execute(array_merge([$merchantId], $keep));
+    } else {
+        db()->prepare('DELETE FROM `MerchantAddon` WHERE merchantId = ?')->execute([$merchantId]);
+    }
+    jsonOk(['saved' => count($keep)]);
+}
+
+// GET /admin/products/{id}/options — sizes + which of the merchant's add-ons
+// are linked, alongside the full list so the form can show unchecked ones.
+if ($method === 'GET' && preg_match('#^/admin/products/([^/]+)/options$#', $path, $m)) {
+    authUser();
+    $pid = $m[1];
+    $ps = db()->prepare('SELECT merchantId FROM `Product` WHERE id = ? LIMIT 1');
+    $ps->execute([$pid]);
+    $merchantId = (string) ($ps->fetchColumn() ?: '');
+
+    $v = db()->prepare('SELECT id, nameAr, price, sortOrder, isActive FROM `ProductVariant` WHERE productId = ? ORDER BY sortOrder ASC');
+    $v->execute([$pid]);
+
+    $all = db()->prepare('SELECT id, nameAr, price FROM `MerchantAddon` WHERE merchantId = ? AND isActive = 1 ORDER BY sortOrder ASC');
+    $all->execute([$merchantId]);
+
+    $lk = db()->prepare('SELECT addonId FROM `ProductAddonLink` WHERE productId = ?');
+    $lk->execute([$pid]);
+
+    jsonOk([
+        'merchantId' => $merchantId,
+        'variants' => array_map(fn($r) => [
+            'id' => $r['id'], 'nameAr' => $r['nameAr'], 'price' => (float) $r['price'],
+            'isActive' => (bool) (int) $r['isActive'],
+        ], $v->fetchAll()),
+        'merchantAddons' => array_map(fn($r) => [
+            'id' => $r['id'], 'nameAr' => $r['nameAr'], 'price' => (float) $r['price'],
+        ], $all->fetchAll()),
+        'linkedAddonIds' => array_column($lk->fetchAll(), 'addonId'),
+    ]);
+}
+
+// PUT /admin/products/{id}/options — replace sizes and add-on links.
+if ($method === 'PUT' && preg_match('#^/admin/products/([^/]+)/options$#', $path, $m)) {
+    $u = authUser();
+    if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
+    $pid = $m[1];
+    $b = readJsonBody();
+
+    if (array_key_exists('variants', $b)) {
+        // Safe to delete-and-reinsert: nothing references a variant by id.
+        // Past orders keep a NAME snapshot, not a foreign key.
+        db()->prepare('DELETE FROM `ProductVariant` WHERE productId = ?')->execute([$pid]);
+        $pos = 0;
+        foreach ((array) $b['variants'] as $r) {
+            $name = trim((string) ($r['nameAr'] ?? ''));
+            if ($name === '') continue;
+            db()->prepare('INSERT INTO `ProductVariant` (id, productId, nameAr, price, sortOrder, isActive, createdAt) VALUES (?,?,?,?,?,?,NOW(3))')
+                ->execute([newId(), $pid, $name, round((float) ($r['price'] ?? 0), 2), $pos,
+                    array_key_exists('isActive', $r) ? (!empty($r['isActive']) ? 1 : 0) : 1]);
+            $pos++;
+        }
+    }
+
+    if (array_key_exists('linkedAddonIds', $b)) {
+        db()->prepare('DELETE FROM `ProductAddonLink` WHERE productId = ?')->execute([$pid]);
+        foreach (array_unique((array) $b['linkedAddonIds']) as $aid) {
+            $aid = trim((string) $aid);
+            if ($aid === '') continue;
+            // INSERT IGNORE: the pair is the primary key, so a duplicate in the
+            // payload must not fail the whole save.
+            db()->prepare('INSERT IGNORE INTO `ProductAddonLink` (productId, addonId) VALUES (?,?)')
+                ->execute([$pid, $aid]);
+        }
+    }
+    jsonOk(['ok' => true]);
+}
+
 // POST /admin/supervisors — insert into Supervisor.
 if ($method === 'POST' && $path === '/admin/supervisors') {
     $u = authUser();
@@ -4385,15 +4736,6 @@ if ($method === 'PATCH' && $path === '/admin/home-config') {
     $jsonFields = ['heroGradient', 'visibleServiceKeys', 'featuredMerchantIds', 'featuredOfferIds'];
     $boolFields = ['showPromoBanner', 'showTrustStrip'];
 
-    // Stored in `Setting` — see the note on the GET route above.
-    if (array_key_exists('featuredProductIds', $b)) {
-        $ids = is_array($b['featuredProductIds']) ? array_values(array_filter(
-            array_map(fn($v) => is_string($v) ? trim($v) : '', $b['featuredProductIds']),
-            fn($v) => $v !== ''
-        )) : [];
-        notifWriteSetting('home_featured_product_ids', $ids, $u['sub'] ?? null);
-    }
-
     $sets = [];
     $args = [];
     foreach ($stringFields as $f) if (array_key_exists($f, $b)) { $sets[] = "`$f` = ?"; $args[] = $b[$f]; }
@@ -4442,12 +4784,20 @@ if ($method === 'POST' && $path === '/admin/merchants') {
     $b = readJsonBody();
     $ownerName = trim((string)($b['ownerName'] ?? $b['name'] ?? ''));
     $phone = trim((string)($b['phone'] ?? ''));
+    // Password is optional: honoured when supplied (older clients still send
+    // one), otherwise auto-generated. The merchant signs in via OTP /
+    // reset-password, so making an admin invent a secret — and then relay it —
+    // adds a step and a thing to leak without adding security. Same rule the
+    // driver route already uses.
     $pass = (string)($b['password'] ?? '');
+    if ($pass !== '' && strlen($pass) < 6) jsonErr('كلمة المرور قصيرة (6 أحرف على الأقل)', 422, 'WEAK_PASSWORD');
+    if ($pass === '') $pass = bin2hex(random_bytes(9));
+
     $storeNameAr = trim((string)($b['storeNameAr'] ?? ''));
     $storeName = trim((string)($b['storeName'] ?? '')) ?: $storeNameAr;
     $categoryId = trim((string)($b['categoryId'] ?? ''));
-    if ($ownerName === '' || $phone === '' || strlen($pass) < 6 || $storeNameAr === '' || $categoryId === '') {
-        jsonErr('بيانات ناقصة: اسم المالك، الهاتف، كلمة المرور، اسم المتجر، والتصنيف مطلوبين', 422, 'MISSING');
+    if ($ownerName === '' || $phone === '' || $storeNameAr === '' || $categoryId === '') {
+        jsonErr('بيانات ناقصة: اسم المالك، الهاتف، اسم المتجر، والتصنيف مطلوبين', 422, 'MISSING');
     }
     $clean = preg_replace('/[\s\-()]/', '', $phone);
     if (preg_match('/^(?:\+?20|0)?(1[0125]\d{8})$/', $clean, $mm)) $phone = '+20' . $mm[1];
@@ -5157,7 +5507,7 @@ function merchantOpenness(array $m, array $hours): array {
 // the admin list already uses (see the /admin/merchants SELECT), but filters to
 // what a customer can actually see — the admin count deliberately includes
 // hidden and unavailable rows.
-const MERCHANT_SEL = 'm.id, m.storeName, m.storeNameAr, m.phone, m.description, m.logoUrl, m.coverUrl, m.menuImages, m.addressLine, m.lat, m.lng, m.governorate, m.city, m.rating, m.isOpen, m.manualStatus, m.timezone, m.categoryId, m.createdAt, (SELECT COUNT(*) FROM `Product` p WHERE p.merchantId = m.id AND p.isAvailable = 1 AND p.isHidden = 0) AS product_count, c.name AS c_name, c.nameAr AS c_nameAr, c.iconUrl AS c_iconUrl';
+const MERCHANT_SEL = 'm.id, m.storeName, m.storeNameAr, m.phone, m.description, m.logoUrl, m.coverUrl, m.menuImages, m.addressLine, m.lat, m.lng, m.governorate, m.city, m.rating, m.isOpen, m.manualStatus, m.timezone, m.categoryId, m.createdAt, m.prepMinutesMin, m.prepMinutesMax, (SELECT COUNT(*) FROM `Product` p WHERE p.merchantId = m.id AND p.isAvailable = 1 AND p.isHidden = 0) AS product_count, c.name AS c_name, c.nameAr AS c_nameAr, c.iconUrl AS c_iconUrl';
 function hoursFor(array $ids): array {
     if (!$ids) return [];
     $in = implode(',', array_fill(0, count($ids), '?'));
@@ -5167,6 +5517,37 @@ function hoursFor(array $ids): array {
     foreach ($st->fetchAll() as $h) { $out[$h['merchantId']][] = boolCast($h, ['isClosed']); }
     return $out;
 }
+/**
+ * What a product actually costs, server-side. THIS is the number charged — the
+ * client's price is never trusted.
+ *
+ * Product carries two independent discount knobs and an admin may use either:
+ *   salePrice — an absolute replacement price
+ *   discount  — a percentage off the list price
+ *
+ * This used to read salePrice only, with a comment reasoning that the app
+ * derived its badge from (price - salePrice) so honouring `discount` would
+ * undercharge. That stopped being true once the app started rendering the
+ * percentage too: the customer saw the discounted price and was billed the
+ * full one. Mirrors apps/mobile/src/lib/productPrice.ts exactly — if one
+ * changes, change both.
+ */
+function effectiveUnitPrice(array $p): float {
+    $list = (float) ($p['price'] ?? 0);
+    if ($list <= 0) return 0.0;
+
+    // salePrice wins when both are set: an explicit number the admin typed
+    // beats a percentage rule.
+    $sale = $p['salePrice'] !== null ? (float) $p['salePrice'] : null;
+    if ($sale !== null && $sale > 0 && $sale < $list) return round($sale, 2);
+
+    $pct = $p['discount'] !== null ? (float) $p['discount'] : 0.0;
+    // Clamped like the client: a bad row must never produce a negative price.
+    if ($pct > 0) return round($list * (1 - min(90.0, $pct) / 100), 2);
+
+    return round($list, 2);
+}
+
 /** A store counts as "new" for this many days after it is created. */
 const NEW_MERCHANT_DAYS = 30;
 
@@ -5190,6 +5571,15 @@ function merchantShape(array $r, array $hours): array {
         unset($m['product_count']);
     }
 
+    // Preparation time — null when the admin hasn't set one, so the client can
+    // hide the stat rather than invent a number.
+    $pmin = $r['prepMinutesMin'] ?? null;
+    $pmax = $r['prepMinutesMax'] ?? null;
+    $m['prepMinutes'] = ($pmin !== null || $pmax !== null)
+        ? ['min' => (int) ($pmin ?? $pmax), 'max' => (int) ($pmax ?? $pmin)]
+        : null;
+    unset($m['prepMinutesMin'], $m['prepMinutesMax']);
+
     // "New store" is decided server-side so the rule lives in one place rather
     // than being re-derived from createdAt by every client.
     if (!empty($r['createdAt'])) {
@@ -5202,6 +5592,45 @@ function merchantShape(array $r, array $hours): array {
 function productShape(array $p): array {
     $p = jsonizeRow($p);
     return boolCast($p, ['isAvailable', 'isHidden']);
+}
+
+/**
+ * Ids of this merchant's products that have a size or an extra.
+ *
+ * The store page's quick "+" adds a product straight to the cart at its base
+ * price. For a product with sizes that's wrong — the size price REPLACES the
+ * base one — so the app has to send those customers to the detail page to
+ * choose instead. This tells it which ones without a per-row subquery on a
+ * catalogue that can run to ~2,900 products: two set queries per request,
+ * regardless of page size.
+ *
+ * Returns productId => ['minPrice' => float|null]. minPrice is the cheapest
+ * size, so a listing can say "من 60 ج.م" instead of printing a base price the
+ * customer can never actually pay.
+ */
+function merchantProductsWithOptions(string $merchantId): array {
+    $ids = [];
+    try {
+        $v = db()->prepare(
+            'SELECT v.productId, MIN(v.price) AS minPrice FROM `ProductVariant` v'
+            . ' JOIN `Product` p ON p.id = v.productId'
+            . ' WHERE p.merchantId = ? AND v.isActive = 1'
+            . ' GROUP BY v.productId'
+        );
+        $v->execute([$merchantId]);
+        foreach ($v->fetchAll() as $r) $ids[$r['productId']] = ['minPrice' => (float) $r['minPrice']];
+
+        $a = db()->prepare(
+            'SELECT DISTINCT pal.productId FROM `ProductAddonLink` pal'
+            . ' JOIN `Product` p ON p.id = pal.productId'
+            . ' JOIN `MerchantAddon` ma ON ma.id = pal.addonId AND ma.isActive = 1'
+            . ' WHERE p.merchantId = ?'
+        );
+        $a->execute([$merchantId]);
+        // Extras alone don't change the starting price — keep minPrice null.
+        foreach ($a->fetchAll() as $r) $ids[$r['productId']] ??= ['minPrice' => null];
+    } catch (Throwable $e) { /* tables absent on an old DB — nothing has options */ }
+    return $ids;
 }
 
 // ═══ AUTH ══════════════════════════════════════════════════════════════
@@ -5744,6 +6173,13 @@ if (preg_match('#^/merchants/([^/]+)/products$#', $path, $mm) && $method === 'GE
             $args[] = "%$q%";
             $args[] = "%$q%";
         }
+        // In-store section, e.g. بيتزا / كريب. Exact match: these come from the
+        // same column the section list is built from, so they always line up.
+        $section = trim((string) ($_GET['section'] ?? ''));
+        if ($section !== '') {
+            $where .= ' AND categoryName = ?';
+            $args[] = $section;
+        }
 
         $cst = db()->prepare('SELECT COUNT(*) n FROM `Product` WHERE ' . $where);
         $cst->execute($args);
@@ -5754,12 +6190,96 @@ if (preg_match('#^/merchants/([^/]+)/products$#', $path, $mm) && $method === 'GE
             . ' LIMIT ' . $pageSize . ' OFFSET ' . (($page - 1) * $pageSize)
         );
         $st->execute($args);
-        jsonList(array_map('productShape', $st->fetchAll()), $page, $pageSize, $total);
+        $withOpts = merchantProductsWithOptions($mm[1]);
+        jsonList(array_map(
+            fn($r) => productShape($r) + ['hasOptions' => isset($withOpts[$r['id']]), 'fromPrice' => $withOpts[$r['id']]['minPrice'] ?? null],
+            $st->fetchAll()
+        ), $page, $pageSize, $total);
     }
 
     $st = db()->prepare($sql);
     $st->execute($args);
-    jsonOk(array_map('productShape', $st->fetchAll()));
+    $withOpts = merchantProductsWithOptions($mm[1]);
+    jsonOk(array_map(
+        fn($r) => productShape($r) + ['hasOptions' => isset($withOpts[$r['id']]), 'fromPrice' => $withOpts[$r['id']]['minPrice'] ?? null],
+        $st->fetchAll()
+    ));
+}
+
+/**
+ * GET /merchants/{id}/suggestions — "ممكن تحتاج كمان" for the cart.
+ *
+ * Deliberately requires NO admin curation. Asking the admin to hand-pick
+ * cross-sells for every store is work that would simply never get done, and an
+ * empty curated list produces an empty rail — worse than a decent guess.
+ *
+ * The guess: prefer this merchant's drinks/sides/desserts sections (that's
+ * what a customer forgets — the cola, not another pizza), cheapest first since
+ * an impulse add-on is a small purchase. Falls back to the cheapest available
+ * items when the store has no such section, which is right for a supermarket
+ * where every section is equally "extra".
+ *
+ * `exclude` drops what's already in the cart. Capped so a crafted query can't
+ * grow the IN(...) without bound.
+ */
+if (preg_match('#^/merchants/([^/]+)/suggestions$#', $path, $mm) && $method === 'GET') {
+    $merchantId = $mm[1];
+    $limit = min(12, max(1, (int) ($_GET['limit'] ?? 8)));
+
+    $where = 'merchantId = ? AND isAvailable = 1 AND isHidden = 0 AND price > 0';
+    $args = [$merchantId];
+
+    $excludeRaw = trim((string) ($_GET['exclude'] ?? ''));
+    if ($excludeRaw !== '') {
+        $ex = array_slice(array_filter(array_map('trim', explode(',', $excludeRaw))), 0, 50);
+        if ($ex) {
+            $where .= ' AND id NOT IN (' . implode(',', array_fill(0, count($ex), '?')) . ')';
+            $args = array_merge($args, $ex);
+        }
+    }
+
+    // Sections that read as "something you add to an order" rather than a meal.
+    $hints = ['مشروب', 'مشروبات', 'عصير', 'عصائر', 'مياه', 'ميه', 'حلويات', 'حلو',
+        'تحلية', 'سلطات', 'سلطة', 'إضافات', 'اضافات', 'جانبية', 'مقبلات'];
+    $like = [];
+    foreach ($hints as $h) { $like[] = 'categoryName LIKE ?'; $args[] = '%' . $h . '%'; }
+    // CASE puts the hinted sections first without a second round trip; the rest
+    // of the catalogue still fills the rail when there aren't enough of them.
+    $rank = 'CASE WHEN (' . implode(' OR ', $like) . ') THEN 0 ELSE 1 END';
+
+    $st = db()->prepare(
+        'SELECT * FROM `Product` WHERE ' . $where
+        . ' ORDER BY ' . $rank . ' ASC, price ASC LIMIT ' . $limit
+    );
+    $st->execute($args);
+    $rows = $st->fetchAll();
+
+    $withOpts = merchantProductsWithOptions($merchantId);
+    jsonOk(array_map(
+        fn($r) => productShape($r) + [
+            'hasOptions' => isset($withOpts[$r['id']]),
+            'fromPrice' => $withOpts[$r['id']]['minPrice'] ?? null,
+        ],
+        $rows
+    ));
+}
+
+// GET /merchants/{id}/product-sections — the in-store sections a customer can
+// filter by, with counts so the UI can drop empty ones and show sizes.
+// Sourced from Product.categoryName, which the API sync already populates and
+// an admin can edit per product — no separate taxonomy to keep in step.
+if (preg_match('#^/merchants/([^/]+)/product-sections$#', $path, $mm) && $method === 'GET') {
+    $st = db()->prepare(
+        'SELECT categoryName AS name, COUNT(*) AS n FROM `Product`'
+        . ' WHERE merchantId = ? AND isAvailable = 1 AND isHidden = 0'
+        . " AND categoryName IS NOT NULL AND categoryName <> ''"
+        . ' GROUP BY categoryName ORDER BY n DESC, categoryName ASC'
+    );
+    $st->execute([$mm[1]]);
+    jsonOk(array_map(
+        fn($r) => ['name' => (string) $r['name'], 'count' => (int) $r['n']],
+        $st->fetchAll()
+    ));
 }
 
 if (preg_match('#^/merchants/([^/]+)$#', $path, $mm) && $method === 'GET') {
@@ -5781,7 +6301,11 @@ if (preg_match('#^/merchants/([^/]+)$#', $path, $mm) && $method === 'GET') {
     if ($embedLimit !== null) $psSql .= ' LIMIT ' . $embedLimit;
     $ps = db()->prepare($psSql);
     $ps->execute([$mm[1]]);
-    $m['products'] = array_map('productShape', $ps->fetchAll());
+    $withOpts = merchantProductsWithOptions($mm[1]);
+    $m['products'] = array_map(
+        fn($r2) => productShape($r2) + ['hasOptions' => isset($withOpts[$r2['id']]), 'fromPrice' => $withOpts[$r2['id']]['minPrice'] ?? null],
+        $ps->fetchAll()
+    );
 
     // Total count so the client knows whether to paginate, regardless of limit.
     $pc = db()->prepare('SELECT COUNT(*) n FROM `Product` WHERE merchantId = ?');
@@ -5831,6 +6355,40 @@ if ($method === 'GET' && $path === '/products') {
     jsonList($rows, $page, $pageSize, $total);
 }
 
+/**
+ * Sizes and extras for a product.
+ *
+ * Variants belong to the product (a "large" only means something for that
+ * item). Addons belong to the MERCHANT and are linked in, so "موتزريلا +15" is
+ * written once for the restaurant and attached to every pizza instead of being
+ * retyped per product — which is the whole point of the feature.
+ */
+function productOptions(string $productId): array {
+    $out = ['variants' => [], 'addons' => []];
+    try {
+        $v = db()->prepare(
+            'SELECT id, nameAr, price FROM `ProductVariant`'
+            . ' WHERE productId = ? AND isActive = 1 ORDER BY sortOrder ASC, price ASC'
+        );
+        $v->execute([$productId]);
+        $out['variants'] = array_map(fn($r) => [
+            'id' => $r['id'], 'nameAr' => $r['nameAr'], 'price' => (float) $r['price'],
+        ], $v->fetchAll());
+
+        $a = db()->prepare(
+            'SELECT ma.id, ma.nameAr, ma.price FROM `ProductAddonLink` pal'
+            . ' JOIN `MerchantAddon` ma ON ma.id = pal.addonId'
+            . ' WHERE pal.productId = ? AND ma.isActive = 1'
+            . ' ORDER BY ma.sortOrder ASC, ma.nameAr ASC'
+        );
+        $a->execute([$productId]);
+        $out['addons'] = array_map(fn($r) => [
+            'id' => $r['id'], 'nameAr' => $r['nameAr'], 'price' => (float) $r['price'],
+        ], $a->fetchAll());
+    } catch (Throwable $e) { /* tables absent on an old DB — degrade to none */ }
+    return $out;
+}
+
 if (preg_match('#^/products/([^/]+)$#', $path, $mm) && $method === 'GET') {
     $st = db()->prepare('SELECT p.*, m.id AS m_id, m.storeNameAr AS m_storeNameAr, m.logoUrl AS m_logoUrl, m.rating AS m_rating, m.manualStatus AS m_manualStatus, m.timezone AS m_timezone FROM `Product` p LEFT JOIN `MerchantProfile` m ON m.id = p.merchantId WHERE p.id = ? LIMIT 1');
     $st->execute([$mm[1]]);
@@ -5845,6 +6403,13 @@ if (preg_match('#^/products/([^/]+)$#', $path, $mm) && $method === 'GET') {
         'openness' => merchantOpenness(['manualStatus' => $r['m_manualStatus'], 'timezone' => $r['m_timezone']], $hrs[$r['merchantId']] ?? []),
     ];
     foreach (['m_id', 'm_storeNameAr', 'm_logoUrl', 'm_rating', 'm_manualStatus', 'm_timezone'] as $k) unset($p[$k]);
+
+    // Sizes and extras. Both arrays are always present (possibly empty) so the
+    // app can render unconditionally without null-guarding every access.
+    $opts = productOptions($mm[1]);
+    $p['variants'] = $opts['variants'];
+    $p['addons'] = $opts['addons'];
+
     jsonOk($p);
 }
 
@@ -6205,7 +6770,7 @@ if ($method === 'POST' && $path === '/orders/cart') {
     foreach ($merchants as $mi => $m) {
         $sum = 0.0; $lines[$mi] = [];
         foreach ((array) ($m['items'] ?? []) as $it) {
-            $ps = db()->prepare('SELECT id, merchantId, nameAr, price, salePrice, isAvailable, isHidden, stock FROM `Product` WHERE id = ? LIMIT 1');
+            $ps = db()->prepare('SELECT id, merchantId, nameAr, price, salePrice, discount, isAvailable, isHidden, stock FROM `Product` WHERE id = ? LIMIT 1');
             $ps->execute([$it['productId'] ?? '']);
             $p = $ps->fetch();
             if (!$p) conflictErr('PRODUCT_UNAVAILABLE', 'أحد المنتجات لم يعد متاحاً');
@@ -6220,12 +6785,57 @@ if ($method === 'POST' && $path === '/orders/cart') {
             if (!(int) $p['isAvailable'] || (int) $p['isHidden']) conflictErr('PRODUCT_UNAVAILABLE', 'المنتج ' . $p['nameAr'] . ' غير متاح حالياً');
             $qty = max(1, (int) ($it['quantity'] ?? 1));
             if ($p['stock'] !== null && (int) $p['stock'] < $qty) conflictErr('INSUFFICIENT_STOCK', 'الكمية المطلوبة من ' . $p['nameAr'] . ' غير متوفرة');
-            // salePrice ?? price — deliberately NOT compounding Product.discount:
-            // the app derives its badge from (price - salePrice), so applying
-            // `discount` here would charge less than the customer was shown.
-            $unit = round($p['salePrice'] !== null ? (float) $p['salePrice'] : (float) $p['price'], 2);
+            /*
+             * Size and extras, priced from the DATABASE — never from what the
+             * client sent. The app posts ids only; the names and prices are
+             * looked up here and snapshotted, so a tampered request can't buy a
+             * jumbo pizza at the small price, and a later menu edit can't
+             * rewrite a past order.
+             */
+            $unit = effectiveUnitPrice($p);
+            $variantName = null;
+            $addonSnap = [];
+
+            $vid = trim((string) ($it['variantId'] ?? ''));
+            if ($vid !== '') {
+                $vq = db()->prepare('SELECT nameAr, price FROM `ProductVariant` WHERE id = ? AND productId = ? AND isActive = 1 LIMIT 1');
+                $vq->execute([$vid, $p['id']]);
+                if ($v = $vq->fetch()) {
+                    // A size REPLACES the base price rather than adding to it.
+                    $unit = round((float) $v['price'], 2);
+                    $variantName = (string) $v['nameAr'];
+                } else {
+                    conflictErr('VARIANT_UNAVAILABLE', 'الحجم المختار لم يعد متاحاً لـ ' . $p['nameAr']);
+                }
+            }
+
+            $aids = array_values(array_filter(array_map('strval', (array) ($it['addonIds'] ?? []))));
+            if ($aids) {
+                $in = implode(',', array_fill(0, count($aids), '?'));
+                // Joined through the link table so an addon from ANOTHER
+                // merchant can't be attached by id.
+                $aq = db()->prepare(
+                    'SELECT ma.nameAr, ma.price FROM `ProductAddonLink` pal'
+                    . ' JOIN `MerchantAddon` ma ON ma.id = pal.addonId'
+                    . " WHERE pal.productId = ? AND ma.isActive = 1 AND ma.id IN ($in)"
+                );
+                $aq->execute(array_merge([$p['id']], $aids));
+                foreach ($aq->fetchAll() as $a) {
+                    $addonSnap[] = ['nameAr' => $a['nameAr'], 'price' => (float) $a['price']];
+                    $unit += (float) $a['price'];
+                }
+            }
+            $unit = round($unit, 2);
             $sum += $unit * $qty;
-            $lines[$mi][] = ['productId' => $p['id'], 'name' => $p['nameAr'], 'qty' => $qty, 'unit' => $unit, 'notes' => $it['notes'] ?? null];
+            $lines[$mi][] = [
+                'productId' => $p['id'],
+                'name' => $p['nameAr'],
+                'qty' => $qty,
+                'unit' => $unit,
+                'notes' => $it['notes'] ?? null,
+                'variantName' => $variantName,
+                'addons' => $addonSnap,
+            ];
         }
         $subtotals[$mi] = round($sum, 2);
     }
@@ -6242,6 +6852,22 @@ if ($method === 'POST' && $path === '/orders/cart') {
     $parentId = newId();
     $parentNo = newOrderNumber($parentId);
     $multi = count($merchants) > 1;
+
+    /*
+     * ONE order per cart, even across stores.
+     *
+     * This used to also create a child order per merchant. That gave each store
+     * its own number, price and driver — but the admin then had to price and
+     * assign N times for a single purchase, and the customer saw N orders.
+     * Every line already carries its own merchantId, so the per-store breakdown
+     * survives without the extra rows: the dashboard groups items by merchant,
+     * and the pricing dialog still splits revenue per store.
+     *
+     * Nothing depended on the children: /merchant/orders (the only per-merchant
+     * inbox) is not implemented on this backend. Orders created BEFORE this
+     * change keep their children, and the read paths still handle them.
+     */
+    $splitPerMerchant = false;
     db()->prepare('INSERT INTO `Order` (id, orderNumber, serviceId, customerId, category, status, merchantId, deliveryAddress, deliveryLat, deliveryLng, cityId, villageId, areaId, paymentMethod, paymentStatus, currency, couponCode, discountAmount, merchantSubtotal, deliveryFee, quotedPrice, finalPrice, scheduledFor, createdAt, updatedAt)
         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NOW(3),NOW(3))')
         ->execute([$parentId, $parentNo, $svc['id'], $uid, 'MERCHANT', 'NEW',
@@ -6253,8 +6879,8 @@ if ($method === 'POST' && $path === '/orders/cart') {
     orderHistory($parentId, null, 'NEW', $uid, 'CUSTOMER', 'Order placed from cart');
 
     foreach ($merchants as $mi => $m) {
-        $childId = $multi ? newId() : $parentId;
-        if ($multi) {
+        $childId = $splitPerMerchant ? newId() : $parentId;
+        if ($splitPerMerchant) {
             db()->prepare('INSERT INTO `Order` (id, orderNumber, serviceId, customerId, category, status, merchantId, parentOrderId, deliveryAddress, deliveryLat, deliveryLng, paymentMethod, paymentStatus, currency, merchantSubtotal, notes, imageUrls, createdAt, updatedAt)
                 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NOW(3),NOW(3))')
                 ->execute([$childId, newOrderNumber($childId), $svc['id'], $uid, 'MERCHANT', 'NEW',
@@ -6263,12 +6889,35 @@ if ($method === 'POST' && $path === '/orders/cart') {
                     !empty($m['imageUrls']) ? json_encode($m['imageUrls'], JSON_UNESCAPED_UNICODE) : null]);
             orderHistory($childId, null, 'NEW', $uid, 'CUSTOMER', 'Sub-order of ' . $parentNo);
         } elseif (!empty($m['notes']) || !empty($m['imageUrls'])) {
+            // Per-merchant notes/images are merged onto the single order. With
+            // several stores the notes are appended rather than overwritten so
+            // the last store doesn't silently erase the first one's.
+            $exist = db()->prepare('SELECT notes, imageUrls FROM `Order` WHERE id = ?');
+            $exist->execute([$parentId]);
+            $prev = $exist->fetch() ?: ['notes' => null, 'imageUrls' => null];
+
+            $noteParts = array_filter([
+                trim((string) ($prev['notes'] ?? '')),
+                trim((string) ($m['notes'] ?? '')),
+            ]);
+            $prevImgs = $prev['imageUrls'] ? (json_decode((string) $prev['imageUrls'], true) ?: []) : [];
+            $imgs = array_values(array_unique(array_merge($prevImgs, (array) ($m['imageUrls'] ?? []))));
+
             db()->prepare('UPDATE `Order` SET notes = ?, imageUrls = ? WHERE id = ?')
-                ->execute([($m['notes'] ?? null) ?: null, !empty($m['imageUrls']) ? json_encode($m['imageUrls'], JSON_UNESCAPED_UNICODE) : null, $parentId]);
+                ->execute([
+                    $noteParts ? implode("\n\n", $noteParts) : null,
+                    $imgs ? json_encode($imgs, JSON_UNESCAPED_UNICODE) : null,
+                    $parentId,
+                ]);
         }
         foreach ($lines[$mi] as $l) {
-            db()->prepare('INSERT INTO `OrderItem` (id, orderId, productId, productNameSnapshot, unitPriceSnapshot, quantity, merchantId, notes) VALUES (?,?,?,?,?,?,?,?)')
-                ->execute([newId(), $childId, $l['productId'], $l['name'], $l['unit'], $l['qty'], $m['merchantId'] ?? null, $l['notes']]);
+            db()->prepare('INSERT INTO `OrderItem` (id, orderId, productId, productNameSnapshot, unitPriceSnapshot, quantity, merchantId, notes, variantNameSnapshot, addonsSnapshot) VALUES (?,?,?,?,?,?,?,?,?,?)')
+                ->execute([
+                    newId(), $childId, $l['productId'], $l['name'], $l['unit'], $l['qty'],
+                    $m['merchantId'] ?? null, $l['notes'],
+                    $l['variantName'] ?? null,
+                    !empty($l['addons']) ? json_encode($l['addons'], JSON_UNESCAPED_UNICODE) : null,
+                ]);
         }
     }
     if ($coupon) {
@@ -6529,7 +7178,44 @@ if (preg_match('#^/orders/([^/]+)$#', $path, $mm) && $method === 'GET') {
     $ss = db()->prepare('SELECT * FROM `Service` WHERE id = ? LIMIT 1');
     $ss->execute([$o['serviceId']]);
     $out['service'] = jsonizeRow($ss->fetch() ?: null);
-    $out['items'] = $q('SELECT * FROM `OrderItem` WHERE orderId = ?', [$mm[1]]);
+    /*
+     * Items, including those on child orders.
+     *
+     * A multi-merchant cart writes its OrderItems onto the per-merchant CHILD
+     * orders, not the parent. The customer only ever sees the parent (
+     * /orders/mine filters parentOrderId IS NULL), so asking for the parent
+     * returned an order with an empty item list — "what did I order, and from
+     * where?" had no answer anywhere in the app.
+     *
+     * Reading the children here keeps ONE order for the customer while each
+     * line still carries its own merchantId, which is what lets the app and the
+     * dashboard group the order by store.
+     */
+    $out['items'] = $q(
+        'SELECT oi.*, mp.storeNameAr AS merchantNameAr'
+        . ' FROM `OrderItem` oi'
+        . ' LEFT JOIN `MerchantProfile` mp ON mp.id = oi.merchantId'
+        . ' WHERE oi.orderId = ?'
+        . ' OR oi.orderId IN (SELECT id FROM `Order` WHERE parentOrderId = ?)'
+        . ' ORDER BY oi.merchantId, oi.id',
+        [$mm[1], $mm[1]]
+    );
+    // Nest the merchant the way the clients expect, rather than leaving a flat
+    // column they'd each have to know about.
+    foreach ($out['items'] as &$__it) {
+        $__it['merchant'] = $__it['merchantNameAr'] !== null
+            ? ['id' => $__it['merchantId'], 'storeNameAr' => $__it['merchantNameAr']]
+            : null;
+        unset($__it['merchantNameAr']);
+        // This route's $q returns raw rows — no jsonizeRow — so the extras
+        // would arrive as a JSON *string* here and as an array on the admin
+        // route. Decode so both clients read the same shape.
+        if (is_string($__it['addonsSnapshot'] ?? null)) {
+            $d = json_decode($__it['addonsSnapshot'], true);
+            $__it['addonsSnapshot'] = is_array($d) ? $d : null;
+        }
+    }
+    unset($__it);
     $out['pickupPoints'] = $q('SELECT * FROM `OrderPickupPoint` WHERE orderId = ? ORDER BY sortOrder ASC', [$mm[1]]);
     $out['deliveryPoints'] = $q('SELECT * FROM `OrderDeliveryPoint` WHERE orderId = ? ORDER BY sortOrder ASC', [$mm[1]]);
     // OrderTrackingScreen .map()s statusHistory with no guard.
@@ -6654,19 +7340,9 @@ if ($method === 'GET' && $path === '/home-config') {
     $cfg = boolCast(jsonizeRow($cfg), ['showPromoBanner', 'showTrustStrip']);
     // heroGradient / visibleServiceKeys / featuredMerchantIds / featuredOfferIds
     // are spread + .includes()-ed client-side — must be arrays or null, never {}.
-    foreach (['heroGradient', 'visibleServiceKeys', 'featuredMerchantIds', 'featuredOfferIds'] as $k) {
+    foreach (['heroGradient', 'visibleServiceKeys', 'featuredMerchantIds', 'featuredOfferIds', 'featuredProductIds'] as $k) {
         if (!array_key_exists($k, $cfg) || !is_array($cfg[$k] ?? null)) $cfg[$k] = $cfg[$k] ?? null;
     }
-    /*
-     * featuredProductIds lives in `Setting`, not in a HomeConfig column.
-     *
-     * The column would be the natural home, but the DB credentials on hand are
-     * stale so the ALTER could not be run. The API deliberately presents it as
-     * a normal home-config field anyway: when the column does get added, only
-     * these few lines change and neither the dashboard nor the app notices.
-     */
-    $cfg['featuredProductIds'] = homeListSetting('home_featured_product_ids');
-
     $cfg['promoCoupon'] = null;
     if (!empty($cfg['promoBannerCouponId'])) {
         // validTo checked in SQL — see the couponCheck() timezone note.

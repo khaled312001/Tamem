@@ -5,9 +5,8 @@
  * Both are pure navigation shortcuts into flows that already exist — tracking
  * routes to the active order when there is one, otherwise to the orders list.
  */
-import { MapPin, Navigation } from 'lucide-react-native';
 import { memo } from 'react';
-import { I18nManager, Pressable, StyleSheet, Text, View } from 'react-native';
+import { I18nManager, ImageBackground, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { colors, fontFamilies, radii, spacing } from '../../../theme/tokens';
 
@@ -18,15 +17,22 @@ import { colors, fontFamilies, radii, spacing } from '../../../theme/tokens';
 // direction from the document's dir="rtl".
 const ROW = 'row' as const;
 
+/* eslint-disable @typescript-eslint/no-var-requires */
+const ART = {
+  track: require('../../../assets/Track-Order.png'),
+  fast: require('../../../assets/Fast-delivery.png'),
+};
+
 interface CardProps {
   title: string;
   subtitle: string;
   cta: string;
-  /** Card tint. */
+  /** Tint behind the artwork, and the fallback if the image fails. */
   bg: string;
-  /** Button + icon colour. */
+  /** Button colour. */
   fg: string;
-  Icon: typeof MapPin;
+  /** Background illustration. */
+  art: number;
   onPress: () => void;
 }
 
@@ -36,7 +42,7 @@ const PromoCard = memo(function PromoCard({
   cta,
   bg,
   fg,
-  Icon,
+  art,
   onPress,
 }: CardProps) {
   return (
@@ -46,21 +52,30 @@ const PromoCard = memo(function PromoCard({
       accessibilityRole="button"
       accessibilityLabel={`${title} — ${cta}`}
     >
-      {/* Watermark icon, mirroring the illustration in the design. */}
-      <View style={styles.art}>
-        <Icon size={54} color={fg} strokeWidth={1.4} opacity={0.18} />
-      </View>
+      <ImageBackground
+        source={art}
+        style={styles.bg}
+        imageStyle={styles.bgImage}
+        resizeMode="cover"
+      >
+        {/* The artwork is busy; without this wash the title and the CTA lose
+            contrast against it. Tinted with the card colour so each card keeps
+            its own identity rather than going uniformly grey. */}
+        <View style={[styles.scrim, { backgroundColor: bg }]} />
 
-      <Text style={styles.title} numberOfLines={1}>
-        {title}
-      </Text>
-      <Text style={styles.subtitle} numberOfLines={2}>
-        {subtitle}
-      </Text>
+        <View style={styles.content}>
+          <Text style={styles.title} numberOfLines={1}>
+            {title}
+          </Text>
+          <Text style={styles.subtitle} numberOfLines={2}>
+            {subtitle}
+          </Text>
 
-      <View style={[styles.cta, { backgroundColor: fg }]}>
-        <Text style={styles.ctaText}>{cta}</Text>
-      </View>
+          <View style={[styles.cta, { backgroundColor: fg }]}>
+            <Text style={styles.ctaText}>{cta}</Text>
+          </View>
+        </View>
+      </ImageBackground>
     </Pressable>
   );
 });
@@ -79,7 +94,7 @@ function PromoCardsRowBase({ onPressTrack, onPressFastDelivery }: Props) {
         cta="تتبع الآن"
         bg="#FFF4E8"
         fg="#EC7A2C"
-        Icon={Navigation}
+        art={ART.track}
         onPress={onPressTrack}
       />
       <PromoCard
@@ -88,7 +103,7 @@ function PromoCardsRowBase({ onPressTrack, onPressFastDelivery }: Props) {
         cta="اطلب الآن"
         bg="#FFF1F0"
         fg={colors.brand.red}
-        Icon={MapPin}
+        art={ART.fast}
         onPress={onPressFastDelivery}
       />
     </View>
@@ -101,17 +116,15 @@ const styles = StyleSheet.create({
   row: { gap: spacing.md },
   card: {
     flex: 1,
-    minHeight: 140,
+    minHeight: 150,
     borderRadius: radii.lg,
-    padding: spacing.md,
     overflow: 'hidden',
-    justifyContent: 'flex-start',
   },
-  art: {
-    position: 'absolute',
-    bottom: -6,
-    ...(I18nManager.isRTL ? { left: -6 } : { right: -6 }),
-  },
+  bg: { flex: 1, minHeight: 150 },
+  bgImage: { borderRadius: radii.lg },
+  // 0.72 keeps the illustration readable while the copy stays legible on top.
+  scrim: { ...StyleSheet.absoluteFillObject, opacity: 0.72 },
+  content: { flex: 1, padding: spacing.md, justifyContent: 'flex-start' },
   title: {
     fontSize: 16,
     color: colors.brand.dark,
