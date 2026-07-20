@@ -170,7 +170,7 @@ export function CartScreen() {
 
             {/* Items */}
             {group.items.map((item) => (
-              <View key={item.productId} style={[styles.row, shadows.sm]}>
+              <View key={item.lineId} style={[styles.row, shadows.sm]}>
                 <View style={styles.thumb}>
                   {item.imageUrl ? (
                     <Image
@@ -184,7 +184,13 @@ export function CartScreen() {
                 <View style={{ flex: 1, gap: 2 }}>
                   <Text style={styles.itemName} numberOfLines={2}>
                     {item.nameAr}
+                    {item.variantNameAr ? ` — ${item.variantNameAr}` : ''}
                   </Text>
+                  {!!item.addons?.length && (
+                    <Text style={styles.itemExtras} numberOfLines={2}>
+                      + {item.addons.map((a) => a.nameAr).join('، ')}
+                    </Text>
+                  )}
                   <View style={styles.itemMeta}>
                     <MoneyText amount={item.price} tone="brand" size="sm" />
                     <Text style={styles.itemMultiplier}>× {item.quantity}</Text>
@@ -197,9 +203,9 @@ export function CartScreen() {
                     onPress={() => {
                       haptic.tap();
                       if (item.quantity <= 1) {
-                        removeFromCart(item.productId, item.merchantId);
+                        removeFromCart(item.lineId, item.merchantId);
                       } else {
-                        setItemQuantity(item.productId, item.quantity - 1, item.merchantId);
+                        setItemQuantity(item.lineId, item.quantity - 1, item.merchantId);
                       }
                     }}
                     hitSlop={4}
@@ -216,7 +222,7 @@ export function CartScreen() {
                   <Pressable
                     onPress={() => {
                       haptic.tap();
-                      setItemQuantity(item.productId, item.quantity + 1, item.merchantId);
+                      setItemQuantity(item.lineId, item.quantity + 1, item.merchantId);
                     }}
                     hitSlop={4}
                     style={({ pressed }) => [styles.stepBtn, pressed && { opacity: 0.7 }]}
@@ -370,6 +376,14 @@ const styles = StyleSheet.create({
     fontSize: fontSizes.sm,
   },
   itemMeta: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
+  itemExtras: {
+    fontSize: 11,
+    color: colors.brand.gray,
+    fontFamily: fontFamilies.body,
+    lineHeight: 18,
+    includeFontPadding: false,
+    textAlign: 'auto',
+  },
   itemMultiplier: {
     color: colors.text.muted,
     fontFamily: fontFamilies.bodyBold,

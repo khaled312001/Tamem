@@ -4529,6 +4529,136 @@ if ($method === 'PUT' && preg_match('#^/admin/merchants/([^/]+)/prep-time$#', $p
     jsonOk(['merchantId' => $id, 'prepMinutes' => $min === null ? null : ['min' => $min, 'max' => $max]]);
 }
 
+// ── Product sizes + merchant add-ons (admin) ───────────────────────────────
+//
+// Both writers REPLACE the whole list rather than exposing per-row CRUD: the
+// admin edits these as a list in one form, so a single atomic save matches what
+// they actually do and removes the need to track per-row create/update/delete.
+
+// GET /admin/merchants/{id}/addons — the merchant's reusable extras.
+if ($method === 'GET' && preg_match('#^/admin/merchants/([^/]+)/addons$#', $path, $m)) {
+    authUser();
+    $st = db()->prepare('SELECT id, nameAr, price, sortOrder, isActive FROM `MerchantAddon` WHERE merchantId = ? ORDER BY sortOrder ASC, nameAr ASC');
+    $st->execute([$m[1]]);
+    jsonOk(array_map(fn($r) => [
+        'id' => $r['id'], 'nameAr' => $r['nameAr'], 'price' => (float) $r['price'],
+        'sortOrder' => (int) $r['sortOrder'], 'isActive' => (bool) (int) $r['isActive'],
+    ], $st->fetchAll()));
+}
+
+// PUT /admin/merchants/{id}/addons — replace the list.
+if ($method === 'PUT' && preg_match('#^/admin/merchants/([^/]+)/addons$#', $path, $m)) {
+    $u = authUser();
+    if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
+    $merchantId = $m[1];
+    $rows = (array) (readJsonBody()['addons'] ?? []);
+
+    /*
+     * Rows that still carry an id are UPDATED, not recreated.
+     *
+     * ProductAddonLink points at these ids, and ON DELETE CASCADE would take
+     * the links with them — so a delete-then-insert would silently unlink an
+     * add-on from every product the moment the admin edited its price.
+     */
+    $keep = [];
+    $pos = 0;
+    foreach ($rows as $r) {
+        $name = trim((string) ($r['nameAr'] ?? ''));
+        if ($name === '') continue;
+        $price = round((float) ($r['price'] ?? 0), 2);
+        $active = array_key_exists('isActive', $r) ? (!empty($r['isActive']) ? 1 : 0) : 1;
+        $id = trim((string) ($r['id'] ?? ''));
+
+        if ($id !== '') {
+            db()->prepare('UPDATE `MerchantAddon` SET nameAr = ?, price = ?, sortOrder = ?, isActive = ? WHERE id = ? AND merchantId = ?')
+                ->execute([$name, $price, $pos, $active, $id, $merchantId]);
+        } else {
+            $id = newId();
+            db()->prepare('INSERT INTO `MerchantAddon` (id, merchantId, nameAr, price, sortOrder, isActive, createdAt) VALUES (?,?,?,?,?,?,NOW(3))')
+                ->execute([$id, $merchantId, $name, $price, $pos, $active]);
+        }
+        $keep[] = $id;
+        $pos++;
+    }
+
+    // Anything the admin removed from the form.
+    if ($keep) {
+        $in = implode(',', array_fill(0, count($keep), '?'));
+        db()->prepare("DELETE FROM `MerchantAddon` WHERE merchantId = ? AND id NOT IN ($in)")
+            ->execute(array_merge([$merchantId], $keep));
+    } else {
+        db()->prepare('DELETE FROM `MerchantAddon` WHERE merchantId = ?')->execute([$merchantId]);
+    }
+    jsonOk(['saved' => count($keep)]);
+}
+
+// GET /admin/products/{id}/options — sizes + which of the merchant's add-ons
+// are linked, alongside the full list so the form can show unchecked ones.
+if ($method === 'GET' && preg_match('#^/admin/products/([^/]+)/options$#', $path, $m)) {
+    authUser();
+    $pid = $m[1];
+    $ps = db()->prepare('SELECT merchantId FROM `Product` WHERE id = ? LIMIT 1');
+    $ps->execute([$pid]);
+    $merchantId = (string) ($ps->fetchColumn() ?: '');
+
+    $v = db()->prepare('SELECT id, nameAr, price, sortOrder, isActive FROM `ProductVariant` WHERE productId = ? ORDER BY sortOrder ASC');
+    $v->execute([$pid]);
+
+    $all = db()->prepare('SELECT id, nameAr, price FROM `MerchantAddon` WHERE merchantId = ? AND isActive = 1 ORDER BY sortOrder ASC');
+    $all->execute([$merchantId]);
+
+    $lk = db()->prepare('SELECT addonId FROM `ProductAddonLink` WHERE productId = ?');
+    $lk->execute([$pid]);
+
+    jsonOk([
+        'merchantId' => $merchantId,
+        'variants' => array_map(fn($r) => [
+            'id' => $r['id'], 'nameAr' => $r['nameAr'], 'price' => (float) $r['price'],
+            'isActive' => (bool) (int) $r['isActive'],
+        ], $v->fetchAll()),
+        'merchantAddons' => array_map(fn($r) => [
+            'id' => $r['id'], 'nameAr' => $r['nameAr'], 'price' => (float) $r['price'],
+        ], $all->fetchAll()),
+        'linkedAddonIds' => array_column($lk->fetchAll(), 'addonId'),
+    ]);
+}
+
+// PUT /admin/products/{id}/options — replace sizes and add-on links.
+if ($method === 'PUT' && preg_match('#^/admin/products/([^/]+)/options$#', $path, $m)) {
+    $u = authUser();
+    if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
+    $pid = $m[1];
+    $b = readJsonBody();
+
+    if (array_key_exists('variants', $b)) {
+        // Safe to delete-and-reinsert: nothing references a variant by id.
+        // Past orders keep a NAME snapshot, not a foreign key.
+        db()->prepare('DELETE FROM `ProductVariant` WHERE productId = ?')->execute([$pid]);
+        $pos = 0;
+        foreach ((array) $b['variants'] as $r) {
+            $name = trim((string) ($r['nameAr'] ?? ''));
+            if ($name === '') continue;
+            db()->prepare('INSERT INTO `ProductVariant` (id, productId, nameAr, price, sortOrder, isActive, createdAt) VALUES (?,?,?,?,?,?,NOW(3))')
+                ->execute([newId(), $pid, $name, round((float) ($r['price'] ?? 0), 2), $pos,
+                    array_key_exists('isActive', $r) ? (!empty($r['isActive']) ? 1 : 0) : 1]);
+            $pos++;
+        }
+    }
+
+    if (array_key_exists('linkedAddonIds', $b)) {
+        db()->prepare('DELETE FROM `ProductAddonLink` WHERE productId = ?')->execute([$pid]);
+        foreach (array_unique((array) $b['linkedAddonIds']) as $aid) {
+            $aid = trim((string) $aid);
+            if ($aid === '') continue;
+            // INSERT IGNORE: the pair is the primary key, so a duplicate in the
+            // payload must not fail the whole save.
+            db()->prepare('INSERT IGNORE INTO `ProductAddonLink` (productId, addonId) VALUES (?,?)')
+                ->execute([$pid, $aid]);
+        }
+    }
+    jsonOk(['ok' => true]);
+}
+
 // POST /admin/supervisors — insert into Supervisor.
 if ($method === 'POST' && $path === '/admin/supervisors') {
     $u = authUser();
@@ -5464,6 +5594,45 @@ function productShape(array $p): array {
     return boolCast($p, ['isAvailable', 'isHidden']);
 }
 
+/**
+ * Ids of this merchant's products that have a size or an extra.
+ *
+ * The store page's quick "+" adds a product straight to the cart at its base
+ * price. For a product with sizes that's wrong — the size price REPLACES the
+ * base one — so the app has to send those customers to the detail page to
+ * choose instead. This tells it which ones without a per-row subquery on a
+ * catalogue that can run to ~2,900 products: two set queries per request,
+ * regardless of page size.
+ *
+ * Returns productId => ['minPrice' => float|null]. minPrice is the cheapest
+ * size, so a listing can say "من 60 ج.م" instead of printing a base price the
+ * customer can never actually pay.
+ */
+function merchantProductsWithOptions(string $merchantId): array {
+    $ids = [];
+    try {
+        $v = db()->prepare(
+            'SELECT v.productId, MIN(v.price) AS minPrice FROM `ProductVariant` v'
+            . ' JOIN `Product` p ON p.id = v.productId'
+            . ' WHERE p.merchantId = ? AND v.isActive = 1'
+            . ' GROUP BY v.productId'
+        );
+        $v->execute([$merchantId]);
+        foreach ($v->fetchAll() as $r) $ids[$r['productId']] = ['minPrice' => (float) $r['minPrice']];
+
+        $a = db()->prepare(
+            'SELECT DISTINCT pal.productId FROM `ProductAddonLink` pal'
+            . ' JOIN `Product` p ON p.id = pal.productId'
+            . ' JOIN `MerchantAddon` ma ON ma.id = pal.addonId AND ma.isActive = 1'
+            . ' WHERE p.merchantId = ?'
+        );
+        $a->execute([$merchantId]);
+        // Extras alone don't change the starting price — keep minPrice null.
+        foreach ($a->fetchAll() as $r) $ids[$r['productId']] ??= ['minPrice' => null];
+    } catch (Throwable $e) { /* tables absent on an old DB — nothing has options */ }
+    return $ids;
+}
+
 // ═══ AUTH ══════════════════════════════════════════════════════════════
 if ($method === 'POST' && $path === '/auth/register') {
     $b = readJsonBody();
@@ -6021,12 +6190,20 @@ if (preg_match('#^/merchants/([^/]+)/products$#', $path, $mm) && $method === 'GE
             . ' LIMIT ' . $pageSize . ' OFFSET ' . (($page - 1) * $pageSize)
         );
         $st->execute($args);
-        jsonList(array_map('productShape', $st->fetchAll()), $page, $pageSize, $total);
+        $withOpts = merchantProductsWithOptions($mm[1]);
+        jsonList(array_map(
+            fn($r) => productShape($r) + ['hasOptions' => isset($withOpts[$r['id']]), 'fromPrice' => $withOpts[$r['id']]['minPrice'] ?? null],
+            $st->fetchAll()
+        ), $page, $pageSize, $total);
     }
 
     $st = db()->prepare($sql);
     $st->execute($args);
-    jsonOk(array_map('productShape', $st->fetchAll()));
+    $withOpts = merchantProductsWithOptions($mm[1]);
+    jsonOk(array_map(
+        fn($r) => productShape($r) + ['hasOptions' => isset($withOpts[$r['id']]), 'fromPrice' => $withOpts[$r['id']]['minPrice'] ?? null],
+        $st->fetchAll()
+    ));
 }
 
 // GET /merchants/{id}/product-sections — the in-store sections a customer can
@@ -6066,7 +6243,11 @@ if (preg_match('#^/merchants/([^/]+)$#', $path, $mm) && $method === 'GET') {
     if ($embedLimit !== null) $psSql .= ' LIMIT ' . $embedLimit;
     $ps = db()->prepare($psSql);
     $ps->execute([$mm[1]]);
-    $m['products'] = array_map('productShape', $ps->fetchAll());
+    $withOpts = merchantProductsWithOptions($mm[1]);
+    $m['products'] = array_map(
+        fn($r2) => productShape($r2) + ['hasOptions' => isset($withOpts[$r2['id']]), 'fromPrice' => $withOpts[$r2['id']]['minPrice'] ?? null],
+        $ps->fetchAll()
+    );
 
     // Total count so the client knows whether to paginate, regardless of limit.
     $pc = db()->prepare('SELECT COUNT(*) n FROM `Product` WHERE merchantId = ?');
