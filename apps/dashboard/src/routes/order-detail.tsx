@@ -436,7 +436,11 @@ export function OrderDetailPage() {
                 finalPrice: number | null;
                 paymentStatus: string | null;
                 assignedDriver: { name: string; phone?: string } | null;
-                items: { productNameSnapshot: string; quantity: number }[];
+                items: {
+                  productNameSnapshot: string;
+                  quantity: number;
+                  variantNameSnapshot?: string | null;
+                }[];
                 merchant: { id: string; storeNameAr: string; logoUrl: string | null } | null;
               }) => {
                 const total = sub.finalPrice ?? sub.merchantSubtotal ?? sub.quotedPrice;
@@ -468,7 +472,12 @@ export function OrderDetailPage() {
                       </div>
                       <div className="text-xs text-muted-foreground mt-1 truncate">
                         {sub.items
-                          .map((i) => `${i.productNameSnapshot} ×${i.quantity}`)
+                          .map(
+                            (i) =>
+                              `${i.productNameSnapshot}${
+                                i.variantNameSnapshot ? ` — ${i.variantNameSnapshot}` : ''
+                              } ×${i.quantity}`,
+                          )
                           .join(' · ')}
                       </div>
                       <div className="text-xs text-muted-foreground mt-1 flex items-center gap-3">
