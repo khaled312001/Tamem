@@ -77,12 +77,37 @@ interface OrderItemRow {
   unitPriceSnapshot?: string | number | null;
   merchantId?: string | null;
   merchant?: { storeNameAr?: string } | null;
+  /** Chosen size, snapshotted at order time. */
+  variantNameSnapshot?: string | null;
+  /** Chosen extras, snapshotted at order time. Array; string on older payloads. */
+  addonsSnapshot?: Array<{ nameAr?: string; price?: number }> | string | null;
 }
 
 interface GroupedItem {
   name: string;
   quantity: number;
   unitPrice: number | null;
+  /** e.g. "موتزريلا، زيتون" — already priced into unitPrice. */
+  extras: string | null;
+}
+
+/**
+ * The extras arrive as an array, but a longtext column read by a route that
+ * doesn't decode JSON can still hand back a string — so accept both rather
+ * than render "[object Object]" the one time it happens.
+ */
+function extrasLabel(raw: OrderItemRow['addonsSnapshot']): string | null {
+  let list = raw;
+  if (typeof list === 'string') {
+    try {
+      list = JSON.parse(list);
+    } catch {
+      return null;
+    }
+  }
+  if (!Array.isArray(list) || list.length === 0) return null;
+  const names = list.map((a) => String(a?.nameAr ?? '').trim()).filter(Boolean);
+  return names.length > 0 ? names.join('، ') : null;
 }
 
 interface OrderDetail {
@@ -344,9 +369,15 @@ export function OrderTrackingScreen() {
         items: [],
       };
       g.items.push({
-        name: it.productNameSnapshot,
+        // The size is part of what was bought, so it belongs in the name —
+        // "بيتزا فراخ" and "بيتزا فراخ — صغير" are different purchases at
+        // different prices.
+        name: it.variantNameSnapshot
+          ? `${it.productNameSnapshot} — ${it.variantNameSnapshot}`
+          : it.productNameSnapshot,
         quantity: it.quantity,
         unitPrice: it.unitPriceSnapshot != null ? Number(it.unitPriceSnapshot) : null,
+        extras: extrasLabel(it.addonsSnapshot),
       });
       map.set(key, g);
     }
@@ -661,9 +692,18 @@ export function OrderTrackingScreen() {
                 {g.items.map((it, i) => (
                   <View key={`${g.key}-${i}`} style={styles.itemRow}>
                     <Text style={styles.itemQty}>{it.quantity}×</Text>
-                    <Text style={styles.itemName} numberOfLines={2}>
-                      {it.name}
-                    </Text>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.itemName} numberOfLines={2}>
+                        {it.name}
+                      </Text>
+                      {/* The price above already includes these — saying so
+                          stops it reading as an uncharged freebie. */}
+                      {!!it.extras && (
+                        <Text style={styles.itemExtras} numberOfLines={2}>
+                          + {it.extras}
+                        </Text>
+                      )}
+                    </View>
                     {it.unitPrice != null && (
                       <Text style={styles.itemPrice}>
                         {(it.unitPrice * it.quantity).toLocaleString('ar-EG')} ج.م
@@ -755,14 +795,24 @@ export function OrderTrackingScreen() {
                             unitPriceSnapshot?: string | number | null;
                             merchantId?: string | null;
                             merchant?: { storeNameAr?: string } | null;
+                            variantNameSnapshot?: string | null;
+                            addonsSnapshot?: Array<{ nameAr?: string }> | string | null;
                           }>
-                        ).map((it) => ({
-                          name: it.productNameSnapshot,
-                          quantity: it.quantity,
-                          unitPrice:
-                            it.unitPriceSnapshot != null ? Number(it.unitPriceSnapshot) : null,
-                          merchantName: it.merchant?.storeNameAr ?? null,
-                        }))
+                        ).map((it) => {
+                          // The receipt is the record of what was bought — the
+                          // size and extras are part of that, not decoration.
+                          const extras = extrasLabel(it.addonsSnapshot);
+                          const base = it.variantNameSnapshot
+                            ? `${it.productNameSnapshot} — ${it.variantNameSnapshot}`
+                            : it.productNameSnapshot;
+                          return {
+                            name: extras ? `${base} (+ ${extras})` : base,
+                            quantity: it.quantity,
+                            unitPrice:
+                              it.unitPriceSnapshot != null ? Number(it.unitPriceSnapshot) : null,
+                            merchantName: it.merchant?.storeNameAr ?? null,
+                          };
+                        })
                       : [];
                     const paymentMethodMap: Record<string, string> = {
                       CASH: 'كاش عند الاستلام',
@@ -1667,11 +1717,18 @@ const styles = StyleSheet.create({
     minWidth: 26,
   },
   itemName: {
-    flex: 1,
     fontSize: fontSizes.sm,
     fontFamily: fontFamilies.body,
     color: colors.ink,
     lineHeight: 21,
+    includeFontPadding: false,
+    textAlign: 'auto',
+  },
+  itemExtras: {
+    fontSize: 11,
+    fontFamily: fontFamilies.body,
+    color: colors.text.secondary,
+    lineHeight: 18,
     includeFontPadding: false,
     textAlign: 'auto',
   },
