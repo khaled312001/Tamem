@@ -29,6 +29,7 @@ import {
   useCart,
 } from '../stores/cart';
 import { colors, fontFamilies, fontSizes, radii, shadows, spacing } from '../theme/tokens';
+import { SuggestionsRail } from './cart/SuggestionsRail';
 
 type NavProp = NativeStackNavigationProp<HomeStackParamList, 'Cart'>;
 
@@ -233,6 +234,16 @@ export function CartScreen() {
                 </View>
               </View>
             ))}
+
+            {/* Cross-sell, per store — the cola you forgot. Sits above the
+                subtotal so adding one visibly moves the number. */}
+            <SuggestionsRail
+              merchantId={group.merchantId}
+              merchantNameAr={group.merchantNameAr}
+              excludeIds={group.items.map((i) => i.productId)}
+              disabled={openness?.[group.merchantId]?.isOpenNow === false}
+              onOpenProduct={(productId) => navigation.navigate('ProductDetail', { productId })}
+            />
 
             {/* Per-merchant subtotal */}
             <View style={styles.subRow}>

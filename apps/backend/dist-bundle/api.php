@@ -6206,6 +6206,64 @@ if (preg_match('#^/merchants/([^/]+)/products$#', $path, $mm) && $method === 'GE
     ));
 }
 
+/**
+ * GET /merchants/{id}/suggestions — "ممكن تحتاج كمان" for the cart.
+ *
+ * Deliberately requires NO admin curation. Asking the admin to hand-pick
+ * cross-sells for every store is work that would simply never get done, and an
+ * empty curated list produces an empty rail — worse than a decent guess.
+ *
+ * The guess: prefer this merchant's drinks/sides/desserts sections (that's
+ * what a customer forgets — the cola, not another pizza), cheapest first since
+ * an impulse add-on is a small purchase. Falls back to the cheapest available
+ * items when the store has no such section, which is right for a supermarket
+ * where every section is equally "extra".
+ *
+ * `exclude` drops what's already in the cart. Capped so a crafted query can't
+ * grow the IN(...) without bound.
+ */
+if (preg_match('#^/merchants/([^/]+)/suggestions$#', $path, $mm) && $method === 'GET') {
+    $merchantId = $mm[1];
+    $limit = min(12, max(1, (int) ($_GET['limit'] ?? 8)));
+
+    $where = 'merchantId = ? AND isAvailable = 1 AND isHidden = 0 AND price > 0';
+    $args = [$merchantId];
+
+    $excludeRaw = trim((string) ($_GET['exclude'] ?? ''));
+    if ($excludeRaw !== '') {
+        $ex = array_slice(array_filter(array_map('trim', explode(',', $excludeRaw))), 0, 50);
+        if ($ex) {
+            $where .= ' AND id NOT IN (' . implode(',', array_fill(0, count($ex), '?')) . ')';
+            $args = array_merge($args, $ex);
+        }
+    }
+
+    // Sections that read as "something you add to an order" rather than a meal.
+    $hints = ['مشروب', 'مشروبات', 'عصير', 'عصائر', 'مياه', 'ميه', 'حلويات', 'حلو',
+        'تحلية', 'سلطات', 'سلطة', 'إضافات', 'اضافات', 'جانبية', 'مقبلات'];
+    $like = [];
+    foreach ($hints as $h) { $like[] = 'categoryName LIKE ?'; $args[] = '%' . $h . '%'; }
+    // CASE puts the hinted sections first without a second round trip; the rest
+    // of the catalogue still fills the rail when there aren't enough of them.
+    $rank = 'CASE WHEN (' . implode(' OR ', $like) . ') THEN 0 ELSE 1 END';
+
+    $st = db()->prepare(
+        'SELECT * FROM `Product` WHERE ' . $where
+        . ' ORDER BY ' . $rank . ' ASC, price ASC LIMIT ' . $limit
+    );
+    $st->execute($args);
+    $rows = $st->fetchAll();
+
+    $withOpts = merchantProductsWithOptions($merchantId);
+    jsonOk(array_map(
+        fn($r) => productShape($r) + [
+            'hasOptions' => isset($withOpts[$r['id']]),
+            'fromPrice' => $withOpts[$r['id']]['minPrice'] ?? null,
+        ],
+        $rows
+    ));
+}
+
 // GET /merchants/{id}/product-sections — the in-store sections a customer can
 // filter by, with counts so the UI can drop empty ones and show sizes.
 // Sourced from Product.categoryName, which the API sync already populates and
