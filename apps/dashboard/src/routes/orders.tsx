@@ -832,7 +832,11 @@ export function OrdersPage() {
                               finalPrice: number | null;
                               assignedDriver: { name: string } | null;
                               merchant: { storeNameAr: string } | null;
-                              items: { productNameSnapshot: string; quantity: number }[];
+                              items: {
+                                productNameSnapshot: string;
+                                quantity: number;
+                                variantNameSnapshot?: string | null;
+                              }[];
                             }) => (
                               <tr
                                 key={sub.id}
@@ -850,7 +854,12 @@ export function OrdersPage() {
                                     spanning them. */}
                                 <td className="px-4 py-2 text-muted-foreground">
                                   {sub.items
-                                    .map((i) => `${i.productNameSnapshot} ×${i.quantity}`)
+                                    .map(
+                                      (i) =>
+                                        `${i.productNameSnapshot}${
+                                          i.variantNameSnapshot ? ` — ${i.variantNameSnapshot}` : ''
+                                        } ×${i.quantity}`,
+                                    )
                                     .join(' · ')}
                                 </td>
                                 <td className="px-4 py-2 font-medium">
@@ -1094,6 +1103,12 @@ function OrderDetailDrawer({ orderId, onClose }: { orderId: string; onClose: () 
                   <li key={i} className="flex justify-between text-sm">
                     <span>
                       {it.quantity} × {it.productNameSnapshot}
+                      {it.variantNameSnapshot ? (
+                        <span className="font-bold text-brand-red">
+                          {' '}
+                          — {it.variantNameSnapshot}
+                        </span>
+                      ) : null}
                     </span>
                     {it.unitPriceSnapshot && (
                       <span className="text-muted-foreground">

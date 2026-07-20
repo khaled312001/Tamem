@@ -2585,7 +2585,7 @@ if ($method === 'GET' && $path === '/admin/orders') {
             $subIds = [];
             foreach ($subsByParent as $list) foreach ($list as $sub) $subIds[] = $sub['id'];
             $iin = implode(',', array_fill(0, count($subIds), '?'));
-            $is = db()->prepare("SELECT orderId, productNameSnapshot, quantity FROM `OrderItem` WHERE orderId IN ($iin) ORDER BY id");
+            $is = db()->prepare("SELECT orderId, productNameSnapshot, quantity, variantNameSnapshot FROM `OrderItem` WHERE orderId IN ($iin) ORDER BY id");
             $is->execute($subIds);
             $itemsByOrder = [];
             foreach ($is->fetchAll() as $it) {
@@ -2670,7 +2670,7 @@ if ($method === 'GET' && preg_match('#^/admin/orders/([^/]+)$#', $path, $m)) {
         if ($subRows) {
             $sids = array_column($subRows, 'id');
             $iin = implode(',', array_fill(0, count($sids), '?'));
-            $iq = db()->prepare("SELECT orderId, productNameSnapshot, quantity FROM `OrderItem` WHERE orderId IN ($iin) ORDER BY id");
+            $iq = db()->prepare("SELECT orderId, productNameSnapshot, quantity, variantNameSnapshot FROM `OrderItem` WHERE orderId IN ($iin) ORDER BY id");
             $iq->execute($sids);
             foreach ($iq->fetchAll() as $it) {
                 $itemsBySub[$it['orderId']][] = [
