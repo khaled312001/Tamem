@@ -70,19 +70,23 @@ interface Props {
 export function ProductOptionsPanel({ productId, merchantId, basePrice, registerSave }: Props) {
   const qc = useQueryClient();
 
-  const { data, isLoading, error } = useQuery({
+  const optionsQuery = {
     queryKey: ['admin', 'product-options', productId],
     queryFn: () => api.adminGetProductOptions(productId) as Promise<OptionsResponse>,
-  });
+  };
+  const { data, isLoading, error } = useQuery(optionsQuery);
 
   const [variants, setVariants] = useState<VariantRow[] | null>(null);
   const [linked, setLinked] = useState<string[] | null>(null);
 
-  // Seed local state once the fetch lands. Keeping it null until then is what
-  // lets us tell "not loaded yet" from "admin deleted every size" — the latter
-  // must still be saved (as an empty list), the former must not.
+  // Seed local state ONCE, when the first fetch lands.
+  //
+  // Two reasons it must not re-seed on every `data` change: null vs [] is how
+  // we tell "not loaded yet" from "admin deleted every size" (the second must
+  // still save, as an empty list), and adding an add-on refetches this query —
+  // re-seeding there would silently discard sizes the admin had just typed.
   useEffect(() => {
-    if (!data) return;
+    if (!data || variants !== null) return;
     setVariants(
       data.variants.map((v) => ({
         key: nextKey(),
@@ -92,7 +96,7 @@ export function ProductOptionsPanel({ productId, merchantId, basePrice, register
       })),
     );
     setLinked(data.linkedAddonIds);
-  }, [data]);
+  }, [data, variants]);
 
   const merchantAddons = data?.merchantAddons ?? [];
 
@@ -115,7 +119,6 @@ export function ProductOptionsPanel({ productId, merchantId, basePrice, register
 
   const addonMut = useMutation({
     mutationFn: async (next: MerchantAddon[]) => api.adminSaveMerchantAddons(merchantId, next),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['admin', 'product-options'] }),
     onError: (e: Error) => toast.error(e.message),
   });
 
@@ -131,6 +134,12 @@ export function ProductOptionsPanel({ productId, merchantId, basePrice, register
       { id: '', nameAr, price },
     ]);
     setNewAddon({ nameAr: '', price: '' });
+
+    // The server mints the id, so re-read to learn it, then tick it on this
+    // product — you added it from inside a pizza, you meant it for this pizza.
+    const fresh = await qc.fetchQuery({ ...optionsQuery, staleTime: 0 });
+    const created = fresh.merchantAddons.find((a) => a.nameAr === nameAr);
+    if (created) setLinked((cur) => [...(cur ?? []), created.id]);
     toast.success(`تمت إضافة "${nameAr}" لإضافات المتجر`);
   };
 
@@ -140,6 +149,7 @@ export function ProductOptionsPanel({ productId, merchantId, basePrice, register
         .filter((a) => a.id !== id)
         .map((a) => ({ id: a.id, nameAr: a.nameAr, price: a.price })),
     );
+    await qc.fetchQuery({ ...optionsQuery, staleTime: 0 });
     setLinked((cur) => (cur ?? []).filter((x) => x !== id));
   };
 
