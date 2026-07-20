@@ -1320,6 +1320,7 @@ function orderDetailBlocks(array $o): array {
             // list of product names left them guessing.
             $st = db()->prepare(
                 'SELECT oi.quantity, oi.productNameSnapshot, oi.unitPriceSnapshot,'
+                . ' oi.variantNameSnapshot, oi.addonsSnapshot,'
                 . ' oi.merchantId, mp.storeNameAr'
                 . ' FROM `OrderItem` oi'
                 . ' LEFT JOIN `MerchantProfile` mp ON mp.id = oi.merchantId'
@@ -1332,8 +1333,18 @@ function orderDetailBlocks(array $o): array {
                 $key = (string) ($it['merchantId'] ?? '');
                 $groups[$key]['name'] = trim((string) ($it['storeNameAr'] ?? ''));
                 $pl = waMoney($it['unitPriceSnapshot']);
-                $groups[$key]['lines'][] = '• ' . (int) $it['quantity'] . '× '
-                    . trim((string) $it['productNameSnapshot']) . ($pl ? " ({$pl})" : '');
+                // Size inline with the name, extras on a sub-line — the
+                // dispatcher has to buy exactly this, so it can't be implied.
+                $nm = trim((string) $it['productNameSnapshot']);
+                if (!empty($it['variantNameSnapshot'])) $nm .= ' — ' . $it['variantNameSnapshot'];
+                $line = '• ' . (int) $it['quantity'] . '× ' . $nm . ($pl ? " ({$pl})" : '');
+
+                $ex = json_decode((string) ($it['addonsSnapshot'] ?? ''), true);
+                if (is_array($ex) && $ex) {
+                    $names = array_map(fn($a) => (string) ($a['nameAr'] ?? ''), $ex);
+                    $line .= "\n     + " . implode('، ', array_filter($names));
+                }
+                $groups[$key]['lines'][] = $line;
             }
 
             $blocks = [];
@@ -6105,6 +6116,40 @@ if ($method === 'GET' && $path === '/products') {
     jsonList($rows, $page, $pageSize, $total);
 }
 
+/**
+ * Sizes and extras for a product.
+ *
+ * Variants belong to the product (a "large" only means something for that
+ * item). Addons belong to the MERCHANT and are linked in, so "موتزريلا +15" is
+ * written once for the restaurant and attached to every pizza instead of being
+ * retyped per product — which is the whole point of the feature.
+ */
+function productOptions(string $productId): array {
+    $out = ['variants' => [], 'addons' => []];
+    try {
+        $v = db()->prepare(
+            'SELECT id, nameAr, price FROM `ProductVariant`'
+            . ' WHERE productId = ? AND isActive = 1 ORDER BY sortOrder ASC, price ASC'
+        );
+        $v->execute([$productId]);
+        $out['variants'] = array_map(fn($r) => [
+            'id' => $r['id'], 'nameAr' => $r['nameAr'], 'price' => (float) $r['price'],
+        ], $v->fetchAll());
+
+        $a = db()->prepare(
+            'SELECT ma.id, ma.nameAr, ma.price FROM `ProductAddonLink` pal'
+            . ' JOIN `MerchantAddon` ma ON ma.id = pal.addonId'
+            . ' WHERE pal.productId = ? AND ma.isActive = 1'
+            . ' ORDER BY ma.sortOrder ASC, ma.nameAr ASC'
+        );
+        $a->execute([$productId]);
+        $out['addons'] = array_map(fn($r) => [
+            'id' => $r['id'], 'nameAr' => $r['nameAr'], 'price' => (float) $r['price'],
+        ], $a->fetchAll());
+    } catch (Throwable $e) { /* tables absent on an old DB — degrade to none */ }
+    return $out;
+}
+
 if (preg_match('#^/products/([^/]+)$#', $path, $mm) && $method === 'GET') {
     $st = db()->prepare('SELECT p.*, m.id AS m_id, m.storeNameAr AS m_storeNameAr, m.logoUrl AS m_logoUrl, m.rating AS m_rating, m.manualStatus AS m_manualStatus, m.timezone AS m_timezone FROM `Product` p LEFT JOIN `MerchantProfile` m ON m.id = p.merchantId WHERE p.id = ? LIMIT 1');
     $st->execute([$mm[1]]);
@@ -6119,6 +6164,13 @@ if (preg_match('#^/products/([^/]+)$#', $path, $mm) && $method === 'GET') {
         'openness' => merchantOpenness(['manualStatus' => $r['m_manualStatus'], 'timezone' => $r['m_timezone']], $hrs[$r['merchantId']] ?? []),
     ];
     foreach (['m_id', 'm_storeNameAr', 'm_logoUrl', 'm_rating', 'm_manualStatus', 'm_timezone'] as $k) unset($p[$k]);
+
+    // Sizes and extras. Both arrays are always present (possibly empty) so the
+    // app can render unconditionally without null-guarding every access.
+    $opts = productOptions($mm[1]);
+    $p['variants'] = $opts['variants'];
+    $p['addons'] = $opts['addons'];
+
     jsonOk($p);
 }
 
@@ -6494,9 +6546,57 @@ if ($method === 'POST' && $path === '/orders/cart') {
             if (!(int) $p['isAvailable'] || (int) $p['isHidden']) conflictErr('PRODUCT_UNAVAILABLE', 'المنتج ' . $p['nameAr'] . ' غير متاح حالياً');
             $qty = max(1, (int) ($it['quantity'] ?? 1));
             if ($p['stock'] !== null && (int) $p['stock'] < $qty) conflictErr('INSUFFICIENT_STOCK', 'الكمية المطلوبة من ' . $p['nameAr'] . ' غير متوفرة');
+            /*
+             * Size and extras, priced from the DATABASE — never from what the
+             * client sent. The app posts ids only; the names and prices are
+             * looked up here and snapshotted, so a tampered request can't buy a
+             * jumbo pizza at the small price, and a later menu edit can't
+             * rewrite a past order.
+             */
             $unit = effectiveUnitPrice($p);
+            $variantName = null;
+            $addonSnap = [];
+
+            $vid = trim((string) ($it['variantId'] ?? ''));
+            if ($vid !== '') {
+                $vq = db()->prepare('SELECT nameAr, price FROM `ProductVariant` WHERE id = ? AND productId = ? AND isActive = 1 LIMIT 1');
+                $vq->execute([$vid, $p['id']]);
+                if ($v = $vq->fetch()) {
+                    // A size REPLACES the base price rather than adding to it.
+                    $unit = round((float) $v['price'], 2);
+                    $variantName = (string) $v['nameAr'];
+                } else {
+                    conflictErr('VARIANT_UNAVAILABLE', 'الحجم المختار لم يعد متاحاً لـ ' . $p['nameAr']);
+                }
+            }
+
+            $aids = array_values(array_filter(array_map('strval', (array) ($it['addonIds'] ?? []))));
+            if ($aids) {
+                $in = implode(',', array_fill(0, count($aids), '?'));
+                // Joined through the link table so an addon from ANOTHER
+                // merchant can't be attached by id.
+                $aq = db()->prepare(
+                    'SELECT ma.nameAr, ma.price FROM `ProductAddonLink` pal'
+                    . ' JOIN `MerchantAddon` ma ON ma.id = pal.addonId'
+                    . " WHERE pal.productId = ? AND ma.isActive = 1 AND ma.id IN ($in)"
+                );
+                $aq->execute(array_merge([$p['id']], $aids));
+                foreach ($aq->fetchAll() as $a) {
+                    $addonSnap[] = ['nameAr' => $a['nameAr'], 'price' => (float) $a['price']];
+                    $unit += (float) $a['price'];
+                }
+            }
+            $unit = round($unit, 2);
             $sum += $unit * $qty;
-            $lines[$mi][] = ['productId' => $p['id'], 'name' => $p['nameAr'], 'qty' => $qty, 'unit' => $unit, 'notes' => $it['notes'] ?? null];
+            $lines[$mi][] = [
+                'productId' => $p['id'],
+                'name' => $p['nameAr'],
+                'qty' => $qty,
+                'unit' => $unit,
+                'notes' => $it['notes'] ?? null,
+                'variantName' => $variantName,
+                'addons' => $addonSnap,
+            ];
         }
         $subtotals[$mi] = round($sum, 2);
     }
@@ -6572,8 +6672,13 @@ if ($method === 'POST' && $path === '/orders/cart') {
                 ]);
         }
         foreach ($lines[$mi] as $l) {
-            db()->prepare('INSERT INTO `OrderItem` (id, orderId, productId, productNameSnapshot, unitPriceSnapshot, quantity, merchantId, notes) VALUES (?,?,?,?,?,?,?,?)')
-                ->execute([newId(), $childId, $l['productId'], $l['name'], $l['unit'], $l['qty'], $m['merchantId'] ?? null, $l['notes']]);
+            db()->prepare('INSERT INTO `OrderItem` (id, orderId, productId, productNameSnapshot, unitPriceSnapshot, quantity, merchantId, notes, variantNameSnapshot, addonsSnapshot) VALUES (?,?,?,?,?,?,?,?,?,?)')
+                ->execute([
+                    newId(), $childId, $l['productId'], $l['name'], $l['unit'], $l['qty'],
+                    $m['merchantId'] ?? null, $l['notes'],
+                    $l['variantName'] ?? null,
+                    !empty($l['addons']) ? json_encode($l['addons'], JSON_UNESCAPED_UNICODE) : null,
+                ]);
         }
     }
     if ($coupon) {

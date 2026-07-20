@@ -26,7 +26,63 @@ MIGRATIONS = [
     ("HomeConfig", "featuredProductIds", "longtext NULL"),
     ("MerchantProfile", "prepMinutesMin", "int NULL"),
     ("MerchantProfile", "prepMinutesMax", "int NULL"),
+    # Chosen size / extras, snapshotted at order time so a later price or name
+    # change can never rewrite what the customer actually bought.
+    ("OrderItem", "variantNameSnapshot", "varchar(120) NULL"),
+    ("OrderItem", "addonsSnapshot", "longtext NULL"),
 ]
+
+# Tables created if absent.
+#
+# COLLATE is explicit and must stay that way: Product/MerchantProfile are
+# utf8mb4_unicode_ci, while this server's default for a bare "CHARSET=utf8mb4"
+# is utf8mb4_uca1400_ai_ci. A foreign key between columns of differing
+# collation is rejected outright — which is exactly how the first attempt
+# failed.
+TABLES = {
+    "ProductVariant": """
+        CREATE TABLE `ProductVariant` (
+          `id` varchar(191) NOT NULL,
+          `productId` varchar(191) NOT NULL,
+          `nameAr` varchar(120) NOT NULL,
+          `price` decimal(10,2) NOT NULL,
+          `sortOrder` int NOT NULL DEFAULT 0,
+          `isActive` tinyint(1) NOT NULL DEFAULT 1,
+          `createdAt` datetime(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+          PRIMARY KEY (`id`),
+          KEY `ProductVariant_productId_idx` (`productId`),
+          CONSTRAINT `ProductVariant_productId_fk` FOREIGN KEY (`productId`)
+            REFERENCES `Product` (`id`) ON DELETE CASCADE
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    "MerchantAddon": """
+        CREATE TABLE `MerchantAddon` (
+          `id` varchar(191) NOT NULL,
+          `merchantId` varchar(191) NOT NULL,
+          `nameAr` varchar(120) NOT NULL,
+          `price` decimal(10,2) NOT NULL DEFAULT 0,
+          `sortOrder` int NOT NULL DEFAULT 0,
+          `isActive` tinyint(1) NOT NULL DEFAULT 1,
+          `createdAt` datetime(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+          PRIMARY KEY (`id`),
+          KEY `MerchantAddon_merchantId_idx` (`merchantId`),
+          CONSTRAINT `MerchantAddon_merchantId_fk` FOREIGN KEY (`merchantId`)
+            REFERENCES `MerchantProfile` (`id`) ON DELETE CASCADE
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    "ProductAddonLink": """
+        CREATE TABLE `ProductAddonLink` (
+          `productId` varchar(191) NOT NULL,
+          `addonId` varchar(191) NOT NULL,
+          PRIMARY KEY (`productId`,`addonId`),
+          KEY `ProductAddonLink_addonId_idx` (`addonId`),
+          CONSTRAINT `ProductAddonLink_productId_fk` FOREIGN KEY (`productId`)
+            REFERENCES `Product` (`id`) ON DELETE CASCADE,
+          CONSTRAINT `ProductAddonLink_addonId_fk` FOREIGN KEY (`addonId`)
+            REFERENCES `MerchantAddon` (`id`) ON DELETE CASCADE
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+}
 
 DRY_RUN = "--dry-run" in sys.argv
 
@@ -94,6 +150,27 @@ def main() -> None:
         return "'" + s.replace("'", "'\\''") + "'"
 
     print("mysql client:", cli.exec_command("which mysql")[1].read().decode().strip() or "NOT FOUND")
+
+    # Tables first — the columns below may reference them.
+    for tname, ddl in TABLES.items():
+        if "DROP" in ddl.upper() or "TRUNCATE" in ddl.upper():
+            sys.exit(f"Refusing to run destructive DDL for {tname}")
+        exists = sql(
+            "SELECT TABLE_NAME FROM information_schema.TABLES "
+            f"WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = '{tname}'"
+        ).strip()
+        if exists == tname:
+            print(f"  table {tname}: already exists")
+            continue
+        if DRY_RUN:
+            print(f"  [dry-run] CREATE TABLE `{tname}`")
+            continue
+        err = sql(" ".join(ddl.split()))
+        ok = sql(
+            "SELECT TABLE_NAME FROM information_schema.TABLES "
+            f"WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = '{tname}'"
+        ).strip()
+        print(f"  table {tname}: {'created' if ok == tname else 'FAILED ' + err[:160]}")
 
     for table, column, coltype in MIGRATIONS:
         exists = sql(
