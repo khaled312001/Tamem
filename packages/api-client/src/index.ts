@@ -573,6 +573,28 @@ export class TamemClient {
   async getMerchantProductSections(merchantId: string): Promise<unknown[]> {
     return this.request({ method: 'GET', url: `/merchants/${merchantId}/product-sections` });
   }
+  // ===== Product sizes + merchant add-ons =====
+  // Both writers replace the whole list; see the api.php routes for why.
+  async adminGetMerchantAddons(merchantId: string): Promise<unknown[]> {
+    return this.request({ method: 'GET', url: `/admin/merchants/${merchantId}/addons` });
+  }
+  async adminSaveMerchantAddons(merchantId: string, addons: unknown[]): Promise<unknown> {
+    return this.request({
+      method: 'PUT',
+      url: `/admin/merchants/${merchantId}/addons`,
+      data: { addons },
+    });
+  }
+  async adminGetProductOptions(productId: string): Promise<unknown> {
+    return this.request({ method: 'GET', url: `/admin/products/${productId}/options` });
+  }
+  async adminSaveProductOptions(
+    productId: string,
+    data: { variants?: unknown[]; linkedAddonIds?: string[] },
+  ): Promise<unknown> {
+    return this.request({ method: 'PUT', url: `/admin/products/${productId}/options`, data });
+  }
+
   async adminUpdateMerchant(id: string, data: unknown): Promise<unknown> {
     return this.request({ method: 'PATCH', url: `/admin/merchants/${id}`, data });
   }

@@ -53,7 +53,15 @@ interface MerchantDetail {
   /// Menu-image mode: photos of the merchant's paper menu. When present the
   /// customer views these and orders via the free-text "اطلب الآن" flow.
   menuImages?: string[] | null;
-  products?: Array<{ id: string; nameAr: string; price: number; imageUrl?: string }>;
+  products?: Array<{
+    id: string;
+    nameAr: string;
+    price: number;
+    imageUrl?: string;
+    /// True when the product has sizes or extras, i.e. quick-add can't price
+    /// it and the customer must open the detail page to choose.
+    hasOptions?: boolean;
+  }>;
   /// Total catalogue size, independent of how many rows were embedded above.
   /// Absent on backends that predate the paginated product endpoints.
   productsTotal?: number;
@@ -225,11 +233,18 @@ export function MerchantDetailScreen() {
   const isClosed = !(data?.openness?.isOpenNow ?? data?.isOpen ?? true);
   const merchantName = data?.storeNameAr ?? '';
 
-  /** productId -> quantity, for this store only. */
+  /**
+   * productId -> quantity, for this store only.
+   *
+   * Summed, not assigned: one product can now occupy several cart lines (small
+   * pizza + large pizza), and this row shows one badge for the product.
+   */
   const qtyById = useMemo(() => {
     const m = new Map<string, number>();
     for (const it of cart.items) {
-      if (it.merchantId === merchantId) m.set(it.productId, it.quantity);
+      if (it.merchantId === merchantId) {
+        m.set(it.productId, (m.get(it.productId) ?? 0) + it.quantity);
+      }
     }
     return m;
   }, [cart.items, merchantId]);
@@ -241,7 +256,14 @@ export function MerchantDetailScreen() {
         quantity={qtyById.get(item.id) ?? 0}
         disabled={isClosed}
         onPress={() => openProduct(item.id)}
-        onAdd={() =>
+        onAdd={() => {
+          // A product with sizes has no single "the" price — the size replaces
+          // the base one — so quick-add would put a price in the cart that the
+          // server won't honour. Send them to pick instead.
+          if (item.hasOptions) {
+            openProduct(item.id);
+            return;
+          }
           addToCart({
             product: {
               id: item.id,
@@ -254,8 +276,8 @@ export function MerchantDetailScreen() {
             },
             merchantId,
             merchantNameAr: merchantName,
-          })
-        }
+          });
+        }}
         onRemove={() => setItemQuantity(item.id, (qtyById.get(item.id) ?? 1) - 1, merchantId)}
       />
     ),

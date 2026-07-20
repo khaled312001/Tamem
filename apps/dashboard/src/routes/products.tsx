@@ -41,6 +41,7 @@ import { ConfirmDialog } from '../components/ui/ConfirmDialog.js';
 import { Dialog, Drawer } from '../components/ui/Dialog.js';
 import { Field, Input, Textarea } from '../components/ui/Input.js';
 import { ProductHistoryDrawer } from '../components/ProductHistoryDrawer.js';
+import { ProductOptionsPanel } from '../components/ProductOptionsPanel.js';
 import { PageHeader } from '../components/ui/PageHeader.js';
 import { Pagination } from '../components/ui/Pagination.js';
 import { EmptyState, TableSkeleton } from '../components/ui/Skeleton.js';
@@ -2280,6 +2281,10 @@ interface ProductFormDialogProps {
 function ProductFormDialog({ mode, product, merchants, onClose }: ProductFormDialogProps) {
   const qc = useQueryClient();
   const [form, setForm] = useState<ProductFormState>(() => initialFromProduct(product, merchants));
+  // Sizes/add-ons live on their own endpoint, but the admin shouldn't have to
+  // press two save buttons. The panel hands us its writer and we run it right
+  // after the product itself saves.
+  const saveOptionsRef = useRef<(() => Promise<void>) | null>(null);
 
   // Submit-time payload: strip empty optionals so the backend treats them as
   // "not set" instead of validating them as malformed strings.
@@ -2317,7 +2322,9 @@ function ProductFormDialog({ mode, product, merchants, onClose }: ProductFormDia
       // but being explicit avoids confusing 400s if the schema ever changes.
       const { merchantId: _omit, ...patch } = payload;
       void _omit;
-      return api.adminUpdateProduct(product!.id, patch);
+      const saved = await api.adminUpdateProduct(product!.id, patch);
+      await saveOptionsRef.current?.();
+      return saved;
     },
     onSuccess: () => {
       toast.success(mode === 'create' ? 'تم إنشاء المنتج' : 'تم حفظ التغييرات');
@@ -2505,6 +2512,27 @@ function ProductFormDialog({ mode, product, merchants, onClose }: ProductFormDia
           />
           متاح للطلب
         </label>
+
+        {/* Only after the product exists — both endpoints are keyed by product
+            id, and a merchant's add-on list can't be linked to a row that
+            hasn't been created yet. */}
+        {mode === 'edit' && product?.id ? (
+          <div className="pt-2">
+            <h3 className="text-sm font-bold mb-2">الأحجام والإضافات</h3>
+            <ProductOptionsPanel
+              productId={product.id}
+              merchantId={form.merchantId}
+              basePrice={Number(form.price) || 0}
+              registerSave={(fn) => {
+                saveOptionsRef.current = fn;
+              }}
+            />
+          </div>
+        ) : (
+          <p className="text-xs text-muted-foreground pt-2">
+            الأحجام والإضافات بتتضاف بعد حفظ المنتج — افتح تعديل المنتج تاني.
+          </p>
+        )}
       </div>
 
       <div className="flex justify-end gap-2 mt-4">
