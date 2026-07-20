@@ -37,6 +37,7 @@ import {
 import { createRecorder, formatDuration, type Recorder } from '../lib/audioRecorder';
 import { api } from '../lib/api';
 import { useDebouncedValue } from '../lib/useDebouncedValue';
+import { productPrice } from '../lib/productPrice';
 import { showToast } from '../lib/toast';
 import { uploadFile } from '../lib/uploadFile';
 import { colors, fontFamilies, fontSizes, gradients, radii, spacing } from '../theme/tokens';
@@ -124,7 +125,14 @@ export function QuickOrderSheet({ visible, onClose, initialMode }: QuickOrderShe
     audioUri?: string;
     audioMime?: string;
     audioDurationMs?: number;
-    productLines?: { productId: string; nameAr: string; quantity: number; price: number }[];
+    productLines?: {
+      productId: string;
+      nameAr: string;
+      quantity: number;
+      price: number;
+      merchantId?: string | null;
+      merchantNameAr?: string | null;
+    }[];
   }) {
     setSubmitting(true);
     try {
@@ -175,12 +183,40 @@ export function QuickOrderSheet({ visible, onClose, initialMode }: QuickOrderShe
         return;
       }
 
-      const productsNotes =
-        payload.productLines && payload.productLines.length > 0
-          ? payload.productLines
-              .map((l) => `• ${l.quantity}× ${l.nameAr} (${l.price.toLocaleString('ar-EG')} ج.م)`)
-              .join('\n')
-          : null;
+      /*
+       * Group the note by store.
+       *
+       * The dispatcher reads this text to go and buy the items, so "which shop"
+       * is the most useful thing on it — previously it was a flat list of
+       * product names with no source at all.
+       */
+      const byMerchant = new Map<string, { name: string; lines: string[] }>();
+      for (const l of payload.productLines ?? []) {
+        const key = l.merchantId ?? '__none__';
+        const entry = byMerchant.get(key) ?? {
+          name: l.merchantNameAr ?? 'متجر غير محدد',
+          lines: [],
+        };
+        entry.lines.push(`• ${l.quantity}× ${l.nameAr} (${l.price.toLocaleString('ar-EG')} ج.م)`);
+        byMerchant.set(key, entry);
+      }
+
+      const productsNotes = byMerchant.size
+        ? Array.from(byMerchant.values())
+            .map((m) => `🏪 ${m.name}\n${m.lines.join('\n')}`)
+            .join('\n\n')
+        : null;
+
+      /*
+       * Attribute the order to a store when everything came from one — the
+       * normal case. With items from several stores there is no single
+       * merchantId to set, so it stays unset and the grouped note above is what
+       * tells the dispatcher where to go.
+       */
+      const merchantIds = new Set(
+        (payload.productLines ?? []).map((l) => l.merchantId).filter(Boolean) as string[],
+      );
+      const singleMerchantId = merchantIds.size === 1 ? [...merchantIds][0] : undefined;
 
       const finalNotes = [payload.notes, productsNotes].filter(Boolean).join('\n\n') || undefined;
 
@@ -242,6 +278,8 @@ export function QuickOrderSheet({ visible, onClose, initialMode }: QuickOrderShe
         villageId: addrVillageId ?? undefined,
         areaId: addrAreaId ?? undefined,
         paymentMethod: 'CASH',
+        // Set only when unambiguous; see the note above.
+        ...(singleMerchantId ? { merchantId: singleMerchantId } : {}),
         notes: finalNotes,
         imageUrls: hostedImages,
         ...(coupon ? { couponCode: coupon.code } : {}),
@@ -256,7 +294,15 @@ export function QuickOrderSheet({ visible, onClose, initialMode }: QuickOrderShe
               }
             : {}),
           ...(payload.productLines && payload.productLines.length > 0
-            ? { selectedProducts: payload.productLines }
+            ? {
+                selectedProducts: payload.productLines,
+                // Kept even when a single merchantId was set, so a multi-store
+                // quick order is still fully reconstructable from the record.
+                merchants: Array.from(byMerchant.entries()).map(([id, m]) => ({
+                  id: id === '__none__' ? null : id,
+                  nameAr: m.name,
+                })),
+              }
             : {}),
         },
       });
@@ -831,7 +877,15 @@ function ProductsMode({
             productId: id,
             nameAr: p?.nameAr ?? '',
             quantity: q,
-            price: Number(p?.price ?? 0),
+            // Discounted price, via the shared helper — this used to send the
+            // raw list price, so a quick order quoted more than the product
+            // page showed.
+            price: p ? productPrice(p).now : 0,
+            // Carried so the order can be attributed to a store. Without it the
+            // admin received a list of product names with no idea where to buy
+            // them, and the customer's order history showed no merchant.
+            merchantId: p?.merchant?.id ?? null,
+            merchantNameAr: p?.merchant?.storeNameAr ?? null,
           };
         }),
     [cart, seen],

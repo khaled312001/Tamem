@@ -96,16 +96,6 @@ export const COLUMNS: SheetColumn[] = [
     help: 'مطلوب عند الإضافة — ده رقم دخول التاجر ولا يتكرر. مصري: 010/011/012/015.',
   },
   {
-    key: 'password',
-    header: 'كلمة المرور (للجديد فقط)',
-    width: 22,
-    type: 'secret',
-    required: false,
-    createOnly: true,
-    example: '(اتركه فاضي للتوليد التلقائي)',
-    help: 'تُستخدم عند إضافة تاجر جديد فقط. لو تركته فاضياً، النظام هيولّد كلمة مرور قوية ويعرضها لك في نتيجة الاستيراد. لا تُصدَّر أبداً.',
-  },
-  {
     key: 'storePhone',
     header: 'هاتف المتجر',
     width: 18,
@@ -272,9 +262,6 @@ function cellValue(m: Row, c: SheetColumn): unknown {
       return m.commissionPct == null ? '' : Number(m.commissionPct);
     case 'apiUrl':
       return m.apiConfig?.apiUrl ?? '';
-    // Never exported: the stored value is encrypted and must stay that way.
-    case 'password':
-      return '';
     default:
       return m[c.key] ?? '';
   }
@@ -686,9 +673,6 @@ export async function readMerchantsFile(file: File, ctx: ReadCtx): Promise<Parse
         case 'ownerName':
           if (isCreate) createFields.ownerName = v;
           else data.ownerName = v;
-          break;
-        case 'password':
-          if (isCreate) createFields.password = v;
           break;
         case 'lat':
         case 'lng': {

@@ -1003,6 +1003,8 @@ interface StoreFields {
   coverUrl: string;
   storePhone: string;
   commissionPct: string; // kept as text for the input; coerced on submit
+  prepMin: string; // preparation window, saved via its own endpoint
+  prepMax: string;
   menuImages: string[]; // menu-image mode: photos of the paper menu
   addressLine: string;
   lat: number;
@@ -1283,6 +1285,35 @@ function BasicFields({
           ))}
         </select>
       </Field>
+      {/* Prep time is what the customer checks before ordering — it sits next
+          to commission because both are operational settings, not branding. */}
+      <Field
+        label="مدة التجهيز (بالدقائق)"
+        hint="تظهر للعميل في صفحة المتجر. اتركها فارغة لإخفائها."
+      >
+        <div className="flex items-center gap-2">
+          <Input
+            type="number"
+            min={0}
+            max={600}
+            dir="ltr"
+            placeholder="من"
+            value={form.prepMin}
+            onChange={(e) => patch({ prepMin: e.target.value })}
+          />
+          <span className="text-muted-foreground text-sm">إلى</span>
+          <Input
+            type="number"
+            min={0}
+            max={600}
+            dir="ltr"
+            placeholder="إلى"
+            value={form.prepMax}
+            onChange={(e) => patch({ prepMax: e.target.value })}
+          />
+        </div>
+      </Field>
+
       <Field label="نسبة العمولة %" hint="تُترك فارغة لاستخدام النسبة الافتراضية">
         <Input
           type="number"
@@ -1505,6 +1536,8 @@ function storePayload(form: StoreFields): Record<string, unknown> {
 
 function toStoreFields(m: Row): StoreFields {
   return {
+    prepMin: m.prepMinutes?.min != null ? String(m.prepMinutes.min) : '',
+    prepMax: m.prepMinutes?.max != null ? String(m.prepMinutes.max) : '',
     storeNameAr: m.storeNameAr ?? '',
     storeName: m.storeName ?? '',
     categoryId: m.categoryId ?? m.category?.id ?? '',
@@ -1584,7 +1617,17 @@ function EditMerchantDialog({ merchant, onClose }: { merchant: Row; onClose: () 
   );
 
   const mut = useMutation({
-    mutationFn: (data: Record<string, unknown>) => api.adminUpdateMerchant(merchant.id, data),
+    mutationFn: async (data: Record<string, unknown>) => {
+      const res = await api.adminUpdateMerchant(merchant.id, data);
+      // Prep time has its own endpoint because it isn't a MerchantProfile
+      // column yet — it's kept in Setting until the schema change can run.
+      // Saved unconditionally so clearing both fields also clears the value.
+      await api.adminSetMerchantPrepTime(merchant.id, {
+        min: store.prepMin === '' ? null : Number(store.prepMin),
+        max: store.prepMax === '' ? null : Number(store.prepMax),
+      });
+      return res;
+    },
     onSuccess: () => {
       toast.success('تم حفظ بيانات التاجر');
       qc.invalidateQueries({ queryKey: ['admin', 'merchants'] });
@@ -1670,6 +1713,8 @@ function EditMerchantDialog({ merchant, onClose }: { merchant: Row; onClose: () 
 }
 
 const BLANK_STORE: StoreFields = {
+  prepMin: '',
+  prepMax: '',
   storeNameAr: '',
   storeName: '',
   categoryId: '',
@@ -1696,15 +1741,15 @@ function CreateMerchantDialog({ onClose }: { onClose: () => void }) {
   const [store, setStore] = useState<StoreFields>(BLANK_STORE);
   const [ownerName, setOwnerName] = useState('');
   const [phone, setPhone] = useState('+20');
-  const [password, setPassword] = useState('');
-
   const mut = useMutation({
     mutationFn: () =>
       api.adminCreateMerchant({
         ...storePayload(store),
         ownerName: ownerName.trim(),
         phone,
-        password,
+        // No password field: the backend auto-generates one; the merchant signs
+        // in via OTP / reset-password, so there is no secret for the admin to
+        // invent or relay.
       }),
     onSuccess: () => {
       toast.success('تم إضافة التاجر');
@@ -1742,14 +1787,6 @@ function CreateMerchantDialog({ onClose }: { onClose: () => void }) {
         </Field>
         <Field label="هاتف المالك" required>
           <PhoneInput value={phone} onChange={setPhone} />
-        </Field>
-        <Field label="كلمة المرور" required>
-          <Input
-            type="password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            autoComplete="new-password"
-          />
         </Field>
         <Field label="رقم هاتف المتجر (اختياري)" hint="لو مختلف عن رقم المالك">
           <Input

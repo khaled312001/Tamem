@@ -3,22 +3,54 @@
  *
  * Multi-merchant: each line item carries its own merchantId/name so the
  * customer can mix products from several stores in one cart. The checkout
- * groups items by merchant and the backend fans the request out into one
- * order per merchant (parent/sub-orders linked by `parentOrderId`).
+ * groups items by merchant for display, but the backend creates ONE order for
+ * the whole cart — so it's priced and assigned a driver once.
+ *
+ * Line identity is `lineId`, NOT productId: the same pizza in two sizes, or
+ * with and without extra cheese, are separate lines that must not merge. For a
+ * product with no options `lineId === productId`, which is what keeps the
+ * quick +/- buttons on the store page (they only know a product id) working.
  *
  * Persisted to AsyncStorage so closing the app doesn't lose state.
  */
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useEffect, useState } from 'react';
 
+export interface CartAddon {
+  id: string;
+  nameAr: string;
+  price: number;
+}
+
 export interface CartItem {
+  /** Stable identity of this line — see the file header. */
+  lineId: string;
   productId: string;
   nameAr: string;
+  /** Unit price WITH the chosen size and extras already applied. */
   price: number;
   imageUrl: string | null;
   quantity: number;
   merchantId: string;
   merchantNameAr: string;
+  /** Chosen size, when the product has any. */
+  variantId?: string | null;
+  variantNameAr?: string | null;
+  addons?: CartAddon[];
+}
+
+/**
+ * Same product + same size + same extras = same line. Add-on ids are sorted so
+ * picking cheese-then-olives and olives-then-cheese land on one line.
+ */
+export function cartLineId(
+  productId: string,
+  variantId?: string | null,
+  addonIds?: string[],
+): string {
+  const extras = (addonIds ?? []).slice().sort().join(',');
+  if (!variantId && !extras) return productId;
+  return `${productId}|${variantId ?? ''}|${extras}`;
 }
 
 export interface CartState {
@@ -76,9 +108,11 @@ async function hydrate(): Promise<void> {
       const parsed = JSON.parse(raw) as CartState;
       if (parsed && Array.isArray(parsed.items)) {
         // Defensive: ensure every item has a merchantId. Drop malformed rows.
-        const items = parsed.items.filter(
-          (i) => i && typeof i.merchantId === 'string' && typeof i.productId === 'string',
-        );
+        const items = parsed.items
+          .filter((i) => i && typeof i.merchantId === 'string' && typeof i.productId === 'string')
+          // Carts saved before sizes/add-ons existed have no lineId. They can
+          // only be plain products, so productId is the correct lineId.
+          .map((i) => (i.lineId ? i : { ...i, lineId: i.productId }));
         state = { items, ...recompute(items) };
         listeners.forEach((fn) => fn(state));
       }
@@ -108,11 +142,23 @@ export function addToCart(opts: {
   merchantId: string;
   merchantNameAr: string;
   quantity?: number;
+  /** Chosen size. Its price REPLACES the base price (server does the same). */
+  variant?: { id: string; nameAr: string; price: number } | null;
+  addons?: CartAddon[];
 }): void {
   const qty = Math.max(1, Math.floor(opts.quantity ?? 1));
-  const idx = state.items.findIndex(
-    (i) => i.productId === opts.product.id && i.merchantId === opts.merchantId,
+  const addons = opts.addons ?? [];
+  const lineId = cartLineId(
+    opts.product.id,
+    opts.variant?.id,
+    addons.map((a) => a.id),
   );
+  // Display price only — the server re-derives every price from the DB.
+  const base = opts.variant ? opts.variant.price : opts.product.price;
+  const unit =
+    Math.round((base + addons.reduce((sum, a) => sum + (Number(a.price) || 0), 0)) * 100) / 100;
+
+  const idx = state.items.findIndex((i) => i.lineId === lineId && i.merchantId === opts.merchantId);
   let items: CartItem[];
   if (idx >= 0) {
     items = state.items.map((it, i) => (i === idx ? { ...it, quantity: it.quantity + qty } : it));
@@ -120,24 +166,34 @@ export function addToCart(opts: {
     items = [
       ...state.items,
       {
+        lineId,
         productId: opts.product.id,
         nameAr: opts.product.nameAr,
-        price: opts.product.price,
+        price: unit,
         imageUrl: opts.product.imageUrl ?? null,
         quantity: qty,
         merchantId: opts.merchantId,
         merchantNameAr: opts.merchantNameAr,
+        variantId: opts.variant?.id ?? null,
+        variantNameAr: opts.variant?.nameAr ?? null,
+        addons,
       },
     ];
   }
   setState({ items, ...recompute(items) });
 }
 
-/** Set absolute quantity (used by +/- controls in the cart). 0 → removed. */
-export function setItemQuantity(productId: string, quantity: number, merchantId?: string): void {
+/**
+ * Set absolute quantity (used by +/- controls in the cart). 0 → removed.
+ *
+ * Accepts a lineId OR a bare productId. The store page's +/- only knows the
+ * product, so a productId there hits every option-line of that product — which
+ * is the sane reading of "minus one" from a screen that shows one row.
+ */
+export function setItemQuantity(id: string, quantity: number, merchantId?: string): void {
   let items: CartItem[];
   const matches = (i: CartItem): boolean =>
-    i.productId === productId && (!merchantId || i.merchantId === merchantId);
+    (i.lineId === id || i.productId === id) && (!merchantId || i.merchantId === merchantId);
   if (quantity <= 0) {
     items = state.items.filter((i) => !matches(i));
   } else {
@@ -146,8 +202,8 @@ export function setItemQuantity(productId: string, quantity: number, merchantId?
   setState({ items, ...recompute(items) });
 }
 
-export function removeFromCart(productId: string, merchantId?: string): void {
-  setItemQuantity(productId, 0, merchantId);
+export function removeFromCart(id: string, merchantId?: string): void {
+  setItemQuantity(id, 0, merchantId);
 }
 
 /** Remove all items belonging to one merchant (used by section "clear"). */

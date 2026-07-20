@@ -41,6 +41,7 @@ import { ConfirmDialog } from '../components/ui/ConfirmDialog.js';
 import { Dialog, Drawer } from '../components/ui/Dialog.js';
 import { Field, Input, Textarea } from '../components/ui/Input.js';
 import { ProductHistoryDrawer } from '../components/ProductHistoryDrawer.js';
+import { ProductOptionsPanel } from '../components/ProductOptionsPanel.js';
 import { PageHeader } from '../components/ui/PageHeader.js';
 import { Pagination } from '../components/ui/Pagination.js';
 import { EmptyState, TableSkeleton } from '../components/ui/Skeleton.js';
@@ -2221,6 +2222,7 @@ interface ProductFormState {
   price: number;
   unit: string;
   sku: string;
+  categoryName: string; // in-store section, e.g. بيتزا / مشويات
   discount: string; // kept as string so the field can be empty
   availableFrom: string;
   availableTo: string;
@@ -2238,6 +2240,7 @@ function initialFromProduct(product: Row | undefined, merchants: Row[]): Product
       price: 0,
       unit: '',
       sku: '',
+      categoryName: '',
       discount: '',
       availableFrom: '',
       availableTo: '',
@@ -2259,6 +2262,7 @@ function initialFromProduct(product: Row | undefined, merchants: Row[]): Product
     price: Number(product.price ?? 0),
     unit: product.unit ?? '',
     sku: product.sku ?? '',
+    categoryName: product.categoryName ?? '',
     discount: product.discount == null ? '' : String(product.discount),
     availableFrom: product.availableFrom ?? '',
     availableTo: product.availableTo ?? '',
@@ -2277,6 +2281,10 @@ interface ProductFormDialogProps {
 function ProductFormDialog({ mode, product, merchants, onClose }: ProductFormDialogProps) {
   const qc = useQueryClient();
   const [form, setForm] = useState<ProductFormState>(() => initialFromProduct(product, merchants));
+  // Sizes/add-ons live on their own endpoint, but the admin shouldn't have to
+  // press two save buttons. The panel hands us its writer and we run it right
+  // after the product itself saves.
+  const saveOptionsRef = useRef<(() => Promise<void>) | null>(null);
 
   // Submit-time payload: strip empty optionals so the backend treats them as
   // "not set" instead of validating them as malformed strings.
@@ -2295,6 +2303,9 @@ function ProductFormDialog({ mode, product, merchants, onClose }: ProductFormDia
     if (form.description.trim()) out.description = form.description.trim();
     if (form.unit.trim()) out.unit = form.unit.trim();
     if (form.sku.trim()) out.sku = form.sku.trim();
+    // Always sent (even empty) so clearing the box actually removes the
+    // section — a truthy-only check would make it un-clearable.
+    out.categoryName = form.categoryName.trim() || null;
     if (form.discount !== '') {
       const n = Number(form.discount);
       if (Number.isFinite(n)) out.discount = n;
@@ -2311,7 +2322,9 @@ function ProductFormDialog({ mode, product, merchants, onClose }: ProductFormDia
       // but being explicit avoids confusing 400s if the schema ever changes.
       const { merchantId: _omit, ...patch } = payload;
       void _omit;
-      return api.adminUpdateProduct(product!.id, patch);
+      const saved = await api.adminUpdateProduct(product!.id, patch);
+      await saveOptionsRef.current?.();
+      return saved;
     },
     onSuccess: () => {
       toast.success(mode === 'create' ? 'تم إنشاء المنتج' : 'تم حفظ التغييرات');
@@ -2329,6 +2342,21 @@ function ProductFormDialog({ mode, product, merchants, onClose }: ProductFormDia
     }
     return null;
   }, [form.availableFrom, form.availableTo]);
+
+  /**
+   * Section names this merchant already uses, for the datalist below.
+   *
+   * Uses the same public endpoint the mobile store page filters with, so the
+   * suggestions are exactly the chips a customer will see — no chance of
+   * offering a name the app doesn't render.
+   */
+  const { data: sections } = useQuery({
+    queryKey: ['merchant-sections', form.merchantId],
+    queryFn: () => api.getMerchantProductSections(form.merchantId) as Promise<{ name: string }[]>,
+    enabled: !!form.merchantId,
+    staleTime: 5 * 60_000,
+  });
+  const sectionSuggestions = (sections ?? []).map((x) => x.name);
 
   const discountNum = form.discount === '' ? 0 : Number(form.discount);
   const afterDiscount =
@@ -2405,6 +2433,27 @@ function ProductFormDialog({ mode, product, merchants, onClose }: ProductFormDia
           </Field>
         </div>
 
+        {/* In-store section. Free text with suggestions drawn from what this
+            merchant already uses — typing "بيتزا" when "بيتزا " exists would
+            create a second chip in the app, so the datalist nudges toward
+            reusing a name rather than inventing one. */}
+        <Field
+          label="القسم داخل المتجر"
+          hint="يظهر كفلتر في صفحة المتجر بالتطبيق — مثال: بيتزا، كريب، مشويات"
+        >
+          <Input
+            list="product-sections"
+            value={form.categoryName}
+            onChange={(e) => setForm({ ...form, categoryName: e.target.value })}
+            placeholder="اتركه فارغاً لو المتجر مفيهوش أقسام"
+          />
+          <datalist id="product-sections">
+            {sectionSuggestions.map((n) => (
+              <option key={n} value={n} />
+            ))}
+          </datalist>
+        </Field>
+
         <div className="grid grid-cols-2 gap-3">
           <Field
             label="نسبة الخصم %"
@@ -2463,6 +2512,27 @@ function ProductFormDialog({ mode, product, merchants, onClose }: ProductFormDia
           />
           متاح للطلب
         </label>
+
+        {/* Only after the product exists — both endpoints are keyed by product
+            id, and a merchant's add-on list can't be linked to a row that
+            hasn't been created yet. */}
+        {mode === 'edit' && product?.id ? (
+          <div className="pt-2">
+            <h3 className="text-sm font-bold mb-2">الأحجام والإضافات</h3>
+            <ProductOptionsPanel
+              productId={product.id}
+              merchantId={form.merchantId}
+              basePrice={Number(form.price) || 0}
+              registerSave={(fn) => {
+                saveOptionsRef.current = fn;
+              }}
+            />
+          </div>
+        ) : (
+          <p className="text-xs text-muted-foreground pt-2">
+            الأحجام والإضافات بتتضاف بعد حفظ المنتج — افتح تعديل المنتج تاني.
+          </p>
+        )}
       </div>
 
       <div className="flex justify-end gap-2 mt-4">

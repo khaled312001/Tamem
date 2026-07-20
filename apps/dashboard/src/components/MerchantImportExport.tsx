@@ -22,7 +22,6 @@ import {
   buildMerchantErrorCsv,
   buildMerchantWorkbook,
   downloadBlob,
-  generatePassword,
   readMerchantsFile,
 } from '../lib/merchantsSheet.js';
 import type { Tone } from '../lib/statusRegistry.js';
@@ -37,7 +36,6 @@ type Row = any;
 interface NewCredential {
   name: string;
   phone: string;
-  password: string;
 }
 
 export function MerchantExportDialog({
@@ -316,22 +314,16 @@ export function MerchantImportDialog({
             updated++;
           } else {
             const cf = r.createFields ?? {};
-            // Generated when the sheet leaves it blank: an account with no
-            // password can't be created, and putting one in a shared file is
-            // worse than handing it over once here.
-            const password = String(cf.password ?? '') || generatePassword();
+            // No password: the backend generates one and the merchant signs in
+            // via OTP / reset-password. Passwords used to travel in the sheet
+            // itself, which is a file that gets emailed around.
             const { apiUrl: _apiUrl, email: _email, ...rest } = r.data;
             await api.adminCreateMerchant({
               ...rest,
               ownerName: cf.ownerName,
               phone: cf.phone,
-              password,
             });
-            creds.push({
-              name,
-              phone: String(cf.phone ?? ''),
-              password: cf.password ? '(كما في الملف)' : password,
-            });
+            creds.push({ name, phone: String(cf.phone ?? '') });
             created++;
           }
         } catch (e) {
@@ -359,7 +351,7 @@ export function MerchantImportDialog({
   const canRun = !!sheet?.valid.length && !run.isPending && !result;
 
   const copyCreds = (creds: NewCredential[]) => {
-    const text = creds.map((c) => `${c.name}\t${c.phone}\t${c.password}`).join('\n');
+    const text = creds.map((c) => `${c.name}\t${c.phone}`).join('\n');
     void navigator.clipboard?.writeText(text).then(
       () => toast.success('تم نسخ البيانات'),
       () => toast.error('تعذّر النسخ'),
@@ -450,8 +442,8 @@ export function MerchantImportDialog({
               <div className="flex gap-2 rounded-lg border border-amber-300 bg-amber-50 p-3 text-xs text-amber-900 leading-5">
                 <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
                 <span>
-                  هيتم إنشاء <b>{formatCount(creates)}</b> حساب تاجر جديد. أي صف بدون كلمة مرور
-                  هيتولّدله واحدة قوية، وهتظهرلك بعد الاستيراد <b>مرة واحدة</b> عشان تسلّمها للتاجر.
+                  هيتم إنشاء <b>{formatCount(creates)}</b> حساب تاجر جديد. التاجر بيدخل برقم هاتفه
+                  عبر كود التحقق — مفيش كلمة مرور تتسلّمها له.
                 </span>
               </div>
             )}
@@ -582,7 +574,7 @@ export function MerchantImportDialog({
               <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 space-y-2">
                 <div className="flex items-center justify-between gap-2">
                   <span className="text-xs font-bold text-amber-900">
-                    بيانات دخول التجار الجدد — تظهر مرة واحدة فقط:
+                    التجار الجدد — يدخلون برقم الهاتف عبر كود التحقق:
                   </span>
                   <button
                     type="button"
@@ -599,7 +591,6 @@ export function MerchantImportDialog({
                       <tr className="text-right">
                         <th className="px-2 py-1.5 font-bold">المتجر</th>
                         <th className="px-2 py-1.5 font-bold">رقم الدخول</th>
-                        <th className="px-2 py-1.5 font-bold">كلمة المرور</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -608,9 +599,6 @@ export function MerchantImportDialog({
                           <td className="px-2 py-1.5 font-bold">{c.name}</td>
                           <td className="px-2 py-1.5 font-mono" dir="ltr">
                             {c.phone}
-                          </td>
-                          <td className="px-2 py-1.5 font-mono" dir="ltr">
-                            {c.password}
                           </td>
                         </tr>
                       ))}

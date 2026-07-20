@@ -13,7 +13,7 @@ import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useQuery } from '@tanstack/react-query';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Clock, Minus, Package, Plus, ShoppingCart, Star, Store } from 'lucide-react-native';
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Image,
@@ -37,6 +37,7 @@ import type { NativeScrollEvent, NativeSyntheticEvent } from 'react-native';
 import { ImageViewer } from '../components/ImageViewer';
 import { productPrice } from '../lib/productPrice';
 import { addToCart } from '../stores/cart';
+import { ProductOptions } from './product-detail/ProductOptions';
 import { BackChevron } from '../theme/rtl';
 import { colors, fontFamilies, fontSizes, radii, shadows, spacing } from '../theme/tokens';
 
@@ -59,6 +60,10 @@ interface ProductDetail {
   isHidden: boolean;
   categoryName?: string | null;
   unit?: string | null;
+  /** Sizes. When present, one MUST be chosen and its price replaces `price`. */
+  variants?: { id: string; nameAr: string; price: number }[];
+  /** Extras linked to this product; each one ADDS to the unit price. */
+  addons?: { id: string; nameAr: string; price: number }[];
   merchant: {
     id: string;
     storeNameAr: string;
@@ -81,6 +86,11 @@ export function ProductDetailScreen() {
   const [quantity, setQuantity] = useState(1);
   const [viewerAt, setViewerAt] = useState<number | null>(null);
   const [heroIndex, setHeroIndex] = useState(0);
+  // null = nothing picked yet. Pre-selected to the cheapest size on load (see
+  // the effect below) so the sticky bar always shows a real, payable total
+  // instead of the base price of a product that can't be bought at base price.
+  const [variantId, setVariantId] = useState<string | null>(null);
+  const [addonIds, setAddonIds] = useState<string[]>([]);
 
   const { data, isLoading, error, refetch } = useQuery<ProductDetail>({
     queryKey: ['product', productId],
@@ -90,6 +100,31 @@ export function ProductDetailScreen() {
     staleTime: 0,
     refetchOnMount: 'always',
   });
+
+  const variants = useMemo(() => data?.variants ?? [], [data?.variants]);
+  const addons = useMemo(() => data?.addons ?? [], [data?.addons]);
+
+  // Default to the cheapest size. Leaving it unpicked would mean the bar reads
+  // "أضف إلى السلة" next to a price the customer can't actually get, and the
+  // first tap would have to be an error toast.
+  useEffect(() => {
+    const first = variants[0];
+    if (!first) return;
+    setVariantId((cur) => {
+      if (cur && variants.some((v) => v.id === cur)) return cur;
+      return variants.reduce((lo, v) => (v.price < lo.price ? v : lo), first).id;
+    });
+    // Re-runs when the fetched list changes identity, i.e. after a refetch.
+  }, [variants]);
+
+  const selectedVariant = useMemo(
+    () => variants.find((v) => v.id === variantId) ?? null,
+    [variants, variantId],
+  );
+  const selectedAddons = useMemo(
+    () => addons.filter((a) => addonIds.includes(a.id)),
+    [addons, addonIds],
+  );
 
   // ── Loading ───────────────────────────────────────────────────────────
   if (isLoading) {
@@ -142,6 +177,14 @@ export function ProductDetailScreen() {
 
   // Guard `data.merchant` itself (not just openness) — an orphaned merchantId
   // would otherwise throw here.
+  // A size REPLACES the base price; extras add on top. Same rule as the server.
+  const unitPrice =
+    Math.round(
+      ((selectedVariant ? selectedVariant.price : effectivePrice) +
+        selectedAddons.reduce((sum, a) => sum + a.price, 0)) *
+        100,
+    ) / 100;
+
   const merchantOpen = data.merchant?.openness?.isOpenNow ?? true;
   const productInStock =
     data.isAvailable && !data.isHidden && (data.stock == null || data.stock > 0);
@@ -159,6 +202,8 @@ export function ProductDetailScreen() {
       merchantId: data.merchant.id,
       merchantNameAr: data.merchant.storeNameAr,
       quantity,
+      variant: selectedVariant,
+      addons: selectedAddons,
     });
     showToast({ title: 'تمت إضافة المنتج إلى السلة', tone: 'success' });
   };
@@ -285,8 +330,8 @@ export function ProductDetailScreen() {
 
           {/* Price block */}
           <View style={styles.priceRow}>
-            <MoneyText amount={effectivePrice} tone="brand" size="xl" />
-            {hasSale && (
+            <MoneyText amount={unitPrice} tone="brand" size="xl" />
+            {hasSale && !selectedVariant && (
               <View style={{ marginStart: spacing.sm }}>
                 <MoneyText
                   amount={listPrice ?? 0}
@@ -327,6 +372,18 @@ export function ProductDetailScreen() {
               <Text style={styles.description}>{data.description}</Text>
             </View>
           ) : null}
+
+          <ProductOptions
+            variants={variants}
+            addons={addons}
+            variantId={variantId}
+            addonIds={addonIds}
+            onSelectVariant={setVariantId}
+            onToggleAddon={(id) =>
+              setAddonIds((cur) => (cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id]))
+            }
+            disabled={!canAdd}
+          />
 
           {/* Quantity — in the page body, not the bottom bar, so the bar has a
               single action. */}
@@ -407,7 +464,7 @@ export function ProductDetailScreen() {
               </Text>
               {canAdd && (
                 <Text style={styles.addPrice}>
-                  {(effectivePrice * quantity).toLocaleString('ar-EG')} ج.م
+                  {(unitPrice * quantity).toLocaleString('ar-EG')} ج.م
                 </Text>
               )}
             </LinearGradient>

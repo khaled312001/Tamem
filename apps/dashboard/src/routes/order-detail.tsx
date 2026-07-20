@@ -436,7 +436,11 @@ export function OrderDetailPage() {
                 finalPrice: number | null;
                 paymentStatus: string | null;
                 assignedDriver: { name: string; phone?: string } | null;
-                items: { productNameSnapshot: string; quantity: number }[];
+                items: {
+                  productNameSnapshot: string;
+                  quantity: number;
+                  variantNameSnapshot?: string | null;
+                }[];
                 merchant: { id: string; storeNameAr: string; logoUrl: string | null } | null;
               }) => {
                 const total = sub.finalPrice ?? sub.merchantSubtotal ?? sub.quotedPrice;
@@ -468,7 +472,12 @@ export function OrderDetailPage() {
                       </div>
                       <div className="text-xs text-muted-foreground mt-1 truncate">
                         {sub.items
-                          .map((i) => `${i.productNameSnapshot} ×${i.quantity}`)
+                          .map(
+                            (i) =>
+                              `${i.productNameSnapshot}${
+                                i.variantNameSnapshot ? ` — ${i.variantNameSnapshot}` : ''
+                              } ×${i.quantity}`,
+                          )
                           .join(' · ')}
                       </div>
                       <div className="text-xs text-muted-foreground mt-1 flex items-center gap-3">
@@ -1313,6 +1322,29 @@ function ReviewCard({ review }: { review: any }) {
  * easy to scan as ONE order instead of three.
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
+/**
+ * Extras chosen at order time. Normally an array (the API decodes the JSON
+ * column), but accept a string too — one of the two order routes doesn't run
+ * rows through the JSON decoder, and rendering "[object Object]" to a
+ * dispatcher who has to go buy the thing is the worst possible failure.
+ */
+function extrasLabel(raw: unknown): string | null {
+  let list = raw;
+  if (typeof list === 'string') {
+    try {
+      list = JSON.parse(list);
+    } catch {
+      return null;
+    }
+  }
+  if (!Array.isArray(list) || list.length === 0) return null;
+  const names = list
+    .map((a) => String((a as { nameAr?: unknown })?.nameAr ?? '').trim())
+    .filter(Boolean);
+  return names.length > 0 ? names.join('، ') : null;
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 function ItemsByMerchantCard({ items }: { items: any[] }) {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const groups = new Map<string, { merchant: any; items: any[]; subtotal: number }>();
@@ -1329,12 +1361,19 @@ function ItemsByMerchantCard({ items }: { items: any[] }) {
   const groupArr = Array.from(groups.values());
   const isMulti = groupArr.length > 1;
 
+  // Single-merchant orders are the common case, and the header used to read
+  // just "المنتجات (3)" — the store never appeared anywhere, so an admin
+  // couldn't tell where to buy from without opening the order's merchant tab.
+  const soleMerchant = !isMulti ? (groupArr[0]?.merchant?.storeNameAr ?? null) : null;
+
   return (
     <Card
       title={
         isMulti
           ? `🛒 المنتجات — من ${groupArr.length} متاجر (${items.length})`
-          : `المنتجات (${items.length})`
+          : soleMerchant
+            ? `🏪 ${soleMerchant} — المنتجات (${items.length})`
+            : `المنتجات (${items.length})`
       }
       icon={<MessageSquare className="w-4 h-4" />}
     >
@@ -1366,18 +1405,33 @@ function ItemsByMerchantCard({ items }: { items: any[] }) {
               </div>
             )}
             <ul className={`divide-y divide-border ${isMulti ? 'px-3' : ''}`}>
-              {g.items.map((it, i) => (
-                <li key={i} className="py-2 flex items-center justify-between text-sm">
-                  <span>
-                    <span className="font-bold">{it.quantity}×</span> {it.productNameSnapshot}
-                  </span>
-                  {it.unitPriceSnapshot && (
-                    <span className="text-muted-foreground">
-                      {(Number(it.unitPriceSnapshot) * it.quantity).toLocaleString('ar-EG')} ج.م
+              {g.items.map((it, i) => {
+                const extras = extrasLabel(it.addonsSnapshot);
+                return (
+                  <li key={i} className="py-2 flex items-start justify-between gap-2 text-sm">
+                    <span className="min-w-0">
+                      <span className="font-bold">{it.quantity}×</span> {it.productNameSnapshot}
+                      {/* The size is part of what to buy, not a label — a
+                          dispatcher handed "بيتزا فراخ" alone buys the wrong
+                          one. */}
+                      {it.variantNameSnapshot && (
+                        <span className="font-bold text-brand-red">
+                          {' '}
+                          — {it.variantNameSnapshot}
+                        </span>
+                      )}
+                      {extras && (
+                        <span className="block text-xs text-muted-foreground">+ {extras}</span>
+                      )}
                     </span>
-                  )}
-                </li>
-              ))}
+                    {it.unitPriceSnapshot && (
+                      <span className="text-muted-foreground whitespace-nowrap">
+                        {(Number(it.unitPriceSnapshot) * it.quantity).toLocaleString('ar-EG')} ج.م
+                      </span>
+                    )}
+                  </li>
+                );
+              })}
             </ul>
           </div>
         ))}
@@ -1594,14 +1648,27 @@ function PriceDialog({
   // priced before this existed has no lines, so it starts with one blank row
   // the admin has to fill — which is the whole point.
   const [lines, setLines] = useState<MerchantLine[]>(() => {
-    const seeded = (initialItems ?? [])
-      .filter((it) => it?.merchantId)
-      .map((it) =>
-        newLine(
-          String(it.merchantId),
-          String(Number(it.unitPriceSnapshot ?? 0) * (it.quantity ?? 1)),
-        ),
-      );
+    /*
+     * One row PER MERCHANT, not per item.
+     *
+     * This used to map over items directly, so three products from the same
+     * restaurant seeded three identical rows — which the duplicate-merchant
+     * check below then rejected, blocking the save on an order the admin had
+     * done nothing wrong with. Sum the line totals per merchant instead.
+     */
+    const totals = new Map<string, number>();
+    for (const it of initialItems ?? []) {
+      if (!it?.merchantId) continue;
+      const id = String(it.merchantId);
+      const lineTotal = Number(it.unitPriceSnapshot ?? 0) * (it.quantity ?? 1);
+      totals.set(id, (totals.get(id) ?? 0) + lineTotal);
+    }
+
+    const seeded = Array.from(totals.entries()).map(([id, total]) =>
+      // Rounded to piastres: summing decimals accumulates float error, and the
+      // field is money.
+      newLine(id, String(Math.round(total * 100) / 100)),
+    );
     return seeded.length ? seeded : [newLine()];
   });
   const [fee, setFee] = useState(initialFee != null ? String(initialFee) : '');
