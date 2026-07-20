@@ -2606,8 +2606,86 @@ if ($method === 'GET' && preg_match('#^/admin/orders/([^/]+)$#', $path, $m)) {
     $r = $st->fetch();
     if (!$r) jsonErr('الطلب غير موجود', 404, 'NOT_FOUND');
     $o = orderNest($r);
+    /*
+     * Items, including those on child orders — same reason as the customer
+     * route: a multi-merchant cart writes its OrderItems onto the per-merchant
+     * CHILD orders, so reading `orderId = parent` returns nothing. The admin
+     * opened a "سلة من 2 متاجر" order and saw neither the products nor the
+     * stores.
+     *
+     * Each line carries its own merchant so ItemsByMerchantCard can group them.
+     */
     $o['items'] = [];
-    try { $it = db()->prepare('SELECT * FROM `OrderItem` WHERE orderId = ?'); $it->execute([$m[1]]); $o['items'] = array_map('jsonizeRow', $it->fetchAll()); } catch (Throwable $e) {}
+    try {
+        $it = db()->prepare(
+            'SELECT oi.*, mp.storeNameAr AS merchantNameAr'
+            . ' FROM `OrderItem` oi'
+            . ' LEFT JOIN `MerchantProfile` mp ON mp.id = oi.merchantId'
+            . ' WHERE oi.orderId = ?'
+            . ' OR oi.orderId IN (SELECT id FROM `Order` WHERE parentOrderId = ?)'
+            . ' ORDER BY oi.merchantId, oi.id'
+        );
+        $it->execute([$m[1], $m[1]]);
+        $o['items'] = array_map(function ($row) {
+            $row = jsonizeRow($row);
+            $row['merchant'] = $row['merchantNameAr'] !== null
+                ? ['id' => $row['merchantId'], 'storeNameAr' => $row['merchantNameAr']]
+                : null;
+            unset($row['merchantNameAr']);
+            return $row;
+        }, $it->fetchAll());
+    } catch (Throwable $e) { /* leave empty */ }
+
+    // Per-merchant child orders, for the multi-merchant banner and the
+    // per-store subtotal breakdown.
+    $o['subOrders'] = [];
+    try {
+        $so = db()->prepare(
+            'SELECT o.id, o.orderNumber, o.status, o.merchantSubtotal, o.quotedPrice,'
+            . ' o.finalPrice, o.paymentStatus, o.merchantId, mp.storeNameAr, mp.logoUrl,'
+            . ' d.name AS driverName, d.phone AS driverPhone'
+            . ' FROM `Order` o'
+            . ' LEFT JOIN `MerchantProfile` mp ON mp.id = o.merchantId'
+            . ' LEFT JOIN `User` d ON d.id = o.assignedDriverId'
+            . ' WHERE o.parentOrderId = ? ORDER BY o.createdAt ASC'
+        );
+        $so->execute([$m[1]]);
+        $subRows = $so->fetchAll();
+
+        // Item lines per sub-order, in ONE query. The dashboard renders
+        // `sub.items.map(...)` unconditionally, so this key must always exist —
+        // omitting it crashes the whole order page, not just that section.
+        $itemsBySub = [];
+        if ($subRows) {
+            $sids = array_column($subRows, 'id');
+            $iin = implode(',', array_fill(0, count($sids), '?'));
+            $iq = db()->prepare("SELECT orderId, productNameSnapshot, quantity FROM `OrderItem` WHERE orderId IN ($iin) ORDER BY id");
+            $iq->execute($sids);
+            foreach ($iq->fetchAll() as $it) {
+                $itemsBySub[$it['orderId']][] = [
+                    'productNameSnapshot' => $it['productNameSnapshot'],
+                    'quantity' => (int) $it['quantity'],
+                ];
+            }
+        }
+
+        $o['subOrders'] = array_map(fn($s) => [
+            'id' => $s['id'],
+            'orderNumber' => $s['orderNumber'],
+            'status' => $s['status'],
+            'merchantSubtotal' => $s['merchantSubtotal'] !== null ? (float) $s['merchantSubtotal'] : null,
+            'quotedPrice' => $s['quotedPrice'] !== null ? (float) $s['quotedPrice'] : null,
+            'finalPrice' => $s['finalPrice'] !== null ? (float) $s['finalPrice'] : null,
+            'paymentStatus' => $s['paymentStatus'],
+            'assignedDriver' => $s['driverName']
+                ? ['name' => $s['driverName'], 'phone' => $s['driverPhone']]
+                : null,
+            'items' => $itemsBySub[$s['id']] ?? [],
+            'merchant' => $s['merchantId']
+                ? ['id' => $s['merchantId'], 'storeNameAr' => $s['storeNameAr'], 'logoUrl' => $s['logoUrl']]
+                : null,
+        ], $subRows);
+    } catch (Throwable $e) { /* leave empty */ }
     $o['statusHistory'] = [];
     try { $sh = db()->prepare('SELECT * FROM `OrderStatusHistory` WHERE orderId = ? ORDER BY createdAt ASC'); $sh->execute([$m[1]]); $o['statusHistory'] = array_map('jsonizeRow', $sh->fetchAll()); } catch (Throwable $e) {}
     jsonOk($o);
@@ -6435,6 +6513,22 @@ if ($method === 'POST' && $path === '/orders/cart') {
     $parentId = newId();
     $parentNo = newOrderNumber($parentId);
     $multi = count($merchants) > 1;
+
+    /*
+     * ONE order per cart, even across stores.
+     *
+     * This used to also create a child order per merchant. That gave each store
+     * its own number, price and driver — but the admin then had to price and
+     * assign N times for a single purchase, and the customer saw N orders.
+     * Every line already carries its own merchantId, so the per-store breakdown
+     * survives without the extra rows: the dashboard groups items by merchant,
+     * and the pricing dialog still splits revenue per store.
+     *
+     * Nothing depended on the children: /merchant/orders (the only per-merchant
+     * inbox) is not implemented on this backend. Orders created BEFORE this
+     * change keep their children, and the read paths still handle them.
+     */
+    $splitPerMerchant = false;
     db()->prepare('INSERT INTO `Order` (id, orderNumber, serviceId, customerId, category, status, merchantId, deliveryAddress, deliveryLat, deliveryLng, cityId, villageId, areaId, paymentMethod, paymentStatus, currency, couponCode, discountAmount, merchantSubtotal, deliveryFee, quotedPrice, finalPrice, scheduledFor, createdAt, updatedAt)
         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NOW(3),NOW(3))')
         ->execute([$parentId, $parentNo, $svc['id'], $uid, 'MERCHANT', 'NEW',
@@ -6446,8 +6540,8 @@ if ($method === 'POST' && $path === '/orders/cart') {
     orderHistory($parentId, null, 'NEW', $uid, 'CUSTOMER', 'Order placed from cart');
 
     foreach ($merchants as $mi => $m) {
-        $childId = $multi ? newId() : $parentId;
-        if ($multi) {
+        $childId = $splitPerMerchant ? newId() : $parentId;
+        if ($splitPerMerchant) {
             db()->prepare('INSERT INTO `Order` (id, orderNumber, serviceId, customerId, category, status, merchantId, parentOrderId, deliveryAddress, deliveryLat, deliveryLng, paymentMethod, paymentStatus, currency, merchantSubtotal, notes, imageUrls, createdAt, updatedAt)
                 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NOW(3),NOW(3))')
                 ->execute([$childId, newOrderNumber($childId), $svc['id'], $uid, 'MERCHANT', 'NEW',
@@ -6456,8 +6550,26 @@ if ($method === 'POST' && $path === '/orders/cart') {
                     !empty($m['imageUrls']) ? json_encode($m['imageUrls'], JSON_UNESCAPED_UNICODE) : null]);
             orderHistory($childId, null, 'NEW', $uid, 'CUSTOMER', 'Sub-order of ' . $parentNo);
         } elseif (!empty($m['notes']) || !empty($m['imageUrls'])) {
+            // Per-merchant notes/images are merged onto the single order. With
+            // several stores the notes are appended rather than overwritten so
+            // the last store doesn't silently erase the first one's.
+            $exist = db()->prepare('SELECT notes, imageUrls FROM `Order` WHERE id = ?');
+            $exist->execute([$parentId]);
+            $prev = $exist->fetch() ?: ['notes' => null, 'imageUrls' => null];
+
+            $noteParts = array_filter([
+                trim((string) ($prev['notes'] ?? '')),
+                trim((string) ($m['notes'] ?? '')),
+            ]);
+            $prevImgs = $prev['imageUrls'] ? (json_decode((string) $prev['imageUrls'], true) ?: []) : [];
+            $imgs = array_values(array_unique(array_merge($prevImgs, (array) ($m['imageUrls'] ?? []))));
+
             db()->prepare('UPDATE `Order` SET notes = ?, imageUrls = ? WHERE id = ?')
-                ->execute([($m['notes'] ?? null) ?: null, !empty($m['imageUrls']) ? json_encode($m['imageUrls'], JSON_UNESCAPED_UNICODE) : null, $parentId]);
+                ->execute([
+                    $noteParts ? implode("\n\n", $noteParts) : null,
+                    $imgs ? json_encode($imgs, JSON_UNESCAPED_UNICODE) : null,
+                    $parentId,
+                ]);
         }
         foreach ($lines[$mi] as $l) {
             db()->prepare('INSERT INTO `OrderItem` (id, orderId, productId, productNameSnapshot, unitPriceSnapshot, quantity, merchantId, notes) VALUES (?,?,?,?,?,?,?,?)')
