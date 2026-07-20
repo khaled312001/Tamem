@@ -2487,7 +2487,11 @@ if ($method === 'GET' && $path === '/admin/orders/stats') {
 if ($method === 'GET' && $path === '/admin/orders') {
     authUser();
     $page = max(1, (int)($_GET['page'] ?? 1)); $size = min(100, max(1, (int)($_GET['pageSize'] ?? 20))); $off = ($page - 1) * $size;
-    $where = '1=1'; $args = [];
+    // Children of a multi-merchant cart are nested under their parent below,
+    // never listed on their own — otherwise one purchase reads as N orders.
+    // `includeSubOrders=1` opts out for anything that genuinely needs them flat.
+    $where = empty($_GET['includeSubOrders']) ? 'o.parentOrderId IS NULL' : '1=1';
+    $args = [];
     $status = (string)($_GET['status'] ?? '');
     if ($status !== '' && $status !== 'all') {
         // The status tabs send a CSV set (e.g. "DRIVER_ASSIGNED,PICKED_UP,IN_ROUTE").
@@ -2525,6 +2529,73 @@ if ($method === 'GET' && $path === '/admin/orders') {
     $st = db()->prepare("SELECT " . ORDER_LIST_COLS . " " . ORDER_JOIN . " WHERE $where ORDER BY $sortCol $sortDir LIMIT $size OFFSET $off");
     $st->execute($args);
     $rows = array_map('orderNest', $st->fetchAll());
+
+    /*
+     * Attach each parent's per-merchant sub-orders.
+     *
+     * A two-merchant cart creates a parent plus one child per store. The list
+     * used to return all three as separate top-level rows, so one purchase
+     * looked like three orders. The children are now excluded from the top
+     * level (see the WHERE clause) and nested here instead — which is what the
+     * dashboard's expand chevron already expected to find.
+     *
+     * One extra query for the whole page, not one per row.
+     */
+    $parentIds = array_values(array_filter(array_map(fn($r) => $r['id'] ?? null, $rows)));
+    if ($parentIds) {
+        $in = implode(',', array_fill(0, count($parentIds), '?'));
+        $ss = db()->prepare(
+            'SELECT o.id, o.orderNumber, o.status, o.parentOrderId, o.merchantSubtotal,'
+            . ' o.quotedPrice, o.finalPrice, o.merchantId, mp.storeNameAr,'
+            . ' d.name AS driverName'
+            . ' FROM `Order` o'
+            . ' LEFT JOIN `MerchantProfile` mp ON mp.id = o.merchantId'
+            . ' LEFT JOIN `User` d ON d.id = o.assignedDriverId'
+            . " WHERE o.parentOrderId IN ($in) ORDER BY o.createdAt ASC"
+        );
+        $ss->execute($parentIds);
+        $subsByParent = [];
+        foreach ($ss->fetchAll() as $sub) {
+            $subsByParent[$sub['parentOrderId']][] = [
+                'id' => $sub['id'],
+                'orderNumber' => $sub['orderNumber'],
+                'status' => $sub['status'],
+                'merchantSubtotal' => $sub['merchantSubtotal'] !== null ? (float) $sub['merchantSubtotal'] : null,
+                'quotedPrice' => $sub['quotedPrice'] !== null ? (float) $sub['quotedPrice'] : null,
+                'finalPrice' => $sub['finalPrice'] !== null ? (float) $sub['finalPrice'] : null,
+                'merchant' => $sub['merchantId'] ? ['id' => $sub['merchantId'], 'storeNameAr' => $sub['storeNameAr']] : null,
+                'assignedDriver' => $sub['driverName'] ? ['name' => $sub['driverName']] : null,
+                'items' => [],
+            ];
+        }
+
+        // Item lines for every sub-order on this page, in one go.
+        if ($subsByParent) {
+            $subIds = [];
+            foreach ($subsByParent as $list) foreach ($list as $sub) $subIds[] = $sub['id'];
+            $iin = implode(',', array_fill(0, count($subIds), '?'));
+            $is = db()->prepare("SELECT orderId, productNameSnapshot, quantity FROM `OrderItem` WHERE orderId IN ($iin) ORDER BY id");
+            $is->execute($subIds);
+            $itemsByOrder = [];
+            foreach ($is->fetchAll() as $it) {
+                $itemsByOrder[$it['orderId']][] = [
+                    'productNameSnapshot' => $it['productNameSnapshot'],
+                    'quantity' => (int) $it['quantity'],
+                ];
+            }
+            foreach ($subsByParent as &$list) {
+                foreach ($list as &$sub) $sub['items'] = $itemsByOrder[$sub['id']] ?? [];
+            }
+            unset($list, $sub);
+        }
+
+        foreach ($rows as &$r) {
+            $subs = $subsByParent[$r['id']] ?? [];
+            $r['subOrders'] = $subs;
+            $r['_count'] = ['subOrders' => count($subs)];
+        }
+        unset($r);
+    }
     http_response_code(200);
     echo json_encode(['data' => $rows, 'meta' => ['pagination' => ['page' => $page, 'pageSize' => $size, 'total' => $total, 'totalPages' => (int) ceil($total / max(1, $size))]]], JSON_UNESCAPED_UNICODE);
     exit;
@@ -6651,7 +6722,37 @@ if (preg_match('#^/orders/([^/]+)$#', $path, $mm) && $method === 'GET') {
     $ss = db()->prepare('SELECT * FROM `Service` WHERE id = ? LIMIT 1');
     $ss->execute([$o['serviceId']]);
     $out['service'] = jsonizeRow($ss->fetch() ?: null);
-    $out['items'] = $q('SELECT * FROM `OrderItem` WHERE orderId = ?', [$mm[1]]);
+    /*
+     * Items, including those on child orders.
+     *
+     * A multi-merchant cart writes its OrderItems onto the per-merchant CHILD
+     * orders, not the parent. The customer only ever sees the parent (
+     * /orders/mine filters parentOrderId IS NULL), so asking for the parent
+     * returned an order with an empty item list — "what did I order, and from
+     * where?" had no answer anywhere in the app.
+     *
+     * Reading the children here keeps ONE order for the customer while each
+     * line still carries its own merchantId, which is what lets the app and the
+     * dashboard group the order by store.
+     */
+    $out['items'] = $q(
+        'SELECT oi.*, mp.storeNameAr AS merchantNameAr'
+        . ' FROM `OrderItem` oi'
+        . ' LEFT JOIN `MerchantProfile` mp ON mp.id = oi.merchantId'
+        . ' WHERE oi.orderId = ?'
+        . ' OR oi.orderId IN (SELECT id FROM `Order` WHERE parentOrderId = ?)'
+        . ' ORDER BY oi.merchantId, oi.id',
+        [$mm[1], $mm[1]]
+    );
+    // Nest the merchant the way the clients expect, rather than leaving a flat
+    // column they'd each have to know about.
+    foreach ($out['items'] as &$__it) {
+        $__it['merchant'] = $__it['merchantNameAr'] !== null
+            ? ['id' => $__it['merchantId'], 'storeNameAr' => $__it['merchantNameAr']]
+            : null;
+        unset($__it['merchantNameAr']);
+    }
+    unset($__it);
     $out['pickupPoints'] = $q('SELECT * FROM `OrderPickupPoint` WHERE orderId = ? ORDER BY sortOrder ASC', [$mm[1]]);
     $out['deliveryPoints'] = $q('SELECT * FROM `OrderDeliveryPoint` WHERE orderId = ? ORDER BY sortOrder ASC', [$mm[1]]);
     // OrderTrackingScreen .map()s statusHistory with no guard.
