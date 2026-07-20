@@ -98,10 +98,14 @@ android {
     // and this keeps working if the redirect is ever removed.
     sourceSets {
         main {
+            // Register both candidate autolinking dirs, but DEDUPE by canonical
+            // path: when the E:/tb redirect is active both strings resolve to the
+            // SAME folder (differing only by slash direction), and adding it twice
+            // makes javac compile PackageList.java twice → "duplicate class".
             java.srcDirs += [
-                "${layout.buildDirectory.get().asFile}/generated/autolinking/src/main/java",
-                "E:/tb/${project.name}/generated/autolinking/src/main/java",
-            ]
+                file("${layout.buildDirectory.get().asFile}/generated/autolinking/src/main/java"),
+                file("E:/tb/${project.name}/generated/autolinking/src/main/java"),
+            ].collect { it.canonicalFile }.unique()
         }
     }
 

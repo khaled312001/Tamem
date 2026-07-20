@@ -1,13 +1,31 @@
-import * as Google from 'expo-auth-session/providers/google';
-import * as WebBrowser from 'expo-web-browser';
+/**
+ * Google Sign-In — NATIVE account picker, no browser.
+ *
+ * This used to run through expo-auth-session, which hands off to a Custom Tab /
+ * external browser: the user leaves the app, signs in on a web page and is
+ * redirected back. Now it uses the Google Play Services sign-in sheet, so the
+ * account chooser appears as a native dialog inside the app (the WhatsApp /
+ * Instagram behaviour).
+ *
+ * The backend contract is unchanged: we still POST the Google `idToken` to
+ * /auth/google, which verifies it with Google and issues our own JWTs. The
+ * native token's `aud` is the WEB client id, which is exactly what the server
+ * checks against GOOGLE_CLIENT_ID.
+ *
+ * NOTE: this is a native module, so it only works in a real build (EAS / APK),
+ * not in Expo Go. On web it falls back to a disabled button.
+ */
+import {
+  GoogleSignin,
+  statusCodes,
+  type NativeModuleError,
+} from '@react-native-google-signin/google-signin';
 import { useEffect, useState } from 'react';
 import { ActivityIndicator, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import Svg, { Path } from 'react-native-svg';
 
 import { useAuth, type SignupRole } from '../stores/auth';
 import { fontFamilies, fontSizes, radii, spacing } from '../theme/tokens';
-
-WebBrowser.maybeCompleteAuthSession();
 
 // Official Google 4-color "G" logo (Google branding guidelines)
 function GoogleLogo({ size = 18 }: { size?: number }) {
@@ -36,45 +54,31 @@ function GoogleLogo({ size = 18 }: { size?: number }) {
 interface GoogleSignInButtonProps {
   /** Override the default label */
   label?: string;
-  /** Called when sign-in fails (network/cancel/auth). */
+  /** Called when sign-in fails (network/auth). Cancelling is silent. */
   onError?: (message: string) => void;
   /**
    * Pre-selected role to send to the backend. ONLY honored by the backend
    * when creating a brand-new user — returning users keep their existing role.
-   * Used by the role-aware signup flow (RoleChoice → Register → Google).
    */
   role?: SignupRole;
   /**
-   * Called BEFORE the backend exchange happens, so the caller can show a
-   * role-choice modal when no role was pre-selected. Return the chosen role
-   * (or null to abort). Returning `undefined` means "no role" and the backend
-   * defaults to CUSTOMER.
+   * Called BEFORE the backend exchange, so the caller can show a role-choice
+   * modal when no role was pre-selected. Return the chosen role, or null to
+   * abort the sign-in.
    */
   onResolveRole?: () => Promise<SignupRole | null | undefined>;
 }
 
-// Read at module load — process.env values are inlined at build time in Expo.
+// Read at module load — Expo inlines EXPO_PUBLIC_* at build time.
 const WEB_CLIENT_ID = process.env.EXPO_PUBLIC_GOOGLE_CLIENT_ID;
-const ANDROID_CLIENT_ID = process.env.EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID;
 const IOS_CLIENT_ID = process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID;
 
-// Whether ANY Google OAuth client id is configured for the current platform.
-// On web `webClientId` is mandatory; on native at least one of android/ios is needed.
-const HAS_GOOGLE_CONFIG =
-  (Platform.OS === 'web' && !!WEB_CLIENT_ID) ||
-  (Platform.OS === 'android' && !!ANDROID_CLIENT_ID) ||
-  (Platform.OS === 'ios' && !!IOS_CLIENT_ID);
+// The native module needs the WEB client id (it is what the returned idToken is
+// issued for). Web has no native sign-in sheet, so the button is disabled there.
+const HAS_GOOGLE_CONFIG = Platform.OS !== 'web' && !!WEB_CLIENT_ID;
 
-/**
- * Official Google Sign-In button. If no OAuth client id is configured for the
- * current platform we render a disabled placeholder instead of calling the
- * Google hook — passing `webClientId: undefined` to useAuthRequest crashes the
- * whole screen with "Client Id property must be defined".
- */
 export function GoogleSignInButton(props: GoogleSignInButtonProps) {
-  if (!HAS_GOOGLE_CONFIG) {
-    return <DisabledGoogleButton label={props.label} />;
-  }
+  if (!HAS_GOOGLE_CONFIG) return <DisabledGoogleButton label={props.label} />;
   return <ConfiguredGoogleButton {...props} />;
 }
 
@@ -82,86 +86,80 @@ function ConfiguredGoogleButton({ label, onError, role, onResolveRole }: GoogleS
   const loginWithGoogle = useAuth((s) => s.loginWithGoogle);
   const [loading, setLoading] = useState(false);
 
-  const [request, response, promptAsync] = Google.useAuthRequest({
-    webClientId: WEB_CLIENT_ID,
-    androidClientId: ANDROID_CLIENT_ID,
-    iosClientId: IOS_CLIENT_ID,
-    scopes: ['profile', 'email', 'openid'],
-  });
-
+  // Configure once. Cheap + idempotent; must run before signIn().
   useEffect(() => {
-    if (response?.type === 'success') {
-      const idToken = response.authentication?.idToken;
-      const accessToken = response.authentication?.accessToken;
-      if (!idToken && !accessToken) {
+    GoogleSignin.configure({
+      webClientId: WEB_CLIENT_ID,
+      iosClientId: IOS_CLIENT_ID,
+      // We only need identity — asking for the id token keeps the consent
+      // screen to name/email/picture.
+      scopes: ['profile', 'email'],
+      offlineAccess: false,
+    });
+  }, []);
+
+  const onPress = async () => {
+    if (loading) return;
+    setLoading(true);
+    try {
+      // Play Services is what renders the native sheet; without it there is no
+      // in-app picker to show.
+      await GoogleSignin.hasPlayServices({ showPlayServicesUpdateDialog: true });
+
+      // Always start from a clean slate so the account chooser actually appears
+      // instead of silently reusing the last account.
+      try {
+        await GoogleSignin.signOut();
+      } catch {
+        /* nothing was signed in */
+      }
+
+      const result = await GoogleSignin.signIn();
+      // v13 returns { type: 'success' | 'cancelled', data }.
+      if (result.type === 'cancelled') {
+        setLoading(false);
+        return; // user dismissed the sheet — not an error
+      }
+      const idToken = result.data?.idToken;
+      if (!idToken) {
         setLoading(false);
         onError?.('لم يتم استلام رمز التحقق من Google');
         return;
       }
-      // Exchange with our backend
-      void exchangeWithBackend(idToken, accessToken);
-    } else if (response?.type === 'error') {
-      setLoading(false);
-      onError?.(response.error?.message ?? 'فشل تسجيل الدخول بـ Google');
-    } else if (response?.type === 'dismiss' || response?.type === 'cancel') {
-      setLoading(false);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [response]);
 
-  async function exchangeWithBackend(idToken?: string, accessToken?: string) {
-    try {
-      // If no role was pre-selected (e.g. on the Login screen), let the
-      // caller pop a role-choice modal so brand-new Google users land in the
-      // correct role. Returning users keep their existing role server-side
-      // regardless of what we send.
+      // Ask for a role only for brand-new users; returning users keep theirs.
       let effectiveRole: SignupRole | null | undefined = role;
       if (effectiveRole == null && onResolveRole) {
         effectiveRole = await onResolveRole();
         if (effectiveRole === null) {
-          // User cancelled the role chooser — abort the sign-in.
           setLoading(false);
-          return;
+          return; // role chooser cancelled
         }
       }
 
-      const token = idToken ?? accessToken;
-      if (!token) {
-        onError?.('لم يتم استلام رمز التحقق من Google');
+      await loginWithGoogle(idToken, effectiveRole ?? undefined);
+    } catch (err: unknown) {
+      const e = err as NativeModuleError;
+      // Cancels are normal user behaviour — never surface them as failures.
+      if (e?.code === statusCodes.SIGN_IN_CANCELLED || e?.code === statusCodes.IN_PROGRESS) {
+        setLoading(false);
         return;
       }
-      await loginWithGoogle(token, effectiveRole ?? undefined);
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : 'فشل ربط حساب Google بالسيرفر';
-      onError?.(msg);
+      if (e?.code === statusCodes.PLAY_SERVICES_NOT_AVAILABLE) {
+        onError?.('خدمات Google Play غير متاحة على هذا الجهاز');
+      } else {
+        onError?.(err instanceof Error ? err.message : 'فشل تسجيل الدخول بـ Google');
+      }
     } finally {
       setLoading(false);
-    }
-  }
-
-  const onPress = async () => {
-    if (!request) {
-      onError?.('Google OAuth غير مهيأ — تحقق من EXPO_PUBLIC_GOOGLE_CLIENT_ID');
-      return;
-    }
-    setLoading(true);
-    try {
-      await promptAsync();
-    } catch (err: unknown) {
-      setLoading(false);
-      onError?.(err instanceof Error ? err.message : 'تعذّر فتح نافذة Google');
     }
   };
 
   return (
     <Pressable
       onPress={onPress}
-      disabled={loading || !request}
-      style={({ pressed }) => [
-        styles.btn,
-        pressed && styles.pressed,
-        (loading || !request) && styles.disabled,
-      ]}
+      disabled={loading}
+      style={({ pressed }) => [styles.btn, pressed && styles.pressed, loading && styles.disabled]}
     >
       <View style={styles.row}>
         <GoogleLogo size={20} />
@@ -170,7 +168,6 @@ function ConfiguredGoogleButton({ label, onError, role, onResolveRole }: GoogleS
         ) : (
           <Text style={styles.label}>{label ?? 'الدخول بحساب جوجل'}</Text>
         )}
-        {/* spacer to keep the label visually centered when the logo is on the side */}
         <View style={styles.spacer} />
       </View>
     </Pressable>
@@ -199,19 +196,14 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.lg,
     minHeight: 48,
     justifyContent: 'center',
-    // Subtle official-style elevation
     ...(Platform.OS === 'web'
       ? { boxShadow: '0 1px 2px rgba(60,64,67,0.30), 0 1px 3px 1px rgba(60,64,67,0.15)' }
       : { elevation: 1 }),
   },
   pressed: { backgroundColor: '#F7F8F8' },
   disabled: { opacity: 0.6 },
-  row: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  spacer: { width: 20 }, // matches logo width — keeps text optically centered
+  row: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  spacer: { width: 20 },
   spinner: { flex: 1 },
   label: {
     flex: 1,
