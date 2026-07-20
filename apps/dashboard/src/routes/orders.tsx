@@ -635,6 +635,7 @@ export function OrdersPage() {
                     />
                     <th className="px-4 py-3 font-bold">العميل</th>
                     <th className="px-4 py-3 font-bold">الخدمة</th>
+                    <th className="px-4 py-3 font-bold">المتجر</th>
                     <SortableTh
                       label="الحالة"
                       col="status"
@@ -744,6 +745,25 @@ export function OrdersPage() {
                             </div>
                           </td>
                           <td className="px-4 py-3">{o.service?.nameAr ?? '—'}</td>
+                          {/*
+                            The store the order is bought from. It was on no
+                            column at all, so pricing an order meant opening it
+                            just to find out where to buy — the single most
+                            common reason to open a row.
+                            A multi-merchant cart has no single merchant, so the
+                            parent shows the count instead of a name.
+                          */}
+                          <td className="px-4 py-3">
+                            {o.merchant?.storeNameAr ? (
+                              <span className="font-medium">{o.merchant.storeNameAr}</span>
+                            ) : (o._count?.subOrders ?? 0) > 1 ? (
+                              <span className="text-xs bg-brand-orange/10 text-brand-orange px-2 py-0.5 rounded-full font-bold">
+                                {o._count?.subOrders} متاجر
+                              </span>
+                            ) : (
+                              <span className="text-muted-foreground">—</span>
+                            )}
+                          </td>
                           <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
                             <StatusQuickMenu orderId={o.id} status={o.status as OrderStatus} />
                           </td>
@@ -811,6 +831,7 @@ export function OrdersPage() {
                               quotedPrice: number | null;
                               finalPrice: number | null;
                               assignedDriver: { name: string } | null;
+                              merchant: { storeNameAr: string } | null;
                               items: { productNameSnapshot: string; quantity: number }[];
                             }) => (
                               <tr
@@ -823,10 +844,17 @@ export function OrdersPage() {
                                   <span className="text-muted-foreground">↳ </span>
                                   {sub.orderNumber}
                                 </td>
-                                <td className="px-4 py-2 text-muted-foreground" colSpan={2}>
+                                {/* Items in the الخدمة column, store in the new
+                                    المتجر column — the sub-row now lines up
+                                    with the parent's headers instead of
+                                    spanning them. */}
+                                <td className="px-4 py-2 text-muted-foreground">
                                   {sub.items
                                     .map((i) => `${i.productNameSnapshot} ×${i.quantity}`)
                                     .join(' · ')}
+                                </td>
+                                <td className="px-4 py-2 font-medium">
+                                  {sub.merchant?.storeNameAr ?? '—'}
                                 </td>
                                 <td className="px-4 py-2">
                                   <span className="inline-block px-1.5 py-0.5 rounded text-[10px] font-bold bg-brand-red/10 text-brand-red">
