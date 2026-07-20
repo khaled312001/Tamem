@@ -1313,6 +1313,29 @@ function ReviewCard({ review }: { review: any }) {
  * easy to scan as ONE order instead of three.
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
+/**
+ * Extras chosen at order time. Normally an array (the API decodes the JSON
+ * column), but accept a string too — one of the two order routes doesn't run
+ * rows through the JSON decoder, and rendering "[object Object]" to a
+ * dispatcher who has to go buy the thing is the worst possible failure.
+ */
+function extrasLabel(raw: unknown): string | null {
+  let list = raw;
+  if (typeof list === 'string') {
+    try {
+      list = JSON.parse(list);
+    } catch {
+      return null;
+    }
+  }
+  if (!Array.isArray(list) || list.length === 0) return null;
+  const names = list
+    .map((a) => String((a as { nameAr?: unknown })?.nameAr ?? '').trim())
+    .filter(Boolean);
+  return names.length > 0 ? names.join('، ') : null;
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 function ItemsByMerchantCard({ items }: { items: any[] }) {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const groups = new Map<string, { merchant: any; items: any[]; subtotal: number }>();
@@ -1373,18 +1396,33 @@ function ItemsByMerchantCard({ items }: { items: any[] }) {
               </div>
             )}
             <ul className={`divide-y divide-border ${isMulti ? 'px-3' : ''}`}>
-              {g.items.map((it, i) => (
-                <li key={i} className="py-2 flex items-center justify-between text-sm">
-                  <span>
-                    <span className="font-bold">{it.quantity}×</span> {it.productNameSnapshot}
-                  </span>
-                  {it.unitPriceSnapshot && (
-                    <span className="text-muted-foreground">
-                      {(Number(it.unitPriceSnapshot) * it.quantity).toLocaleString('ar-EG')} ج.م
+              {g.items.map((it, i) => {
+                const extras = extrasLabel(it.addonsSnapshot);
+                return (
+                  <li key={i} className="py-2 flex items-start justify-between gap-2 text-sm">
+                    <span className="min-w-0">
+                      <span className="font-bold">{it.quantity}×</span> {it.productNameSnapshot}
+                      {/* The size is part of what to buy, not a label — a
+                          dispatcher handed "بيتزا فراخ" alone buys the wrong
+                          one. */}
+                      {it.variantNameSnapshot && (
+                        <span className="font-bold text-brand-red">
+                          {' '}
+                          — {it.variantNameSnapshot}
+                        </span>
+                      )}
+                      {extras && (
+                        <span className="block text-xs text-muted-foreground">+ {extras}</span>
+                      )}
                     </span>
-                  )}
-                </li>
-              ))}
+                    {it.unitPriceSnapshot && (
+                      <span className="text-muted-foreground whitespace-nowrap">
+                        {(Number(it.unitPriceSnapshot) * it.quantity).toLocaleString('ar-EG')} ج.م
+                      </span>
+                    )}
+                  </li>
+                );
+              })}
             </ul>
           </div>
         ))}

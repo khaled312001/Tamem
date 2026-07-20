@@ -7207,6 +7207,13 @@ if (preg_match('#^/orders/([^/]+)$#', $path, $mm) && $method === 'GET') {
             ? ['id' => $__it['merchantId'], 'storeNameAr' => $__it['merchantNameAr']]
             : null;
         unset($__it['merchantNameAr']);
+        // This route's $q returns raw rows — no jsonizeRow — so the extras
+        // would arrive as a JSON *string* here and as an array on the admin
+        // route. Decode so both clients read the same shape.
+        if (is_string($__it['addonsSnapshot'] ?? null)) {
+            $d = json_decode($__it['addonsSnapshot'], true);
+            $__it['addonsSnapshot'] = is_array($d) ? $d : null;
+        }
     }
     unset($__it);
     $out['pickupPoints'] = $q('SELECT * FROM `OrderPickupPoint` WHERE orderId = ? ORDER BY sortOrder ASC', [$mm[1]]);
