@@ -114,3 +114,9 @@ apps/mobile/android/app/google-services.json
 client_secret_*.json
 apps/mobile/.env
 HANDOFF.md
+
+# Store upload guide — contains keystore password
+STORE-UPLOAD-GUIDE.md
+/google-services.json
+apps/mobile/android/*-log*.txt
+store-assets/_*.png

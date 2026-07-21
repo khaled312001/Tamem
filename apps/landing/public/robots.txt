@@ -6,4 +6,4 @@ Disallow: /backendtamem/
 # @astrojs/sitemap generates sitemap-index.xml at build time. The old
 # hand-written /sitemap.xml was deleted — it was stale, used non-trailing-slash
 # URLs that 301, and listed /super_admin/ which is Disallow'd above.
-Sitemap: https://deliverytamem.com/sitemap-index.xml
+Sitemap: https://deliverytamem.com/sitemap.xml
