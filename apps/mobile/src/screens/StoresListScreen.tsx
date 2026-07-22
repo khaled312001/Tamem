@@ -33,6 +33,23 @@ interface Category {
   sortOrder: number;
 }
 
+interface Section {
+  name: string;
+  count: number;
+  merchants: number;
+}
+
+interface ProductHit {
+  id: string;
+  nameAr?: string | null;
+  name?: string | null;
+  price?: number | string | null;
+  salePrice?: number | string | null;
+  imageUrl?: string | null;
+  categoryName?: string | null;
+  merchant?: { id: string; storeNameAr?: string | null; isOpen?: boolean } | null;
+}
+
 export function StoresListScreen() {
   const navigation = useNavigation<Nav>();
   const route = useRoute<RouteProp<HomeStackParamList, 'StoresList'>>();
@@ -46,6 +63,9 @@ export function StoresListScreen() {
   );
   const [search, setSearch] = useState(route.params?.search ?? '');
   const [sortKey, setSortKey] = useState<SortKey>('recommended');
+  // Shared product section (e.g. مشويات) filtered ACROSS merchants. When set,
+  // the list switches from "stores" to matching products from every merchant.
+  const [activeSection, setActiveSection] = useState<string | null>(null);
 
   // Chips come from the Categories table now, not a hardcoded list of four
   // slugs that silently stopped matching whatever the admin actually created.
@@ -69,6 +89,31 @@ export function StoresListScreen() {
       return api.raw.get('/merchants', { params }).then((r) => r.data.data);
     },
     // Browsing back and forth shouldn't refetch the same store list.
+    staleTime: 60_000,
+    placeholderData: (prev) => prev,
+  });
+
+  // The unified section list (مشويات، بيتزا…) shared across all merchants of the
+  // active type. Sourced from the same column the store page filters with.
+  const { data: sections } = useQuery<Section[]>({
+    queryKey: ['product-sections', activeCategory],
+    queryFn: () => {
+      const params: Record<string, string> = {};
+      if (activeCategory) params.merchantCategoryId = activeCategory;
+      return api.raw.get('/product-sections', { params }).then((r) => r.data.data);
+    },
+    staleTime: 5 * 60_000,
+  });
+
+  // Cross-merchant products for the selected section.
+  const { data: sectionProducts, isLoading: loadingProducts } = useQuery<ProductHit[]>({
+    queryKey: ['section-products', activeSection, activeCategory],
+    enabled: !!activeSection,
+    queryFn: () => {
+      const params: Record<string, string> = { section: activeSection!, pageSize: '50' };
+      if (activeCategory) params.merchantCategoryId = activeCategory;
+      return api.raw.get('/products', { params }).then((r) => r.data.data);
+    },
     staleTime: 60_000,
     placeholderData: (prev) => prev,
   });
@@ -113,7 +158,10 @@ export function StoresListScreen() {
           contentContainerStyle={styles.chipsRow}
         >
           <Pressable
-            onPress={() => setActiveCategory(null)}
+            onPress={() => {
+              setActiveCategory(null);
+              setActiveSection(null);
+            }}
             style={[styles.chip, !activeCategory && styles.chipOn]}
           >
             <Text style={[styles.chipText, !activeCategory && styles.chipTextOn]}>الكل</Text>
@@ -123,7 +171,10 @@ export function StoresListScreen() {
             return (
               <Pressable
                 key={c.id}
-                onPress={() => setActiveCategory(isOn ? null : c.id)}
+                onPress={() => {
+                  setActiveCategory(isOn ? null : c.id);
+                  setActiveSection(null);
+                }}
                 style={[styles.chip, isOn && styles.chipOn]}
               >
                 <Text style={[styles.chipText, isOn && styles.chipTextOn]}>{c.nameAr}</Text>
@@ -142,7 +193,93 @@ export function StoresListScreen() {
         </Pressable>
       </View>
 
-      {isLoading ? (
+      {/* Shared sections (مشويات، بيتزا…) filtered across every merchant. */}
+      {(sections?.length ?? 0) > 0 && (
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={styles.sectionRow}
+          style={styles.sectionScroll}
+        >
+          <Pressable
+            onPress={() => setActiveSection(null)}
+            style={[styles.sectionChip, !activeSection && styles.sectionChipOn]}
+          >
+            <Text style={[styles.sectionChipText, !activeSection && styles.sectionChipTextOn]}>
+              كل الأقسام
+            </Text>
+          </Pressable>
+          {(sections ?? []).map((s) => {
+            const on = activeSection === s.name;
+            return (
+              <Pressable
+                key={s.name}
+                onPress={() => setActiveSection(on ? null : s.name)}
+                style={[styles.sectionChip, on && styles.sectionChipOn]}
+              >
+                <Text style={[styles.sectionChipText, on && styles.sectionChipTextOn]}>
+                  {s.name} · {s.count}
+                </Text>
+              </Pressable>
+            );
+          })}
+        </ScrollView>
+      )}
+
+      {activeSection ? (
+        loadingProducts && !sectionProducts ? (
+          <View style={styles.listContent}>
+            <CardListSkeleton count={5} />
+          </View>
+        ) : (
+          <FlatList
+            {...LIST_PERF}
+            data={sectionProducts ?? []}
+            keyExtractor={(p) => p.id}
+            contentContainerStyle={[
+              styles.listContent,
+              (sectionProducts?.length ?? 0) === 0 && { flexGrow: 1, justifyContent: 'center' },
+            ]}
+            ListEmptyComponent={
+              <EmptyState
+                icon={<Store size={36} color={colors.brand.red} />}
+                title={`لا توجد منتجات في "${activeSection}"`}
+                subtitle="جرّب قسمًا آخر"
+              />
+            }
+            renderItem={({ item }) => {
+              const price = Number(item.salePrice ?? item.price ?? 0);
+              return (
+                <Pressable
+                  onPress={() => navigation.navigate('ProductDetail', { productId: item.id })}
+                  style={({ pressed }) => [styles.card, pressed && styles.pressed]}
+                >
+                  <View style={styles.cardIcon}>
+                    <Store size={22} color={colors.brand.red} />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.cardTitle}>{item.nameAr || item.name || '—'}</Text>
+                    <View style={styles.cardMeta}>
+                      <Store size={11} color={colors.text.muted} />
+                      <Text style={styles.cardSub}>{item.merchant?.storeNameAr ?? '—'}</Text>
+                    </View>
+                    {price > 0 && <Text style={styles.priceText}>{price.toFixed(0)} ج.م</Text>}
+                  </View>
+                  {item.merchant && (
+                    <View style={item.merchant.isOpen ? styles.tagOpen : styles.tagClosed}>
+                      <Text
+                        style={item.merchant.isOpen ? styles.tagOpenText : styles.tagClosedText}
+                      >
+                        {item.merchant.isOpen ? 'مفتوح' : 'مغلق'}
+                      </Text>
+                    </View>
+                  )}
+                </Pressable>
+              );
+            }}
+          />
+        )
+      ) : isLoading ? (
         <View style={styles.listContent}>
           <CardListSkeleton count={5} />
         </View>
@@ -259,6 +396,34 @@ const styles = StyleSheet.create({
     fontFamily: fontFamilies.bodyBold,
   },
   chipTextOn: { color: colors.white },
+  sectionScroll: { flexGrow: 0 },
+  sectionRow: {
+    paddingHorizontal: spacing.lg,
+    paddingBottom: spacing.sm,
+    gap: spacing.xs,
+  },
+  sectionChip: {
+    backgroundColor: colors.white,
+    borderWidth: 1,
+    borderColor: colors.brand.red,
+    paddingHorizontal: spacing.md,
+    paddingVertical: 5,
+    borderRadius: radii.pill,
+    marginEnd: spacing.xs,
+  },
+  sectionChipOn: { backgroundColor: colors.brand.red },
+  sectionChipText: {
+    color: colors.brand.red,
+    fontSize: fontSizes.xs,
+    fontFamily: fontFamilies.bodyBold,
+  },
+  sectionChipTextOn: { color: colors.white },
+  priceText: {
+    fontSize: fontSizes.sm,
+    color: colors.brand.red,
+    fontFamily: fontFamilies.bodyExtraBold,
+    marginTop: 3,
+  },
   listContent: { paddingHorizontal: spacing.lg, paddingBottom: spacing.xl },
   empty: {
     textAlign: 'center',

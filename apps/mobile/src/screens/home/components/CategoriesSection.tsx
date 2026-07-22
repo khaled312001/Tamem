@@ -22,9 +22,11 @@ import type { HomeCategory, Merchant } from '../homeData';
 const ROW = 'row' as const;
 const TILE = 104;
 
-/** Rotating tints so a row of icon-only tiles doesn't read as one grey block. */
-const TINTS = ['#FFF1F0', '#FFF4E8', '#FFF8DF', '#EFFAF3', '#F1F4FF', '#FDF0F7'];
-const FGS = ['#E0301E', '#EC7A2C', '#D49316', '#20A85B', '#3B6FE0', '#C2418B'];
+// Unified brand-orange theme (per request: all icons orange like the logo).
+// Two very close warm tints keep a row from looking like one flat block while
+// staying entirely inside the logo's orange/gold family.
+const TINTS = ['#FFF3E6', '#FFEFE0'];
+const FGS = ['#EC7A2C', '#E0781E'];
 
 interface CategoryWithCount extends HomeCategory {
   count: number;

@@ -547,17 +547,22 @@ function PhotoMode({
   const [caption, setCaption] = useState('');
 
   const pick = async (source: 'camera' | 'library') => {
-    const perm =
-      source === 'camera'
-        ? await ImagePicker.requestCameraPermissionsAsync()
-        : await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (!perm.granted) {
-      showToast({
-        title: 'لا يوجد إذن',
-        message: 'فعّل صلاحية الكاميرا/الصور من الإعدادات',
-        tone: 'error',
-      });
-      return;
+    // Only the CAMERA needs a runtime permission. The gallery uses Android's
+    // system photo picker (SDK 52), which grants access to the chosen image
+    // WITHOUT any storage/media permission — requesting one there just
+    // auto-denies on Android 13+ (no READ_MEDIA_IMAGES) and blocked the flow.
+    if (source === 'camera') {
+      const perm = await ImagePicker.requestCameraPermissionsAsync();
+      if (!perm.granted) {
+        showToast({
+          title: 'إذن الكاميرا مطلوب',
+          message: perm.canAskAgain
+            ? 'اسمح باستخدام الكاميرا وحاول مرة أخرى'
+            : 'فعّل صلاحية الكاميرا من إعدادات الهاتف',
+          tone: 'error',
+        });
+        return;
+      }
     }
     const launcher =
       source === 'camera' ? ImagePicker.launchCameraAsync : ImagePicker.launchImageLibraryAsync;

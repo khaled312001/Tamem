@@ -19,11 +19,12 @@ import { colors, fontFamilies, shadows, spacing } from '../../../theme/tokens';
 const ROW = 'row' as const;
 
 // Order matches the reference: exclusive offers on the right in RTL.
+// Icons unified to the orange/gold logo family (per request).
 const FEATURES = [
   {
     key: 'offers',
     Icon: BadgePercent,
-    color: colors.brand.red,
+    color: '#EC7A2C',
     title: 'عروض حصرية',
     sub: 'خصومات مميزة',
   },
@@ -37,11 +38,11 @@ const FEATURES = [
   {
     key: 'support',
     Icon: Headphones,
-    color: '#EC7A2C',
+    color: '#E0781E',
     title: 'دعم 24/7',
     sub: 'نحن هنا دائماً',
   },
-  { key: 'fast', Icon: Rocket, color: colors.brand.red, title: 'توصيل سريع', sub: 'في أسرع وقت' },
+  { key: 'fast', Icon: Rocket, color: '#EC7A2C', title: 'توصيل سريع', sub: 'في أسرع وقت' },
 ] as const;
 
 interface Props {
