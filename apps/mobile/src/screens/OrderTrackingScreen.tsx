@@ -41,6 +41,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { ORDER_STATUS_AR, type OrderStatus } from '@tamem/types';
 
+import { OrderMedia } from '../components/OrderMedia';
 import { ScreenHeader } from '../components/ScreenHeader';
 import {
   EmptyState,
@@ -716,16 +717,26 @@ export function OrderTrackingScreen() {
           </View>
         )}
 
-        {/* ─────── Order notes ─────── */}
-        {order.notes ? (
-          <View style={[styles.section, shadows.sm]}>
-            <View style={styles.sectionTitleRow}>
-              <Receipt size={16} color={colors.text.secondary} />
-              <Text style={styles.sectionTitle}>تفاصيل الطلب</Text>
+        {/* ─────── Order notes + attached media (photos / voice) ─────── */}
+        {(() => {
+          const media = order as unknown as {
+            imageUrls?: string[] | null;
+            customData?: { audioUri?: string | null } | null;
+          };
+          const audioUri = media.customData?.audioUri ?? null;
+          const hasImages = Array.isArray(media.imageUrls) && media.imageUrls.length > 0;
+          if (!order.notes && !hasImages && !audioUri) return null;
+          return (
+            <View style={[styles.section, shadows.sm]}>
+              <View style={styles.sectionTitleRow}>
+                <Receipt size={16} color={colors.text.secondary} />
+                <Text style={styles.sectionTitle}>تفاصيل الطلب</Text>
+              </View>
+              {order.notes ? <Text style={styles.notesText}>{order.notes}</Text> : null}
+              <OrderMedia imageUrls={media.imageUrls} audioUri={audioUri} />
             </View>
-            <Text style={styles.notesText}>{order.notes}</Text>
-          </View>
-        ) : null}
+          );
+        })()}
 
         {/* ─────── Activity log ─────── */}
         {Array.isArray(order.statusHistory) && order.statusHistory.length > 0 ? (

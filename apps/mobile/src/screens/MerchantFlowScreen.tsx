@@ -1,7 +1,7 @@
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
-import { Building2, MapPin, Package, Phone, Plus, Trash2, Truck, User } from 'lucide-react-native';
+import { Box, MapPin, Package, Phone, Plus, Store, Trash2, User } from 'lucide-react-native';
 import { useMemo, useState } from 'react';
 import {
   ActivityIndicator,
@@ -25,46 +25,38 @@ import { colors, fontFamilies, fontSizes, radii, spacing } from '../theme/tokens
 
 type Nav = NativeStackNavigationProp<HomeStackParamList, 'MerchantFlow'>;
 
-interface ItemDraft {
+type PkgSize = 'BAG' | 'CARTON';
+
+interface OrderDraft {
   id: string;
-  productNameSnapshot: string;
-  quantity: string;
-}
-interface PickupDraft {
-  id: string;
-  address: string;
-  contactName?: string;
-  contactPhone?: string;
-}
-interface DeliveryDraft {
-  id: string;
-  address: string;
-  recipientName: string;
-  recipientPhone: string;
+  customerName: string;
+  customerPhone: string;
+  customerAddress: string;
+  size: PkgSize;
 }
 
 const newId = () => Math.random().toString(36).slice(2);
+const SIZE_LABEL: Record<PkgSize, string> = { BAG: 'كيس', CARTON: 'كرتونة' };
 
 /**
- * B2B / merchant order flow — supports multiple products + multiple pickup
- * locations + multiple delivery locations. Pricing is QUOTE (admin sets manually).
+ * Merchant / distributor flow. The trader enters their own details once, then
+ * adds an order per customer (name / phone / address / package size). Delivery
+ * price is set by the admin from the distance between the trader and each
+ * customer, so no products or prices are collected here.
  */
 export function MerchantFlowScreen() {
   const navigation = useNavigation<Nav>();
 
-  const [items, setItems] = useState<ItemDraft[]>([
-    { id: newId(), productNameSnapshot: '', quantity: '1' },
+  const [merchantName, setMerchantName] = useState('');
+  const [merchantAddress, setMerchantAddress] = useState('');
+  const [merchantPhone, setMerchantPhone] = useState('');
+  const [orders, setOrders] = useState<OrderDraft[]>([
+    { id: newId(), customerName: '', customerPhone: '', customerAddress: '', size: 'BAG' },
   ]);
-  const [pickups, setPickups] = useState<PickupDraft[]>([{ id: newId(), address: '' }]);
-  const [deliveries, setDeliveries] = useState<DeliveryDraft[]>([
-    { id: newId(), address: '', recipientName: '', recipientPhone: '' },
-  ]);
-  const [notes, setNotes] = useState('');
 
   const { data: services } = useQuery<Service[]>({
     queryKey: ['services'],
     queryFn: () => api.raw.get('/services').then((r) => r.data.data),
-    // Service definitions are admin config — they change rarely.
     staleTime: 10 * 60_000,
   });
   const merchantService = useMemo(
@@ -72,37 +64,56 @@ export function MerchantFlowScreen() {
     [services],
   );
 
+  const validOrders = orders.filter(
+    (o) => o.customerName.trim() && o.customerPhone.trim() && o.customerAddress.trim(),
+  );
+  const canSubmit =
+    merchantName.trim().length >= 2 && merchantPhone.trim().length >= 6 && validOrders.length > 0;
+
+  const setOrder = (id: string, patch: Partial<OrderDraft>) =>
+    setOrders((p) => p.map((o) => (o.id === id ? { ...o, ...patch } : o)));
+
   const submit = useMutation({
     mutationFn: async () => {
       if (!merchantService) throw new Error('خدمة التاجر غير متاحة');
+      const list = validOrders.map((o) => ({
+        customerName: o.customerName.trim(),
+        customerPhone: o.customerPhone.trim(),
+        customerAddress: o.customerAddress.trim(),
+        size: o.size,
+        sizeLabel: SIZE_LABEL[o.size],
+      }));
+      const notes =
+        `🏪 التاجر: ${merchantName.trim()}\n` +
+        `📍 العنوان: ${merchantAddress.trim() || '—'}\n` +
+        `📞 الهاتف: ${merchantPhone.trim()}\n\n` +
+        `الأوردرات (${list.length}):\n` +
+        list
+          .map(
+            (o, i) =>
+              `${i + 1}) ${o.customerName} — ${o.customerPhone}\n   📍 ${o.customerAddress} — ${o.sizeLabel}`,
+          )
+          .join('\n');
+
       const res = await api.raw.post('/orders', {
         category: 'MERCHANT',
         serviceId: merchantService.id,
-        notes: notes.trim() || undefined,
-        items: items
-          .filter((it) => it.productNameSnapshot.trim() && parseInt(it.quantity, 10) > 0)
-          .map((it) => ({
-            productNameSnapshot: it.productNameSnapshot.trim(),
-            quantity: parseInt(it.quantity, 10),
-          })),
-        pickupPoints: pickups
-          .filter((p) => p.address.trim())
-          .map((p) => ({
-            address: p.address.trim(),
-            lat: 26.0297,
-            lng: 32.8146,
-            contactName: p.contactName?.trim() || undefined,
-            contactPhone: p.contactPhone?.trim() || undefined,
-          })),
-        deliveryPoints: deliveries
-          .filter((d) => d.address.trim() && d.recipientName.trim() && d.recipientPhone.trim())
-          .map((d) => ({
-            address: d.address.trim(),
-            recipientName: d.recipientName.trim(),
-            recipientPhone: d.recipientPhone.trim(),
-            lat: 26.0297,
-            lng: 32.8146,
-          })),
+        // The trader's own address is the pickup; deliveries live per-order in
+        // customData. deliveryAddress mirrors it so the backend never falls back
+        // to the account's default address.
+        pickupAddress: merchantAddress.trim() || merchantName.trim(),
+        deliveryAddress: merchantAddress.trim() || merchantName.trim(),
+        paymentMethod: 'CASH',
+        notes,
+        customData: {
+          merchantOrder: true,
+          merchant: {
+            name: merchantName.trim(),
+            address: merchantAddress.trim(),
+            phone: merchantPhone.trim(),
+          },
+          orders: list,
+        },
       });
       return res.data.data;
     },
@@ -125,15 +136,6 @@ export function MerchantFlowScreen() {
     onError: (err) => Alert.alert('خطأ', err instanceof Error ? err.message : 'فشل الإرسال'),
   });
 
-  const validItems = items.filter(
-    (it) => it.productNameSnapshot.trim() && parseInt(it.quantity, 10) > 0,
-  ).length;
-  const validPickups = pickups.filter((p) => p.address.trim()).length;
-  const validDeliveries = deliveries.filter(
-    (d) => d.address.trim() && d.recipientName.trim() && d.recipientPhone.trim(),
-  ).length;
-  const canSubmit = validItems > 0 && validPickups > 0 && validDeliveries > 0 && !submit.isPending;
-
   if (!services) {
     return (
       <SafeAreaView style={styles.container}>
@@ -144,198 +146,118 @@ export function MerchantFlowScreen() {
 
   return (
     <SafeAreaView edges={['top']} style={styles.container}>
-      <GradientHeader greeting="طلب تاجر / موزع" location="منتجات وكميات متعددة" />
+      <GradientHeader greeting="طلب تاجر / موزع" location="بياناتك وأوردرات عملائك" />
 
       <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
-        {/* Items */}
-        <SectionHeader Icon={Package} title="المنتجات المطلوبة" count={validItems} />
-        {items.map((it, idx) => (
-          <View key={it.id} style={styles.repeater}>
-            <View style={styles.repeaterHeader}>
-              <Text style={styles.repeaterTitle}>منتج {idx + 1}</Text>
-              {items.length > 1 && (
-                <Pressable onPress={() => setItems((p) => p.filter((x) => x.id !== it.id))}>
-                  <Trash2 size={16} color={colors.danger} />
-                </Pressable>
-              )}
-            </View>
-            <TextInput
-              value={it.productNameSnapshot}
-              onChangeText={(v) =>
-                setItems((p) =>
-                  p.map((x) => (x.id === it.id ? { ...x, productNameSnapshot: v } : x)),
-                )
-              }
-              placeholder="اسم المنتج (مثال: مياه معدنية كرتون)"
-              placeholderTextColor={colors.text.muted}
-              style={styles.input}
-            />
-            <View style={styles.qtyRow}>
-              <Text style={styles.qtyLabel}>الكمية:</Text>
-              <TextInput
-                value={it.quantity}
-                onChangeText={(v) =>
-                  setItems((p) =>
-                    p.map((x) => (x.id === it.id ? { ...x, quantity: v.replace(/\D/g, '') } : x)),
-                  )
-                }
-                keyboardType="numeric"
-                style={[styles.input, { flex: 0, width: 80, textAlign: 'center' }]}
-              />
-            </View>
-          </View>
-        ))}
-        <AddButton
-          label="إضافة منتج آخر"
-          onPress={() =>
-            setItems((p) => [...p, { id: newId(), productNameSnapshot: '', quantity: '1' }])
-          }
-        />
+        {/* ── Merchant info ── */}
+        <SectionHeader Icon={Store} title="بيانات التاجر" />
+        <View style={styles.card}>
+          <Field
+            Icon={User}
+            value={merchantName}
+            onChangeText={setMerchantName}
+            placeholder="اسم التاجر / المحل"
+          />
+          <Field
+            Icon={MapPin}
+            value={merchantAddress}
+            onChangeText={setMerchantAddress}
+            placeholder="عنوان التاجر (مثال: قفط - شارع المحطة)"
+          />
+          <Field
+            Icon={Phone}
+            value={merchantPhone}
+            onChangeText={(v) => setMerchantPhone(v.replace(/[^\d+]/g, ''))}
+            placeholder="رقم تليفون التاجر"
+            keyboardType="phone-pad"
+            last
+          />
+        </View>
 
-        {/* Pickup points */}
-        <SectionHeader Icon={Building2} title="نقاط الاستلام" count={validPickups} />
-        {pickups.map((p, idx) => (
-          <View key={p.id} style={styles.repeater}>
+        {/* ── Orders (per customer) ── */}
+        <SectionHeader Icon={Package} title="الأوردرات" count={validOrders.length} />
+        {orders.map((o, idx) => (
+          <View key={o.id} style={styles.repeater}>
             <View style={styles.repeaterHeader}>
-              <Text style={styles.repeaterTitle}>نقطة استلام {idx + 1}</Text>
-              {pickups.length > 1 && (
-                <Pressable onPress={() => setPickups((arr) => arr.filter((x) => x.id !== p.id))}>
+              <Text style={styles.repeaterTitle}>أوردر {idx + 1}</Text>
+              {orders.length > 1 && (
+                <Pressable
+                  onPress={() => setOrders((p) => p.filter((x) => x.id !== o.id))}
+                  hitSlop={8}
+                >
                   <Trash2 size={16} color={colors.danger} />
                 </Pressable>
               )}
             </View>
-            <TextInput
-              value={p.address}
-              onChangeText={(v) =>
-                setPickups((arr) => arr.map((x) => (x.id === p.id ? { ...x, address: v } : x)))
-              }
-              placeholder="عنوان المخزن / المورد"
-              placeholderTextColor={colors.text.muted}
-              style={styles.input}
+            <Field
+              Icon={User}
+              value={o.customerName}
+              onChangeText={(v) => setOrder(o.id, { customerName: v })}
+              placeholder="اسم العميل"
             />
-            <View style={styles.contactRow}>
-              <TextInput
-                value={p.contactName ?? ''}
-                onChangeText={(v) =>
-                  setPickups((arr) =>
-                    arr.map((x) => (x.id === p.id ? { ...x, contactName: v } : x)),
-                  )
-                }
-                placeholder="اسم جهة الاتصال (اختياري)"
-                placeholderTextColor={colors.text.muted}
-                style={[styles.input, { flex: 1 }]}
-              />
-              <TextInput
-                value={p.contactPhone ?? ''}
-                onChangeText={(v) =>
-                  setPickups((arr) =>
-                    arr.map((x) => (x.id === p.id ? { ...x, contactPhone: v } : x)),
-                  )
-                }
-                placeholder="هاتف"
-                placeholderTextColor={colors.text.muted}
-                keyboardType="phone-pad"
-                style={[styles.input, { flex: 1 }]}
-              />
+            <Field
+              Icon={Phone}
+              value={o.customerPhone}
+              onChangeText={(v) => setOrder(o.id, { customerPhone: v.replace(/[^\d+]/g, '') })}
+              placeholder="رقم تليفون العميل"
+              keyboardType="phone-pad"
+            />
+            <Field
+              Icon={MapPin}
+              value={o.customerAddress}
+              onChangeText={(v) => setOrder(o.id, { customerAddress: v })}
+              placeholder="عنوان العميل (المدينة / القرية / الشارع)"
+            />
+            <Text style={styles.sizeLabel}>حجم الأوردر</Text>
+            <View style={styles.sizeRow}>
+              {(['BAG', 'CARTON'] as PkgSize[]).map((s) => {
+                const on = o.size === s;
+                return (
+                  <Pressable
+                    key={s}
+                    onPress={() => setOrder(o.id, { size: s })}
+                    style={[styles.sizeChip, on && styles.sizeChipOn]}
+                  >
+                    <Box size={16} color={on ? colors.white : colors.brand.red} />
+                    <Text style={[styles.sizeChipText, on && { color: colors.white }]}>
+                      {SIZE_LABEL[s]}
+                    </Text>
+                  </Pressable>
+                );
+              })}
             </View>
           </View>
         ))}
         <AddButton
-          label="إضافة نقطة استلام أخرى"
-          onPress={() => setPickups((arr) => [...arr, { id: newId(), address: '' }])}
-        />
-
-        {/* Delivery points */}
-        <SectionHeader Icon={Truck} title="نقاط التسليم" count={validDeliveries} />
-        {deliveries.map((d, idx) => (
-          <View key={d.id} style={styles.repeater}>
-            <View style={styles.repeaterHeader}>
-              <Text style={styles.repeaterTitle}>نقطة تسليم {idx + 1}</Text>
-              {deliveries.length > 1 && (
-                <Pressable onPress={() => setDeliveries((arr) => arr.filter((x) => x.id !== d.id))}>
-                  <Trash2 size={16} color={colors.danger} />
-                </Pressable>
-              )}
-            </View>
-            <TextInput
-              value={d.address}
-              onChangeText={(v) =>
-                setDeliveries((arr) => arr.map((x) => (x.id === d.id ? { ...x, address: v } : x)))
-              }
-              placeholder="عنوان الفرع / المستلم"
-              placeholderTextColor={colors.text.muted}
-              style={styles.input}
-            />
-            <View style={styles.contactRow}>
-              <View style={styles.iconInput}>
-                <User size={14} color={colors.brand.red} />
-                <TextInput
-                  value={d.recipientName}
-                  onChangeText={(v) =>
-                    setDeliveries((arr) =>
-                      arr.map((x) => (x.id === d.id ? { ...x, recipientName: v } : x)),
-                    )
-                  }
-                  placeholder="اسم المستلم"
-                  placeholderTextColor={colors.text.muted}
-                  style={{ flex: 1, fontFamily: fontFamilies.body, textAlign: 'right' }}
-                />
-              </View>
-              <View style={styles.iconInput}>
-                <Phone size={14} color={colors.brand.red} />
-                <TextInput
-                  value={d.recipientPhone}
-                  onChangeText={(v) =>
-                    setDeliveries((arr) =>
-                      arr.map((x) => (x.id === d.id ? { ...x, recipientPhone: v } : x)),
-                    )
-                  }
-                  placeholder="الهاتف"
-                  placeholderTextColor={colors.text.muted}
-                  keyboardType="phone-pad"
-                  style={{ flex: 1, fontFamily: fontFamilies.body, textAlign: 'right' }}
-                />
-              </View>
-            </View>
-          </View>
-        ))}
-        <AddButton
-          label="إضافة نقطة تسليم أخرى"
+          label="إضافة أوردر آخر"
           onPress={() =>
-            setDeliveries((arr) => [
-              ...arr,
-              { id: newId(), address: '', recipientName: '', recipientPhone: '' },
+            setOrders((p) => [
+              ...p,
+              {
+                id: newId(),
+                customerName: '',
+                customerPhone: '',
+                customerAddress: '',
+                size: 'BAG',
+              },
             ])
           }
         />
 
-        {/* Notes */}
-        <SectionHeader Icon={MapPin} title="ملاحظات إضافية" />
-        <TextInput
-          value={notes}
-          onChangeText={setNotes}
-          placeholder="مواعيد التسليم، أوقات العمل، تعليمات خاصة…"
-          placeholderTextColor={colors.text.muted}
-          multiline
-          numberOfLines={3}
-          style={[styles.input, styles.notesInput]}
-        />
-
-        <View style={{ height: 100 }} />
-      </ScrollView>
-
-      {/* Sticky footer */}
-      <View style={styles.footer}>
-        <View style={styles.summaryRow}>
-          <Text style={styles.summaryText}>
-            {validItems} منتج · {validPickups} استلام · {validDeliveries} تسليم
+        <View style={styles.noteBox}>
+          <Text style={styles.noteText}>
+            سعر التوصيل يُحدَّد من الإدارة حسب المسافة بين عنوان التاجر وكل عميل.
           </Text>
         </View>
-        <Text style={styles.priceNote}>السعر يُحدَّد من الإدارة بعد المراجعة</Text>
+
+        <View style={{ height: 90 }} />
+      </ScrollView>
+
+      <View style={styles.footer}>
         <GradientButton
-          label={submit.isPending ? 'جاري الإرسال…' : 'طلب عرض سعر'}
+          label={submit.isPending ? 'جاري الإرسال…' : 'إرسال الطلب للإدارة'}
           onPress={() => submit.mutate()}
-          disabled={!canSubmit}
+          disabled={!canSubmit || submit.isPending}
           loading={submit.isPending}
         />
       </View>
@@ -348,7 +270,7 @@ function SectionHeader({
   title,
   count,
 }: {
-  Icon: typeof Package;
+  Icon: typeof Store;
   title: string;
   count?: number;
 }) {
@@ -358,11 +280,24 @@ function SectionHeader({
         <Icon size={16} color={colors.brand.red} />
       </View>
       <Text style={styles.sectionTitle}>{title}</Text>
-      {count !== undefined && count > 0 && (
-        <View style={styles.countBadge}>
-          <Text style={styles.countBadgeText}>{count}</Text>
+      {count !== undefined && count > 0 ? (
+        <View style={styles.countPill}>
+          <Text style={styles.countPillText}>{count}</Text>
         </View>
-      )}
+      ) : null}
+    </View>
+  );
+}
+
+function Field({
+  Icon,
+  last,
+  ...props
+}: React.ComponentProps<typeof TextInput> & { Icon: typeof User; last?: boolean }) {
+  return (
+    <View style={[styles.fieldWrap, last && { marginBottom: 0 }]}>
+      <Icon size={18} color={colors.brand.red} />
+      <TextInput placeholderTextColor={colors.text.muted} style={styles.fieldInput} {...props} />
     </View>
   );
 }
@@ -371,9 +306,9 @@ function AddButton({ label, onPress }: { label: string; onPress: () => void }) {
   return (
     <Pressable
       onPress={onPress}
-      style={({ pressed }) => [styles.addBtn, pressed && { opacity: 0.7 }]}
+      style={({ pressed }) => [styles.addBtn, pressed && { opacity: 0.85 }]}
     >
-      <Plus size={16} color={colors.brand.red} />
+      <Plus size={18} color={colors.brand.red} />
       <Text style={styles.addBtnText}>{label}</Text>
     </Pressable>
   );
@@ -397,101 +332,118 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  sectionTitle: {
-    flex: 1,
-    fontSize: fontSizes.md,
-    fontFamily: fontFamilies.headingBold,
-    color: colors.ink,
-  },
-  countBadge: {
-    backgroundColor: colors.brand.red,
-    paddingHorizontal: spacing.sm,
+  sectionTitle: { fontSize: fontSizes.md, fontFamily: fontFamilies.headingBold, color: colors.ink },
+  countPill: {
+    minWidth: 22,
     height: 22,
+    paddingHorizontal: 6,
     borderRadius: 11,
+    backgroundColor: colors.brand.red,
     alignItems: 'center',
     justifyContent: 'center',
-    minWidth: 22,
   },
-  countBadgeText: { color: colors.white, fontSize: 11, fontFamily: fontFamilies.bodyExtraBold },
+  countPillText: {
+    color: colors.white,
+    fontSize: fontSizes.xs,
+    fontFamily: fontFamilies.bodyExtraBold,
+  },
+  card: {
+    backgroundColor: colors.white,
+    borderRadius: radii.lg,
+    borderWidth: 1,
+    borderColor: colors.line,
+    padding: spacing.md,
+  },
   repeater: {
     backgroundColor: colors.white,
     borderRadius: radii.lg,
     borderWidth: 1,
     borderColor: colors.line,
     padding: spacing.md,
-    marginBottom: spacing.sm,
-    gap: spacing.sm,
+    marginBottom: spacing.md,
   },
   repeaterHeader: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
     alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: spacing.sm,
   },
   repeaterTitle: {
     fontSize: fontSizes.sm,
-    fontFamily: fontFamilies.bodyBold,
-    color: colors.text.muted,
+    fontFamily: fontFamilies.bodyExtraBold,
+    color: colors.brand.red,
   },
-  input: {
-    backgroundColor: colors.soft,
+  fieldWrap: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    backgroundColor: colors.surface,
     borderRadius: radii.md,
-    padding: spacing.sm,
+    borderWidth: 1,
+    borderColor: colors.line,
+    paddingHorizontal: spacing.md,
+    minHeight: 46,
+    marginBottom: spacing.sm,
+  },
+  fieldInput: {
+    flex: 1,
     fontSize: fontSizes.sm,
-    color: colors.text.primary,
-    textAlign: 'right',
+    color: colors.ink,
     fontFamily: fontFamilies.body,
-    minHeight: 42,
+    textAlign: 'right',
   },
-  notesInput: { minHeight: 72, textAlignVertical: 'top' },
-  qtyRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
-  qtyLabel: {
-    fontSize: fontSizes.sm,
-    color: colors.text.muted,
+  sizeLabel: {
+    fontSize: fontSizes.xs,
     fontFamily: fontFamilies.bodyBold,
+    color: colors.text.secondary,
+    marginBottom: 6,
+    marginTop: 2,
   },
-  contactRow: { flexDirection: 'row', gap: spacing.sm },
-  iconInput: {
+  sizeRow: { flexDirection: 'row', gap: spacing.sm },
+  sizeChip: {
     flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: spacing.xs,
-    backgroundColor: colors.soft,
+    justifyContent: 'center',
+    gap: 6,
+    borderWidth: 1.5,
+    borderColor: colors.line,
     borderRadius: radii.md,
-    paddingHorizontal: spacing.sm,
-    minHeight: 42,
+    paddingVertical: spacing.sm,
   },
+  sizeChipOn: { backgroundColor: colors.brand.red, borderColor: colors.brand.red },
+  sizeChipText: { fontSize: fontSizes.sm, fontFamily: fontFamilies.bodyBold, color: colors.ink },
   addBtn: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: spacing.xs,
+    gap: spacing.sm,
     backgroundColor: colors.brand.redLight,
-    borderRadius: radii.md,
-    paddingVertical: spacing.sm,
-    marginTop: spacing.xs,
+    borderRadius: radii.lg,
+    paddingVertical: spacing.md,
+    marginBottom: spacing.md,
   },
   addBtnText: {
-    color: colors.brand.red,
-    fontFamily: fontFamilies.bodyExtraBold,
     fontSize: fontSizes.sm,
+    fontFamily: fontFamilies.bodyExtraBold,
+    color: colors.brand.red,
+  },
+  noteBox: {
+    backgroundColor: colors.brand.gold + '18',
+    borderRadius: radii.md,
+    padding: spacing.md,
+  },
+  noteText: {
+    fontSize: fontSizes.xs,
+    color: colors.brand.dark,
+    fontFamily: fontFamilies.body,
+    lineHeight: 20,
+    textAlign: 'center',
   },
   footer: {
     padding: spacing.lg,
     backgroundColor: colors.white,
     borderTopWidth: 1,
     borderTopColor: colors.line,
-    gap: spacing.sm,
-  },
-  summaryRow: { alignItems: 'center' },
-  summaryText: {
-    fontSize: fontSizes.sm,
-    fontFamily: fontFamilies.bodyBold,
-    color: colors.text.primary,
-  },
-  priceNote: {
-    fontSize: fontSizes.xs,
-    color: colors.text.muted,
-    fontFamily: fontFamilies.body,
-    textAlign: 'center',
   },
 });

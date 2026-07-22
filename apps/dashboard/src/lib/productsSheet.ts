@@ -166,6 +166,22 @@ const ARCHIVE_COLUMNS: { header: string; width: number; get: (p: Row) => unknown
   { header: 'سعر الخصم', width: 12, get: (p) => (p.salePrice == null ? '' : num(p.salePrice)) },
   { header: 'المخزون', width: 10, get: (p) => (p.stock == null ? '' : Number(p.stock)) },
   { header: 'الحالة', width: 12, get: (p) => (p.isAvailable ? 'متاح' : 'معطّل') },
+  {
+    header: 'المقاسات',
+    width: 34,
+    get: (p) =>
+      Array.isArray(p.variants) && p.variants.length
+        ? p.variants.map((v: Row) => `${v.nameAr}=${num(v.price)}`).join(' | ')
+        : '',
+  },
+  {
+    header: 'الإضافات',
+    width: 34,
+    get: (p) =>
+      Array.isArray(p.addons) && p.addons.length
+        ? p.addons.map((a: Row) => `${a.nameAr}=${num(a.price)}`).join(' | ')
+        : '',
+  },
   { header: 'وصف مختصر', width: 36, get: (p) => p.description ?? '' },
 ];
 

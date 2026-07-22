@@ -2,11 +2,23 @@ import { useMutation, useQuery } from '@tanstack/react-query';
 import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { LinearGradient } from 'expo-linear-gradient';
-import { AlertTriangle, Box, MapPin, Package, Weight, Zap } from 'lucide-react-native';
+import * as ImagePicker from 'expo-image-picker';
+import {
+  AlertTriangle,
+  Box,
+  Camera,
+  ImagePlus,
+  MapPin,
+  Package,
+  Weight,
+  X,
+  Zap,
+} from 'lucide-react-native';
 import { useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
+  Image,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -22,6 +34,7 @@ import type { Service } from '@tamem/types';
 import { GradientButton } from '../components/GradientButton';
 import { GradientHeader } from '../components/GradientHeader';
 import { api } from '../lib/api';
+import { uploadFile } from '../lib/uploadFile';
 import type { HomeStackParamList } from '../navigation/HomeStack';
 import { colors, fontFamilies, fontSizes, radii, spacing } from '../theme/tokens';
 
@@ -48,13 +61,53 @@ const SPEEDS: { key: SpeedKey; label: string; sub: string; multiplier: string }[
 export function ShippingFlowScreen() {
   const navigation = useNavigation<Nav>();
 
-  const [from, setFrom] = useState('قفط');
-  const [to, setTo] = useState('الأقصر');
+  // Empty by default so the faded placeholder («مدينة الانطلاق» / «مدينة الوصول»)
+  // shows as an example — the customer types the real cities.
+  const [from, setFrom] = useState('');
+  const [to, setTo] = useState('');
   const [weight, setWeight] = useState('');
   const [size, setSize] = useState<SizeKey>('SMALL');
   const [fragile, setFragile] = useState(false);
   const [speed, setSpeed] = useState<SpeedKey>('STANDARD');
   const [estimate, setEstimate] = useState<number | null>(null);
+  // Optional shipment photo — lets the team verify the size/contents before pickup.
+  const [photoUri, setPhotoUri] = useState<string | null>(null);
+  const [photoUrl, setPhotoUrl] = useState<string | null>(null);
+  const [uploadingPhoto, setUploadingPhoto] = useState(false);
+
+  const pickPhoto = async (source: 'camera' | 'gallery') => {
+    // Camera needs a runtime permission; the gallery uses Android's system photo
+    // picker (no permission needed — requesting one auto-denies on Android 13+).
+    if (source === 'camera') {
+      const perm = await ImagePicker.requestCameraPermissionsAsync();
+      if (!perm.granted) {
+        Alert.alert(
+          'إذن الكاميرا مطلوب',
+          perm.canAskAgain
+            ? 'اسمح باستخدام الكاميرا وحاول مرة أخرى.'
+            : 'فعّل صلاحية الكاميرا من إعدادات الهاتف.',
+        );
+        return;
+      }
+    }
+    const launch =
+      source === 'camera' ? ImagePicker.launchCameraAsync : ImagePicker.launchImageLibraryAsync;
+    const res = await launch({ mediaTypes: ImagePicker.MediaTypeOptions.Images, quality: 0.6 });
+    if (res.canceled || !res.assets?.[0]) return;
+    const uri = res.assets[0].uri;
+    setPhotoUri(uri);
+    setUploadingPhoto(true);
+    try {
+      const up = await uploadFile(uri, { mime: 'image/jpeg' });
+      if (!up.url || !/^https?:/.test(up.url)) throw new Error('upload failed');
+      setPhotoUrl(up.url);
+    } catch {
+      Alert.alert('تعذّر رفع الصورة', 'تأكد من اتصالك بالإنترنت وحاول مرة أخرى.');
+      setPhotoUri(null);
+    } finally {
+      setUploadingPhoto(false);
+    }
+  };
 
   const { data: services } = useQuery<Service[]>({
     queryKey: ['services'],
@@ -68,11 +121,18 @@ export function ShippingFlowScreen() {
     [services],
   );
 
-  // Live price estimate (debounced via stale time in React Query)
+  // Region list drives the from/to pickers + the region→region price table.
+  const { data: regionsData } = useQuery<{ regions: string[] }>({
+    queryKey: ['shipping-regions'],
+    queryFn: () => api.raw.get('/shipping/regions').then((r) => r.data.data),
+    staleTime: 30 * 60_000,
+  });
+  const regions = regionsData?.regions ?? [];
+
+  // Live price estimate — computed from the chosen from/to regions.
   useEffect(() => {
     if (!shippingService) return;
-    const weightNum = parseFloat(weight);
-    if (!Number.isFinite(weightNum) || weightNum <= 0) {
+    if (!from || !to) {
       setEstimate(null);
       return;
     }
@@ -80,12 +140,9 @@ export function ShippingFlowScreen() {
       try {
         const res = await api.raw.post('/pricing/estimate', {
           serviceId: shippingService.id,
-          // Default Qift → Luxor coords for live estimate
-          pickupLat: 26.0297,
-          pickupLng: 32.8146,
-          deliveryLat: 25.6872,
-          deliveryLng: 32.6396,
-          weightKg: weightNum,
+          fromRegion: from,
+          toRegion: to,
+          weightKg: parseFloat(weight) || undefined,
           sizeCategory: size,
           isFragile: fragile,
           speedTier: speed,
@@ -94,9 +151,9 @@ export function ShippingFlowScreen() {
       } catch {
         setEstimate(null);
       }
-    }, 500);
+    }, 400);
     return () => clearTimeout(id);
-  }, [shippingService, weight, size, fragile, speed]);
+  }, [shippingService, from, to, weight, size, fragile, speed]);
 
   const submit = useMutation({
     mutationFn: async () => {
@@ -104,17 +161,16 @@ export function ShippingFlowScreen() {
       const res = await api.raw.post('/orders', {
         category: 'SHIPPING',
         serviceId: shippingService.id,
+        fromRegion: from,
+        toRegion: to,
         pickupAddress: from,
-        pickupLat: 26.0297,
-        pickupLng: 32.8146,
         deliveryAddress: to,
-        deliveryLat: 25.6872,
-        deliveryLng: 32.6396,
-        weightKg: parseFloat(weight),
+        weightKg: parseFloat(weight) || undefined,
         sizeCategory: size,
         isFragile: fragile,
         speedTier: speed,
         paymentMethod: 'CASH',
+        imageUrls: photoUrl ? [photoUrl] : undefined,
       });
       return res.data.data;
     },
@@ -139,8 +195,7 @@ export function ShippingFlowScreen() {
     },
   });
 
-  const canSubmit =
-    from.trim().length >= 2 && to.trim().length >= 2 && parseFloat(weight) > 0 && !submit.isPending;
+  const canSubmit = !!from && !!to && from !== to && !submit.isPending;
 
   if (!services) {
     return (
@@ -155,37 +210,63 @@ export function ShippingFlowScreen() {
       <GradientHeader greeting="طلب شحن" location="بين المناطق" />
 
       <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
-        {/* From / To */}
+        {/* From / To — pick from the priced regions */}
         <Text style={styles.section}>المسار</Text>
         <View style={styles.routeCard}>
           <View style={styles.routeRow}>
             <View style={[styles.routePin, { backgroundColor: colors.success }]} />
-            <View style={{ flex: 1 }}>
-              <Text style={styles.routeLabel}>من</Text>
-              <TextInput
-                value={from}
-                onChangeText={setFrom}
-                placeholder="مدينة الانطلاق"
-                placeholderTextColor={colors.text.muted}
-                style={styles.routeInput}
-              />
-            </View>
+            <Text style={styles.routeLabel}>من</Text>
           </View>
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.regionRow}
+          >
+            {regions.map((r) => {
+              const on = from === r;
+              return (
+                <Pressable
+                  key={`from-${r}`}
+                  onPress={() => setFrom(r)}
+                  style={[styles.regionChip, on && styles.regionChipOn]}
+                >
+                  <Text style={[styles.regionChipTxt, on && styles.regionChipTxtOn]}>{r}</Text>
+                </Pressable>
+              );
+            })}
+          </ScrollView>
+
           <View style={styles.routeDivider} />
+
           <View style={styles.routeRow}>
             <View style={[styles.routePin, { backgroundColor: colors.brand.red }]} />
-            <View style={{ flex: 1 }}>
-              <Text style={styles.routeLabel}>إلى</Text>
-              <TextInput
-                value={to}
-                onChangeText={setTo}
-                placeholder="مدينة الوصول"
-                placeholderTextColor={colors.text.muted}
-                style={styles.routeInput}
-              />
-            </View>
-            <MapPin size={18} color={colors.brand.red} />
+            <Text style={styles.routeLabel}>إلى</Text>
+            <MapPin size={16} color={colors.brand.red} style={{ marginStart: 'auto' }} />
           </View>
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.regionRow}
+          >
+            {regions.map((r) => {
+              const on = to === r;
+              const disabled = from === r;
+              return (
+                <Pressable
+                  key={`to-${r}`}
+                  onPress={() => setTo(r)}
+                  disabled={disabled}
+                  style={[
+                    styles.regionChip,
+                    on && styles.regionChipOn,
+                    disabled && styles.regionChipOff,
+                  ]}
+                >
+                  <Text style={[styles.regionChipTxt, on && styles.regionChipTxtOn]}>{r}</Text>
+                </Pressable>
+              );
+            })}
+          </ScrollView>
         </View>
 
         {/* Weight */}
@@ -240,6 +321,42 @@ export function ShippingFlowScreen() {
             thumbColor={colors.white}
           />
         </View>
+
+        {/* Shipment photo (optional) — helps verify size/contents before pickup */}
+        <Text style={styles.subLabel}>صورة الشحنة (اختياري)</Text>
+        <Text style={styles.photoHint}>صوّر الشحنة عشان نتأكد من حجمها وتفاصيلها قبل الاستلام</Text>
+        {photoUri ? (
+          <View style={styles.photoPreviewWrap}>
+            <Image source={{ uri: photoUri }} style={styles.photoPreview} resizeMode="cover" />
+            {uploadingPhoto ? (
+              <View style={styles.photoOverlay}>
+                <ActivityIndicator color={colors.white} />
+              </View>
+            ) : (
+              <Pressable
+                onPress={() => {
+                  setPhotoUri(null);
+                  setPhotoUrl(null);
+                }}
+                style={styles.photoRemove}
+                hitSlop={8}
+              >
+                <X size={16} color={colors.white} />
+              </Pressable>
+            )}
+          </View>
+        ) : (
+          <View style={styles.photoActions}>
+            <Pressable onPress={() => pickPhoto('camera')} style={styles.photoBtn}>
+              <Camera size={18} color={colors.brand.red} />
+              <Text style={styles.photoBtnText}>التقط صورة</Text>
+            </Pressable>
+            <Pressable onPress={() => pickPhoto('gallery')} style={styles.photoBtn}>
+              <ImagePlus size={18} color={colors.brand.red} />
+              <Text style={styles.photoBtnText}>من المعرض</Text>
+            </Pressable>
+          </View>
+        )}
 
         {/* Speed */}
         <Text style={styles.subLabel}>سرعة الشحن</Text>
@@ -324,18 +441,30 @@ const styles = StyleSheet.create({
     color: colors.text.muted,
     fontFamily: fontFamilies.body,
   },
-  routeInput: {
-    fontSize: fontSizes.md,
-    color: colors.ink,
-    fontFamily: fontFamilies.bodyExtraBold,
-    paddingVertical: 4,
+  regionRow: { gap: spacing.xs, paddingVertical: spacing.sm, paddingStart: 2 },
+  regionChip: {
+    paddingHorizontal: spacing.md,
+    paddingVertical: 8,
+    borderRadius: radii.pill,
+    borderWidth: 1,
+    borderColor: colors.line,
+    backgroundColor: colors.white,
   },
+  regionChipOn: {
+    backgroundColor: colors.brand.red,
+    borderColor: colors.brand.red,
+  },
+  regionChipOff: { opacity: 0.35 },
+  regionChipTxt: {
+    fontSize: fontSizes.sm,
+    color: colors.ink,
+    fontFamily: fontFamilies.bodyBold,
+  },
+  regionChipTxtOn: { color: colors.white },
   routeDivider: {
-    width: 1,
-    height: 16,
+    height: 1,
     backgroundColor: colors.line2,
     marginVertical: spacing.xs,
-    marginStart: 5,
   },
   inputWrap: {
     flexDirection: 'row',
@@ -412,6 +541,55 @@ const styles = StyleSheet.create({
     color: colors.text.muted,
     fontFamily: fontFamilies.body,
     marginTop: 2,
+  },
+  photoHint: {
+    fontSize: fontSizes.xs,
+    color: colors.text.muted,
+    fontFamily: fontFamilies.body,
+    marginBottom: spacing.sm,
+    lineHeight: 18,
+  },
+  photoActions: { flexDirection: 'row', gap: spacing.sm },
+  photoBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing.sm,
+    backgroundColor: colors.white,
+    borderWidth: 1.5,
+    borderColor: colors.line,
+    borderRadius: radii.lg,
+    paddingVertical: spacing.md,
+  },
+  photoBtnText: {
+    fontSize: fontSizes.sm,
+    fontFamily: fontFamilies.bodyBold,
+    color: colors.ink,
+  },
+  photoPreviewWrap: {
+    height: 160,
+    borderRadius: radii.lg,
+    overflow: 'hidden',
+    backgroundColor: colors.line2,
+  },
+  photoPreview: { width: '100%', height: '100%' },
+  photoOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(0,0,0,0.35)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  photoRemove: {
+    position: 'absolute',
+    top: 8,
+    right: 8,
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    backgroundColor: 'rgba(0,0,0,0.55)',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   fade: { position: 'absolute', left: 0, right: 0, bottom: 110, height: 40 },
   footer: {

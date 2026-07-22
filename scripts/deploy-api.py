@@ -28,7 +28,7 @@ import time
 import urllib.request
 
 HANDOFF = r"E:\Tamem\HANDOFF.md"
-LOCAL = r"E:\Tamem\Tamem\apps\backend\dist-bundle\api.php"
+LOCAL = r"E:\Tamem\apps\backend\dist-bundle\api.php"
 HOST, PORT, USER = "77.37.37.207", 65002, "u748721963"
 HEALTH_URL = "https://backendtamem.deliverytamem.com/api/v1/health"
 

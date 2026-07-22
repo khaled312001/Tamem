@@ -1,149 +1,143 @@
 import { LinearGradient } from 'expo-linear-gradient';
-import { ChevronLeft, Bike } from 'lucide-react-native';
-import { useEffect, useRef } from 'react';
-import { Animated, Image, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
+import { ArrowLeft } from 'lucide-react-native';
+import { useEffect } from 'react';
+import { Image, Pressable, StyleSheet, Text, View } from 'react-native';
+import Animated, {
+  Easing,
+  FadeInDown,
+  FadeInUp,
+  ZoomIn,
+  useAnimatedStyle,
+  useSharedValue,
+  withRepeat,
+  withSequence,
+  withTiming,
+} from 'react-native-reanimated';
 
-import { colors, fontFamilies, fontSizes, gradients, radii, spacing } from '../theme/tokens';
-
-const useNative = Platform.OS !== 'web';
+import { colors, fontFamilies, fontSizes, radii, spacing } from '../theme/tokens';
 
 interface SplashScreenProps {
   /**
-   * If provided, renders a "ابدأ الآن" CTA at the bottom that calls this
-   * callback. When omitted, the splash acts as a hydration loading state
-   * (showing only the animated dots).
+   * When provided, renders the "ابدأ الآن" CTA that calls this on press.
+   * When omitted, the splash is a pure hydration/loading state (animated dots).
    */
   onStart?: () => void;
 }
 
+/**
+ * Brand splash / intro. Fully rebuilt: a warm brand gradient, a soft breathing
+ * halo behind a clean logo card, staggered reanimated entrance, and a modern
+ * pill CTA. No portrait badge, no loose dots overlapping the mark.
+ */
 export function SplashScreen({ onStart }: SplashScreenProps = {}) {
-  const pulse = useRef(new Animated.Value(0.85)).current;
-  const dot1 = useRef(new Animated.Value(0.4)).current;
-  const dot2 = useRef(new Animated.Value(0.4)).current;
-  const dot3 = useRef(new Animated.Value(0.4)).current;
-  const ctaScale = useRef(new Animated.Value(1)).current;
+  // Breathing halo behind the logo + a gentle CTA pulse. Shared values so the
+  // loops live on the UI thread and stop cleanly on unmount.
+  const halo = useSharedValue(0.92);
+  const ctaPulse = useSharedValue(1);
+  const d1 = useSharedValue(0.3);
+  const d2 = useSharedValue(0.3);
+  const d3 = useSharedValue(0.3);
 
   useEffect(() => {
-    // Collected so every loop can be stopped on unmount. This screen doubles as
-    // the auth-hydration state, so it unmounts on every cold start — leaving
-    // five loops running behind the app.
-    const loops: Animated.CompositeAnimation[] = [
-      Animated.loop(
-        Animated.sequence([
-          Animated.timing(pulse, { toValue: 1.05, duration: 1400, useNativeDriver: useNative }),
-          Animated.timing(pulse, { toValue: 0.85, duration: 1400, useNativeDriver: useNative }),
-        ]),
+    halo.value = withRepeat(
+      withSequence(
+        withTiming(1.12, { duration: 1700, easing: Easing.inOut(Easing.quad) }),
+        withTiming(0.92, { duration: 1700, easing: Easing.inOut(Easing.quad) }),
       ),
-    ];
-
-    const seq = (val: Animated.Value, delay: number) =>
-      Animated.loop(
-        Animated.sequence([
-          Animated.delay(delay),
-          Animated.timing(val, { toValue: 1, duration: 350, useNativeDriver: useNative }),
-          Animated.timing(val, { toValue: 0.4, duration: 350, useNativeDriver: useNative }),
-        ]),
-      );
-    loops.push(seq(dot1, 0), seq(dot2, 200), seq(dot3, 400));
-
-    // Subtle CTA bounce
+      -1,
+    );
     if (onStart) {
-      loops.push(
-        Animated.loop(
-          Animated.sequence([
-            Animated.timing(ctaScale, { toValue: 1.03, duration: 900, useNativeDriver: useNative }),
-            Animated.timing(ctaScale, { toValue: 1, duration: 900, useNativeDriver: useNative }),
-          ]),
+      ctaPulse.value = withRepeat(
+        withSequence(
+          withTiming(1.035, { duration: 1000, easing: Easing.inOut(Easing.quad) }),
+          withTiming(1, { duration: 1000, easing: Easing.inOut(Easing.quad) }),
         ),
+        -1,
       );
+    } else {
+      const bounce = (v: typeof d1, delay: number) =>
+        (v.value = withRepeat(
+          withSequence(
+            withTiming(0.3, { duration: delay }),
+            withTiming(1, { duration: 380 }),
+            withTiming(0.3, { duration: 380 }),
+          ),
+          -1,
+        ));
+      bounce(d1, 0);
+      bounce(d2, 160);
+      bounce(d3, 320);
     }
+  }, [onStart, halo, ctaPulse, d1, d2, d3]);
 
-    loops.forEach((l) => l.start());
-    return () => loops.forEach((l) => l.stop());
-  }, [pulse, dot1, dot2, dot3, ctaScale, onStart]);
+  const haloStyle = useAnimatedStyle(() => ({ transform: [{ scale: halo.value }] }));
+  const ctaStyle = useAnimatedStyle(() => ({ transform: [{ scale: ctaPulse.value }] }));
+  const dot1Style = useAnimatedStyle(() => ({ opacity: d1.value }));
+  const dot2Style = useAnimatedStyle(() => ({ opacity: d2.value }));
+  const dot3Style = useAnimatedStyle(() => ({ opacity: d3.value }));
 
   return (
     <View style={styles.container}>
+      {/* Warm diagonal brand gradient */}
       <LinearGradient
-        colors={gradients.splash}
-        locations={[0, 0.18, 0.4, 0.85]}
-        start={{ x: 0.3, y: 0 }}
-        end={{ x: 0.7, y: 1 }}
+        colors={['#F0863B', '#E0301E', '#9E1D11']}
+        locations={[0, 0.5, 1]}
+        start={{ x: 0.1, y: 0 }}
+        end={{ x: 0.9, y: 1 }}
         style={StyleSheet.absoluteFill}
       />
+      {/* Soft light blooms for depth */}
+      <View style={[styles.bloom, styles.bloomTop]} />
+      <View style={[styles.bloom, styles.bloomBottom]} />
 
-      {/* Top gold accent line */}
-      <LinearGradient
-        colors={['transparent', '#F2A93B', 'transparent']}
-        start={{ x: 0, y: 0 }}
-        end={{ x: 1, y: 0 }}
-        style={styles.accentLine}
-      />
-
-      {/* Decorative circles */}
-      <View style={[styles.circle, styles.circle1]} />
-      <View style={[styles.circle, styles.circle2]} />
-      <View style={[styles.circle, styles.circle3]} />
-
-      {/* Top: rider + brand + tagline */}
-      <View style={styles.top}>
-        <View style={styles.riderBlock}>
-          <Animated.View style={[styles.glow, { transform: [{ scale: pulse }] }]} />
-          <View style={styles.goldRing} />
-
-          {/* Main brand logo — center of the halo. The rider portrait
-              shows as a small rotated badge in the corner so the brand
-              is the immediate visual anchor of the splash. */}
-          <View style={styles.riderFrame}>
+      {/* ── Center: logo + wordmark + tagline ── */}
+      <View style={styles.content}>
+        <Animated.View entering={ZoomIn.springify().damping(13).mass(0.9)} style={styles.logoWrap}>
+          <Animated.View style={[styles.halo, haloStyle]} />
+          <View style={styles.logoCard}>
             <Image
-              source={require('../assets/logo.jpg')}
-              style={styles.logoMainImg}
+              source={require('../assets/logo-clean.png')}
+              style={styles.logo}
               resizeMode="contain"
             />
           </View>
+        </Animated.View>
 
-          <View style={styles.logoBadge}>
-            <Image
-              source={require('../assets/delivery-rider.png')}
-              style={styles.riderBadgeImg}
-              resizeMode="cover"
-            />
+        <Animated.View entering={FadeInDown.delay(220).duration(600)} style={styles.brandWrap}>
+          <Text style={styles.brandEn}>Delivery Tamem</Text>
+          <View style={styles.dividerRow}>
+            <View style={styles.divider} />
+            <Text style={styles.brandAr}>تميم للتوصيل</Text>
+            <View style={styles.divider} />
           </View>
-        </View>
+        </Animated.View>
 
-        <View style={styles.brandWrap}>
-          <Text style={styles.brand}>TAMEM</Text>
-          <View style={styles.deliveryRow}>
-            <View style={styles.line} />
-            <Text style={styles.delivery}>DELIVERY</Text>
-            <View style={styles.line} />
-          </View>
-        </View>
-
-        <View style={styles.tagline}>
-          <Bike size={14} color={colors.brand.gold} />
-          <Text style={styles.taglineText}>تميم… التوصيل لعبتنا</Text>
-        </View>
+        <Animated.View entering={FadeInDown.delay(400).duration(600)} style={styles.taglineWrap}>
+          <Text style={styles.tagline}>أسرع توصيل وشحن في الصعيد 🚀</Text>
+        </Animated.View>
       </View>
 
-      {/* Bottom: CTA button when onStart is provided, else loading dots */}
+      {/* ── Bottom: CTA or loading dots ── */}
       <View style={styles.bottom}>
         {onStart ? (
-          <Animated.View style={[styles.ctaInner, { transform: [{ scale: ctaScale }] }]}>
+          <Animated.View
+            entering={FadeInUp.delay(600).duration(600)}
+            style={[styles.ctaWrap, ctaStyle]}
+          >
             <Pressable
               onPress={onStart}
               style={({ pressed }) => [styles.cta, pressed && styles.ctaPressed]}
             >
               <Text style={styles.ctaText}>ابدأ الآن</Text>
-              <ChevronLeft size={20} color={colors.brand.dark} />
+              <ArrowLeft size={20} color={colors.brand.red} strokeWidth={2.6} />
             </Pressable>
             <Text style={styles.ctaHint}>اضغط للمتابعة لإنشاء حساب أو تسجيل الدخول</Text>
           </Animated.View>
         ) : (
           <View style={styles.dotsRow}>
-            <Animated.View style={[styles.dotGold, { opacity: dot1 }]} />
-            <Animated.View style={[styles.dot, { opacity: dot2 }]} />
-            <Animated.View style={[styles.dot, { opacity: dot3 }]} />
+            <Animated.View style={[styles.dotGold, dot1Style]} />
+            <Animated.View style={[styles.dot, dot2Style]} />
+            <Animated.View style={[styles.dot, dot3Style]} />
           </View>
         )}
       </View>
@@ -151,171 +145,139 @@ export function SplashScreen({ onStart }: SplashScreenProps = {}) {
   );
 }
 
-const RIDER_SIZE = 220;
-const BADGE_SIZE = 76;
+const CARD = 200;
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: colors.brand.redDark,
+    backgroundColor: colors.brand.red,
     justifyContent: 'space-between',
-    paddingTop: spacing.xxl,
-    paddingBottom: spacing.xl,
+    paddingTop: spacing.xxl * 1.4,
+    paddingBottom: spacing.xxl,
   },
-  top: { alignItems: 'center', paddingHorizontal: spacing.xl, flexShrink: 1 },
-  bottom: { alignItems: 'center', paddingHorizontal: spacing.xl, paddingBottom: spacing.lg },
-  accentLine: { position: 'absolute', top: 0, left: 0, right: 0, height: 3 },
-  circle: { position: 'absolute', borderRadius: 999 },
-  circle1: {
-    top: -40,
-    right: -40,
-    width: 180,
-    height: 180,
-    backgroundColor: 'rgba(255,255,255,0.04)',
-  },
-  circle2: {
-    top: 30,
-    right: 20,
-    width: 120,
-    height: 120,
-    backgroundColor: 'rgba(255,255,255,0.03)',
-  },
-  circle3: {
-    bottom: 100,
-    left: -30,
-    width: 140,
-    height: 140,
-    backgroundColor: 'rgba(236,122,44,0.08)',
-  },
-  riderBlock: {
-    width: RIDER_SIZE + 30,
-    height: RIDER_SIZE + 30,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: spacing.lg,
-    position: 'relative',
-  },
-  glow: {
-    position: 'absolute',
-    width: RIDER_SIZE + 60,
-    height: RIDER_SIZE + 60,
-    borderRadius: 999,
-    backgroundColor: 'rgba(242,169,59,0.18)',
-  },
-  goldRing: {
-    position: 'absolute',
-    width: RIDER_SIZE + 12,
-    height: RIDER_SIZE + 12,
-    borderRadius: 999,
-    borderWidth: 1.5,
-    borderColor: 'rgba(242,169,59,0.4)',
-  },
-  riderFrame: {
-    width: RIDER_SIZE,
-    height: RIDER_SIZE,
-    borderRadius: RIDER_SIZE / 2,
-    overflow: 'hidden',
-    borderWidth: 3,
-    borderColor: 'rgba(255,255,255,0.18)',
-    backgroundColor: colors.white,
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: spacing.lg,
-    boxShadow: '0 14px 24px rgba(0,0,0,0.4)',
-    elevation: 14,
-  },
-  riderImage: { width: '100%', height: '100%' },
-  logoMainImg: { width: '100%', height: '100%' },
-  logoBadge: {
-    position: 'absolute',
-    bottom: 0,
-    right: 0,
-    width: BADGE_SIZE,
-    height: BADGE_SIZE,
-    borderRadius: radii.lg,
-    backgroundColor: colors.white,
-    padding: 4,
-    transform: [{ rotate: '-6deg' }],
-    boxShadow: '0 8px 12px rgba(0,0,0,0.35)',
-    elevation: 12,
-    zIndex: 3,
-    overflow: 'hidden',
-  },
-  logoBadgeImg: { width: '100%', height: '100%' },
-  riderBadgeImg: { width: '100%', height: '100%', borderRadius: radii.md },
-
-  brandWrap: { alignItems: 'center', marginTop: spacing.md },
-  brand: {
-    color: colors.white,
-    fontSize: 38,
-    fontFamily: fontFamilies.headingBlack,
-    letterSpacing: 6,
-  },
-  deliveryRow: { flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 4 },
-  line: { width: 26, height: 1.5, backgroundColor: colors.brand.gold, opacity: 0.7 },
-  delivery: {
-    color: colors.brand.gold,
-    letterSpacing: 8,
-    fontSize: fontSizes.xs,
-    fontFamily: fontFamilies.bodyExtraBold,
-  },
-  tagline: {
-    marginTop: spacing.xl,
+  bloom: { position: 'absolute', borderRadius: 999 },
+  bloomTop: {
+    top: -120,
+    right: -90,
+    width: 320,
+    height: 320,
     backgroundColor: 'rgba(255,255,255,0.10)',
-    borderColor: 'rgba(255,255,255,0.15)',
-    borderWidth: 1,
-    borderRadius: radii.pill,
-    paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.sm,
+  },
+  bloomBottom: {
+    bottom: -80,
+    left: -70,
+    width: 260,
+    height: 260,
+    backgroundColor: 'rgba(242,169,59,0.14)',
+  },
+
+  content: { alignItems: 'center', paddingHorizontal: spacing.xl },
+
+  logoWrap: {
+    width: CARD + 60,
+    height: CARD + 60,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  halo: {
+    position: 'absolute',
+    width: CARD + 56,
+    height: CARD + 56,
+    borderRadius: 999,
+    backgroundColor: 'rgba(255,255,255,0.14)',
+  },
+  logoCard: {
+    width: CARD,
+    height: CARD,
+    borderRadius: 44,
+    backgroundColor: colors.white,
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: spacing.xl,
+    boxShadow: '0 20px 40px rgba(120,20,10,0.45)',
+    elevation: 16,
+  },
+  logo: { width: '100%', height: '100%' },
+
+  brandWrap: { alignItems: 'center', marginTop: spacing.xxl },
+  brandEn: {
+    color: colors.white,
+    fontSize: 32,
+    fontFamily: fontFamilies.headingDisplay,
+    letterSpacing: 0.5,
+  },
+  dividerRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing.sm,
+    marginTop: spacing.sm,
   },
-  taglineText: {
+  divider: {
+    width: 28,
+    height: 2,
+    borderRadius: 2,
+    backgroundColor: colors.brand.gold,
+    opacity: 0.85,
+  },
+  brandAr: {
+    color: colors.brand.gold,
+    fontSize: fontSizes.md,
+    fontFamily: fontFamilies.headingBold,
+    letterSpacing: 1,
+  },
+
+  taglineWrap: {
+    marginTop: spacing.xl,
+    backgroundColor: 'rgba(255,255,255,0.12)',
+    borderColor: 'rgba(255,255,255,0.18)',
+    borderWidth: 1,
+    borderRadius: radii.pill,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.sm + 2,
+  },
+  tagline: {
     color: colors.white,
     fontSize: fontSizes.sm,
     fontFamily: fontFamilies.bodyBold,
+    textAlign: 'center',
   },
 
-  // CTA at the bottom (when onStart prop given)
-  ctaInner: { alignItems: 'center', width: '100%' },
+  bottom: { alignItems: 'center', paddingHorizontal: spacing.xl },
+  ctaWrap: { alignItems: 'center', width: '100%' },
   cta: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     gap: spacing.sm,
     backgroundColor: colors.white,
-    paddingVertical: spacing.md,
-    paddingHorizontal: spacing.xl,
+    paddingVertical: spacing.md + 2,
+    paddingHorizontal: spacing.xxl,
     borderRadius: radii.pill,
-    minWidth: 220,
-    boxShadow: '0 8px 24px rgba(242,169,59,0.35)',
-    elevation: 10,
+    minWidth: 240,
+    boxShadow: '0 12px 30px rgba(158,29,17,0.5)',
+    elevation: 12,
   },
-  ctaPressed: { opacity: 0.85, transform: [{ scale: 0.98 }] },
+  ctaPressed: { opacity: 0.9, transform: [{ scale: 0.98 }] },
   ctaText: {
-    color: colors.brand.dark,
-    fontSize: fontSizes.md,
+    color: colors.brand.red,
+    fontSize: fontSizes.lg,
     fontFamily: fontFamilies.headingBold,
   },
   ctaHint: {
     marginTop: spacing.md,
-    color: 'rgba(255,255,255,0.7)',
+    color: 'rgba(255,255,255,0.75)',
     fontSize: fontSizes.xs,
     fontFamily: fontFamilies.body,
     textAlign: 'center',
   },
 
-  dotsRow: {
-    flexDirection: 'row',
-    gap: 8,
-  },
-  dot: { width: 8, height: 8, borderRadius: 4, backgroundColor: colors.white },
+  dotsRow: { flexDirection: 'row', gap: 9 },
+  dot: { width: 9, height: 9, borderRadius: 5, backgroundColor: colors.white },
   dotGold: {
-    width: 10,
-    height: 10,
-    borderRadius: 5,
+    width: 11,
+    height: 11,
+    borderRadius: 6,
     backgroundColor: colors.brand.gold,
-    boxShadow: '0 0 8px rgba(242,169,59,0.5)',
+    boxShadow: '0 0 10px rgba(242,169,59,0.6)',
   },
 });

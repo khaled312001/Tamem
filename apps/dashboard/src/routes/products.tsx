@@ -2356,7 +2356,28 @@ function ProductFormDialog({ mode, product, merchants, onClose }: ProductFormDia
     enabled: !!form.merchantId,
     staleTime: 5 * 60_000,
   });
-  const sectionSuggestions = (sections ?? []).map((x) => x.name);
+
+  // Shared, cross-merchant sections for THIS merchant's type (e.g. every
+  // restaurant's مشويات), so a new store is offered the unified taxonomy the app
+  // filters by — not just the names it happens to have typed already.
+  const selectedMerchant = merchants.find((m) => m.id === form.merchantId);
+  const merchantCategoryId: string | undefined =
+    selectedMerchant?.category?.id ?? selectedMerchant?.categoryId ?? undefined;
+  const { data: sharedSections } = useQuery({
+    queryKey: ['shared-sections', merchantCategoryId ?? 'all'],
+    queryFn: () =>
+      api.raw
+        .get('/product-sections', {
+          params: merchantCategoryId ? { merchantCategoryId } : {},
+        })
+        .then((r) => r.data.data as { name: string }[]),
+    staleTime: 5 * 60_000,
+  });
+
+  // Merchant's own sections first (most relevant), then the shared list, deduped.
+  const sectionSuggestions = Array.from(
+    new Set([...(sections ?? []).map((x) => x.name), ...(sharedSections ?? []).map((x) => x.name)]),
+  ).filter(Boolean);
 
   const discountNum = form.discount === '' ? 0 : Number(form.discount);
   const afterDiscount =

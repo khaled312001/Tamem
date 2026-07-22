@@ -153,8 +153,10 @@ export const SERVICE_IMAGE: Record<ServiceKey, number> = {
   merchant: require('../../assets/service-merchant.png'),
 };
 
+// Unified orange/logo palette across the three service cards (per request),
+// with slightly different warm tints so the row still has gentle variety.
 export const SERVICE_THEME: Record<ServiceKey, { bg: string; fg: string }> = {
-  delivery: { bg: '#FFF1F0', fg: '#E0301E' },
-  shipping: { bg: '#FFF4E8', fg: '#EC7A2C' },
-  merchant: { bg: '#FFF8DF', fg: '#D49316' },
+  delivery: { bg: '#FFF3E6', fg: '#EC7A2C' },
+  shipping: { bg: '#FFF4E8', fg: '#E0781E' },
+  merchant: { bg: '#FFF6EC', fg: '#EC7A2C' },
 };

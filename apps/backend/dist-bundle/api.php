@@ -2997,6 +2997,26 @@ if ($method === 'GET' && $path === '/admin/products') {
         unset($p['m_storeNameAr'], $p['m_storeName']);
         $rows[] = $p;
     }
+    // Attach sizes (ProductVariant) + linked add-ons so the products sheet and
+    // the dashboard can show/round-trip them — one batched query each, not N+1.
+    if ($rows) {
+        $pids = array_column($rows, 'id');
+        $in = implode(',', array_fill(0, count($pids), '?'));
+        $vBy = []; $aBy = [];
+        $vs = db()->prepare("SELECT productId, nameAr, price FROM `ProductVariant` WHERE productId IN ($in) AND isActive = 1 ORDER BY sortOrder ASC");
+        $vs->execute($pids);
+        foreach ($vs->fetchAll() as $v) $vBy[$v['productId']][] = ['nameAr' => (string) $v['nameAr'], 'price' => (float) $v['price']];
+        try {
+            $as = db()->prepare("SELECT pal.productId, ma.nameAr, ma.price FROM `ProductAddonLink` pal JOIN `MerchantAddon` ma ON ma.id = pal.addonId WHERE pal.productId IN ($in) ORDER BY ma.sortOrder ASC");
+            $as->execute($pids);
+            foreach ($as->fetchAll() as $a) $aBy[$a['productId']][] = ['nameAr' => (string) $a['nameAr'], 'price' => (float) $a['price']];
+        } catch (Throwable $e) { /* add-on tables optional */ }
+        foreach ($rows as &$__r) {
+            $__r['variants'] = $vBy[$__r['id']] ?? [];
+            $__r['addons'] = $aBy[$__r['id']] ?? [];
+        }
+        unset($__r);
+    }
     jsonList($rows, $page, $pageSize, $total);
 }
 
@@ -6323,6 +6343,18 @@ if ($method === 'GET' && $path === '/products') {
     $q = trim((string) ($_GET['q'] ?? $_GET['search'] ?? ''));
     if ($q !== '') { $where .= ' AND (p.name LIKE ? OR p.nameAr LIKE ?)'; $args[] = "%$q%"; $args[] = "%$q%"; }
 
+    // Cross-merchant section filter — e.g. "مشويات" across every restaurant.
+    // Section is exact (same column the shared section list is built from) and
+    // the merchant-type scope goes through a subquery so the COUNT and the page
+    // query, which don't join MerchantProfile, both stay valid. Hidden rows are
+    // dropped here because this is a browse surface, not a merchant's own list.
+    $section = trim((string) ($_GET['section'] ?? ''));
+    if ($section !== '') { $where .= ' AND p.categoryName = ? AND p.isHidden = 0'; $args[] = $section; }
+    if (!empty($_GET['merchantCategoryId'])) {
+        $where .= ' AND p.merchantId IN (SELECT id FROM `MerchantProfile` WHERE categoryId = ?)';
+        $args[] = $_GET['merchantCategoryId'];
+    }
+
     // ids=a,b,c — fetch a curated set in one round trip. Capped so a crafted
     // query can't turn this into an unbounded IN(...) scan.
     $idsRaw = trim((string) ($_GET['ids'] ?? ''));
@@ -6353,6 +6385,28 @@ if ($method === 'GET' && $path === '/products') {
         $rows[] = $p;
     }
     jsonList($rows, $page, $pageSize, $total);
+}
+
+// GET /product-sections — the UNIFIED, cross-merchant section list (e.g. مشويات
+// across every restaurant). Powers the app's global section filter and the
+// dashboard's shared section suggestions. Optional ?merchantCategoryId scopes
+// to one merchant type (restaurants, pharmacies…). Built from Product.categoryName
+// so it stays in step with the data — no separate taxonomy to keep in sync.
+if ($method === 'GET' && $path === '/product-sections') {
+    $where = "p.isAvailable = 1 AND p.isHidden = 0 AND p.categoryName IS NOT NULL AND p.categoryName <> ''";
+    $args = [];
+    if (!empty($_GET['merchantCategoryId'])) { $where .= ' AND m.categoryId = ?'; $args[] = $_GET['merchantCategoryId']; }
+    $st = db()->prepare(
+        'SELECT p.categoryName AS name, COUNT(*) AS n, COUNT(DISTINCT p.merchantId) AS merchants'
+        . ' FROM `Product` p JOIN `MerchantProfile` m ON m.id = p.merchantId'
+        . ' WHERE ' . $where
+        . ' GROUP BY p.categoryName ORDER BY n DESC, p.categoryName ASC'
+    );
+    $st->execute($args);
+    jsonOk(array_map(
+        fn($r) => ['name' => (string) $r['name'], 'count' => (int) $r['n'], 'merchants' => (int) $r['merchants']],
+        $st->fetchAll()
+    ));
 }
 
 /**
@@ -6736,7 +6790,11 @@ if ($method === 'POST' && $path === '/orders/cart') {
     // "Null Island" coordinates onto the order.
     $cartLat = $cartHasPin ? (float) $b['deliveryLat'] : null;
     $cartLng = $cartHasPin ? (float) $b['deliveryLng'] : null;
-    $svc = db()->query("SELECT * FROM `Service` WHERE category = 'MERCHANT' AND isActive = 1 ORDER BY sortOrder ASC LIMIT 1")->fetch();
+    // A customer cart (products delivered from stores) is a DELIVERY order — not
+    // a MERCHANT/distributor order. Using MERCHANT here mislabeled every cart as
+    // «طلب تاجر / موزع». Fall back to MERCHANT only if no DELIVERY service exists.
+    $svc = db()->query("SELECT * FROM `Service` WHERE category = 'DELIVERY' AND isActive = 1 ORDER BY sortOrder ASC LIMIT 1")->fetch()
+        ?: db()->query("SELECT * FROM `Service` WHERE category = 'MERCHANT' AND isActive = 1 ORDER BY sortOrder ASC LIMIT 1")->fetch();
     if (!$svc) jsonErr('الخدمة غير متاحة', 404, 'NOT_FOUND');
 
     // Refuse the whole cart if any merchant is closed — matches orders.customer.
@@ -7023,6 +7081,10 @@ if ($method === 'POST' && $path === '/orders') {
         if ($q[0] === 'NO_PRICE') jsonErr('لا يوجد سعر توصيل لهذه المنطقة، تواصل مع الدعم', 400, 'NO_DELIVERY_PRICE');
         $fee = (float) $q[1];
     }
+    // Shipping between named regions is priced from the admin route table.
+    if ($fee === null && $cat === 'SHIPPING' && !empty($b['fromRegion']) && !empty($b['toRegion'])) {
+        $fee = shippingQuote((string) $b['fromRegion'], (string) $b['toRegion'], ($b['speedTier'] ?? '') === 'EXPRESS');
+    }
     $pm = (string) ($b['paymentMethod'] ?? 'CASH');
     if (!in_array($pm, ['CASH', 'VODAFONE_CASH', 'INSTAPAY'], true)) $pm = 'CASH';
 
@@ -7174,6 +7236,10 @@ if (preg_match('#^/orders/([^/]+)$#', $path, $mm) && $method === 'GET') {
     if (!$o) jsonErr('الطلب غير موجود', 404, 'NOT_FOUND');
     if ($o['customerId'] !== $uid && !in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('لا تستطيع عرض هذا الطلب', 403, 'FORBIDDEN');
     $out = orderRow($o);
+    // Decode the JSON blobs so the app gets a real array/object — the attached
+    // photos and the voice recording (customData.audioUri) render in «تفاصيل الطلب».
+    $out['imageUrls'] = $o['imageUrls'] ? (json_decode((string) $o['imageUrls'], true) ?: []) : [];
+    $out['customData'] = $o['customData'] ? (json_decode((string) $o['customData'], true) ?: null) : null;
     $q = fn(string $sql, array $a) => (function () use ($sql, $a) { $s = db()->prepare($sql); $s->execute($a); return $s->fetchAll(); })();
     $ss = db()->prepare('SELECT * FROM `Service` WHERE id = ? LIMIT 1');
     $ss->execute([$o['serviceId']]);
@@ -7288,12 +7354,91 @@ if (preg_match('#^/me/recurring-orders/([^/]+)$#', $path, $mm) && in_array($meth
 }
 
 // ═══ PRICING ═══════════════════════════════════════════════════════════
+// ─── Shipping route pricing (admin-editable table, from/to regions) ─────
+function shippingConfigDefault(): array {
+    return [
+        'regions' => ['قفط', 'قوص', 'نقادة', 'دشنا', 'نجع حمادي', 'أبوتشت', 'فرشوط', 'الأقصر', 'أسوان', 'سوهاج', 'البحر الأحمر', 'القاهرة'],
+        'rules' => [
+            ['from' => ['قفط', 'قوص', 'نقادة', 'دشنا'], 'to' => ['قفط', 'قوص', 'نقادة', 'دشنا'], 'normal' => 70, 'express' => 85],
+            ['from' => ['قفط', 'قوص', 'نقادة', 'دشنا'], 'to' => ['نجع حمادي'], 'normal' => 100, 'express' => 115],
+            ['from' => ['قفط', 'قوص', 'نقادة', 'دشنا'], 'to' => ['أبوتشت', 'فرشوط'], 'normal' => 120, 'express' => 140],
+            ['from' => ['*'], 'to' => ['أسوان'], 'normal' => 120, 'express' => 140],
+            ['from' => ['أسوان'], 'to' => ['*'], 'normal' => 120, 'express' => 140],
+        ],
+        'default' => ['normal' => 100, 'express' => 120],
+    ];
+}
+function shippingConfig(): array {
+    static $cfg = null;
+    if ($cfg !== null) return $cfg;
+    try {
+        $st = db()->prepare("SELECT `value` FROM `Setting` WHERE `key` = 'shipping_prices' LIMIT 1");
+        $st->execute();
+        $v = $st->fetchColumn();
+        if ($v) { $j = json_decode((string) $v, true); if (is_array($j) && !empty($j['rules'])) return $cfg = $j; }
+    } catch (Throwable $e) { /* fall through */ }
+    return $cfg = shippingConfigDefault();
+}
+/** Price between two named regions, symmetric; null only if regions are empty. */
+function shippingQuote(?string $from, ?string $to, bool $express = false): ?float {
+    $from = trim((string) $from); $to = trim((string) $to);
+    if ($from === '' || $to === '') return null;
+    $cfg = shippingConfig();
+    $key = $express ? 'express' : 'normal';
+    $inSet = fn(string $r, array $set) => in_array('*', $set, true) || in_array($r, $set, true);
+    foreach ((array) ($cfg['rules'] ?? []) as $rule) {
+        $f = (array) ($rule['from'] ?? []); $t = (array) ($rule['to'] ?? []);
+        if (($inSet($from, $f) && $inSet($to, $t)) || ($inSet($from, $t) && $inSet($to, $f))) {
+            return (float) ($rule[$key] ?? $rule['normal'] ?? 0);
+        }
+    }
+    $d = (array) ($cfg['default'] ?? ['normal' => 100, 'express' => 120]);
+    return (float) ($d[$key] ?? $d['normal'] ?? 100);
+}
+
+// GET/PUT /admin/shipping-prices — the editable region→region shipping table.
+if ($method === 'GET' && $path === '/admin/shipping-prices') {
+    authUser();
+    jsonOk(shippingConfig());
+}
+if ($method === 'PUT' && $path === '/admin/shipping-prices') {
+    $u = authUser();
+    if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
+    $b = readJsonBody();
+    if (empty($b['rules']) || !is_array($b['rules'])) jsonErr('قواعد الأسعار مطلوبة', 422, 'VALIDATION_ERROR');
+    $cfg = [
+        'regions' => array_values(array_filter(array_map('strval', (array) ($b['regions'] ?? [])))),
+        'rules' => array_values(array_map(fn ($r) => [
+            'from' => array_values(array_filter(array_map('strval', (array) ($r['from'] ?? [])))),
+            'to' => array_values(array_filter(array_map('strval', (array) ($r['to'] ?? [])))),
+            'normal' => (float) ($r['normal'] ?? 0),
+            'express' => (float) ($r['express'] ?? 0),
+        ], (array) $b['rules'])),
+        'default' => ['normal' => (float) ($b['default']['normal'] ?? 100), 'express' => (float) ($b['default']['express'] ?? 120)],
+    ];
+    db()->prepare('INSERT INTO `Setting` (`key`,`value`,`description`,`updatedAt`,`updatedById`) VALUES (?,?,NULL,NOW(3),?) ON DUPLICATE KEY UPDATE `value`=VALUES(`value`), `updatedAt`=VALUES(`updatedAt`), `updatedById`=VALUES(`updatedById`)')
+        ->execute(['shipping_prices', json_encode($cfg, JSON_UNESCAPED_UNICODE), $u['sub'] ?? null]);
+    jsonOk($cfg);
+}
+
+// GET /shipping/regions — the list of shippable regions for the app's pickers.
+if ($method === 'GET' && $path === '/shipping/regions') {
+    authUser();
+    jsonOk(['regions' => array_values((array) (shippingConfig()['regions'] ?? []))]);
+}
+
 if ($method === 'POST' && $path === '/pricing/estimate') {
     $b = readJsonBody();
     $ss = db()->prepare('SELECT * FROM `Service` WHERE id = ? LIMIT 1');
     $ss->execute([$b['serviceId'] ?? '']);
     $s = $ss->fetch();
     if (!$s) jsonErr('الخدمة غير متاحة', 404, 'NOT_FOUND');
+    // Shipping is priced from an admin-editable region→region table.
+    if (($s['category'] ?? '') === 'SHIPPING' && !empty($b['fromRegion']) && !empty($b['toRegion'])) {
+        $q = shippingQuote((string) $b['fromRegion'], (string) $b['toRegion'], ($b['speedTier'] ?? '') === 'EXPRESS');
+        jsonOk(['estimate' => $q !== null ? round($q) : null, 'method' => 'SHIPPING_ZONE',
+            'breakdown' => ['route' => $q !== null ? round($q, 2) : 0]]);
+    }
     if ($s['pricingMethod'] === 'QUOTE') jsonOk(['estimate' => null, 'method' => 'QUOTE', 'note' => 'سيتم تسعيره يدوياً من الإدارة']);
     $base = (float) ($s['basePrice'] ?? 0);
     $km = 0.0;

@@ -26,7 +26,7 @@ import time
 import urllib.request
 
 HANDOFF = r"E:\Tamem\HANDOFF.md"
-LOCAL_DIST = r"E:\Tamem\Tamem\apps\dashboard\dist"
+LOCAL_DIST = r"E:\Tamem\apps\dashboard\dist"
 REMOTE_BASE = "/home/u748721963/domains/deliverytamem.com/public_html"
 REMOTE_DIR = posixpath.join(REMOTE_BASE, "super_admin")
 URL = "https://deliverytamem.com/super_admin/"

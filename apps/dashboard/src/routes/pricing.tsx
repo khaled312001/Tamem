@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { DollarSign, Loader2, MapPin, Pencil, Plus, Save, Trash2 } from 'lucide-react';
+import { DollarSign, Loader2, MapPin, Pencil, Plus, Save, Trash2, Truck, X } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
 
@@ -26,6 +26,311 @@ export function PricingPage() {
       </div>
 
       <DeliveryZonesTab />
+
+      <div className="pt-2 border-t border-border" />
+      <ShippingPricesTab />
+    </div>
+  );
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Shipping between regions — the region→region price table (SHIPPING service).
+// Backed by the `shipping_prices` Setting via GET/PUT /admin/shipping-prices.
+// ────────────────────────────────────────────────────────────────────────────
+
+interface ShipRule {
+  from: string[];
+  to: string[];
+  normal: number;
+  express: number;
+}
+interface ShipCfg {
+  regions: string[];
+  rules: ShipRule[];
+  default: { normal: number; express: number };
+}
+
+const WILDCARD = '*';
+
+function ShippingPricesTab() {
+  const qc = useQueryClient();
+  const [cfg, setCfg] = useState<ShipCfg | null>(null);
+  const [newRegion, setNewRegion] = useState('');
+
+  const cfgQ = useQuery({
+    queryKey: ['admin', 'shipping-prices'],
+    queryFn: async (): Promise<ShipCfg> => {
+      const res = await api.raw.get<{ data: ShipCfg }>('/admin/shipping-prices');
+      return res.data.data;
+    },
+  });
+
+  // Seed the editable copy once the server config arrives.
+  useEffect(() => {
+    if (cfgQ.data && !cfg) setCfg(structuredClone(cfgQ.data));
+  }, [cfgQ.data, cfg]);
+
+  const saveMut = useMutation({
+    mutationFn: async (next: ShipCfg) => {
+      const res = await api.raw.put<{ data: ShipCfg }>('/admin/shipping-prices', next);
+      return res.data.data;
+    },
+    onSuccess: (saved) => {
+      toast.success('تم حفظ أسعار الشحن');
+      qc.setQueryData(['admin', 'shipping-prices'], saved);
+      setCfg(structuredClone(saved));
+    },
+    onError: (err: Error) => toast.error(err.message),
+  });
+
+  if (cfgQ.isLoading || !cfg) {
+    return (
+      <section className="space-y-3">
+        <CardSkeleton />
+        <CardSkeleton />
+      </section>
+    );
+  }
+
+  const patch = (fn: (draft: ShipCfg) => void) => {
+    setCfg((prev) => {
+      if (!prev) return prev;
+      const next = structuredClone(prev);
+      fn(next);
+      return next;
+    });
+  };
+
+  const addRegion = () => {
+    const name = newRegion.trim();
+    if (!name) return;
+    if (cfg.regions.includes(name)) {
+      toast.error('المنطقة موجودة بالفعل');
+      return;
+    }
+    patch((d) => d.regions.push(name));
+    setNewRegion('');
+  };
+
+  const removeRegion = (name: string) => {
+    patch((d) => {
+      d.regions = d.regions.filter((r) => r !== name);
+      // Drop the region from any rule that references it.
+      for (const rule of d.rules) {
+        rule.from = rule.from.filter((r) => r !== name);
+        rule.to = rule.to.filter((r) => r !== name);
+      }
+    });
+  };
+
+  const toggleInSet = (ruleIdx: number, side: 'from' | 'to', region: string) => {
+    patch((d) => {
+      const set = d.rules[ruleIdx]![side];
+      if (region === WILDCARD) {
+        d.rules[ruleIdx]![side] = set.includes(WILDCARD) ? [] : [WILDCARD];
+        return;
+      }
+      const cleaned = set.filter((r) => r !== WILDCARD);
+      d.rules[ruleIdx]![side] = cleaned.includes(region)
+        ? cleaned.filter((r) => r !== region)
+        : [...cleaned, region];
+    });
+  };
+
+  const addRule = () => patch((d) => d.rules.push({ from: [], to: [], normal: 100, express: 120 }));
+  const removeRule = (idx: number) => patch((d) => d.rules.splice(idx, 1));
+
+  const dirty = JSON.stringify(cfg) !== JSON.stringify(cfgQ.data);
+
+  return (
+    <section className="space-y-4">
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <div>
+          <h2 className="text-lg font-black text-brand-dark flex items-center gap-2">
+            <Truck className="w-5 h-5 text-brand-red" />
+            أسعار الشحن بين المناطق
+          </h2>
+          <p className="text-sm text-muted-foreground mt-1">
+            سعر الشحن بيتحسب حسب منطقة الانطلاق ومنطقة الوصول. «الكل» يعني أي منطقة.
+          </p>
+        </div>
+        <Button
+          size="md"
+          onClick={() => saveMut.mutate(cfg)}
+          disabled={!dirty || saveMut.isPending}
+        >
+          {saveMut.isPending ? (
+            <Loader2 className="w-4 h-4 animate-spin" />
+          ) : (
+            <Save className="w-4 h-4" />
+          )}
+          حفظ التغييرات
+        </Button>
+      </div>
+
+      {/* Regions manager */}
+      <div className="bg-white rounded-xl border border-border p-5 space-y-3">
+        <div className="text-xs uppercase tracking-wider text-muted-foreground font-bold">
+          المناطق المتاحة للشحن
+        </div>
+        <div className="flex flex-wrap gap-2">
+          {cfg.regions.map((r) => (
+            <span
+              key={r}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-brand-red/10 text-brand-dark text-sm font-bold"
+            >
+              {r}
+              <button
+                type="button"
+                onClick={() => removeRegion(r)}
+                className="text-brand-red/70 hover:text-brand-red"
+                title="حذف المنطقة"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </span>
+          ))}
+          {cfg.regions.length === 0 && (
+            <span className="text-sm text-muted-foreground">لا توجد مناطق — أضف منطقة.</span>
+          )}
+        </div>
+        <div className="flex items-center gap-2 max-w-sm">
+          <Input
+            value={newRegion}
+            onChange={(e) => setNewRegion(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && addRegion()}
+            placeholder="اسم منطقة جديدة"
+          />
+          <Button variant="outline" size="md" onClick={addRegion}>
+            <Plus className="w-4 h-4" />
+            إضافة
+          </Button>
+        </div>
+      </div>
+
+      {/* Rules */}
+      <div className="space-y-3">
+        {cfg.rules.map((rule, idx) => (
+          <div key={idx} className="bg-white rounded-xl border border-border p-5 space-y-4">
+            <div className="flex items-center justify-between">
+              <div className="text-sm font-black text-brand-dark">قاعدة {idx + 1}</div>
+              <Button variant="ghost" size="sm" onClick={() => removeRule(idx)} title="حذف القاعدة">
+                <Trash2 className="w-4 h-4 text-destructive" />
+              </Button>
+            </div>
+
+            <RegionSetPicker
+              label="من"
+              regions={cfg.regions}
+              selected={rule.from}
+              onToggle={(r) => toggleInSet(idx, 'from', r)}
+            />
+            <RegionSetPicker
+              label="إلى"
+              regions={cfg.regions}
+              selected={rule.to}
+              onToggle={(r) => toggleInSet(idx, 'to', r)}
+            />
+
+            <div className="grid grid-cols-2 gap-3 max-w-md">
+              <Field label="عادي (ج.م)">
+                <Input
+                  type="number"
+                  min={0}
+                  step="1"
+                  value={String(rule.normal)}
+                  onChange={(e) =>
+                    patch((d) => (d.rules[idx]!.normal = Number(e.target.value) || 0))
+                  }
+                />
+              </Field>
+              <Field label="سريع / إكسبريس (ج.م)">
+                <Input
+                  type="number"
+                  min={0}
+                  step="1"
+                  value={String(rule.express)}
+                  onChange={(e) =>
+                    patch((d) => (d.rules[idx]!.express = Number(e.target.value) || 0))
+                  }
+                />
+              </Field>
+            </div>
+          </div>
+        ))}
+
+        <Button variant="outline" size="md" onClick={addRule}>
+          <Plus className="w-4 h-4" />
+          إضافة قاعدة سعر
+        </Button>
+      </div>
+
+      {/* Default fallback price */}
+      <div className="bg-white rounded-xl border border-border p-5 space-y-3">
+        <div className="text-xs uppercase tracking-wider text-muted-foreground font-bold">
+          السعر الافتراضي (لو مفيش قاعدة مطابقة)
+        </div>
+        <div className="grid grid-cols-2 gap-3 max-w-md">
+          <Field label="عادي (ج.م)">
+            <Input
+              type="number"
+              min={0}
+              step="1"
+              value={String(cfg.default.normal)}
+              onChange={(e) => patch((d) => (d.default.normal = Number(e.target.value) || 0))}
+            />
+          </Field>
+          <Field label="سريع / إكسبريس (ج.م)">
+            <Input
+              type="number"
+              min={0}
+              step="1"
+              value={String(cfg.default.express)}
+              onChange={(e) => patch((d) => (d.default.express = Number(e.target.value) || 0))}
+            />
+          </Field>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function RegionSetPicker({
+  label,
+  regions,
+  selected,
+  onToggle,
+}: {
+  label: string;
+  regions: string[];
+  selected: string[];
+  onToggle: (region: string) => void;
+}) {
+  const chip = (value: string, text: string) => {
+    const on = selected.includes(value);
+    return (
+      <button
+        key={value}
+        type="button"
+        onClick={() => onToggle(value)}
+        className={cn(
+          'px-3 py-1.5 rounded-full text-sm font-bold border transition',
+          on
+            ? 'bg-brand-red text-white border-brand-red'
+            : 'bg-white text-ink border-border hover:border-brand-red/50',
+        )}
+      >
+        {text}
+      </button>
+    );
+  };
+  return (
+    <div className="space-y-1.5">
+      <div className="text-xs font-bold text-muted-foreground">{label}</div>
+      <div className="flex flex-wrap gap-2">
+        {chip(WILDCARD, 'الكل')}
+        {regions.map((r) => chip(r, r))}
+      </div>
     </div>
   );
 }
