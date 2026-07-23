@@ -934,8 +934,12 @@ function ProductsMode({
         <View style={styles.productsList}>
           {filtered.map((p) => {
             const qty = cart[p.id] ?? 0;
+            // A store closed by its hours still exists in the catalogue. Ordering
+            // from it means the customer waits on something no one is making —
+            // so a closed store's products can be seen but not added.
+            const storeClosed = p.merchant?.isOpen === false;
             return (
-              <View key={p.id} style={styles.productRow}>
+              <View key={p.id} style={[styles.productRow, storeClosed && { opacity: 0.55 }]}>
                 <View style={styles.productThumb}>
                   {p.imageUrl ? (
                     <Image source={{ uri: p.imageUrl }} style={{ width: '100%', height: '100%' }} />
@@ -947,14 +951,21 @@ function ProductsMode({
                   <Text style={styles.productName} numberOfLines={1}>
                     {p.nameAr}
                   </Text>
-                  <Text style={styles.productMerchant} numberOfLines={1}>
-                    {p.merchant?.storeNameAr ?? '—'}
-                  </Text>
+                  <View style={styles.productMerchantRow}>
+                    <Text style={styles.productMerchant} numberOfLines={1}>
+                      {p.merchant?.storeNameAr ?? '—'}
+                    </Text>
+                    {storeClosed && <Text style={styles.closedTag}>مغلق الآن</Text>}
+                  </View>
                   <Text style={styles.productPrice}>
                     {Number(p.price).toLocaleString('ar-EG')} ج.م
                   </Text>
                 </View>
-                {qty === 0 ? (
+                {storeClosed ? (
+                  <View style={styles.closedBtn}>
+                    <Text style={styles.closedBtnText}>مغلق</Text>
+                  </View>
+                ) : qty === 0 ? (
                   <Pressable
                     onPress={() => inc(p.id)}
                     style={({ pressed }) => [styles.addBtn, pressed && { opacity: 0.85 }]}
@@ -1354,11 +1365,39 @@ const styles = StyleSheet.create({
     color: colors.ink,
     fontSize: fontSizes.sm,
   },
+  productMerchantRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginTop: 2,
+  },
   productMerchant: {
+    flexShrink: 1,
     fontFamily: fontFamilies.body,
     color: colors.text.muted,
     fontSize: fontSizes.xs,
-    marginTop: 2,
+  },
+  closedTag: {
+    fontFamily: fontFamilies.bodyExtraBold,
+    color: colors.brand.red,
+    fontSize: 10,
+    backgroundColor: '#FDECEA',
+    borderRadius: radii.sm,
+    paddingHorizontal: 6,
+    paddingVertical: 1,
+    lineHeight: 16,
+    includeFontPadding: false,
+  },
+  closedBtn: {
+    paddingHorizontal: spacing.md,
+    paddingVertical: 8,
+    borderRadius: radii.pill,
+    backgroundColor: colors.soft,
+  },
+  closedBtnText: {
+    color: colors.text.muted,
+    fontFamily: fontFamilies.bodyExtraBold,
+    fontSize: fontSizes.xs,
   },
   productPrice: {
     fontFamily: fontFamilies.bodyExtraBold,

@@ -117,6 +117,11 @@ interface OrderDetail {
   status: OrderStatus;
   category: 'DELIVERY' | 'SHIPPING' | 'MERCHANT';
   notes?: string | null;
+  // Shipping specifics the customer filled in — stored but never shown before.
+  speedTier?: 'STANDARD' | 'EXPRESS' | string | null;
+  weightKg?: string | number | null;
+  sizeCategory?: 'SMALL' | 'MEDIUM' | 'LARGE' | string | null;
+  isFragile?: boolean | number | null;
   quotedPrice?: string | number | null;
   finalPrice?: string | number | null;
   paymentStatus?: 'PENDING' | 'PAID' | 'FAILED' | 'REFUNDED' | null;
@@ -145,6 +150,18 @@ interface OrderDetail {
 
 const SUPPORT_WHATSAPP =
   (typeof process !== 'undefined' && process.env?.EXPO_PUBLIC_TAMEM_WHATSAPP) || '+201010254819';
+
+// Shipping option labels — the customer chose these; the app has to echo them
+// back or the shipment reads as "just a photo + two addresses".
+const SPEED_LABEL: Record<string, string> = {
+  STANDARD: 'عادي (خلال 24 ساعة)',
+  EXPRESS: 'سريع (خلال 6 ساعات)',
+};
+const SIZE_LABEL: Record<string, string> = {
+  SMALL: 'صغير',
+  MEDIUM: 'وسط',
+  LARGE: 'كبير',
+};
 
 interface DriverLocation {
   lat: number;
@@ -716,6 +733,45 @@ export function OrderTrackingScreen() {
             ))}
           </View>
         )}
+
+        {/* ─────── Shipping details (سرعة/وزن/حجم/قابل للكسر) ─────── */}
+        {order.category === 'SHIPPING' &&
+          (() => {
+            const rows: { label: string; value: string }[] = [];
+            if (order.speedTier) {
+              rows.push({
+                label: 'سرعة الشحن',
+                value: SPEED_LABEL[order.speedTier] ?? String(order.speedTier),
+              });
+            }
+            if (order.sizeCategory) {
+              rows.push({
+                label: 'الحجم',
+                value: SIZE_LABEL[order.sizeCategory] ?? String(order.sizeCategory),
+              });
+            }
+            if (order.weightKg != null && Number(order.weightKg) > 0) {
+              rows.push({ label: 'الوزن', value: `${Number(order.weightKg)} كجم` });
+            }
+            if (order.isFragile) {
+              rows.push({ label: 'المحتوى', value: 'قابل للكسر ⚠️' });
+            }
+            if (rows.length === 0) return null;
+            return (
+              <View style={[styles.section, shadows.sm]}>
+                <View style={styles.sectionTitleRow}>
+                  <Package size={16} color={colors.text.secondary} />
+                  <Text style={styles.sectionTitle}>تفاصيل الشحنة</Text>
+                </View>
+                {rows.map((r) => (
+                  <View key={r.label} style={styles.shipRow}>
+                    <Text style={styles.shipLabel}>{r.label}</Text>
+                    <Text style={styles.shipValue}>{r.value}</Text>
+                  </View>
+                ))}
+              </View>
+            );
+          })()}
 
         {/* ─────── Order notes + attached media (photos / voice) ─────── */}
         {(() => {
@@ -1754,6 +1810,30 @@ const styles = StyleSheet.create({
     fontFamily: fontFamilies.body,
     marginTop: spacing.sm,
     lineHeight: 22,
+  },
+  // Shipping details
+  shipRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginTop: spacing.sm,
+    gap: spacing.md,
+  },
+  shipLabel: {
+    fontSize: fontSizes.sm,
+    color: colors.text.muted,
+    fontFamily: fontFamilies.body,
+    lineHeight: 22,
+    includeFontPadding: false,
+    textAlign: 'auto',
+  },
+  shipValue: {
+    fontSize: fontSizes.sm,
+    color: colors.ink,
+    fontFamily: fontFamilies.bodyExtraBold,
+    lineHeight: 22,
+    includeFontPadding: false,
+    textAlign: 'auto',
   },
   // Log
   logRow: {
