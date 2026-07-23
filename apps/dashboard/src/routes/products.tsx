@@ -1738,6 +1738,16 @@ function ImportDialog({
             productId = made?.id;
             created++;
           }
+          // Sizes / add-ons — applied only when the sheet actually carried them,
+          // so a blank cell on re-import never wipes options set elsewhere. The
+          // backend resolves add-ons by name (creating the merchant's addon if
+          // new) so the sheet needs only "name=price", not internal ids.
+          if (productId && (r.variants || r.addons)) {
+            await api.adminSaveProductOptions(productId, {
+              ...(r.variants ? { variants: r.variants } : {}),
+              ...(r.addons ? { addons: r.addons } : {}),
+            });
+          }
           rowLogs.push({
             line: r.line,
             productId,

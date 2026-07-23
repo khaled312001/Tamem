@@ -4740,6 +4740,42 @@ if ($method === 'PUT' && preg_match('#^/admin/products/([^/]+)/options$#', $path
                 ->execute([$pid, $aid]);
         }
     }
+
+    // Add-ons by NAME (the import sheet path). Each {nameAr, price} is resolved
+    // against THIS product's merchant — the merchant's add-on is created if it
+    // doesn't exist yet and its price kept in step — then this product's links
+    // are set to exactly this set. Only this product's links change; the
+    // merchant's other add-ons and other products are untouched. This is what
+    // lets the sheet carry just "كاتشب=10" without knowing any internal id.
+    if (array_key_exists('addons', $b)) {
+        $ps = db()->prepare('SELECT merchantId FROM `Product` WHERE id = ? LIMIT 1');
+        $ps->execute([$pid]);
+        $mid = (string) ($ps->fetchColumn() ?: '');
+        $ids = [];
+        if ($mid !== '') {
+            foreach ((array) $b['addons'] as $r) {
+                $name = trim((string) ($r['nameAr'] ?? ''));
+                if ($name === '') continue;
+                $price = round((float) ($r['price'] ?? 0), 2);
+                $find = db()->prepare('SELECT id FROM `MerchantAddon` WHERE merchantId = ? AND nameAr = ? LIMIT 1');
+                $find->execute([$mid, $name]);
+                $aid = (string) ($find->fetchColumn() ?: '');
+                if ($aid === '') {
+                    $aid = newId();
+                    db()->prepare('INSERT INTO `MerchantAddon` (id, merchantId, nameAr, price, sortOrder, isActive, createdAt) VALUES (?,?,?,?,0,1,NOW(3))')
+                        ->execute([$aid, $mid, $name, $price]);
+                } else {
+                    db()->prepare('UPDATE `MerchantAddon` SET price = ? WHERE id = ?')->execute([$price, $aid]);
+                }
+                $ids[] = $aid;
+            }
+        }
+        db()->prepare('DELETE FROM `ProductAddonLink` WHERE productId = ?')->execute([$pid]);
+        foreach (array_unique($ids) as $aid) {
+            db()->prepare('INSERT IGNORE INTO `ProductAddonLink` (productId, addonId) VALUES (?,?)')
+                ->execute([$pid, $aid]);
+        }
+    }
     jsonOk(['ok' => true]);
 }
 

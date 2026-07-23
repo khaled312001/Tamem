@@ -590,7 +590,14 @@ export class TamemClient {
   }
   async adminSaveProductOptions(
     productId: string,
-    data: { variants?: unknown[]; linkedAddonIds?: string[] },
+    data: {
+      variants?: unknown[];
+      /** Link existing merchant add-ons by id (used by the product form). */
+      linkedAddonIds?: string[];
+      /** Add-ons by {nameAr, price} — the backend creates/reuses the merchant's
+       *  add-on by name and links it. Used by the import sheet. */
+      addons?: { nameAr: string; price: number }[];
+    },
   ): Promise<unknown> {
     return this.request({ method: 'PUT', url: `/admin/products/${productId}/options`, data });
   }
