@@ -1,44 +1,40 @@
 /**
- * Home header: avatar + current location on the right, notification bell on the
- * left, then the greeting block. Presentational only — the address, user and
- * navigation callbacks are passed down from HomeV2Screen.
+ * Home header — a branded gradient band (the red→orange identity) that carries
+ * the location, the greeting, the notification bell and the search pill on one
+ * cohesive surface, instead of a flat row of controls on the page background.
+ *
+ * Full-bleed: it pulls out of the ScrollView's horizontal padding with a
+ * negative margin so the gradient reaches both screen edges, then rounds its
+ * bottom corners. Presentational only — every callback comes from HomeV2Screen.
  */
+import { LinearGradient } from 'expo-linear-gradient';
 import { Bell, ChevronDown, MapPin } from 'lucide-react-native';
 import { memo } from 'react';
 import { I18nManager, Image, Pressable, StyleSheet, Text, View } from 'react-native';
 
-import { colors, fontFamilies, spacing } from '../../../theme/tokens';
+import { colors, fontFamilies, gradients, radii, shadows, spacing } from '../../../theme/tokens';
+import { HomeSearchBar } from './HomeSearchBar';
 
-const AVATAR = 46;
-// The whole screen is authored right-to-left. Rather than sprinkling
-// `row-reverse` per component, each row declares its direction once from the
-// single RTL flag, so a future LTR locale flips everything consistently.
-// React Native already lays `flexDirection: 'row'` out right-to-left when
-// I18nManager RTL is on. Adding 'row-reverse' on top of that flips it a
-// SECOND time, back to left-to-right — which is why the header rendered
-// mirrored. Plain 'row' is correct on native; the web build gets its
-// direction from the document's dir="rtl".
+const AVATAR = 44;
+// RN already lays `flexDirection: 'row'` right-to-left under I18nManager RTL;
+// adding 'row-reverse' would flip it a second time. Plain 'row' is correct.
 const ROW = 'row' as const;
+// A warm cream for the customer's name against the red gradient — the brand
+// gold reads as a highlight without fighting the white greeting.
+const NAME_GOLD = '#FFE0A3';
 
 interface Props {
-  /** Display name; only the first word is greeted. */
   name?: string | null;
-  /** Profile photo. Falls back to the name's first letter when absent. */
   avatarUrl?: string | null;
-  /** Label of the default saved address, if any. */
   locationLabel: string;
-  /** Unread notification count — hidden when 0. */
   notificationCount?: number;
-  /**
-   * Admin overrides from home-config. Both screens used to hardcode the
-   * greeting even though صفحة التطبيق offers the field, so setting it did
-   * nothing. `{name}` is substituted with the customer's first name.
-   */
   greetingOverride?: string | null;
   subtitleOverride?: string | null;
   onPressAvatar: () => void;
   onPressLocation: () => void;
   onPressNotifications: () => void;
+  onPressSearch: () => void;
+  onPressVoice: () => void;
 }
 
 function HomeHeaderBase({
@@ -51,14 +47,21 @@ function HomeHeaderBase({
   onPressAvatar,
   onPressLocation,
   onPressNotifications,
+  onPressSearch,
+  onPressVoice,
 }: Props) {
   const firstName = (name ?? '').trim().split(/\s+/)[0] || 'بك';
   const initial = (name ?? 'ت').trim().charAt(0);
 
   return (
-    <View style={styles.wrap}>
+    <LinearGradient
+      colors={gradients.brand}
+      start={{ x: 0, y: 0 }}
+      end={{ x: 1, y: 1 }}
+      style={styles.band}
+    >
       <View style={[styles.topRow, { flexDirection: ROW }]}>
-        {/* right cluster (RTL): avatar + location */}
+        {/* right cluster (RTL): avatar + location chip */}
         <View style={[styles.rightCluster, { flexDirection: ROW }]}>
           <Pressable
             onPress={onPressAvatar}
@@ -72,13 +75,12 @@ function HomeHeaderBase({
             ) : (
               <Text style={styles.avatarText}>{initial}</Text>
             )}
-            <View style={styles.avatarDot} />
           </Pressable>
 
           <Pressable
             onPress={onPressLocation}
             style={({ pressed }) => [
-              styles.locationRow,
+              styles.locationChip,
               { flexDirection: ROW },
               pressed && styles.pressed,
             ]}
@@ -86,11 +88,16 @@ function HomeHeaderBase({
             accessibilityLabel="تغيير العنوان"
             hitSlop={6}
           >
-            <MapPin size={15} color={colors.brand.red} />
-            <Text style={styles.locationText} numberOfLines={1}>
-              {locationLabel}
-            </Text>
-            <ChevronDown size={14} color={colors.brand.gray} />
+            <MapPin size={14} color={colors.white} />
+            <View style={styles.locationTextCol}>
+              <Text style={styles.locationLabel}>التوصيل إلى</Text>
+              <View style={[styles.locationValueRow, { flexDirection: ROW }]}>
+                <Text style={styles.locationText} numberOfLines={1}>
+                  {locationLabel}
+                </Text>
+                <ChevronDown size={13} color={colors.white} />
+              </View>
+            </View>
           </Pressable>
         </View>
 
@@ -102,7 +109,7 @@ function HomeHeaderBase({
           accessibilityLabel="الإشعارات"
           hitSlop={6}
         >
-          <Bell size={22} color={colors.brand.dark} />
+          <Bell size={20} color={colors.white} />
           {notificationCount > 0 && (
             <View style={styles.badge}>
               <Text style={styles.badgeText}>
@@ -120,109 +127,131 @@ function HomeHeaderBase({
           <>
             <Text>أهلاً </Text>
             <Text style={styles.greetingName}>{firstName}</Text>
-            {/* Trailing in the string so RTL lays it out on the far left, as
-                in the design. */}
             <Text> 👋</Text>
           </>
         )}
       </Text>
-      <Text style={styles.subtitle} numberOfLines={2}>
-        {subtitleOverride || 'ماذا تريد أن تطلب اليوم؟'}
+      <Text style={styles.subtitle} numberOfLines={1}>
+        {subtitleOverride || 'ماذا تحب تطلب النهاردة؟'}
       </Text>
-    </View>
+
+      <View style={styles.searchWrap}>
+        <HomeSearchBar onPress={onPressSearch} onPressVoice={onPressVoice} />
+      </View>
+    </LinearGradient>
   );
 }
 
 export const HomeHeader = memo(HomeHeaderBase);
 
 const styles = StyleSheet.create({
-  wrap: { paddingTop: spacing.sm },
+  band: {
+    // Escape the ScrollView's horizontal padding so the gradient is full-bleed,
+    // and lift under the top inset so it reads as the screen's crown.
+    marginHorizontal: -spacing.lg,
+    marginTop: -spacing.sm,
+    paddingHorizontal: spacing.lg,
+    paddingTop: spacing.md,
+    paddingBottom: spacing.lg,
+    borderBottomLeftRadius: 28,
+    borderBottomRightRadius: 28,
+    ...shadows.md,
+  },
   topRow: { alignItems: 'center', justifyContent: 'space-between' },
-  rightCluster: { alignItems: 'center', gap: spacing.sm },
+  rightCluster: { alignItems: 'center', gap: spacing.sm, flex: 1, minWidth: 0 },
 
   avatar: {
     width: AVATAR,
     height: AVATAR,
     borderRadius: AVATAR / 2,
-    backgroundColor: colors.brand.red,
+    backgroundColor: 'rgba(255,255,255,0.2)',
+    borderWidth: 2,
+    borderColor: 'rgba(255,255,255,0.6)',
     alignItems: 'center',
     justifyContent: 'center',
     overflow: 'hidden',
   },
   avatarImg: { width: '100%', height: '100%' },
-  avatarText: {
-    color: colors.white,
-    fontSize: 19,
-    fontFamily: fontFamilies.bodyExtraBold,
-  },
-  avatarDot: {
-    position: 'absolute',
-    top: 1,
-    // Sits on the outer edge in both directions.
-    ...(I18nManager.isRTL ? { left: 1 } : { right: 1 }),
-    width: 11,
-    height: 11,
-    borderRadius: 6,
-    backgroundColor: colors.brand.red,
-    borderWidth: 2,
-    borderColor: colors.white,
-  },
+  avatarText: { color: colors.white, fontSize: 18, fontFamily: fontFamilies.bodyExtraBold },
 
-  locationRow: { alignItems: 'center', gap: 4, maxWidth: 190 },
+  // Glassy chip on the gradient rather than bare text — reads as a tappable
+  // control and stays legible over the red.
+  locationChip: {
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: 'rgba(255,255,255,0.16)',
+    borderRadius: radii.pill,
+    paddingStart: spacing.sm,
+    paddingEnd: spacing.md,
+    paddingVertical: 6,
+    flexShrink: 1,
+    minWidth: 0,
+  },
+  locationTextCol: { minWidth: 0, flexShrink: 1 },
+  locationLabel: {
+    fontSize: 10,
+    color: 'rgba(255,255,255,0.75)',
+    fontFamily: fontFamilies.body,
+    lineHeight: 14,
+    includeFontPadding: false,
+    textAlign: 'auto',
+  },
+  locationValueRow: { alignItems: 'center', gap: 3 },
   locationText: {
     fontSize: 13,
-    color: colors.brand.gray,
-    fontFamily: fontFamilies.bodyBold,
+    color: colors.white,
+    fontFamily: fontFamilies.bodyExtraBold,
+    lineHeight: 19,
+    includeFontPadding: false,
+    flexShrink: 1,
   },
 
-  // Bare icon, no card behind it — the reference has the bell sitting directly
-  // on the background.
   bellBtn: {
     width: AVATAR,
     height: AVATAR,
+    borderRadius: AVATAR / 2,
+    backgroundColor: 'rgba(255,255,255,0.16)',
     alignItems: 'center',
     justifyContent: 'center',
   },
   badge: {
     position: 'absolute',
-    top: -4,
-    ...(I18nManager.isRTL ? { right: -4 } : { left: -4 }),
-    minWidth: 20,
-    height: 20,
+    top: -2,
+    ...(I18nManager.isRTL ? { right: -2 } : { left: -2 }),
+    minWidth: 19,
+    height: 19,
     paddingHorizontal: 4,
     borderRadius: 10,
-    backgroundColor: colors.brand.red,
+    backgroundColor: colors.brand.gold,
     alignItems: 'center',
     justifyContent: 'center',
     borderWidth: 2,
     borderColor: colors.white,
   },
-  badgeText: {
-    color: colors.white,
-    fontSize: 10,
-    fontFamily: fontFamilies.bodyExtraBold,
-  },
+  badgeText: { color: colors.brand.dark, fontSize: 10, fontFamily: fontFamilies.bodyExtraBold },
 
   greeting: {
     marginTop: spacing.lg,
-    fontSize: 26,
-    // "أهلاً" stays dark; only the customer's name is brand red.
-    color: colors.brand.dark,
+    fontSize: 24,
+    color: colors.white,
     fontFamily: fontFamilies.bodyExtraBold,
-    // 'auto' (not 'right'): under RTL, React Native flips an explicit 'right'
-    // to the left. Letting it align to the writing direction puts Arabic on
-    // the right in RTL and would put English on the left in LTR.
     alignSelf: 'stretch',
     textAlign: 'auto',
+    lineHeight: 34,
+    includeFontPadding: false,
   },
-  greetingName: { color: colors.brand.red },
+  greetingName: { color: NAME_GOLD },
   subtitle: {
     marginTop: 2,
-    fontSize: 15,
-    color: colors.brand.gray,
+    fontSize: 14,
+    color: 'rgba(255,255,255,0.9)',
     fontFamily: fontFamilies.body,
     alignSelf: 'stretch',
     textAlign: 'auto',
+    lineHeight: 21,
+    includeFontPadding: false,
   },
+
+  searchWrap: { marginTop: spacing.lg },
   pressed: { opacity: 0.7 },
 });
