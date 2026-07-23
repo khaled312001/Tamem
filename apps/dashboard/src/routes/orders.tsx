@@ -1369,7 +1369,8 @@ function PriceDialog({
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()} title="تسعير الطلب">
       <div className="grid grid-cols-2 gap-3">
-        <Field label="قيمة الطلب (البضاعة)" htmlFor="goods" required>
+        {/* Optional: a shipping order has no goods value, only a delivery fee. */}
+        <Field label="قيمة الطلب (البضاعة)" htmlFor="goods">
           <Input
             id="goods"
             type="number"
@@ -1377,6 +1378,7 @@ function PriceDialog({
             min={0}
             value={goods}
             onChange={(e) => setGoods(e.target.value)}
+            placeholder="0"
           />
         </Field>
         <Field label="رسوم التوصيل" htmlFor="fee" required>
@@ -1401,10 +1403,7 @@ function PriceDialog({
         <Button variant="outline" size="md" onClick={onClose}>
           إلغاء
         </Button>
-        <Button
-          onClick={() => mut.mutate()}
-          disabled={total <= 0 || goods === '' || fee === '' || mut.isPending}
-        >
+        <Button onClick={() => mut.mutate()} disabled={total <= 0 || fee === '' || mut.isPending}>
           {mut.isPending && <Loader2 className="w-3 h-3 animate-spin" />}
           حفظ السعر
         </Button>

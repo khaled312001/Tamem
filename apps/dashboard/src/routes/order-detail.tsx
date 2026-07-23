@@ -940,6 +940,7 @@ export function OrderDetailPage() {
       {dialog?.kind === 'price' && (
         <PriceDialog
           orderId={id!}
+          category={order.category}
           initialPrice={order.quotedPrice ?? order.finalPrice}
           initialGoods={order.merchantSubtotal}
           initialFee={order.deliveryFee}
@@ -1665,6 +1666,7 @@ const newLine = (merchantId = '', amount = ''): MerchantLine => ({
 
 function PriceDialog({
   orderId,
+  category,
   initialPrice,
   initialGoods,
   initialFee,
@@ -1674,6 +1676,9 @@ function PriceDialog({
   onClose,
 }: {
   orderId: string;
+  /** Order category. Shipping and B2B have no store to credit, so the merchant
+   *  picker is replaced by a direct (optional) goods-value field. */
+  category?: string | null;
   initialPrice?: number | string | null;
   /** Goods value and delivery fee are priced separately — the total alone can't
    *  be un-mixed later, and every merchant payout / commission figure in the
@@ -1702,6 +1707,12 @@ function PriceDialog({
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const merchantList: any[] = (merchants?.items as any[]) ?? [];
 
+  // Shipping (نقل من مكان لمكان) and B2B (طلب تاجر/موزع) have no platform store
+  // to attribute revenue to, so forcing a merchant blocked pricing them at all.
+  // For these the goods value is typed directly (optional) and only the delivery
+  // fee is required.
+  const noMerchant = category === 'SHIPPING' || category === 'B2B';
+
   // Seed from whatever the order already recorded. A single-merchant order
   // priced before this existed has no lines, so it starts with one blank row
   // the admin has to fill — which is the whole point.
@@ -1727,14 +1738,19 @@ function PriceDialog({
       // field is money.
       newLine(id, String(Math.round(total * 100) / 100)),
     );
-    return seeded.length ? seeded : [newLine()];
+    // No blank starter row for shipping/B2B — there's no merchant to pick.
+    return seeded.length ? seeded : noMerchant ? [] : [newLine()];
   });
   const [fee, setFee] = useState(initialFee != null ? String(initialFee) : '');
   const [note, setNote] = useState('');
+  // Direct goods value, used only in the no-merchant modes.
+  const [goodsInput, setGoodsInput] = useState(initialGoods != null ? String(initialGoods) : '');
 
-  // Goods is the sum of the split, never typed separately: two numbers that
-  // must agree shouldn't be entered twice.
-  const goods = lines.reduce((sum, l) => sum + (Number(l.amount) || 0), 0);
+  // Goods is the sum of the split for merchant orders (two numbers that must
+  // agree shouldn't be entered twice); for shipping/B2B it's typed directly.
+  const goods = noMerchant
+    ? Number(goodsInput) || 0
+    : lines.reduce((sum, l) => sum + (Number(l.amount) || 0), 0);
   const price = goods + (Number(fee) || 0);
 
   const patchLine = (key: string, p: Partial<MerchantLine>) =>
@@ -1743,7 +1759,9 @@ function PriceDialog({
   const usedIds = new Set(lines.map((l) => l.merchantId).filter(Boolean));
   const duplicate = usedIds.size !== lines.filter((l) => l.merchantId).length;
   const incomplete = lines.some((l) => !l.merchantId || !(Number(l.amount) > 0));
-  const invalid = incomplete || duplicate || fee === '' || price <= 0;
+  const invalid = noMerchant
+    ? fee === '' || price <= 0
+    : incomplete || duplicate || fee === '' || price <= 0;
 
   const mut = useMutation({
     mutationFn: async () => {
@@ -1777,90 +1795,112 @@ function PriceDialog({
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()} title="تسعير الطلب" size="lg">
       <div className="space-y-3">
-        <div>
-          <div className="flex items-center justify-between mb-1.5">
-            <span className="text-sm font-bold">
-              اتشرى من <span className="text-destructive">*</span>
-            </span>
-            <button
-              type="button"
-              onClick={() => setLines((ls) => [...ls, newLine()])}
-              className="text-xs font-bold text-brand-red hover:underline inline-flex items-center gap-1"
-            >
-              <Plus className="w-3.5 h-3.5" />
-              إضافة تاجر
-            </button>
-          </div>
-          <p className="text-xs text-muted-foreground mb-2 leading-5">
-            حدّد كل تاجر اتشرى منه وقيمة اللي اتشرى — عشان الإيراد يتسجّل له في التقارير.
+        {noMerchant && (
+          <p className="text-xs text-muted-foreground bg-muted/40 rounded-lg px-3 py-2 leading-5">
+            {category === 'SHIPPING'
+              ? 'طلب شحن — لا يوجد تاجر. سجّل رسوم التوصيل وقيمة الشحنة (اختياري).'
+              : 'طلب تاجر / موزع — سجّل رسوم التوصيل وقيمة البضاعة (اختياري).'}
           </p>
-
-          <div className="space-y-2">
-            {lines.map((l, i) => (
-              <div key={l.key} className="flex items-center gap-2">
-                <select
-                  value={l.merchantId}
-                  onChange={(e) => patchLine(l.key, { merchantId: e.target.value })}
-                  className="flex-1 min-w-0 px-3 py-2 rounded-lg border border-input bg-white text-sm"
-                >
-                  <option value="">— اختر التاجر —</option>
-                  {merchantList.map((m) => (
-                    <option
-                      key={m.id}
-                      value={m.id}
-                      // Can't credit the same store twice in one order; the
-                      // amounts would just need adding together anyway.
-                      disabled={usedIds.has(String(m.id)) && l.merchantId !== String(m.id)}
-                    >
-                      {m.storeNameAr}
-                    </option>
-                  ))}
-                </select>
-                <div className="relative w-32 shrink-0">
-                  <Input
-                    type="number"
-                    inputMode="decimal"
-                    min={0}
-                    value={l.amount}
-                    onChange={(e) => patchLine(l.key, { amount: e.target.value })}
-                    placeholder="0"
-                    autoFocus={i === 0}
-                  />
-                </div>
-                {lines.length > 1 && (
-                  <button
-                    type="button"
-                    onClick={() => setLines((ls) => ls.filter((x) => x.key !== l.key))}
-                    aria-label="حذف السطر"
-                    className="p-2 rounded-md hover:bg-destructive/10 text-destructive shrink-0"
-                  >
-                    <Trash2 className="w-4 h-4" />
-                  </button>
-                )}
-              </div>
-            ))}
-          </div>
-
-          {duplicate && (
-            <p className="text-xs text-destructive mt-1.5">
-              تاجر مكرر — ادمج القيمتين في سطر واحد.
+        )}
+        {!noMerchant && (
+          <div>
+            <div className="flex items-center justify-between mb-1.5">
+              <span className="text-sm font-bold">
+                اتشرى من <span className="text-destructive">*</span>
+              </span>
+              <button
+                type="button"
+                onClick={() => setLines((ls) => [...ls, newLine()])}
+                className="text-xs font-bold text-brand-red hover:underline inline-flex items-center gap-1"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                إضافة تاجر
+              </button>
+            </div>
+            <p className="text-xs text-muted-foreground mb-2 leading-5">
+              حدّد كل تاجر اتشرى منه وقيمة اللي اتشرى — عشان الإيراد يتسجّل له في التقارير.
             </p>
-          )}
-        </div>
+
+            <div className="space-y-2">
+              {lines.map((l, i) => (
+                <div key={l.key} className="flex items-center gap-2">
+                  <select
+                    value={l.merchantId}
+                    onChange={(e) => patchLine(l.key, { merchantId: e.target.value })}
+                    className="flex-1 min-w-0 px-3 py-2 rounded-lg border border-input bg-white text-sm"
+                  >
+                    <option value="">— اختر التاجر —</option>
+                    {merchantList.map((m) => (
+                      <option
+                        key={m.id}
+                        value={m.id}
+                        // Can't credit the same store twice in one order; the
+                        // amounts would just need adding together anyway.
+                        disabled={usedIds.has(String(m.id)) && l.merchantId !== String(m.id)}
+                      >
+                        {m.storeNameAr}
+                      </option>
+                    ))}
+                  </select>
+                  <div className="relative w-32 shrink-0">
+                    <Input
+                      type="number"
+                      inputMode="decimal"
+                      min={0}
+                      value={l.amount}
+                      onChange={(e) => patchLine(l.key, { amount: e.target.value })}
+                      placeholder="0"
+                      autoFocus={i === 0}
+                    />
+                  </div>
+                  {lines.length > 1 && (
+                    <button
+                      type="button"
+                      onClick={() => setLines((ls) => ls.filter((x) => x.key !== l.key))}
+                      aria-label="حذف السطر"
+                      className="p-2 rounded-md hover:bg-destructive/10 text-destructive shrink-0"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+
+            {duplicate && (
+              <p className="text-xs text-destructive mt-1.5">
+                تاجر مكرر — ادمج القيمتين في سطر واحد.
+              </p>
+            )}
+          </div>
+        )}
 
         <div className="grid grid-cols-2 gap-3">
-          <div className="rounded-lg bg-muted/40 px-3 py-2">
-            <div className="text-xs text-muted-foreground">قيمة البضاعة</div>
-            <div className="text-base font-bold tabular-nums">
-              {goods.toLocaleString('ar-EG')} ج.م
-              {lines.length > 1 && (
-                <span className="text-xs font-normal text-muted-foreground">
-                  {' '}
-                  ({lines.length} تجار)
-                </span>
-              )}
+          {noMerchant ? (
+            <Field label="قيمة البضاعة (اختياري)">
+              <Input
+                type="number"
+                inputMode="decimal"
+                min={0}
+                value={goodsInput}
+                onChange={(e) => setGoodsInput(e.target.value)}
+                placeholder="0"
+              />
+            </Field>
+          ) : (
+            <div className="rounded-lg bg-muted/40 px-3 py-2">
+              <div className="text-xs text-muted-foreground">قيمة البضاعة</div>
+              <div className="text-base font-bold tabular-nums">
+                {goods.toLocaleString('ar-EG')} ج.م
+                {lines.length > 1 && (
+                  <span className="text-xs font-normal text-muted-foreground">
+                    {' '}
+                    ({lines.length} تجار)
+                  </span>
+                )}
+              </div>
             </div>
-          </div>
+          )}
           <Field label="رسوم التوصيل" required>
             <Input
               type="number"
