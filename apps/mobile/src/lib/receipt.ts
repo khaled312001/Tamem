@@ -108,7 +108,7 @@ function buildHtml(opts: ReceiptOpts): string {
       );
       const header =
         isMulti && merchant !== '__single__'
-          ? `<tr><td colspan="3" class="merchant-row"><span>🏪 ${ESC(merchant)}</span><span class="m-sub">${fmtMoney(sub)}</span></td></tr>`
+          ? `<tr><td colspan="3" class="merchant-row"><div class="m-inner"><span class="m-name">🏪 ${ESC(merchant)}</span><span class="m-sub">${fmtMoney(sub)}</span></div></td></tr>`
           : '';
       return header + list.map(itemRow).join('');
     })
@@ -214,8 +214,12 @@ function buildHtml(opts: ReceiptOpts): string {
   table.items td.item-name .i-name { font-weight: 700; color: #1f2430; }
   table.items td.item-name .i-extras { font-size: 11.5px; color: #8a90a0; margin-top: 3px; }
   table.items td.item-price { font-weight: 800; color: #1f2430; width: 96px; text-align: left; direction: ltr; }
-  table.items td.merchant-row { background: #FBF3E9; font-weight: 800; color: #A11F16; font-size: 12.5px; display: flex; justify-content: space-between; align-items: center; }
-  table.items td.merchant-row .m-sub { direction: ltr; }
+  /* flex lives on a DIV inside the td, not the td itself — display:flex on a
+     table-cell renders unreliably (the name and subtotal collapsed together). */
+  table.items td.merchant-row { background: #FBF3E9; padding: 9px 14px; }
+  table.items td.merchant-row .m-inner { display: flex; justify-content: space-between; align-items: center; gap: 16px; font-weight: 800; color: #A11F16; font-size: 12.5px; }
+  table.items td.merchant-row .m-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  table.items td.merchant-row .m-sub { direction: ltr; white-space: nowrap; flex-shrink: 0; }
 
   /* ── Summary ───────────────────────────────────────────────── */
   .summary { margin-top: 4px; padding: 16px 18px; background: #f6f7f9; border-radius: 14px; }

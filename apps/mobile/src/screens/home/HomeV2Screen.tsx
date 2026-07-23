@@ -311,15 +311,22 @@ export function HomeV2Screen() {
           </View>
         )}
 
+        {/* ─────────────────────────────────────────────────────────────
+            Section order is by IMPORTANCE, top to bottom:
+              1. act        — a live order, then the 3 core services
+              2. promote    — the offers banner
+              3. discover   — browse by store type, then by food kind
+              4. drive      — most-ordered products, today's deals, popular
+              5. local      — stores near you
+              6. utility    — quick order / track shortcuts
+              7. reassure   — trust strip
+              8. shortcuts  — wallet / coupons / favourites
+            ───────────────────────────────────────────────────────────── */}
+
+        {/* 1 — Live order (only while one is in flight) + the 3 core actions. */}
         {!!activeOrder && (
           <View style={styles.section}>
             <ActiveOrderCard order={activeOrder} onPress={goActiveOrder} />
-          </View>
-        )}
-
-        {bannerOffers.length > 0 && (
-          <View style={styles.section}>
-            <OffersCarousel offers={bannerOffers} onPressOffer={onPressOffer} />
           </View>
         )}
 
@@ -327,18 +334,32 @@ export function HomeV2Screen() {
           <MainServicesSection services={services} />
         </View>
 
-        {/* Benefits sit directly under the services in the design, not at the
-            bottom of the page. */}
-        {homeConfig?.showTrustStrip !== false && (
+        {/* 2 — Promotional banner (only when there's a live offer). */}
+        {bannerOffers.length > 0 && (
           <View style={styles.section}>
-            <BenefitsBar
-              title={homeConfig?.trustStripTitle}
-              subtitle={homeConfig?.trustStripSubtitle}
-            />
+            <OffersCarousel offers={bannerOffers} onPressOffer={onPressOffer} />
           </View>
         )}
 
-        {/* Admin-curated products. Renders nothing until someone pins some. */}
+        {/* 3 — Discovery: by store type (مطاعم/صيدليات), then by food kind
+            (بيتزا/كريب) across every store. Both are prime browse entry points,
+            so they sit high rather than at the bottom. */}
+        <View style={styles.section}>
+          <CategoriesSection
+            categories={categories ?? []}
+            merchants={nearbyMerchants}
+            onPressCategory={onPressCategory}
+            onPressSeeAll={goNearbyMap}
+          />
+        </View>
+
+        <View style={styles.section}>
+          <SectionsSection onPressSection={onPressSection} />
+        </View>
+
+        {/* 4 — Order-drivers. Each renders nothing when empty:
+            الأكثر طلباً only when admin pins products, عروض اليوم only while
+            something is on sale. */}
         <View style={styles.section}>
           <ProductRail
             title="الأكثر طلباً"
@@ -347,7 +368,6 @@ export function HomeV2Screen() {
           />
         </View>
 
-        {/* Self-maintaining: appears only while something is actually on sale. */}
         <View style={styles.section}>
           <ProductRail
             title="عروض اليوم"
@@ -365,10 +385,7 @@ export function HomeV2Screen() {
           />
         </View>
 
-        <View style={styles.section}>
-          <PromoCardsRow onPressTrack={goTracking} onPressFastDelivery={goFastDelivery} />
-        </View>
-
+        {/* 5 — Stores near the customer. */}
         <View style={styles.section}>
           <NearbyStoresSection
             merchants={nearbyMerchants}
@@ -382,24 +399,22 @@ export function HomeV2Screen() {
           />
         </View>
 
-        {/* Not in the reference design, kept below the fold: both are live
-            navigation paths (category browsing, wallet/favourites/coupons) that
-            would otherwise be unreachable from home. */}
+        {/* 6 — Quick-order / track shortcuts. */}
         <View style={styles.section}>
-          <CategoriesSection
-            categories={categories ?? []}
-            merchants={nearbyMerchants}
-            onPressCategory={onPressCategory}
-            onPressSeeAll={goNearbyMap}
-          />
+          <PromoCardsRow onPressTrack={goTracking} onPressFastDelivery={goFastDelivery} />
         </View>
 
-        {/* Global product sections (بيتزا/كريب…) — a PRODUCT kind across all
-            stores, distinct from the store-type categories above. */}
-        <View style={styles.section}>
-          <SectionsSection onPressSection={onPressSection} />
-        </View>
+        {/* 7 — Trust strip: informational, so it sits low. */}
+        {homeConfig?.showTrustStrip !== false && (
+          <View style={styles.section}>
+            <BenefitsBar
+              title={homeConfig?.trustStripTitle}
+              subtitle={homeConfig?.trustStripSubtitle}
+            />
+          </View>
+        )}
 
+        {/* 8 — Utility shortcuts (wallet / coupons / favourites). */}
         <View style={styles.section}>
           <QuickActionsSection actions={quickActions} />
         </View>

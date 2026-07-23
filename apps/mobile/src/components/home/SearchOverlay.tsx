@@ -10,11 +10,12 @@
  * pill's exact y-position to the top of the screen while it opens, so
  * the transition feels like the pill itself is unfolding.
  */
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useQuery } from '@tanstack/react-query';
-import { ArrowRight, Package, Search, Store, X } from 'lucide-react-native';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { ArrowRight, Clock, Package, Search, Store, TrendingUp, X } from 'lucide-react-native';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Animated,
@@ -23,6 +24,7 @@ import {
   Modal,
   Platform,
   Pressable,
+  ScrollView,
   StyleSheet,
   Text,
   TextInput,
@@ -57,12 +59,47 @@ interface Props {
 }
 
 const useNative = Platform.OS !== 'web';
+const RECENTS_KEY = '@tamem/recent_searches_v1';
+const MAX_RECENTS = 8;
+
+interface SectionSuggestion {
+  id: string;
+  nameAr: string;
+  imageUrl?: string | null;
+}
 
 export function SearchOverlay({ visible, onClose }: Props) {
   const navigation = useNavigation<NavProp>();
   const [query, setQuery] = useState('');
   const [debounced, setDebounced] = useState('');
+  const [recents, setRecents] = useState<string[]>([]);
   const inputRef = useRef<TextInput>(null);
+
+  // Load recent searches once, and whenever the overlay re-opens (another
+  // session may have added to them).
+  useEffect(() => {
+    if (!visible) return;
+    void AsyncStorage.getItem(RECENTS_KEY)
+      .then((raw) => {
+        if (raw) setRecents(JSON.parse(raw) as string[]);
+      })
+      .catch(() => undefined);
+  }, [visible]);
+
+  const pushRecent = useCallback((term: string) => {
+    const t = term.trim();
+    if (t.length < 2) return;
+    setRecents((prev) => {
+      const next = [t, ...prev.filter((x) => x !== t)].slice(0, MAX_RECENTS);
+      void AsyncStorage.setItem(RECENTS_KEY, JSON.stringify(next)).catch(() => undefined);
+      return next;
+    });
+  }, []);
+
+  const clearRecents = useCallback(() => {
+    setRecents([]);
+    void AsyncStorage.removeItem(RECENTS_KEY).catch(() => undefined);
+  }, []);
 
   // Slide-up + fade animation
   const progress = useRef(new Animated.Value(0)).current;
@@ -114,34 +151,62 @@ export function SearchOverlay({ visible, onClose }: Props) {
     staleTime: 30_000,
   });
 
+  // Popular sections (بيتزا/كريب…) — shown as quick chips on the empty state so
+  // the search is useful before a single keystroke. Cheap and cached.
+  const sectionsQ = useQuery({
+    queryKey: ['search-popular-sections'],
+    queryFn: () =>
+      api.raw
+        .get('/product-sections/featured')
+        .then((r) => (r.data.data ?? []).slice(0, 8) as SectionSuggestion[]),
+    enabled: visible,
+    staleTime: 5 * 60_000,
+  });
+  const popularSections = sectionsQ.data ?? [];
+
   const isLoading = enabled && (merchantQ.isLoading || productQ.isLoading);
   const merchants = merchantQ.data ?? [];
   const products = productQ.data ?? [];
   const totalSuggestions = merchants.length + products.length;
 
-  const goToMerchant = (id: string) => {
+  const goToMerchant = (id: string, name?: string) => {
+    if (name) pushRecent(name);
     onClose();
     navigation.navigate('MerchantDetail', { merchantId: id });
   };
-  const goToProduct = (id: string) => {
+  const goToProduct = (id: string, name?: string) => {
+    if (name) pushRecent(name);
     onClose();
     navigation.navigate('ProductDetail', { productId: id });
   };
-  const submit = () => {
-    if (!query.trim()) return;
+  const submit = (termArg?: string) => {
+    const term = (termArg ?? query).trim();
+    if (!term) return;
+    pushRecent(term);
     onClose();
-    navigation.navigate('StoresList', { search: query.trim() });
+    navigation.navigate('StoresList', { search: term });
+  };
+  // Tapping a section chip searches within that section's products across
+  // every store.
+  const goToSection = (name: string) => {
+    pushRecent(name);
+    onClose();
+    navigation.navigate('StoresList', { section: name });
   };
 
   const translateY = progress.interpolate({ inputRange: [0, 1], outputRange: [40, 0] });
   const backdropOpacity = progress.interpolate({ inputRange: [0, 1], outputRange: [0, 1] });
 
-  const emptyHint = useMemo(() => {
-    if (!query) return 'ابدأ تكتب اسم المتجر، المنتج، أو الخدمة';
-    if (query.length < 2) return 'اكتب على الأقل حرفين';
-    if (!isLoading && totalSuggestions === 0) return 'مفيش نتائج لـ "' + query + '"';
+  // The empty state (no query) gets its own rich UI — recents + popular chips —
+  // so this hint only covers "keep typing" and "no matches".
+  const hint = useMemo(() => {
+    if (query && query.length < 2) return 'اكتب على الأقل حرفين';
+    if (query.length >= 2 && !isLoading && totalSuggestions === 0)
+      return `مفيش نتائج لـ "${query}"`;
     return null;
   }, [query, isLoading, totalSuggestions]);
+
+  const showEmptyState = !query;
 
   return (
     <Modal visible={visible} transparent animationType="none" onRequestClose={onClose}>
@@ -159,7 +224,7 @@ export function SearchOverlay({ visible, onClose }: Props) {
                 ref={inputRef}
                 value={query}
                 onChangeText={setQuery}
-                onSubmitEditing={submit}
+                onSubmitEditing={() => submit()}
                 returnKeyType="search"
                 placeholder="ابحث عن مطعم، محل، أو منتج…"
                 placeholderTextColor={colors.text.muted}
@@ -174,11 +239,86 @@ export function SearchOverlay({ visible, onClose }: Props) {
           </View>
 
           {/* Suggestions list */}
-          <View style={styles.body}>
-            {emptyHint && (
+          <ScrollView
+            style={styles.body}
+            keyboardShouldPersistTaps="handled"
+            showsVerticalScrollIndicator={false}
+          >
+            {/* Empty state: recent searches + popular section chips, so the
+                search is useful before a single keystroke. */}
+            {showEmptyState && (
+              <>
+                {recents.length > 0 && (
+                  <View style={styles.group}>
+                    <View style={styles.groupHeaderRow}>
+                      <Text style={styles.groupTitle}>عمليات بحث سابقة</Text>
+                      <Pressable onPress={clearRecents} hitSlop={8}>
+                        <Text style={styles.clearAll}>مسح الكل</Text>
+                      </Pressable>
+                    </View>
+                    {recents.map((term) => (
+                      <Pressable
+                        key={term}
+                        onPress={() => submit(term)}
+                        style={({ pressed }) => [styles.row, pressed && { opacity: 0.85 }]}
+                      >
+                        <View style={[styles.thumb, styles.thumbFallback]}>
+                          <Clock size={16} color={colors.text.muted} />
+                        </View>
+                        <Text style={styles.rowTitle} numberOfLines={1}>
+                          {term}
+                        </Text>
+                        <X
+                          size={16}
+                          color={colors.text.muted}
+                          onPress={() =>
+                            setRecents((prev) => {
+                              const next = prev.filter((x) => x !== term);
+                              void AsyncStorage.setItem(RECENTS_KEY, JSON.stringify(next)).catch(
+                                () => undefined,
+                              );
+                              return next;
+                            })
+                          }
+                        />
+                      </Pressable>
+                    ))}
+                  </View>
+                )}
+
+                {popularSections.length > 0 && (
+                  <View style={styles.group}>
+                    <View style={styles.groupHeaderRow}>
+                      <TrendingUp size={14} color={colors.text.muted} />
+                      <Text style={styles.groupTitle}>الأكثر بحثاً</Text>
+                    </View>
+                    <View style={styles.chips}>
+                      {popularSections.map((s) => (
+                        <Pressable
+                          key={s.id}
+                          onPress={() => goToSection(s.nameAr)}
+                          style={({ pressed }) => [styles.chip, pressed && { opacity: 0.8 }]}
+                        >
+                          <Text style={styles.chipText}>{s.nameAr}</Text>
+                        </Pressable>
+                      ))}
+                    </View>
+                  </View>
+                )}
+
+                {recents.length === 0 && popularSections.length === 0 && (
+                  <View style={styles.empty}>
+                    <Search size={28} color={colors.text.muted} />
+                    <Text style={styles.emptyText}>ابدأ تكتب اسم المتجر، المنتج، أو الخدمة</Text>
+                  </View>
+                )}
+              </>
+            )}
+
+            {hint && (
               <View style={styles.empty}>
                 <Search size={28} color={colors.text.muted} />
-                <Text style={styles.emptyText}>{emptyHint}</Text>
+                <Text style={styles.emptyText}>{hint}</Text>
               </View>
             )}
 
@@ -188,13 +328,27 @@ export function SearchOverlay({ visible, onClose }: Props) {
               </View>
             )}
 
+            {/* "See all" — a prominent way to open the full results list for the
+                exact query, instead of only the top few suggestions. */}
+            {!isLoading && totalSuggestions > 0 && (
+              <Pressable
+                onPress={() => submit()}
+                style={({ pressed }) => [styles.seeAll, pressed && { opacity: 0.85 }]}
+              >
+                <Search size={16} color={colors.white} />
+                <Text style={styles.seeAllText} numberOfLines={1}>
+                  عرض كل نتائج «{query.trim()}»
+                </Text>
+              </Pressable>
+            )}
+
             {!isLoading && merchants.length > 0 && (
               <View style={styles.group}>
                 <Text style={styles.groupTitle}>متاجر</Text>
                 {merchants.map((m) => (
                   <Pressable
                     key={m.id}
-                    onPress={() => goToMerchant(m.id)}
+                    onPress={() => goToMerchant(m.id, m.storeNameAr)}
                     style={({ pressed }) => [styles.row, pressed && { opacity: 0.85 }]}
                   >
                     {m.logoUrl ? (
@@ -218,7 +372,7 @@ export function SearchOverlay({ visible, onClose }: Props) {
                 {products.map((p) => (
                   <Pressable
                     key={p.id}
-                    onPress={() => goToProduct(p.id)}
+                    onPress={() => goToProduct(p.id, p.nameAr)}
                     style={({ pressed }) => [styles.row, pressed && { opacity: 0.85 }]}
                   >
                     {p.imageUrl ? (
@@ -245,7 +399,9 @@ export function SearchOverlay({ visible, onClose }: Props) {
                 ))}
               </View>
             )}
-          </View>
+
+            <View style={{ height: 40 }} />
+          </ScrollView>
         </Animated.View>
       </SafeAreaView>
     </Modal>
@@ -302,7 +458,7 @@ const styles = StyleSheet.create({
     fontFamily: fontFamilies.body,
     fontSize: fontSizes.sm,
     color: colors.ink,
-    textAlign: 'right',
+    textAlign: 'auto',
     paddingVertical: 0,
   },
   body: { flex: 1, paddingHorizontal: spacing.md, paddingTop: spacing.md },
@@ -315,13 +471,56 @@ const styles = StyleSheet.create({
   },
   loading: { paddingVertical: spacing.lg },
   group: { marginBottom: spacing.lg },
+  groupHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing.sm,
+    marginBottom: spacing.sm,
+    paddingHorizontal: spacing.xs,
+  },
   groupTitle: {
     fontFamily: fontFamilies.bodyExtraBold,
     fontSize: fontSizes.xs,
     color: colors.text.muted,
     letterSpacing: 0.6,
-    marginBottom: spacing.sm,
     paddingHorizontal: spacing.xs,
+  },
+  clearAll: {
+    fontFamily: fontFamilies.bodyBold,
+    fontSize: fontSizes.xs,
+    color: colors.brand.red,
+  },
+  chips: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
+  chip: {
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.line,
+    borderRadius: radii.pill,
+    paddingHorizontal: spacing.md,
+    paddingVertical: 8,
+  },
+  chipText: {
+    fontFamily: fontFamilies.bodyBold,
+    fontSize: fontSizes.sm,
+    color: colors.ink,
+  },
+  seeAll: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing.sm,
+    backgroundColor: colors.brand.red,
+    borderRadius: radii.lg,
+    paddingVertical: 12,
+    marginBottom: spacing.lg,
+  },
+  seeAllText: {
+    fontFamily: fontFamilies.bodyExtraBold,
+    fontSize: fontSizes.sm,
+    color: colors.white,
+    lineHeight: 22,
+    includeFontPadding: false,
   },
   row: {
     flexDirection: 'row',
