@@ -56,7 +56,12 @@ interface ProductHit {
   salePrice?: number | string | null;
   imageUrl?: string | null;
   categoryName?: string | null;
-  merchant?: { id: string; storeNameAr?: string | null; isOpen?: boolean } | null;
+  merchant?: {
+    id: string;
+    storeNameAr?: string | null;
+    logoUrl?: string | null;
+    isOpen?: boolean;
+  } | null;
 }
 
 export function StoresListScreen() {
@@ -129,6 +134,23 @@ export function StoresListScreen() {
     placeholderData: (prev) => prev,
   });
 
+  // Product search — because the search box searches store NAMES, typing a
+  // product or section ("بيتزا") matched no store and dead-ended on "لا توجد
+  // محلات". When the query finds no store, we fall back to matching PRODUCTS
+  // across every merchant, so the search finds what the customer actually means.
+  const isSearching = !activeSection && debouncedSearch.trim().length >= 2;
+  const { data: searchProducts, isLoading: loadingSearchProducts } = useQuery<ProductHit[]>({
+    queryKey: ['search-products-list', debouncedSearch, activeCategory],
+    enabled: isSearching,
+    queryFn: () => {
+      const params: Record<string, string> = { search: debouncedSearch.trim(), pageSize: '30' };
+      if (activeCategory) params.merchantCategoryId = activeCategory;
+      return api.raw.get('/products', { params }).then((r) => r.data.data);
+    },
+    staleTime: 30_000,
+    placeholderData: (prev) => prev,
+  });
+
   const activeCategoryName = categories?.find((c) => c.id === activeCategory)?.nameAr ?? null;
 
   const sorted = useMemo(() => {
@@ -146,6 +168,74 @@ export function StoresListScreen() {
   };
   const sortLabel =
     sortKey === 'rating' ? 'الأعلى تقييماً' : sortKey === 'open' ? 'المفتوحة أولاً' : 'الموصى بها';
+
+  // One product card, reused by the section view and the search-fallback view.
+  // The image falls back to the STORE LOGO when the product has no photo (many
+  // synced items don't), then to a generic icon.
+  const renderProductItem = ({ item }: { item: ProductHit }) => {
+    const price = Number(item.salePrice ?? item.price ?? 0);
+    const img = item.imageUrl || item.merchant?.logoUrl || null;
+    return (
+      <Pressable
+        onPress={() => navigation.navigate('ProductDetail', { productId: item.id })}
+        style={({ pressed }) => [styles.card, pressed && styles.pressed]}
+      >
+        <View style={styles.cardIcon}>
+          {img ? (
+            <Image source={{ uri: img }} style={styles.cardImg} resizeMode="cover" />
+          ) : (
+            <Package size={22} color={colors.brand.red} />
+          )}
+        </View>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.cardTitle}>{item.nameAr || item.name || '—'}</Text>
+          <View style={styles.cardMeta}>
+            <Store size={11} color={colors.text.muted} />
+            <Text style={styles.cardSub}>{item.merchant?.storeNameAr ?? '—'}</Text>
+          </View>
+          {price > 0 && <Text style={styles.priceText}>{price.toFixed(0)} ج.م</Text>}
+        </View>
+        {item.merchant && (
+          <View style={item.merchant.isOpen ? styles.tagOpen : styles.tagClosed}>
+            <Text style={item.merchant.isOpen ? styles.tagOpenText : styles.tagClosedText}>
+              {item.merchant.isOpen ? 'مفتوح' : 'مغلق'}
+            </Text>
+          </View>
+        )}
+      </Pressable>
+    );
+  };
+
+  const productsList = (
+    data: ProductHit[] | undefined,
+    loading: boolean,
+    emptyTitle: string,
+    emptySubtitle: string,
+  ) =>
+    loading && !data ? (
+      <View style={styles.listContent}>
+        <CardListSkeleton count={5} />
+      </View>
+    ) : (
+      <FlatList
+        {...LIST_PERF}
+        style={styles.list}
+        data={data ?? []}
+        keyExtractor={(p) => p.id}
+        contentContainerStyle={[
+          styles.listContent,
+          (data?.length ?? 0) === 0 && { flexGrow: 1, justifyContent: 'center' },
+        ]}
+        ListEmptyComponent={
+          <EmptyState
+            icon={<Store size={36} color={colors.brand.red} />}
+            title={emptyTitle}
+            subtitle={emptySubtitle}
+          />
+        }
+        renderItem={renderProductItem}
+      />
+    );
 
   return (
     <SafeAreaView edges={['top']} style={styles.container}>
@@ -238,75 +328,25 @@ export function StoresListScreen() {
       )}
 
       {activeSection ? (
-        loadingProducts && !sectionProducts ? (
-          <View style={styles.listContent}>
-            <CardListSkeleton count={5} />
-          </View>
-        ) : (
-          <FlatList
-            {...LIST_PERF}
-            // flex:1 gives the list its OWN bounded, scrollable viewport. Without
-            // it the list isn't height-bounded, so scrolling drags the whole
-            // column — carrying the category/section chips above off-screen. With
-            // it, only the list scrolls and the chips stay pinned.
-            style={styles.list}
-            data={sectionProducts ?? []}
-            keyExtractor={(p) => p.id}
-            contentContainerStyle={[
-              styles.listContent,
-              (sectionProducts?.length ?? 0) === 0 && { flexGrow: 1, justifyContent: 'center' },
-            ]}
-            ListEmptyComponent={
-              <EmptyState
-                icon={<Store size={36} color={colors.brand.red} />}
-                title={`لا توجد منتجات في "${activeSection}"`}
-                subtitle="جرّب قسمًا آخر"
-              />
-            }
-            renderItem={({ item }) => {
-              const price = Number(item.salePrice ?? item.price ?? 0);
-              return (
-                <Pressable
-                  onPress={() => navigation.navigate('ProductDetail', { productId: item.id })}
-                  style={({ pressed }) => [styles.card, pressed && styles.pressed]}
-                >
-                  <View style={styles.cardIcon}>
-                    {item.imageUrl ? (
-                      <Image
-                        source={{ uri: item.imageUrl }}
-                        style={styles.cardImg}
-                        resizeMode="cover"
-                      />
-                    ) : (
-                      <Package size={22} color={colors.brand.red} />
-                    )}
-                  </View>
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.cardTitle}>{item.nameAr || item.name || '—'}</Text>
-                    <View style={styles.cardMeta}>
-                      <Store size={11} color={colors.text.muted} />
-                      <Text style={styles.cardSub}>{item.merchant?.storeNameAr ?? '—'}</Text>
-                    </View>
-                    {price > 0 && <Text style={styles.priceText}>{price.toFixed(0)} ج.م</Text>}
-                  </View>
-                  {item.merchant && (
-                    <View style={item.merchant.isOpen ? styles.tagOpen : styles.tagClosed}>
-                      <Text
-                        style={item.merchant.isOpen ? styles.tagOpenText : styles.tagClosedText}
-                      >
-                        {item.merchant.isOpen ? 'مفتوح' : 'مغلق'}
-                      </Text>
-                    </View>
-                  )}
-                </Pressable>
-              );
-            }}
-          />
+        productsList(
+          sectionProducts,
+          loadingProducts,
+          `لا توجد منتجات في "${activeSection}"`,
+          'جرّب قسمًا آخر',
         )
       ) : isLoading ? (
         <View style={styles.listContent}>
           <CardListSkeleton count={5} />
         </View>
+      ) : isSearching && sorted.length === 0 ? (
+        // No store matched the query — show matching PRODUCTS across every
+        // store instead of dead-ending on "لا توجد محلات".
+        productsList(
+          searchProducts,
+          loadingSearchProducts,
+          `لا توجد نتائج لـ "${debouncedSearch.trim()}"`,
+          'جرّب كلمة أخرى',
+        )
       ) : (
         <FlatList
           {...LIST_PERF}
