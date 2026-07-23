@@ -29,7 +29,6 @@ import { BenefitsBar } from './components/BenefitsBar';
 import { CategoriesSection } from './components/CategoriesSection';
 import { SectionsSection, type HomeProductSection } from './components/SectionsSection';
 import { HomeHeader } from './components/HomeHeader';
-import { HomeSearchBar } from './components/HomeSearchBar';
 import { HomeSkeleton } from './components/HomeSkeleton';
 import { MainServicesSection, type HomeServiceItem } from './components/MainServicesSection';
 import { OffersCarousel } from './components/OffersCarousel';
@@ -285,17 +284,12 @@ export function HomeV2Screen() {
           onPressAvatar={goProfile}
           onPressLocation={goAddresses}
           onPressNotifications={goNotifications}
+          onPressSearch={() => setSearchOpen(true)}
+          onPressVoice={() => {
+            tick();
+            setVoiceOpen(true);
+          }}
         />
-
-        <View style={styles.section}>
-          <HomeSearchBar
-            onPress={() => setSearchOpen(true)}
-            onPressVoice={() => {
-              tick();
-              setVoiceOpen(true);
-            }}
-          />
-        </View>
 
         {isError && (
           <View style={[styles.section, styles.errorBox]}>
