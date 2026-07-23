@@ -4434,6 +4434,70 @@ if ($method === 'DELETE' && preg_match('#^/admin/categories/([^/]+)$#', $path, $
     jsonOk(['deleted' => true]);
 }
 
+// ── Product sections (global in-store taxonomy: بيتزا / كريب / مشويات) ───────
+// These DECORATE a section name (Product.categoryName) with artwork / order /
+// visibility. The name is the join key, so it's unique and a rename cascades to
+// every product tagged with the old name — otherwise the edit would orphan them.
+if ($method === 'GET' && $path === '/admin/product-sections') {
+    authUser();
+    $st = db()->query(
+        'SELECT ps.*, (SELECT COUNT(*) FROM `Product` p WHERE p.categoryName = ps.nameAr'
+        . '   AND p.isAvailable = 1 AND p.isHidden = 0) AS productCount'
+        . ' FROM `ProductSection` ps ORDER BY ps.sortOrder ASC, ps.nameAr ASC'
+    );
+    jsonOk(array_map(fn($r) => [
+        'id' => $r['id'], 'nameAr' => $r['nameAr'], 'imageUrl' => $r['imageUrl'],
+        'sortOrder' => (int) $r['sortOrder'], 'isActive' => (bool) (int) $r['isActive'],
+        'productCount' => (int) $r['productCount'],
+    ], $st->fetchAll()));
+}
+if ($method === 'POST' && $path === '/admin/product-sections') {
+    $u = authUser(); if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
+    $b = readJsonBody();
+    $name = trim((string) ($b['nameAr'] ?? ''));
+    if ($name === '') jsonErr('اسم القسم مطلوب', 422, 'VALIDATION_ERROR');
+    $ex = db()->prepare('SELECT id FROM `ProductSection` WHERE nameAr = ? LIMIT 1');
+    $ex->execute([$name]);
+    if ($ex->fetch()) jsonErr('القسم موجود بالفعل', 409, 'CONFLICT');
+    $id = newId();
+    db()->prepare('INSERT INTO `ProductSection` (id, nameAr, imageUrl, sortOrder, isActive, createdAt) VALUES (?,?,?,?,?,NOW(3))')
+        ->execute([
+            $id, $name, ($b['imageUrl'] ?? null) ?: null, (int) ($b['sortOrder'] ?? 0),
+            array_key_exists('isActive', $b) ? (!empty($b['isActive']) ? 1 : 0) : 1,
+        ]);
+    jsonOk(['id' => $id], 201);
+}
+if ($method === 'PATCH' && preg_match('#^/admin/product-sections/([^/]+)$#', $path, $m)) {
+    $u = authUser(); if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
+    $b = readJsonBody();
+    $sets = []; $args = [];
+    if (array_key_exists('nameAr', $b)) {
+        $newName = trim((string) $b['nameAr']);
+        if ($newName !== '') {
+            $old = db()->prepare('SELECT nameAr FROM `ProductSection` WHERE id = ? LIMIT 1');
+            $old->execute([$m[1]]);
+            $oldName = (string) ($old->fetchColumn() ?: '');
+            if ($oldName !== '' && $oldName !== $newName) {
+                // Cascade the rename to the tagged products so the name-link holds.
+                db()->prepare('UPDATE `Product` SET categoryName = ? WHERE categoryName = ?')
+                    ->execute([$newName, $oldName]);
+            }
+            $sets[] = 'nameAr = ?'; $args[] = $newName;
+        }
+    }
+    if (array_key_exists('imageUrl', $b)) { $sets[] = 'imageUrl = ?'; $args[] = ($b['imageUrl'] ?: null); }
+    if (array_key_exists('sortOrder', $b)) { $sets[] = 'sortOrder = ?'; $args[] = (int) $b['sortOrder']; }
+    if (array_key_exists('isActive', $b)) { $sets[] = 'isActive = ?'; $args[] = (!empty($b['isActive']) ? 1 : 0); }
+    if ($sets) { $args[] = $m[1]; db()->prepare('UPDATE `ProductSection` SET ' . implode(', ', $sets) . ' WHERE id = ?')->execute($args); }
+    jsonOk(['ok' => true]);
+}
+if ($method === 'DELETE' && preg_match('#^/admin/product-sections/([^/]+)$#', $path, $m)) {
+    $u = authUser(); if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
+    // The products keep their categoryName; only the decoration is removed.
+    db()->prepare('DELETE FROM `ProductSection` WHERE id = ?')->execute([$m[1]]);
+    jsonOk(['deleted' => true]);
+}
+
 // ── Offers (home slider) ───────────────────────────────────────────────────
 // The public GET /offers has existed since launch, but nothing in the system
 // ever wrote to the Offer table — so the home slider could never be filled.
@@ -6433,6 +6497,27 @@ if ($method === 'GET' && $path === '/product-sections') {
         fn($r) => ['name' => (string) $r['name'], 'count' => (int) $r['n'], 'merchants' => (int) $r['merchants']],
         $st->fetchAll()
     ));
+}
+
+// GET /product-sections/featured — the admin-curated, cross-merchant sections
+// for the HOME grid (بيتزا / كريب / مشويات …), each with its own artwork. Only
+// active sections that actually have products are returned, so the home never
+// shows a tile that leads to an empty list. Ordered by the admin's sortOrder.
+if ($method === 'GET' && $path === '/product-sections/featured') {
+    $st = db()->query(
+        'SELECT ps.id, ps.nameAr, ps.imageUrl, ps.sortOrder,'
+        . ' (SELECT COUNT(*) FROM `Product` p WHERE p.categoryName = ps.nameAr'
+        . '   AND p.isAvailable = 1 AND p.isHidden = 0) AS productCount'
+        . ' FROM `ProductSection` ps WHERE ps.isActive = 1'
+        . ' HAVING productCount > 0'
+        . ' ORDER BY ps.sortOrder ASC, productCount DESC, ps.nameAr ASC'
+    );
+    jsonOk(array_map(fn($r) => [
+        'id' => $r['id'],
+        'nameAr' => $r['nameAr'],
+        'imageUrl' => $r['imageUrl'],
+        'productCount' => (int) $r['productCount'],
+    ], $st->fetchAll()));
 }
 
 /**

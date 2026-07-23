@@ -20,6 +20,7 @@ import { PaymentGatewayPage } from './routes/payment-gateway.js';
 import { PaymentsPage } from './routes/payments.js';
 import { PricingPage } from './routes/pricing.js';
 import { CategoriesPage } from './routes/categories.js';
+import { ProductSectionsPage } from './routes/product-sections.js';
 import { ImportHistoryPage } from './routes/import-history.js';
 import { ProductsPage } from './routes/products.js';
 import { ReportsPage } from './routes/reports.js';
@@ -64,6 +65,7 @@ const routes: RouteObject[] = [
       { path: 'services/:id/edit', element: <ServiceEditPage /> },
       { path: 'products', element: <ProductsPage /> },
       { path: 'categories', element: <CategoriesPage /> },
+      { path: 'product-sections', element: <ProductSectionsPage /> },
       { path: 'products/import-history', element: <ImportHistoryPage /> },
       { path: 'pricing', element: <PricingPage /> },
       { path: 'payments', element: <PaymentsPage /> },
