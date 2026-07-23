@@ -2374,9 +2374,25 @@ function ProductFormDialog({ mode, product, merchants, onClose }: ProductFormDia
     staleTime: 5 * 60_000,
   });
 
-  // Merchant's own sections first (most relevant), then the shared list, deduped.
+  // The admin-managed global sections (the "أقسام المنتجات" page). These are the
+  // curated taxonomy shown on the app home, so they lead the suggestions —
+  // tagging a product with one of these is what makes it appear under that
+  // section on the home.
+  const { data: managedSections } = useQuery({
+    queryKey: ['admin', 'product-sections'],
+    queryFn: () => api.adminListProductSections() as Promise<{ nameAr: string }[]>,
+    staleTime: 5 * 60_000,
+  });
+
+  // Managed sections first (the curated home taxonomy), then this merchant's own
+  // and the shared derived list, deduped. Kept as a datalist rather than a hard
+  // select so an admin can still type a new section on the fly.
   const sectionSuggestions = Array.from(
-    new Set([...(sections ?? []).map((x) => x.name), ...(sharedSections ?? []).map((x) => x.name)]),
+    new Set([
+      ...(managedSections ?? []).map((x) => x.nameAr),
+      ...(sections ?? []).map((x) => x.name),
+      ...(sharedSections ?? []).map((x) => x.name),
+    ]),
   ).filter(Boolean);
 
   const discountNum = form.discount === '' ? 0 : Number(form.discount);
@@ -2454,19 +2470,19 @@ function ProductFormDialog({ mode, product, merchants, onClose }: ProductFormDia
           </Field>
         </div>
 
-        {/* In-store section. Free text with suggestions drawn from what this
-            merchant already uses — typing "بيتزا" when "بيتزا " exists would
-            create a second chip in the app, so the datalist nudges toward
-            reusing a name rather than inventing one. */}
+        {/* In-store section. Picks from the admin-managed "أقسام المنتجات"
+            first (the curated home taxonomy), then names in use. Datalist, not a
+            hard select, so a new section can still be typed — matching a managed
+            name is what makes the product show under that section on the home. */}
         <Field
           label="القسم داخل المتجر"
-          hint="يظهر كفلتر في صفحة المتجر بالتطبيق — مثال: بيتزا، كريب، مشويات"
+          hint="اختر من الأقسام المُدارة (صفحة أقسام المنتجات) — أو اكتب قسم جديد. مثال: بيتزا، كريب"
         >
           <Input
             list="product-sections"
             value={form.categoryName}
             onChange={(e) => setForm({ ...form, categoryName: e.target.value })}
-            placeholder="اتركه فارغاً لو المتجر مفيهوش أقسام"
+            placeholder="اختر أو اكتب القسم — اتركه فارغاً لو مفيش"
           />
           <datalist id="product-sections">
             {sectionSuggestions.map((n) => (
