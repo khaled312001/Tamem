@@ -11,7 +11,7 @@
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Row = any;
 
-export type ColType = 'id' | 'text' | 'number' | 'int' | 'list' | 'url';
+export type ColType = 'id' | 'text' | 'number' | 'int' | 'list' | 'url' | 'pairs';
 
 export interface SheetColumn {
   /** Product field name. */
@@ -149,7 +149,55 @@ export const COLUMNS: SheetColumn[] = [
     example: 'https://example.com/tea.jpg',
     help: 'اختياري. رابط كامل يبدأ بـ https. لرفع صور من جهازك استخدم نموذج المنتج داخل اللوحة.',
   },
+  {
+    key: 'variants',
+    header: 'الأحجام',
+    width: 40,
+    type: 'pairs',
+    required: false,
+    example: 'صغير=50 | وسط=70 | كبير=95',
+    help: 'اختياري. أحجام المنتج بصيغة الاسم=السعر مفصولة بـ | — مثال: صغير=50 | وسط=70. سعر الحجم يحل محل سعر المنتج. اتركه فاضياً لو المنتج بسعر واحد.',
+  },
+  {
+    key: 'addons',
+    header: 'الإضافات',
+    width: 40,
+    type: 'pairs',
+    required: false,
+    example: 'كاتشب=10 | موتزريلا=25',
+    help: 'اختياري. الإضافات المتاحة للمنتج بصيغة الاسم=السعر مفصولة بـ | — مثال: كاتشب=10 | جبنة=15. سعر الإضافة يُضاف فوق السعر. تُنشأ على مستوى المتجر وتُربط بالمنتج.',
+  },
 ];
+
+/**
+ * Parse a "name=price | name=price" cell into structured pairs.
+ *
+ * The size/add-on columns hold several values in one cell — that's the only sane
+ * shape for a flat sheet. Accepts | ، or a newline as the separator and = or :
+ * between name and price, so an admin typing naturally still parses. Returns the
+ * pairs plus any parts that couldn't be read, for a precise per-cell error.
+ */
+export function parsePairs(raw: string): {
+  pairs: { nameAr: string; price: number }[];
+  bad: string[];
+} {
+  const pairs: { nameAr: string; price: number }[] = [];
+  const bad: string[] = [];
+  for (const part of raw
+    .split(/[|،\n]/)
+    .map((s) => s.trim())
+    .filter(Boolean)) {
+    const m = part.match(/^(.+?)\s*[=:]\s*([0-9.,٠-٩۰-۹]+)\s*$/);
+    const nameAr = (m?.[1] ?? '').trim();
+    const price = m ? toNum(m[2] ?? '') : NaN;
+    if (!m || !nameAr || !Number.isFinite(price) || price < 0) {
+      bad.push(part);
+      continue;
+    }
+    pairs.push({ nameAr, price: Math.round(price * 100) / 100 });
+  }
+  return { pairs, bad };
+}
 
 export const columnsFor = (withId: boolean): SheetColumn[] =>
   withId ? [ID_COLUMN, ...COLUMNS] : COLUMNS;
@@ -226,9 +274,25 @@ function cellValue(p: Row, c: SheetColumn): unknown {
       return p.stock == null ? '' : Number(p.stock);
     case 'isAvailable':
       return p.isAvailable ? 'active' : 'inactive';
+    case 'variants':
+      return serializePairs(p.variants);
+    case 'addons':
+      return serializePairs(p.addons);
     default:
       return p[c.key] ?? '';
   }
+}
+
+/** Array of {nameAr, price} → "name=price | name=price" for a sheet cell. */
+function serializePairs(list: unknown): string {
+  if (!Array.isArray(list) || list.length === 0) return '';
+  return list
+    .map((x) => {
+      const o = x as { nameAr?: unknown; price?: unknown };
+      return o?.nameAr != null ? `${String(o.nameAr)}=${num(o.price)}` : '';
+    })
+    .filter(Boolean)
+    .join(' | ');
 }
 
 export type BuildOpts = {
@@ -419,6 +483,7 @@ function buildInstructionsSheet(
     int: 'رقم صحيح',
     list: 'اختيار من قائمة',
     url: 'رابط https',
+    pairs: 'قائمة الاسم=السعر مفصولة بـ |',
   };
 
   cols.forEach((c) => {
@@ -486,6 +551,12 @@ export interface ParsedRow {
   merchantId?: string;
   merchantName?: string;
   data: Record<string, unknown>;
+  /** Sizes/add-ons from the pairs columns — applied AFTER the product is saved
+   *  (they need its id). Kept off `data` so the product create/update payload
+   *  stays clean. Present only when the cell was non-empty, so a blank cell on
+   *  re-import leaves existing options untouched rather than wiping them. */
+  variants?: { nameAr: string; price: number }[];
+  addons?: { nameAr: string; price: number }[];
   action: 'create' | 'update';
   errors: { column: string; message: string }[];
   raw: string[];
@@ -674,6 +745,11 @@ export async function readProductsFile(file: File, ctx: ReadCtx): Promise<Parsed
       });
     }
 
+    // Sizes / add-ons are parsed separately (they're not part of the product
+    // payload and go through their own endpoint), so collect them here.
+    let variants: { nameAr: string; price: number }[] | undefined;
+    let addons: { nameAr: string; price: number }[] | undefined;
+
     for (const c of COLUMNS) {
       if (c.key === 'merchant') continue;
       const v = cell(c);
@@ -682,6 +758,21 @@ export async function readProductsFile(file: File, ctx: ReadCtx): Promise<Parsed
         continue;
       }
       if (!v) continue;
+
+      if (c.type === 'pairs') {
+        const { pairs, bad } = parsePairs(v);
+        if (bad.length) {
+          errors.push({
+            column: c.header,
+            message: `صيغة غير صحيحة: ${bad.map((b) => `«${b}»`).join('، ')} — استخدم الاسم=السعر مفصولة بـ |`,
+          });
+        }
+        if (pairs.length) {
+          if (c.key === 'variants') variants = pairs;
+          else if (c.key === 'addons') addons = pairs;
+        }
+        continue;
+      }
 
       if (c.type === 'number' || c.type === 'int') {
         const n = toNum(v);
@@ -735,6 +826,8 @@ export async function readProductsFile(file: File, ctx: ReadCtx): Promise<Parsed
       merchantId,
       merchantName,
       data,
+      ...(variants ? { variants } : {}),
+      ...(addons ? { addons } : {}),
       action: id ? 'update' : 'create',
       errors,
       raw: r,
