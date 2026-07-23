@@ -866,14 +866,13 @@ export function OrderTrackingScreen() {
                             addonsSnapshot?: Array<{ nameAr?: string }> | string | null;
                           }>
                         ).map((it) => {
-                          // The receipt is the record of what was bought — the
-                          // size and extras are part of that, not decoration.
-                          const extras = extrasLabel(it.addonsSnapshot);
-                          const base = it.variantNameSnapshot
-                            ? `${it.productNameSnapshot} — ${it.variantNameSnapshot}`
-                            : it.productNameSnapshot;
+                          // The receipt is the record of what was bought — size
+                          // in the name, extras on their own line.
                           return {
-                            name: extras ? `${base} (+ ${extras})` : base,
+                            name: it.variantNameSnapshot
+                              ? `${it.productNameSnapshot} — ${it.variantNameSnapshot}`
+                              : it.productNameSnapshot,
+                            extras: extrasLabel(it.addonsSnapshot),
                             quantity: it.quantity,
                             unitPrice:
                               it.unitPriceSnapshot != null ? Number(it.unitPriceSnapshot) : null,
@@ -903,8 +902,39 @@ export function OrderTrackingScreen() {
                       pickupAddress: order.pickupAddress ?? null,
                       paymentMethodAr: pm ? (paymentMethodMap[pm] ?? pm) : null,
                       paymentStatus: order.paymentStatus ?? null,
+                      // Full money breakdown — the receipt shows each line only
+                      // when present. eslint: order is loosely typed here.
+                      /* eslint-disable @typescript-eslint/no-explicit-any */
+                      subtotal:
+                        (order as any).merchantSubtotal != null
+                          ? Number((order as any).merchantSubtotal)
+                          : null,
+                      deliveryFee:
+                        (order as any).deliveryFee != null
+                          ? Number((order as any).deliveryFee)
+                          : null,
+                      discount:
+                        (order as any).discountAmount != null
+                          ? Number((order as any).discountAmount)
+                          : null,
+                      /* eslint-enable @typescript-eslint/no-explicit-any */
                       total: price != null ? Number(price) : null,
                       notes: order.notes ?? null,
+                      // Shipping specifics — the receipt renders this block only
+                      // for a shipment.
+                      shipping:
+                        order.category === 'SHIPPING'
+                          ? {
+                              speedAr: order.speedTier
+                                ? (SPEED_LABEL[order.speedTier] ?? String(order.speedTier))
+                                : null,
+                              sizeAr: order.sizeCategory
+                                ? (SIZE_LABEL[order.sizeCategory] ?? String(order.sizeCategory))
+                                : null,
+                              weightKg: order.weightKg != null ? Number(order.weightKg) : null,
+                              fragile: !!order.isFragile,
+                            }
+                          : null,
                       driver: order.assignedDriver
                         ? {
                             name: order.assignedDriver.name,
