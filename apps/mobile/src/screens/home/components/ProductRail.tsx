@@ -14,6 +14,7 @@ import { FlatList, Image, Pressable, StyleSheet, Text, View } from 'react-native
 
 import { LIST_PERF } from '../../../lib/listPerf';
 import { productPrice } from '../../../lib/productPrice';
+import { SectionHeader } from './SectionHeader';
 import { colors, fontFamilies, radii, shadows, spacing } from '../../../theme/tokens';
 import type { HomeProduct } from '../homeData';
 
@@ -89,17 +90,7 @@ function ProductRailBase({ title, subtitle, products, onPressProduct, onPressSee
 
   return (
     <View>
-      <View style={[styles.header, { flexDirection: ROW }]}>
-        <View style={styles.headerText}>
-          <Text style={styles.sectionTitle}>{title}</Text>
-          {!!subtitle && <Text style={styles.sectionSub}>{subtitle}</Text>}
-        </View>
-        {!!onPressSeeAll && (
-          <Pressable onPress={onPressSeeAll} hitSlop={8} accessibilityRole="button">
-            <Text style={styles.seeAll}>عرض الكل</Text>
-          </Pressable>
-        )}
-      </View>
+      <SectionHeader title={title} subtitle={subtitle} onPressSeeAll={onPressSeeAll} />
 
       <FlatList
         {...LIST_PERF}
@@ -117,8 +108,6 @@ function ProductRailBase({ title, subtitle, products, onPressProduct, onPressSee
 export const ProductRail = memo(ProductRailBase);
 
 const styles = StyleSheet.create({
-  header: { alignItems: 'center', justifyContent: 'space-between', marginBottom: spacing.md },
-  headerText: { flex: 1 },
   sectionTitle: {
     fontSize: 18,
     color: colors.brand.dark,

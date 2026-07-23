@@ -18,8 +18,8 @@ import { FlatList, Image, Pressable, StyleSheet, Text, View } from 'react-native
 import { iconFor } from '../../../components/home/CategoriesStrip';
 import { colors, fontFamilies, radii, shadows, spacing } from '../../../theme/tokens';
 import type { HomeCategory, Merchant } from '../homeData';
+import { SectionHeader } from './SectionHeader';
 
-const ROW = 'row' as const;
 const TILE = 104;
 
 // Unified brand-orange theme (per request: all icons orange like the logo).
@@ -117,12 +117,7 @@ function CategoriesSectionBase({ categories, merchants, onPressCategory, onPress
 
   return (
     <View>
-      <View style={[styles.header, { flexDirection: ROW }]}>
-        <Text style={styles.sectionTitle}>بتفكر في إيه النهاردة؟</Text>
-        <Pressable onPress={onPressSeeAll} hitSlop={8} accessibilityRole="button">
-          <Text style={styles.seeAll}>عرض الكل</Text>
-        </Pressable>
-      </View>
+      <SectionHeader title="بتفكر في إيه النهاردة؟" onPressSeeAll={onPressSeeAll} />
 
       <FlatList
         data={withCounts}
