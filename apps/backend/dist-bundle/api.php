@@ -6375,13 +6375,39 @@ if ($method === 'GET' && $path === '/products') {
     $cst = db()->prepare('SELECT COUNT(*) n FROM `Product` p WHERE ' . $where);
     $cst->execute($args);
     $total = (int) $cst->fetch()['n'];
-    $st = db()->prepare('SELECT p.*, m.storeNameAr AS m_storeNameAr, m.isOpen AS m_isOpen FROM `Product` p LEFT JOIN `MerchantProfile` m ON m.id = p.merchantId WHERE ' . $where . ' ORDER BY p.sortOrder ASC, p.nameAr ASC LIMIT ' . $pageSize . ' OFFSET ' . (($page - 1) * $pageSize));
+    $st = db()->prepare('SELECT p.*, m.storeNameAr AS m_storeNameAr, m.manualStatus AS m_manualStatus, m.timezone AS m_timezone FROM `Product` p LEFT JOIN `MerchantProfile` m ON m.id = p.merchantId WHERE ' . $where . ' ORDER BY p.sortOrder ASC, p.nameAr ASC LIMIT ' . $pageSize . ' OFFSET ' . (($page - 1) * $pageSize));
     $st->execute($args);
+    $fetched = $st->fetchAll();
+
+    // REAL openness (business hours + manual status + timezone), computed once
+    // per distinct merchant on the page. The stored `isOpen` column is not driven
+    // by hours — a store shut only by its schedule still has isOpen = 1 — which is
+    // how a customer could add a closed store's products to a quick order.
+    $mids = array_values(array_unique(array_filter(array_map(
+        fn($r) => $r['merchantId'] ?? null,
+        $fetched
+    ))));
+    $hrs = $mids ? hoursFor($mids) : [];
+    $openMap = [];
+    foreach ($fetched as $r) {
+        $mid = $r['merchantId'] ?? null;
+        if ($mid === null || array_key_exists($mid, $openMap)) continue;
+        $openMap[$mid] = merchantOpenness(
+            ['id' => $mid, 'manualStatus' => $r['m_manualStatus'] ?? null, 'timezone' => $r['m_timezone'] ?? null],
+            $hrs[$mid] ?? []
+        )['isOpenNow'];
+    }
+
     $rows = [];
-    foreach ($st->fetchAll() as $r) {
+    foreach ($fetched as $r) {
         $p = productShape($r);
-        $p['merchant'] = ['id' => $r['merchantId'], 'storeNameAr' => $r['m_storeNameAr'], 'isOpen' => (bool) (int) $r['m_isOpen']];
-        unset($p['m_storeNameAr'], $p['m_isOpen']);
+        $mid = $r['merchantId'] ?? null;
+        $p['merchant'] = [
+            'id' => $mid,
+            'storeNameAr' => $r['m_storeNameAr'],
+            'isOpen' => $mid !== null ? (bool) ($openMap[$mid] ?? false) : false,
+        ];
+        unset($p['m_storeNameAr'], $p['m_manualStatus'], $p['m_timezone']);
         $rows[] = $p;
     }
     jsonList($rows, $page, $pageSize, $total);

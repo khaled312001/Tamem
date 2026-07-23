@@ -39,6 +39,11 @@ interface MerchantExtras {
   imageUrls: string[];
 }
 
+// Scheduled delivery is hidden for now by product decision. Flip to true to
+// bring the "ميعاد التوصيل" picker back — the rest of the plumbing stays wired,
+// and nothing is sent while it's off because scheduledFor never leaves null.
+const SCHEDULING_ENABLED = false;
+
 export function CartCheckoutScreen() {
   const navigation = useNavigation<NavProp>();
   const cart = useCart();
@@ -310,44 +315,48 @@ export function CartCheckoutScreen() {
         <Text style={styles.sectionTitle}>عنوان التوصيل</Text>
         <AddressPicker value={address} onChange={setAddress} />
 
-        {/* ─────── Schedule ─────── */}
-        <Text style={styles.sectionTitle}>ميعاد التوصيل</Text>
-        <Pressable
-          onPress={() => setScheduleSheetOpen(true)}
-          style={({ pressed }) => [styles.scheduleRow, pressed && { opacity: 0.92 }]}
-        >
-          <View
-            style={[
-              styles.scheduleIcon,
-              { backgroundColor: scheduledFor ? palette.red[50] : colors.soft },
-            ]}
-          >
-            {scheduledFor ? (
-              <Calendar size={20} color={palette.red[600]} />
-            ) : (
-              <Clock size={20} color={colors.text.secondary} />
-            )}
-          </View>
-          <View style={{ flex: 1 }}>
-            <Text style={[typography.bodyBold, { color: colors.ink }]}>
-              {scheduledFor ? 'مجدول' : 'توصيل فوري'}
-            </Text>
-            <Text style={[typography.caption, { color: colors.text.muted, marginTop: 2 }]}>
-              {scheduledFor
-                ? new Date(scheduledFor).toLocaleString('ar-EG', {
-                    weekday: 'long',
-                    day: 'numeric',
-                    month: 'short',
-                    hour: '2-digit',
-                    minute: '2-digit',
-                  })
-                : 'هنبدأ المراجعة فوراً'}
-            </Text>
-          </View>
-          <Text style={[typography.smallBold, { color: palette.red[600] }]}>
-            {scheduledFor ? 'تعديل' : 'جدولة'}
-          </Text>
-        </Pressable>
+        {/* ─────── Schedule (hidden for now — SCHEDULING_ENABLED) ─────── */}
+        {SCHEDULING_ENABLED && (
+          <>
+            <Text style={styles.sectionTitle}>ميعاد التوصيل</Text>
+            <Pressable
+              onPress={() => setScheduleSheetOpen(true)}
+              style={({ pressed }) => [styles.scheduleRow, pressed && { opacity: 0.92 }]}
+            >
+              <View
+                style={[
+                  styles.scheduleIcon,
+                  { backgroundColor: scheduledFor ? palette.red[50] : colors.soft },
+                ]}
+              >
+                {scheduledFor ? (
+                  <Calendar size={20} color={palette.red[600]} />
+                ) : (
+                  <Clock size={20} color={colors.text.secondary} />
+                )}
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={[typography.bodyBold, { color: colors.ink }]}>
+                  {scheduledFor ? 'مجدول' : 'توصيل فوري'}
+                </Text>
+                <Text style={[typography.caption, { color: colors.text.muted, marginTop: 2 }]}>
+                  {scheduledFor
+                    ? new Date(scheduledFor).toLocaleString('ar-EG', {
+                        weekday: 'long',
+                        day: 'numeric',
+                        month: 'short',
+                        hour: '2-digit',
+                        minute: '2-digit',
+                      })
+                    : 'هنبدأ المراجعة فوراً'}
+                </Text>
+              </View>
+              <Text style={[typography.smallBold, { color: palette.red[600] }]}>
+                {scheduledFor ? 'تعديل' : 'جدولة'}
+              </Text>
+            </Pressable>
+          </>
+        )}
 
         {/* ─────── Payment ─────── */}
         <Text style={styles.sectionTitle}>طريقة الدفع</Text>
@@ -396,12 +405,14 @@ export function CartCheckoutScreen() {
         />
       </View>
 
-      <SchedulePicker
-        visible={scheduleSheetOpen}
-        onClose={() => setScheduleSheetOpen(false)}
-        onConfirm={setScheduledFor}
-        initial={scheduledFor}
-      />
+      {SCHEDULING_ENABLED && (
+        <SchedulePicker
+          visible={scheduleSheetOpen}
+          onClose={() => setScheduleSheetOpen(false)}
+          onConfirm={setScheduledFor}
+          initial={scheduledFor}
+        />
+      )}
     </SafeAreaView>
   );
 }

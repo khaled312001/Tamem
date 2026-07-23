@@ -234,6 +234,11 @@ export function StoresListScreen() {
         ) : (
           <FlatList
             {...LIST_PERF}
+            // flex:1 gives the list its OWN bounded, scrollable viewport. Without
+            // it the list isn't height-bounded, so scrolling drags the whole
+            // column — carrying the category/section chips above off-screen. With
+            // it, only the list scrolls and the chips stay pinned.
+            style={styles.list}
             data={sectionProducts ?? []}
             keyExtractor={(p) => p.id}
             contentContainerStyle={[
@@ -286,6 +291,9 @@ export function StoresListScreen() {
       ) : (
         <FlatList
           {...LIST_PERF}
+          // See the note on the products list above — flex:1 keeps the chips
+          // pinned by giving the list its own scroll viewport.
+          style={styles.list}
           data={sorted}
           keyExtractor={(m) => m.id}
           contentContainerStyle={[
@@ -337,6 +345,7 @@ export function StoresListScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.surface },
+  list: { flex: 1 },
   searchWrap: {
     flexDirection: 'row',
     alignItems: 'center',

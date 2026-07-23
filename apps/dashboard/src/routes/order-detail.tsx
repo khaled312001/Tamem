@@ -681,6 +681,11 @@ export function OrderDetailPage() {
             )}
           </div>
 
+          {/* Shipping specifics the customer chose. These are top-level Order
+              columns (not customData), so the generic renderer below never
+              showed them — a shipment arrived as just a photo + two addresses. */}
+          {order.category === 'SHIPPING' && <ShippingDetailsCard order={order} />}
+
           {(order.notes || customData?.quickOrder) && (
             <Card title="تفاصيل الطلب" icon={<MessageSquare className="w-4 h-4" />}>
               <div className="whitespace-pre-wrap text-sm">{(order.notes as string) || '—'}</div>
@@ -1457,6 +1462,59 @@ function Card({
       </div>
       <div>{children}</div>
     </div>
+  );
+}
+
+const SHIP_SPEED_LABEL: Record<string, string> = {
+  STANDARD: 'عادي (خلال 24 ساعة)',
+  EXPRESS: 'سريع (خلال 6 ساعات)',
+};
+const SHIP_SIZE_LABEL: Record<string, string> = {
+  SMALL: 'صغير',
+  MEDIUM: 'وسط',
+  LARGE: 'كبير',
+};
+
+/**
+ * The شحن options the customer picked. speedTier/weightKg/sizeCategory/isFragile
+ * are real columns on the Order row, so they were absent from the customData
+ * renderer — the dispatcher couldn't see whether a shipment was عادي or سريع.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function ShippingDetailsCard({ order }: { order: any }) {
+  const rows: { label: string; value: string; strong?: boolean }[] = [];
+  if (order.speedTier) {
+    rows.push({
+      label: 'سرعة الشحن',
+      value: SHIP_SPEED_LABEL[order.speedTier as string] ?? String(order.speedTier),
+      strong: true,
+    });
+  }
+  if (order.sizeCategory) {
+    rows.push({
+      label: 'الحجم',
+      value: SHIP_SIZE_LABEL[order.sizeCategory as string] ?? String(order.sizeCategory),
+    });
+  }
+  if (order.weightKg != null && Number(order.weightKg) > 0) {
+    rows.push({ label: 'الوزن', value: `${Number(order.weightKg)} كجم` });
+  }
+  if (order.isFragile) {
+    rows.push({ label: 'المحتوى', value: '⚠️ قابل للكسر', strong: true });
+  }
+  if (rows.length === 0) return null;
+
+  return (
+    <Card title="تفاصيل الشحنة" icon={<Truck className="w-4 h-4" />}>
+      <div className="divide-y divide-border">
+        {rows.map((r) => (
+          <div key={r.label} className="flex items-center justify-between py-2 text-sm">
+            <span className="text-muted-foreground">{r.label}</span>
+            <span className={r.strong ? 'font-bold text-brand-red' : 'font-medium'}>{r.value}</span>
+          </div>
+        ))}
+      </div>
+    </Card>
   );
 }
 

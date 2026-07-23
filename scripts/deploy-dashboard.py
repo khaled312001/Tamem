@@ -25,8 +25,12 @@ import sys
 import time
 import urllib.request
 
-HANDOFF = r"E:\Tamem\HANDOFF.md"
-LOCAL_DIST = r"E:\Tamem\apps\dashboard\dist"
+# Paths are derived from this script's own location so the deploy can't break
+# when the repo is checked out somewhere other than E:\Tamem\Tamem. (A hardcoded
+# E:\Tamem\apps\... path silently pointed at a directory that doesn't exist.)
+_REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+HANDOFF = os.path.join(os.path.dirname(_REPO), "HANDOFF.md")
+LOCAL_DIST = os.path.join(_REPO, "apps", "dashboard", "dist")
 REMOTE_BASE = "/home/u748721963/domains/deliverytamem.com/public_html"
 REMOTE_DIR = posixpath.join(REMOTE_BASE, "super_admin")
 URL = "https://deliverytamem.com/super_admin/"
