@@ -6475,7 +6475,7 @@ if ($method === 'GET' && $path === '/products') {
     $cst = db()->prepare('SELECT COUNT(*) n FROM `Product` p WHERE ' . $where);
     $cst->execute($args);
     $total = (int) $cst->fetch()['n'];
-    $st = db()->prepare('SELECT p.*, m.storeNameAr AS m_storeNameAr, m.manualStatus AS m_manualStatus, m.timezone AS m_timezone FROM `Product` p LEFT JOIN `MerchantProfile` m ON m.id = p.merchantId WHERE ' . $where . ' ORDER BY p.sortOrder ASC, p.nameAr ASC LIMIT ' . $pageSize . ' OFFSET ' . (($page - 1) * $pageSize));
+    $st = db()->prepare('SELECT p.*, m.storeNameAr AS m_storeNameAr, m.logoUrl AS m_logoUrl, m.manualStatus AS m_manualStatus, m.timezone AS m_timezone FROM `Product` p LEFT JOIN `MerchantProfile` m ON m.id = p.merchantId WHERE ' . $where . ' ORDER BY p.sortOrder ASC, p.nameAr ASC LIMIT ' . $pageSize . ' OFFSET ' . (($page - 1) * $pageSize));
     $st->execute($args);
     $fetched = $st->fetchAll();
 
@@ -6505,9 +6505,10 @@ if ($method === 'GET' && $path === '/products') {
         $p['merchant'] = [
             'id' => $mid,
             'storeNameAr' => $r['m_storeNameAr'],
+            'logoUrl' => $r['m_logoUrl'] ?? null,
             'isOpen' => $mid !== null ? (bool) ($openMap[$mid] ?? false) : false,
         ];
-        unset($p['m_storeNameAr'], $p['m_manualStatus'], $p['m_timezone']);
+        unset($p['m_storeNameAr'], $p['m_logoUrl'], $p['m_manualStatus'], $p['m_timezone']);
         $rows[] = $p;
     }
     jsonList($rows, $page, $pageSize, $total);
