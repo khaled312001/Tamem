@@ -1,9 +1,18 @@
 import { useNavigation, useRoute, type RouteProp } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useQuery } from '@tanstack/react-query';
-import { ArrowDownUp, Search, Star, Store } from 'lucide-react-native';
+import { ArrowDownUp, Package, Search, Star, Store } from 'lucide-react-native';
 import { useMemo, useState } from 'react';
-import { FlatList, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import {
+  FlatList,
+  Image,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
+} from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { GradientHeader } from '../components/GradientHeader';
@@ -262,7 +271,15 @@ export function StoresListScreen() {
                   style={({ pressed }) => [styles.card, pressed && styles.pressed]}
                 >
                   <View style={styles.cardIcon}>
-                    <Store size={22} color={colors.brand.red} />
+                    {item.imageUrl ? (
+                      <Image
+                        source={{ uri: item.imageUrl }}
+                        style={styles.cardImg}
+                        resizeMode="cover"
+                      />
+                    ) : (
+                      <Package size={22} color={colors.brand.red} />
+                    )}
                   </View>
                   <View style={{ flex: 1 }}>
                     <Text style={styles.cardTitle}>{item.nameAr || item.name || '—'}</Text>
@@ -460,7 +477,9 @@ const styles = StyleSheet.create({
     backgroundColor: colors.soft,
     alignItems: 'center',
     justifyContent: 'center',
+    overflow: 'hidden',
   },
+  cardImg: { width: '100%', height: '100%' },
   cardTitle: {
     fontSize: fontSizes.sm,
     fontFamily: fontFamilies.bodyExtraBold,

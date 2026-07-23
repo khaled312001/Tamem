@@ -191,11 +191,6 @@ export function HomeV2Screen() {
     navigation.navigate('DeliveryServices');
   }, [navigation, tick]);
 
-  const goNearbyMap = useCallback(() => {
-    tick();
-    navigation.navigate('NearbyMap');
-  }, [navigation, tick]);
-
   // Shortcuts into screens that already exist under the Orders / Profile tabs.
   const quickActions = useMemo<QuickAction[]>(() => {
     const goProfileScreen = (screen: string) => () => {
@@ -349,7 +344,7 @@ export function HomeV2Screen() {
             categories={categories ?? []}
             merchants={nearbyMerchants}
             onPressCategory={onPressCategory}
-            onPressSeeAll={goNearbyMap}
+            onPressSeeAll={goStores}
           />
         </View>
 
