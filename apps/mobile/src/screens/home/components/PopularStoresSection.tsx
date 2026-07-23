@@ -12,6 +12,7 @@ import { FlatList, I18nManager, Image, Pressable, StyleSheet, Text, View } from 
 import { HeartButton } from '../../../components/HeartButton';
 import { LIST_PERF } from '../../../lib/listPerf';
 import { colors, fontFamilies, radii, shadows, spacing } from '../../../theme/tokens';
+import { SectionHeader } from './SectionHeader';
 import type { Merchant } from '../homeData';
 
 // React Native already lays `flexDirection: 'row'` out right-to-left when
@@ -103,12 +104,7 @@ function PopularStoresSectionBase({ merchants, onPressMerchant, onPressSeeAll }:
 
   return (
     <View>
-      <View style={[styles.header, { flexDirection: ROW }]}>
-        <Text style={styles.sectionTitle}>متاجر مختارة</Text>
-        <Pressable onPress={onPressSeeAll} hitSlop={8} accessibilityRole="button">
-          <Text style={styles.seeAll}>عرض الكل</Text>
-        </Pressable>
-      </View>
+      <SectionHeader title="متاجر مختارة" onPressSeeAll={onPressSeeAll} />
 
       {merchants.length === 0 ? (
         <View style={styles.empty}>

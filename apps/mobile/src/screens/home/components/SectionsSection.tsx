@@ -18,8 +18,8 @@ import { FlatList, Image, Pressable, StyleSheet, Text, View } from 'react-native
 import { api } from '../../../lib/api';
 import { LIST_PERF } from '../../../lib/listPerf';
 import { colors, fontFamilies, radii, shadows, spacing } from '../../../theme/tokens';
+import { SectionHeader } from './SectionHeader';
 
-const ROW = 'row' as const;
 const TILE = 112;
 
 export interface HomeProductSection {
@@ -91,9 +91,7 @@ function SectionsSectionBase({ onPressSection }: Props) {
 
   return (
     <View>
-      <View style={[styles.header, { flexDirection: ROW }]}>
-        <Text style={styles.sectionTitle}>الأقسام</Text>
-      </View>
+      <SectionHeader title="الأقسام" />
 
       <FlatList
         data={sections}
