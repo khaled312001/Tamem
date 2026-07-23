@@ -65,7 +65,9 @@ export function StoresListScreen() {
   const [sortKey, setSortKey] = useState<SortKey>('recommended');
   // Shared product section (e.g. مشويات) filtered ACROSS merchants. When set,
   // the list switches from "stores" to matching products from every merchant.
-  const [activeSection, setActiveSection] = useState<string | null>(null);
+  // Preset from the home "أقسام المنتجات" grid — opens straight into the
+  // cross-merchant product list for that section (e.g. بيتزا).
+  const [activeSection, setActiveSection] = useState<string | null>(route.params?.section ?? null);
 
   // Chips come from the Categories table now, not a hardcoded list of four
   // slugs that silently stopped matching whatever the admin actually created.

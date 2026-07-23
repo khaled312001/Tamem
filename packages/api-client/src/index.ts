@@ -969,6 +969,20 @@ export class TamemClient {
     await this.http.request({ method: 'DELETE', url: `/admin/categories/${id}` });
   }
 
+  // ===== Admin Product Sections (global in-store taxonomy) =====
+  async adminListProductSections(): Promise<unknown[]> {
+    return this.request({ method: 'GET', url: '/admin/product-sections' });
+  }
+  async adminCreateProductSection(data: unknown): Promise<unknown> {
+    return this.request({ method: 'POST', url: '/admin/product-sections', data });
+  }
+  async adminUpdateProductSection(id: string, data: unknown): Promise<unknown> {
+    return this.request({ method: 'PATCH', url: `/admin/product-sections/${id}`, data });
+  }
+  async adminDeleteProductSection(id: string): Promise<void> {
+    await this.http.request({ method: 'DELETE', url: `/admin/product-sections/${id}` });
+  }
+
   // ===== Admin Offers =====
   // These have existed since launch but had no server implementation — the
   // /admin/offers routes were only added to api.php now, which is why the home

@@ -17,7 +17,7 @@ export type HomeStackParamList = {
   Home: undefined;
   /** The previous home layout, kept mounted so we can flip back instantly. */
   HomeLegacy: undefined;
-  StoresList: { categoryId?: string; search?: string } | undefined;
+  StoresList: { categoryId?: string; search?: string; section?: string } | undefined;
   NearbyMap: { search?: string } | undefined;
   MerchantDetail: { merchantId: string };
   ProductDetail: { productId: string };

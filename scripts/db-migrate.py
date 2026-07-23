@@ -82,7 +82,42 @@ TABLES = {
             REFERENCES `MerchantAddon` (`id`) ON DELETE CASCADE
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     """,
+    # Global, admin-curated in-store sections (بيتزا / كريب / مشويات …) shown on
+    # the home as a cross-merchant taxonomy with artwork. The join to products
+    # stays by NAME (Product.categoryName) — same key the whole section system
+    # already uses — so nameAr is UNIQUE and this table only decorates a name
+    # with an image / order / visibility. No product data is migrated.
+    "ProductSection": """
+        CREATE TABLE `ProductSection` (
+          `id` varchar(191) NOT NULL,
+          `nameAr` varchar(120) NOT NULL,
+          `imageUrl` varchar(500) NULL,
+          `sortOrder` int NOT NULL DEFAULT 0,
+          `isActive` tinyint(1) NOT NULL DEFAULT 1,
+          `createdAt` datetime(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+          PRIMARY KEY (`id`),
+          UNIQUE KEY `ProductSection_nameAr_key` (`nameAr`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
 }
+
+# One-time data seeds, run after the tables exist. Each is (table, sql) and runs
+# only when the table is empty — additive and idempotent, never destructive.
+# Seeds ProductSection from the section names already in use so the admin opens
+# the page to the real sections, ready to get artwork, instead of a blank slate.
+SEEDS = [
+    (
+        "ProductSection",
+        """
+        INSERT IGNORE INTO `ProductSection` (id, nameAr, sortOrder, isActive, createdAt)
+        SELECT CONCAT('psec', LOWER(HEX(RANDOM_BYTES(10)))), t.name, 0, 1, NOW(3)
+        FROM (
+          SELECT DISTINCT categoryName AS name FROM `Product`
+          WHERE categoryName IS NOT NULL AND categoryName <> ''
+        ) t
+        """,
+    ),
+]
 
 DRY_RUN = "--dry-run" in sys.argv
 
@@ -202,6 +237,19 @@ def main() -> None:
             f"AND COLUMN_NAME = '{column}'"
         ).strip()
         print(f"  {table}.{column}: {'added' if ok == column else 'FAILED ' + err[:120]}")
+
+    # Seeds — only into an EMPTY table, so re-running never duplicates.
+    for table, seed_sql in SEEDS:
+        count = sql(f"SELECT COUNT(*) FROM `{table}`").strip()
+        if count and count != "0":
+            print(f"  seed {table}: skipped ({count} rows already)")
+            continue
+        if DRY_RUN:
+            print(f"  [dry-run] seed {table}")
+            continue
+        err = sql(" ".join(seed_sql.split()))
+        after = sql(f"SELECT COUNT(*) FROM `{table}`").strip()
+        print(f"  seed {table}: {after} rows{(' — ' + err[:160]) if err else ''}")
 
     cli.close()
 

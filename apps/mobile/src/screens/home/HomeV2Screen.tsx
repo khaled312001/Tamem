@@ -27,6 +27,7 @@ import { colors, fontFamilies, radii, spacing } from '../../theme/tokens';
 import { ActiveOrderCard } from './components/ActiveOrderCard';
 import { BenefitsBar } from './components/BenefitsBar';
 import { CategoriesSection } from './components/CategoriesSection';
+import { SectionsSection, type HomeProductSection } from './components/SectionsSection';
 import { HomeHeader } from './components/HomeHeader';
 import { HomeSearchBar } from './components/HomeSearchBar';
 import { HomeSkeleton } from './components/HomeSkeleton';
@@ -155,6 +156,16 @@ export function HomeV2Screen() {
     (c: HomeCategory) => {
       tick();
       navigation.navigate('StoresList', { categoryId: c.id });
+    },
+    [navigation, tick],
+  );
+
+  const onPressSection = useCallback(
+    (s: HomeProductSection) => {
+      tick();
+      // Opens StoresList directly in section mode: this section's items across
+      // every merchant.
+      navigation.navigate('StoresList', { section: s.nameAr });
     },
     [navigation, tick],
   );
@@ -381,6 +392,12 @@ export function HomeV2Screen() {
             onPressCategory={onPressCategory}
             onPressSeeAll={goNearbyMap}
           />
+        </View>
+
+        {/* Global product sections (بيتزا/كريب…) — a PRODUCT kind across all
+            stores, distinct from the store-type categories above. */}
+        <View style={styles.section}>
+          <SectionsSection onPressSection={onPressSection} />
         </View>
 
         <View style={styles.section}>
