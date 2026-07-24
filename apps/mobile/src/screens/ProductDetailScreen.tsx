@@ -28,6 +28,7 @@ import {
 import { Image as ImageIcon } from 'lucide-react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { CountdownBadge } from '../components/CountdownBadge';
 import { EmptyState, MoneyText } from '../components/ui';
 import { api } from '../lib/api';
 import { showToast } from '../lib/toast';
@@ -55,6 +56,8 @@ interface ProductDetail {
   salePrice?: number | string | null;
   /** Percentage knob — independent of salePrice. */
   discount?: number | string | null;
+  /** Optional expiry for a timed offer (ISO). */
+  saleEndsAt?: string | null;
   stock?: number | null;
   isAvailable: boolean;
   isHidden: boolean;
@@ -190,6 +193,18 @@ export function ProductDetailScreen() {
         selectedAddons.reduce((sum, a) => sum + a.price, 0)) *
         100,
     ) / 100;
+
+  // Discount display — works for a plain product AND a sized one (the size chip
+  // carries the discount, so the headline must reflect it too, not just when no
+  // variant is picked).
+  const addonsSum = selectedAddons.reduce((sum, a) => sum + a.price, 0);
+  const wasItem = selectedVariant ? selectedVariant.price : (listPrice ?? 0);
+  const nowItem = variantNow != null ? variantNow : effectivePrice;
+  const offPct = selectedVariant ? sizePct : discountPct;
+  const showStrike = offPct > 0 && wasItem > nowItem;
+  const wasTotal = showStrike ? Math.round((wasItem + addonsSum) * 100) / 100 : null;
+  // A live timed offer (future expiry) → show the countdown at the top.
+  const offerLive = !!data.saleEndsAt && Date.parse(data.saleEndsAt) > Date.now();
 
   const merchantOpen = data.merchant?.openness?.isOpenNow ?? true;
   const productInStock =
@@ -342,19 +357,27 @@ export function ProductDetailScreen() {
           {/* Price block */}
           <View style={styles.priceRow}>
             <MoneyText amount={unitPrice} tone="brand" size="xl" />
-            {hasSale && !selectedVariant && (
+            {showStrike && wasTotal != null && (
               <View style={{ marginStart: spacing.sm }}>
-                <MoneyText
-                  amount={listPrice ?? 0}
-                  tone="muted"
-                  size="sm"
-                  strikethrough
-                  showCurrency
-                />
+                <MoneyText amount={wasTotal} tone="muted" size="sm" strikethrough showCurrency />
+              </View>
+            )}
+            {offPct > 0 && (
+              <View style={styles.offPill}>
+                <Text style={styles.offPillText}>-{Math.round(offPct)}%</Text>
               </View>
             )}
             {data.unit ? <Text style={styles.unitText}>/ {data.unit}</Text> : null}
           </View>
+
+          {/* Timed offer — the countdown belongs at the top so the customer sees
+              the deal (and its urgency) before scrolling. Reverts on expiry. */}
+          {offerLive && !!data.saleEndsAt && (
+            <View style={styles.offerTimer}>
+              <Text style={styles.offerTimerLabel}>ينتهي العرض خلال</Text>
+              <CountdownBadge endsAt={data.saleEndsAt} onExpire={() => refetch()} size="lg" />
+            </View>
+          )}
 
           {/* Availability banner */}
           {!productInStock ? (
@@ -684,6 +707,41 @@ const styles = StyleSheet.create({
     fontSize: fontSizes.sm,
     color: colors.text.muted,
     fontFamily: fontFamilies.body,
+  },
+  offPill: {
+    marginStart: spacing.sm,
+    backgroundColor: '#FDECEA',
+    borderRadius: radii.sm,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+  },
+  offPillText: {
+    fontSize: 12,
+    color: colors.brand.red,
+    fontFamily: fontFamilies.bodyExtraBold,
+    lineHeight: 18,
+    includeFontPadding: false,
+  },
+  offerTimer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    marginTop: spacing.sm,
+    alignSelf: 'flex-start',
+    backgroundColor: '#FFF5F3',
+    borderWidth: 1,
+    borderColor: '#F6D6CE',
+    borderRadius: radii.md,
+    paddingHorizontal: spacing.md,
+    paddingVertical: 8,
+  },
+  offerTimerLabel: {
+    fontSize: 13,
+    color: colors.brand.red,
+    fontFamily: fontFamilies.bodyExtraBold,
+    lineHeight: 20,
+    includeFontPadding: false,
+    textAlign: 'auto',
   },
   // Banner
   banner: {
