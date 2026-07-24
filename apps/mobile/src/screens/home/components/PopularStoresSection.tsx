@@ -147,7 +147,7 @@ const styles = StyleSheet.create({
     color: colors.brand.red,
     fontFamily: fontFamilies.bodyBold,
   },
-  listContent: { gap: spacing.md, paddingVertical: 2 },
+  listContent: { flexGrow: 1, gap: spacing.md, paddingVertical: 2 },
 
   card: {
     width: CARD_W,
