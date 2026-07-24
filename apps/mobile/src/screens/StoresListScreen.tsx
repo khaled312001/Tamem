@@ -21,6 +21,7 @@ import { CardListSkeleton, EmptyState } from '../components/ui';
 import { api } from '../lib/api';
 import { LIST_PERF } from '../lib/listPerf';
 import { useDebouncedValue } from '../lib/useDebouncedValue';
+import { productPrice } from '../lib/productPrice';
 import type { HomeStackParamList } from '../navigation/HomeStack';
 import { colors, fontFamilies, fontSizes, radii, spacing } from '../theme/tokens';
 
@@ -54,6 +55,8 @@ interface ProductHit {
   name?: string | null;
   price?: number | string | null;
   salePrice?: number | string | null;
+  discount?: number | string | null;
+  saleEndsAt?: string | null;
   imageUrl?: string | null;
   categoryName?: string | null;
   merchant?: {
@@ -173,7 +176,14 @@ export function StoresListScreen() {
   // The image falls back to the STORE LOGO when the product has no photo (many
   // synced items don't), then to a generic icon.
   const renderProductItem = ({ item }: { item: ProductHit }) => {
-    const price = Number(item.salePrice ?? item.price ?? 0);
+    // Same helper as everywhere else, so a % discount and an expired timed
+    // offer are honoured here too (this card used to read salePrice raw).
+    const pr = productPrice({
+      price: item.price ?? 0,
+      salePrice: item.salePrice,
+      discount: item.discount,
+      saleEndsAt: item.saleEndsAt,
+    });
     const img = item.imageUrl || item.merchant?.logoUrl || null;
     return (
       <Pressable
@@ -193,7 +203,17 @@ export function StoresListScreen() {
             <Store size={11} color={colors.text.muted} />
             <Text style={styles.cardSub}>{item.merchant?.storeNameAr ?? '—'}</Text>
           </View>
-          {price > 0 && <Text style={styles.priceText}>{price.toFixed(0)} ج.م</Text>}
+          {pr.now > 0 && (
+            <View style={styles.priceLine}>
+              <Text style={styles.priceText}>{pr.now.toFixed(0)} ج.م</Text>
+              {pr.was != null && <Text style={styles.wasText}>{pr.was.toFixed(0)}</Text>}
+              {pr.off > 0 && (
+                <View style={styles.offPill}>
+                  <Text style={styles.offPillText}>-{pr.off}%</Text>
+                </View>
+              )}
+            </View>
+          )}
         </View>
         {item.merchant && (
           <View style={item.merchant.isOpen ? styles.tagOpen : styles.tagClosed}>
@@ -486,6 +506,20 @@ const styles = StyleSheet.create({
     fontFamily: fontFamilies.bodyBold,
   },
   sectionChipTextOn: { color: colors.white },
+  priceLine: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 2 },
+  wasText: {
+    fontSize: fontSizes.xs,
+    color: colors.text.muted,
+    fontFamily: fontFamilies.body,
+    textDecorationLine: 'line-through',
+  },
+  offPill: {
+    backgroundColor: '#FDECEA',
+    borderRadius: radii.sm,
+    paddingHorizontal: 5,
+    paddingVertical: 1,
+  },
+  offPillText: { fontSize: 10, color: colors.brand.red, fontFamily: fontFamilies.bodyExtraBold },
   priceText: {
     fontSize: fontSizes.sm,
     color: colors.brand.red,

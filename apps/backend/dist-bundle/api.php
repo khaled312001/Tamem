@@ -4451,8 +4451,7 @@ if ($method === 'GET' && $path === '/admin/deals') {
     );
     jsonOk(array_map(function ($r) {
         $variantCount = (int) $r['variantCount'];
-        $expired = !empty($r['saleEndsAt']) && strtotime((string) $r['saleEndsAt']) !== false
-            && strtotime((string) $r['saleEndsAt']) <= time();
+        $expired = saleExpired($r['saleEndsAt'] ?? null);
         $r = jsonizeRow($r);
         $r['merchant'] = ['id' => $r['merchantId'], 'storeNameAr' => $r['m_storeNameAr'], 'logoUrl' => $r['m_logoUrl']];
         $r['hasVariants'] = $variantCount > 0;
@@ -5697,11 +5696,7 @@ function effectiveUnitPrice(array $p): float {
     // A timed offer that has ended is ignored — the price reverts to list, so a
     // customer can never be charged (or shown) an expired discount. Same rule the
     // client applies, so the two never disagree.
-    $endsAt = $p['saleEndsAt'] ?? null;
-    if ($endsAt !== null && $endsAt !== '' && strtotime((string) $endsAt) !== false
-        && strtotime((string) $endsAt) <= time()) {
-        return round($list, 2);
-    }
+    if (saleExpired($p['saleEndsAt'] ?? null)) return round($list, 2);
 
     // salePrice wins when both are set: an explicit number the admin typed
     // beats a percentage rule.
@@ -5723,13 +5718,23 @@ function effectiveUnitPrice(array $p): float {
  * This is what lets a "20% off" pizza discount every size, add-ons excluded.
  */
 function activeDiscountPct(array $p): float {
-    $endsAt = $p['saleEndsAt'] ?? null;
-    if ($endsAt !== null && $endsAt !== ''
-        && ($t = strtotime((string) $endsAt)) !== false && $t <= time()) {
-        return 0.0;
-    }
+    if (saleExpired($p['saleEndsAt'] ?? null)) return 0.0;
     $pct = $p['discount'] !== null ? (float) $p['discount'] : 0.0;
     return $pct > 0 ? min(90.0, $pct) : 0.0;
+}
+
+/**
+ * Has a timed offer's end passed? Robust to the timezone trap: raw DB datetimes
+ * ("2026-07-24 22:00:00") are UTC but carry no marker, and PHP's default zone
+ * here is Africa/Cairo — so a bare strtotime() would read them 3h early and
+ * kill an offer before its time. Force UTC when there's no zone in the string.
+ */
+function saleExpired($endsAt): bool {
+    if ($endsAt === null || $endsAt === '') return false;
+    $s = (string) $endsAt;
+    if (preg_match('/^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(\.\d+)?$/', $s)) $s .= ' UTC';
+    $t = strtotime($s);
+    return $t !== false && $t <= time();
 }
 
 /** A store counts as "new" for this many days after it is created. */
