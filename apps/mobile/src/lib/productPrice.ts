@@ -74,3 +74,26 @@ export function productPrice(p: PricedProduct): ProductPrice {
 
   return { now: list, was: null, off: 0, hasDiscount: false };
 }
+
+/**
+ * The product's LIVE percentage discount (0..90), or 0 if none or expired.
+ * Mirrors the server's activeDiscountPct. Only the percentage knob is used —
+ * an absolute salePrice can't scale to a chosen size — so this is what a sized
+ * product's discount runs through.
+ */
+export function activeDiscountPct(p: {
+  discount?: number | string | null;
+  saleEndsAt?: string | null;
+}): number {
+  if (p.saleEndsAt) {
+    const ends = Date.parse(p.saleEndsAt);
+    if (Number.isFinite(ends) && ends <= Date.now()) return 0;
+  }
+  const pct = Number(p.discount ?? 0);
+  return Number.isFinite(pct) && pct > 0 ? Math.min(90, pct) : 0;
+}
+
+/** Apply a percentage to an amount, rounded to piastres. */
+export function applyPct(amount: number, pct: number): number {
+  return pct > 0 ? Math.round(amount * (1 - pct / 100) * 100) / 100 : amount;
+}

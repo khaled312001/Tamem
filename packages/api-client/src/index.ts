@@ -641,6 +641,10 @@ export class TamemClient {
   }
 
   // ===== Admin Products =====
+  /** Products that currently have an offer (% or salePrice), for the deals page. */
+  async adminListDeals(): Promise<unknown[]> {
+    return this.request({ method: 'GET', url: '/admin/deals' });
+  }
   async adminListProducts(params?: Record<string, unknown>): Promise<Paginated<unknown>> {
     return this.requestPaginated({ method: 'GET', url: '/admin/products', params });
   }

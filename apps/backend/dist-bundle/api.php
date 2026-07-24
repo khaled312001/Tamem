@@ -4434,6 +4434,34 @@ if ($method === 'DELETE' && preg_match('#^/admin/categories/([^/]+)$#', $path, $
     jsonOk(['deleted' => true]);
 }
 
+// GET /admin/deals — products that currently carry an offer (a % discount or a
+// salePrice under the list price), for the "عروض اليوم" management page. Expired
+// timed offers are included so the admin can see and clear them; each row flags
+// whether it's live and whether the product has sizes (which the % applies to).
+if ($method === 'GET' && $path === '/admin/deals') {
+    authUser();
+    $st = db()->query(
+        'SELECT p.id, p.nameAr, p.imageUrl, p.price, p.salePrice, p.discount, p.saleEndsAt, p.merchantId,'
+        . ' m.storeNameAr AS m_storeNameAr, m.logoUrl AS m_logoUrl,'
+        . ' (SELECT COUNT(*) FROM `ProductVariant` v WHERE v.productId = p.id AND v.isActive = 1) AS variantCount'
+        . ' FROM `Product` p LEFT JOIN `MerchantProfile` m ON m.id = p.merchantId'
+        . ' WHERE (p.discount IS NOT NULL AND p.discount > 0)'
+        . '    OR (p.salePrice IS NOT NULL AND p.salePrice > 0 AND p.salePrice < p.price)'
+        . ' ORDER BY p.saleEndsAt IS NULL ASC, p.saleEndsAt ASC, p.nameAr ASC'
+    );
+    jsonOk(array_map(function ($r) {
+        $variantCount = (int) $r['variantCount'];
+        $expired = !empty($r['saleEndsAt']) && strtotime((string) $r['saleEndsAt']) !== false
+            && strtotime((string) $r['saleEndsAt']) <= time();
+        $r = jsonizeRow($r);
+        $r['merchant'] = ['id' => $r['merchantId'], 'storeNameAr' => $r['m_storeNameAr'], 'logoUrl' => $r['m_logoUrl']];
+        $r['hasVariants'] = $variantCount > 0;
+        $r['expired'] = $expired;
+        unset($r['m_storeNameAr'], $r['m_logoUrl'], $r['variantCount']);
+        return $r;
+    }, $st->fetchAll()));
+}
+
 // ── Product sections (global in-store taxonomy: بيتزا / كريب / مشويات) ───────
 // These DECORATE a section name (Product.categoryName) with artwork / order /
 // visibility. The name is the join key, so it's unique and a rename cascades to
@@ -5685,6 +5713,23 @@ function effectiveUnitPrice(array $p): float {
     if ($pct > 0) return round($list * (1 - min(90.0, $pct) / 100), 2);
 
     return round($list, 2);
+}
+
+/**
+ * The product's LIVE percentage discount (0..90), or 0 if none or expired.
+ *
+ * Only the percentage knob is used — an absolute salePrice can't scale to a
+ * chosen size, so it applies to single-price items only (via effectiveUnitPrice).
+ * This is what lets a "20% off" pizza discount every size, add-ons excluded.
+ */
+function activeDiscountPct(array $p): float {
+    $endsAt = $p['saleEndsAt'] ?? null;
+    if ($endsAt !== null && $endsAt !== ''
+        && ($t = strtotime((string) $endsAt)) !== false && $t <= time()) {
+        return 0.0;
+    }
+    $pct = $p['discount'] !== null ? (float) $p['discount'] : 0.0;
+    return $pct > 0 ? min(90.0, $pct) : 0.0;
 }
 
 /** A store counts as "new" for this many days after it is created. */
@@ -7029,8 +7074,12 @@ if ($method === 'POST' && $path === '/orders/cart') {
                 $vq = db()->prepare('SELECT nameAr, price FROM `ProductVariant` WHERE id = ? AND productId = ? AND isActive = 1 LIMIT 1');
                 $vq->execute([$vid, $p['id']]);
                 if ($v = $vq->fetch()) {
-                    // A size REPLACES the base price rather than adding to it.
-                    $unit = round((float) $v['price'], 2);
+                    // A size REPLACES the base price rather than adding to it,
+                    // and an active % discount applies to the size price too
+                    // (add-ons below stay full price).
+                    $sizePrice = round((float) $v['price'], 2);
+                    $pct = activeDiscountPct($p);
+                    $unit = $pct > 0 ? round($sizePrice * (1 - $pct / 100), 2) : $sizePrice;
                     $variantName = (string) $v['nameAr'];
                 } else {
                     conflictErr('VARIANT_UNAVAILABLE', 'الحجم المختار لم يعد متاحاً لـ ' . $p['nameAr']);

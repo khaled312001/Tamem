@@ -37,6 +37,8 @@ export interface ProductAddon {
 interface Props {
   variants: ProductVariant[];
   addons: ProductAddon[];
+  /** Live % discount on the product — applied to each SIZE price (0 = none). */
+  discountPct?: number;
   variantId: string | null;
   addonIds: string[];
   onSelectVariant: (id: string) => void;
@@ -51,6 +53,7 @@ function money(n: number): string {
 function ProductOptionsBase({
   variants,
   addons,
+  discountPct = 0,
   variantId,
   addonIds,
   onSelectVariant,
@@ -70,6 +73,11 @@ function ProductOptionsBase({
           <View style={[styles.chips, { flexDirection: ROW }]}>
             {variants.map((v) => {
               const on = v.id === variantId;
+              const now =
+                discountPct > 0
+                  ? Math.round(v.price * (1 - discountPct / 100) * 100) / 100
+                  : v.price;
+              const discounted = now < v.price;
               return (
                 <Pressable
                   key={v.id}
@@ -81,14 +89,21 @@ function ProductOptionsBase({
                   ]}
                   accessibilityRole="radio"
                   accessibilityState={{ selected: on, disabled }}
-                  accessibilityLabel={`${v.nameAr} — ${money(v.price)}`}
+                  accessibilityLabel={`${v.nameAr} — ${money(now)}`}
                 >
                   <Text style={[styles.chipName, on && styles.chipNameOn]} numberOfLines={1}>
                     {v.nameAr}
                   </Text>
-                  <Text style={[styles.chipPrice, on && styles.chipPriceOn]} numberOfLines={1}>
-                    {money(v.price)}
-                  </Text>
+                  <View style={[styles.chipPriceRow, { flexDirection: ROW }]}>
+                    <Text style={[styles.chipPrice, on && styles.chipPriceOn]} numberOfLines={1}>
+                      {money(now)}
+                    </Text>
+                    {discounted && (
+                      <Text style={styles.chipWas} numberOfLines={1}>
+                        {money(v.price)}
+                      </Text>
+                    )}
+                  </View>
                 </Pressable>
               );
             })}
@@ -200,6 +215,7 @@ const styles = StyleSheet.create({
     includeFontPadding: false,
   },
   chipNameOn: { color: colors.brand.red },
+  chipPriceRow: { alignItems: 'center', gap: 4 },
   chipPrice: {
     fontSize: 12,
     color: colors.brand.gray,
@@ -208,6 +224,14 @@ const styles = StyleSheet.create({
     includeFontPadding: false,
   },
   chipPriceOn: { color: colors.brand.red },
+  chipWas: {
+    fontSize: 10,
+    color: colors.brand.gray,
+    fontFamily: fontFamilies.body,
+    textDecorationLine: 'line-through',
+    lineHeight: 16,
+    includeFontPadding: false,
+  },
 
   addonList: { gap: spacing.sm },
   addon: {

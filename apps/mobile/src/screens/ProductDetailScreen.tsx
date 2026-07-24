@@ -35,7 +35,7 @@ import type { HomeStackParamList } from '../navigation/HomeStack';
 import type { NativeScrollEvent, NativeSyntheticEvent } from 'react-native';
 
 import { ImageViewer } from '../components/ImageViewer';
-import { productPrice } from '../lib/productPrice';
+import { activeDiscountPct, applyPct, productPrice } from '../lib/productPrice';
 import { addToCart } from '../stores/cart';
 import { ProductOptions } from './product-detail/ProductOptions';
 import { BackChevron } from '../theme/rtl';
@@ -175,12 +175,18 @@ export function ProductDetailScreen() {
     hasDiscount: hasSale,
   } = productPrice(data);
 
+  // A live % discount applies to the chosen SIZE price too (add-ons stay full
+  // price) — same rule the server charges with. salePrice/percentage on the
+  // base is handled by productPrice above; this covers sized products.
+  const sizePct = activeDiscountPct(data);
+  const variantNow = selectedVariant ? applyPct(selectedVariant.price, sizePct) : null;
+
   // Guard `data.merchant` itself (not just openness) — an orphaned merchantId
   // would otherwise throw here.
   // A size REPLACES the base price; extras add on top. Same rule as the server.
   const unitPrice =
     Math.round(
-      ((selectedVariant ? selectedVariant.price : effectivePrice) +
+      ((variantNow != null ? variantNow : effectivePrice) +
         selectedAddons.reduce((sum, a) => sum + a.price, 0)) *
         100,
     ) / 100;
@@ -202,7 +208,12 @@ export function ProductDetailScreen() {
       merchantId: data.merchant.id,
       merchantNameAr: data.merchant.storeNameAr,
       quantity,
-      variant: selectedVariant,
+      // Carry the DISCOUNTED size price so the cart preview matches what the
+      // server will charge. The server re-prices from ids regardless.
+      variant:
+        selectedVariant && variantNow != null
+          ? { ...selectedVariant, price: variantNow }
+          : selectedVariant,
       addons: selectedAddons,
     });
     showToast({ title: 'تمت إضافة المنتج إلى السلة', tone: 'success' });
@@ -376,6 +387,7 @@ export function ProductDetailScreen() {
           <ProductOptions
             variants={variants}
             addons={addons}
+            discountPct={sizePct}
             variantId={variantId}
             addonIds={addonIds}
             onSelectVariant={setVariantId}
