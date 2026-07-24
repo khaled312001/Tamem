@@ -66,8 +66,8 @@ export const HomeSearchBar = memo(HomeSearchBarBase);
 
 const styles = StyleSheet.create({
   bar: {
-    height: 60,
-    borderRadius: 18,
+    height: 50,
+    borderRadius: 14,
     backgroundColor: colors.white,
     borderWidth: 1,
     borderColor: '#EFE7E2',

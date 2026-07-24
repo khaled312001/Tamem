@@ -7043,7 +7043,7 @@ if ($method === 'POST' && $path === '/orders/cart') {
     foreach ($merchants as $mi => $m) {
         $sum = 0.0; $lines[$mi] = [];
         foreach ((array) ($m['items'] ?? []) as $it) {
-            $ps = db()->prepare('SELECT id, merchantId, nameAr, price, salePrice, discount, isAvailable, isHidden, stock FROM `Product` WHERE id = ? LIMIT 1');
+            $ps = db()->prepare('SELECT id, merchantId, nameAr, price, salePrice, discount, saleEndsAt, isAvailable, isHidden, stock FROM `Product` WHERE id = ? LIMIT 1');
             $ps->execute([$it['productId'] ?? '']);
             $p = $ps->fetch();
             if (!$p) conflictErr('PRODUCT_UNAVAILABLE', 'أحد المنتجات لم يعد متاحاً');

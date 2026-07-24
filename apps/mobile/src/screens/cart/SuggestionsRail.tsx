@@ -157,7 +157,7 @@ const styles = StyleSheet.create({
     textAlign: 'auto',
     marginBottom: spacing.sm,
   },
-  listPad: { gap: spacing.sm, paddingVertical: 2 },
+  listPad: { flexGrow: 1, gap: spacing.sm, paddingVertical: 2 },
 
   card: {
     width: CARD_W,

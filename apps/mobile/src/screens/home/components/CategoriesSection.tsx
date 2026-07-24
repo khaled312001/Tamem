@@ -151,7 +151,9 @@ const styles = StyleSheet.create({
     fontFamily: fontFamilies.bodyBold,
   },
 
-  list: { gap: spacing.md, paddingVertical: 2 },
+  // flexGrow:1 fills the viewport so short content right-aligns (RTL start)
+  // instead of pinning to the left — the RN horizontal-list RTL quirk.
+  list: { flexGrow: 1, gap: spacing.md, paddingVertical: 2 },
   tileWrap: { width: TILE, alignItems: 'center' },
   tile: {
     width: TILE,

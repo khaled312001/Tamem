@@ -123,7 +123,7 @@ const styles = StyleSheet.create({
     includeFontPadding: false,
     textAlign: 'auto',
   },
-  listPad: { paddingHorizontal: spacing.lg, gap: spacing.md },
+  listPad: { flexGrow: 1, paddingHorizontal: spacing.lg, gap: spacing.md },
 
   tileWrap: { width: TILE, alignItems: 'center' },
   tile: {
