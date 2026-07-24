@@ -1,53 +1,31 @@
 // Top-level build file where you can add configuration options common to all sub-projects/modules.
 
 buildscript {
-    ext {
-        buildToolsVersion = findProperty('android.buildToolsVersion') ?: '35.0.0'
-        minSdkVersion = Integer.parseInt(findProperty('android.minSdkVersion') ?: '24')
-        compileSdkVersion = Integer.parseInt(findProperty('android.compileSdkVersion') ?: '35')
-        // Google Play refuses new uploads targeting below API 35 (in force since
-        // 2025-08-31). compileSdk is already 35, so this needs no dependency bump.
-        targetSdkVersion = Integer.parseInt(findProperty('android.targetSdkVersion') ?: '35')
-        kotlinVersion = findProperty('android.kotlinVersion') ?: '1.9.25'
-
-        ndkVersion = "26.1.10909125"
-    }
-    repositories {
-        google()
-        mavenCentral()
-    }
-    dependencies {
-        classpath('com.android.tools.build:gradle')
-        classpath('com.facebook.react:react-native-gradle-plugin')
-        classpath('org.jetbrains.kotlin:kotlin-gradle-plugin')
-        // Firebase Cloud Messaging — reads app/google-services.json at build time
-        // so the app can obtain an FCM device token for real push notifications.
-        classpath('com.google.gms:google-services:4.4.2')
-    }
+  repositories {
+    google()
+    mavenCentral()
+  }
+  dependencies {
+        classpath 'com.google.gms:google-services:4.4.1'
+    classpath('com.android.tools.build:gradle')
+    classpath('com.facebook.react:react-native-gradle-plugin')
+    classpath('org.jetbrains.kotlin:kotlin-gradle-plugin')
+  }
 }
-
-apply plugin: "com.facebook.react.rootproject"
 
 allprojects {
-    // Windows MAX_PATH (260) workaround: the deep node_modules build/.transforms
-    // paths (e.g. expo-location's jetified smartlocation dex) blow past the limit
-    // during mergeDexRelease. Redirect every subproject's build dir to a short
-    // root so transform paths stay well under 260 chars.
-    if (project != rootProject) {
-        layout.buildDirectory.set(new File("E:/tb/" + project.name))
-    }
-    repositories {
-        maven {
-            // All of React Native (JS, Obj-C sources, Android binaries) is installed from npm
-            url(new File(['node', '--print', "require.resolve('react-native/package.json')"].execute(null, rootDir).text.trim(), '../android'))
-        }
-        maven {
-            // Android JSC is installed from npm
-            url(new File(['node', '--print', "require.resolve('jsc-android/package.json', { paths: [require.resolve('react-native/package.json')] })"].execute(null, rootDir).text.trim(), '../dist'))
-        }
-
-        google()
-        mavenCentral()
-        maven { url 'https://www.jitpack.io' }
-    }
+  // Windows MAX_PATH (260) workaround: the deep pnpm node_modules build/.transforms
+  // paths blow past the limit during mergeDexRelease. Redirect every subproject's
+  // build dir to a short root so transform paths stay well under 260 chars.
+  if (project != rootProject) {
+    layout.buildDirectory.set(new File("E:/tb/" + project.name))
+  }
+  repositories {
+    google()
+    mavenCentral()
+    maven { url 'https://www.jitpack.io' }
+  }
 }
+
+apply plugin: "expo-root-project"
+apply plugin: "com.facebook.react.rootproject"
