@@ -5359,6 +5359,16 @@ function coerceForColumn($v, array $col) {
     if (is_array($v)) return json_encode($v, JSON_UNESCAPED_UNICODE);
     if (is_bool($v)) return $v ? 1 : 0;
     if (str_starts_with($type, 'tinyint(1)') && ($v === '1' || $v === '0')) return (int) $v;
+    // Datetime columns: the client sends an ISO string ("2026-07-23T22:00:00Z"),
+    // MySQL wants "2026-07-23 22:00:00" and the DB session is UTC. An empty value
+    // clears the column. Lets a timed offer's saleEndsAt round-trip correctly.
+    if (str_contains($type, 'datetime') || str_contains($type, 'timestamp')) {
+        if ($v === '' || $v === null) return null;
+        if (is_string($v) && strpos($v, 'T') !== false) {
+            $ts = strtotime($v);
+            if ($ts !== false) return gmdate('Y-m-d H:i:s', $ts);
+        }
+    }
     return $v;
 }
 
@@ -5655,6 +5665,15 @@ function hoursFor(array $ids): array {
 function effectiveUnitPrice(array $p): float {
     $list = (float) ($p['price'] ?? 0);
     if ($list <= 0) return 0.0;
+
+    // A timed offer that has ended is ignored — the price reverts to list, so a
+    // customer can never be charged (or shown) an expired discount. Same rule the
+    // client applies, so the two never disagree.
+    $endsAt = $p['saleEndsAt'] ?? null;
+    if ($endsAt !== null && $endsAt !== '' && strtotime((string) $endsAt) !== false
+        && strtotime((string) $endsAt) <= time()) {
+        return round($list, 2);
+    }
 
     // salePrice wins when both are set: an explicit number the admin typed
     // beats a percentage rule.
@@ -6470,7 +6489,10 @@ if ($method === 'GET' && $path === '/products') {
     // discount is a percentage.
     if (!empty($_GET['onSale'])) {
         $where .= ' AND ((p.salePrice IS NOT NULL AND p.salePrice > 0 AND p.salePrice < p.price)'
-                . ' OR (p.discount IS NOT NULL AND p.discount > 0))';
+                . ' OR (p.discount IS NOT NULL AND p.discount > 0))'
+                // A timed offer that has ended drops out of "عروض اليوم" on its
+                // own — no cron, the query just stops matching it.
+                . ' AND (p.saleEndsAt IS NULL OR p.saleEndsAt > NOW(3))';
     }
     $cst = db()->prepare('SELECT COUNT(*) n FROM `Product` p WHERE ' . $where);
     $cst->execute($args);

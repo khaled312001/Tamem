@@ -2234,10 +2234,19 @@ interface ProductFormState {
   sku: string;
   categoryName: string; // in-store section, e.g. بيتزا / مشويات
   discount: string; // kept as string so the field can be empty
+  saleEndsAt: string; // datetime-local (admin's local time); '' = permanent offer
   availableFrom: string;
   availableTo: string;
   imageUrls: string[];
   isAvailable: boolean;
+}
+
+/** UTC ISO → a datetime-local input value in the admin's local time. */
+function toLocalInput(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
 function initialFromProduct(product: Row | undefined, merchants: Row[]): ProductFormState {
@@ -2252,6 +2261,7 @@ function initialFromProduct(product: Row | undefined, merchants: Row[]): Product
       sku: '',
       categoryName: '',
       discount: '',
+      saleEndsAt: '',
       availableFrom: '',
       availableTo: '',
       imageUrls: [],
@@ -2274,6 +2284,7 @@ function initialFromProduct(product: Row | undefined, merchants: Row[]): Product
     sku: product.sku ?? '',
     categoryName: product.categoryName ?? '',
     discount: product.discount == null ? '' : String(product.discount),
+    saleEndsAt: product.saleEndsAt ? toLocalInput(String(product.saleEndsAt)) : '',
     availableFrom: product.availableFrom ?? '',
     availableTo: product.availableTo ?? '',
     imageUrls: gallery,
@@ -2320,6 +2331,10 @@ function ProductFormDialog({ mode, product, merchants, onClose }: ProductFormDia
       const n = Number(form.discount);
       if (Number.isFinite(n)) out.discount = n;
     }
+    // Offer expiry: always sent (even empty) so clearing it removes the time
+    // limit. The datetime-local value is the admin's local time; convert to a
+    // full UTC ISO so the server (UTC) compares it correctly.
+    out.saleEndsAt = form.saleEndsAt ? new Date(form.saleEndsAt).toISOString() : null;
     if (form.availableFrom) out.availableFrom = form.availableFrom;
     if (form.availableTo) out.availableTo = form.availableTo;
     return out;
@@ -2529,6 +2544,35 @@ function ProductFormDialog({ mode, product, merchants, onClose }: ProductFormDia
             />
           </Field>
         </div>
+
+        {/* Timed offer. When it passes, the discount is ignored everywhere and
+            the item leaves "عروض اليوم" automatically — no cron. */}
+        <Field
+          label="ينتهي العرض في"
+          hint={
+            form.saleEndsAt
+              ? 'بعد الوقت ده السعر يرجع لأصله تلقائياً ويختفي من عروض اليوم'
+              : 'اختياري — اتركه فارغاً لو العرض دائم (بدون مؤقّت)'
+          }
+        >
+          <div className="flex items-center gap-2">
+            <Input
+              type="datetime-local"
+              value={form.saleEndsAt}
+              onChange={(e) => setForm({ ...form, saleEndsAt: e.target.value })}
+            />
+            {form.saleEndsAt && (
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={() => setForm({ ...form, saleEndsAt: '' })}
+              >
+                مسح
+              </Button>
+            )}
+          </div>
+        </Field>
 
         <Field
           label="ساعات الإتاحة (يومياً)"
