@@ -150,9 +150,9 @@ export const SERVICE_CARD_COPY: Record<ServiceKey, { title: string; subtitle: st
  */
 /* eslint-disable @typescript-eslint/no-var-requires */
 export const SERVICE_IMAGE: Record<ServiceKey, number> = {
-  delivery: require('../../assets/service-delivery.png'),
-  shipping: require('../../assets/service-shipping.png'),
-  merchant: require('../../assets/service-merchant.png'),
+  delivery: require('../../assets/home/service-delivery.jpeg'),
+  shipping: require('../../assets/home/service-shipping.jpeg'),
+  merchant: require('../../assets/home/service-merchant.jpeg'),
 };
 
 // Unified orange/logo palette across the three service cards (per request),
