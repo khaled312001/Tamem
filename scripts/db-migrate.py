@@ -30,6 +30,10 @@ MIGRATIONS = [
     # change can never rewrite what the customer actually bought.
     ("OrderItem", "variantNameSnapshot", "varchar(120) NULL"),
     ("OrderItem", "addonsSnapshot", "longtext NULL"),
+    # Optional expiry for a product's discount — a timed "عرض اليوم". When it
+    # passes, the discount is ignored everywhere (price reverts) and the item
+    # drops out of the deals rail, with no cron job. NULL = no time limit.
+    ("Product", "saleEndsAt", "datetime(3) NULL"),
 ]
 
 # Tables created if absent.

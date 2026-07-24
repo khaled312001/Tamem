@@ -14,6 +14,7 @@ import { FlatList, Image, Pressable, StyleSheet, Text, View } from 'react-native
 
 import { LIST_PERF } from '../../../lib/listPerf';
 import { productPrice } from '../../../lib/productPrice';
+import { CountdownBadge } from '../../../components/CountdownBadge';
 import { SectionHeader } from './SectionHeader';
 import { colors, fontFamilies, radii, shadows, spacing } from '../../../theme/tokens';
 import type { HomeProduct } from '../homeData';
@@ -25,9 +26,11 @@ const IMG_H = 116;
 const ProductCard = memo(function ProductCard({
   product: p,
   onPress,
+  onExpire,
 }: {
   product: HomeProduct;
   onPress: () => void;
+  onExpire?: () => void;
 }) {
   const { now, was, off } = productPrice(p);
 
@@ -47,6 +50,13 @@ const ProductCard = memo(function ProductCard({
         {off > 0 && (
           <View style={styles.offBadge}>
             <Text style={styles.offText}>-{off}%</Text>
+          </View>
+        )}
+        {/* Timed offer — a live countdown over the image. When it hits zero the
+            parent refetches so the (now full-price) item leaves the rail. */}
+        {!!p.saleEndsAt && (
+          <View style={styles.timer}>
+            <CountdownBadge endsAt={p.saleEndsAt} onExpire={onExpire} />
           </View>
         )}
       </View>
@@ -75,14 +85,23 @@ interface Props {
   products: HomeProduct[];
   onPressProduct: (p: HomeProduct) => void;
   onPressSeeAll?: () => void;
+  /** Called when a timed offer on the rail expires, so the list can refetch. */
+  onProductExpire?: () => void;
 }
 
-function ProductRailBase({ title, subtitle, products, onPressProduct, onPressSeeAll }: Props) {
+function ProductRailBase({
+  title,
+  subtitle,
+  products,
+  onPressProduct,
+  onPressSeeAll,
+  onProductExpire,
+}: Props) {
   const renderItem = useCallback(
     ({ item }: { item: HomeProduct }) => (
-      <ProductCard product={item} onPress={() => onPressProduct(item)} />
+      <ProductCard product={item} onPress={() => onPressProduct(item)} onExpire={onProductExpire} />
     ),
-    [onPressProduct],
+    [onPressProduct, onProductExpire],
   );
   const keyExtractor = useCallback((p: HomeProduct) => p.id, []);
 
@@ -155,6 +174,7 @@ const styles = StyleSheet.create({
     paddingVertical: 3,
   },
   offText: { color: colors.white, fontSize: 11, fontFamily: fontFamilies.bodyExtraBold },
+  timer: { position: 'absolute', bottom: 6, insetInlineStart: 6 },
 
   name: {
     fontSize: 13,

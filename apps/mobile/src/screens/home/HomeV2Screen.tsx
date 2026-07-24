@@ -151,6 +151,11 @@ export function HomeV2Screen() {
     navigation.navigate('StoresList');
   }, [navigation, tick]);
 
+  const goDeals = useCallback(() => {
+    tick();
+    navigation.navigate('Deals');
+  }, [navigation, tick]);
+
   const onPressCategory = useCallback(
     (c: HomeCategory) => {
       tick();
@@ -363,6 +368,8 @@ export function HomeV2Screen() {
             subtitle="خصومات سارية الآن"
             products={dealProducts}
             onPressProduct={onPressProduct}
+            onPressSeeAll={goDeals}
+            onProductExpire={refetchAll}
           />
         </View>
 

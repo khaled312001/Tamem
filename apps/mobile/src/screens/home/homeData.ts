@@ -63,6 +63,8 @@ export interface HomeProduct {
   salePrice?: number | string | null;
   /** Percentage discount, an alternative knob to salePrice. */
   discount?: number | string | null;
+  /** Optional expiry for a timed offer — drives the countdown on deal cards. */
+  saleEndsAt?: string | null;
   imageUrl?: string | null;
   merchant?: { id: string; storeNameAr: string };
 }

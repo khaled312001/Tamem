@@ -18,6 +18,8 @@ export interface PricedProduct {
   price: number | string;
   salePrice?: number | string | null;
   discount?: number | string | null;
+  /** Optional expiry for the discount (ISO). Past → the discount is ignored. */
+  saleEndsAt?: string | null;
 }
 
 export interface ProductPrice {
@@ -34,6 +36,15 @@ export function productPrice(p: PricedProduct): ProductPrice {
   const list = Number(p.price ?? 0);
   if (!Number.isFinite(list) || list <= 0) {
     return { now: 0, was: null, off: 0, hasDiscount: false };
+  }
+
+  // A timed offer that has ended reverts to the list price — the same rule the
+  // server applies when it prices the order, so the two never disagree.
+  if (p.saleEndsAt) {
+    const ends = Date.parse(p.saleEndsAt);
+    if (Number.isFinite(ends) && ends <= Date.now()) {
+      return { now: list, was: null, off: 0, hasDiscount: false };
+    }
   }
 
   // salePrice wins when both are set: it's an explicit number the admin typed,
