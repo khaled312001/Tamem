@@ -34,6 +34,7 @@ interface Merchant {
   addressLine: string;
   rating?: number | null;
   isOpen: boolean;
+  logoUrl?: string | null;
   category?: { id: string; nameAr: string };
 }
 
@@ -396,7 +397,11 @@ export function StoresListScreen() {
               style={({ pressed }) => [styles.card, pressed && styles.pressed]}
             >
               <View style={styles.cardIcon}>
-                <Store size={22} color={colors.brand.red} />
+                {item.logoUrl ? (
+                  <Image source={{ uri: item.logoUrl }} style={styles.cardImg} resizeMode="cover" />
+                ) : (
+                  <Store size={22} color={colors.brand.red} />
+                )}
               </View>
               <View style={{ flex: 1 }}>
                 <Text style={styles.cardTitle}>{item.storeNameAr}</Text>

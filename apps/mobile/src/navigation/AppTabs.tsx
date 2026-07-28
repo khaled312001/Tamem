@@ -81,14 +81,14 @@ function HomeCircle({ focused }: { focused: boolean }) {
 
 const homeStyles = StyleSheet.create({
   circle: {
-    width: 52,
-    height: 52,
-    borderRadius: 26,
+    width: 46,
+    height: 46,
+    borderRadius: 23,
     backgroundColor: colors.brand.red,
     alignItems: 'center',
     justifyContent: 'center',
-    marginTop: -18, // lift it above the bar so it reads as a centre anchor
-    borderWidth: 4,
+    marginTop: -14, // lift it above the bar so it reads as a centre anchor
+    borderWidth: 3,
     borderColor: colors.white,
     ...(Platform.OS === 'web'
       ? { boxShadow: '0 6px 16px rgba(224,48,30,0.4)' }
@@ -147,8 +147,8 @@ export function AppTabs() {
             borderTopColor: colors.line,
             backgroundColor: colors.white,
             // Grown with the label line-height so the taller text still fits.
-            height: 74 + bottomInset,
-            paddingTop: 8,
+            height: 60 + bottomInset,
+            paddingTop: 6,
             paddingBottom: bottomInset,
             // Let the raised centre Home circle spill above the bar edge.
             overflow: 'visible',

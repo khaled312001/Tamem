@@ -12,7 +12,7 @@ import { useNavigation, useRoute, type RouteProp } from '@react-navigation/nativ
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useQuery } from '@tanstack/react-query';
 import { LinearGradient } from 'expo-linear-gradient';
-import { Clock, Minus, Package, Plus, ShoppingCart, Star, Store } from 'lucide-react-native';
+import { Clock, Minus, Package, Plus, ShoppingCart, Star, Store, Zap } from 'lucide-react-native';
 import { useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
@@ -211,8 +211,7 @@ export function ProductDetailScreen() {
     data.isAvailable && !data.isHidden && (data.stock == null || data.stock > 0);
   const canAdd = productInStock && merchantOpen;
 
-  const onAddToCart = () => {
-    if (!canAdd) return;
+  const pushToCart = () => {
     addToCart({
       product: {
         id: data.id,
@@ -231,7 +230,20 @@ export function ProductDetailScreen() {
           : selectedVariant,
       addons: selectedAddons,
     });
+  };
+
+  const onAddToCart = () => {
+    if (!canAdd) return;
+    pushToCart();
     showToast({ title: 'تمت إضافة المنتج إلى السلة', tone: 'success' });
+  };
+
+  // "اطلب الآن" — a quick order for JUST this item: add it, then jump straight
+  // to checkout, skipping the cart when the customer only wants this product.
+  const onOrderNow = () => {
+    if (!canAdd) return;
+    pushToCart();
+    navigation.navigate('CartCheckout');
   };
 
   const rating = data.merchant?.rating != null ? Number(data.merchant.rating) : null;
@@ -480,6 +492,32 @@ export function ProductDetailScreen() {
       */}
       <View style={styles.bottomBar}>
         <View style={styles.bottomInner}>
+          {/* Quick order — skips the cart and goes straight to checkout for
+              customers who only want this one item. */}
+          <Pressable
+            onPress={onOrderNow}
+            disabled={!canAdd}
+            style={({ pressed }) => [
+              styles.orderNowBtn,
+              !canAdd && styles.orderNowDisabled,
+              pressed && { opacity: 0.9 },
+            ]}
+            accessibilityRole="button"
+            accessibilityLabel="اطلب الآن"
+          >
+            <Zap
+              size={18}
+              color={canAdd ? colors.white : colors.text.muted}
+              fill={canAdd ? colors.white : 'transparent'}
+            />
+            <Text
+              style={[styles.orderNowLabel, !canAdd && { color: colors.text.muted }]}
+              numberOfLines={1}
+            >
+              اطلب الآن
+            </Text>
+          </Pressable>
+
           <Pressable
             onPress={onAddToCart}
             disabled={!canAdd}
@@ -493,9 +531,9 @@ export function ProductDetailScreen() {
               end={{ x: 1, y: 0 }}
               style={styles.addBar}
             >
-              {canAdd && <ShoppingCart size={20} color={colors.white} />}
+              {canAdd && <ShoppingCart size={18} color={colors.white} />}
               <Text style={styles.addLabel} numberOfLines={1}>
-                {!productInStock ? 'غير متاح' : !merchantOpen ? 'المتجر مغلق' : 'أضف إلى السلة'}
+                {!productInStock ? 'غير متاح' : !merchantOpen ? 'المتجر مغلق' : 'السلة'}
               </Text>
               {canAdd && (
                 <Text style={styles.addPrice}>
@@ -795,7 +833,23 @@ const styles = StyleSheet.create({
     fontFamily: fontFamilies.bodyBold,
     color: colors.ink,
   },
-  addWrap: { flex: 1 },
+  addWrap: { flex: 1.05 },
+  orderNowBtn: {
+    flex: 0.85,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    height: 56,
+    borderRadius: radii.lg,
+    backgroundColor: colors.brand.dark,
+  },
+  orderNowDisabled: { backgroundColor: colors.line },
+  orderNowLabel: {
+    color: colors.white,
+    fontFamily: fontFamilies.bodyExtraBold,
+    fontSize: fontSizes.md,
+  },
   addBar: {
     flexDirection: 'row',
     alignItems: 'center',

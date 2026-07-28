@@ -85,18 +85,26 @@ export function GoogleSignInButton(props: GoogleSignInButtonProps) {
 function ConfiguredGoogleButton({ label, onError, role, onResolveRole }: GoogleSignInButtonProps) {
   const loginWithGoogle = useAuth((s) => s.loginWithGoogle);
   const [loading, setLoading] = useState(false);
+  const [configError, setConfigError] = useState(false);
 
   // Configure once. Cheap + idempotent; must run before signIn().
   useEffect(() => {
-    GoogleSignin.configure({
-      webClientId: WEB_CLIENT_ID,
-      iosClientId: IOS_CLIENT_ID,
-      // We only need identity — asking for the id token keeps the consent
-      // screen to name/email/picture.
-      scopes: ['profile', 'email'],
-      offlineAccess: false,
-    });
+    try {
+      GoogleSignin.configure({
+        webClientId: WEB_CLIENT_ID,
+        iosClientId: IOS_CLIENT_ID,
+        // We only need identity — asking for the id token keeps the consent
+        // screen to name/email/picture.
+        scopes: ['profile', 'email'],
+        offlineAccess: false,
+      });
+    } catch (err) {
+      console.warn('[GoogleSignIn] configure failed:', err);
+      setConfigError(true);
+    }
   }, []);
+
+  if (configError) return <DisabledGoogleButton label={label} />;
 
   const onPress = async () => {
     if (loading) return;
@@ -147,6 +155,14 @@ function ConfiguredGoogleButton({ label, onError, role, onResolveRole }: GoogleS
       }
       if (e?.code === statusCodes.PLAY_SERVICES_NOT_AVAILABLE) {
         onError?.('خدمات Google Play غير متاحة على هذا الجهاز');
+      } else if (e?.message?.includes('DEVELOPER_ERROR') || e?.code === '10') {
+        // DEVELOPER_ERROR (status code 10) = SHA-1 / client ID mismatch.
+        // Give the user a friendlier message instead of the raw native error.
+        onError?.('خطأ في إعدادات تسجيل الدخول بـ Google. يرجى التواصل مع الدعم.');
+        console.error(
+          '[GoogleSignIn] DEVELOPER_ERROR — check google-services.json oauth_client, SHA-1, and webClientId.',
+          err,
+        );
       } else {
         onError?.(err instanceof Error ? err.message : 'فشل تسجيل الدخول بـ Google');
       }

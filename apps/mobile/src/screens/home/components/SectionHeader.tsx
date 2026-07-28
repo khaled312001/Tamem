@@ -80,10 +80,10 @@ const styles = StyleSheet.create({
   },
   titleCol: { flex: 1, minWidth: 0 },
   title: {
-    fontSize: 18,
+    fontSize: 16,
     color: colors.brand.dark,
     fontFamily: fontFamilies.bodyExtraBold,
-    lineHeight: 27,
+    lineHeight: 23,
     includeFontPadding: false,
     textAlign: 'auto',
   },

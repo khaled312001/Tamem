@@ -20,7 +20,7 @@ import { colors, fontFamilies, radii, shadows, spacing } from '../../../theme/to
 import type { HomeCategory, Merchant } from '../homeData';
 import { SectionHeader } from './SectionHeader';
 
-const TILE = 104;
+const TILE = 84;
 
 // Unified brand-orange theme (per request: all icons orange like the logo).
 // Two very close warm tints keep a row from looking like one flat block while
@@ -140,7 +140,7 @@ const styles = StyleSheet.create({
     marginBottom: spacing.md,
   },
   sectionTitle: {
-    fontSize: 18,
+    fontSize: 16,
     color: colors.brand.dark,
     fontFamily: fontFamilies.bodyExtraBold,
     textAlign: 'auto',
