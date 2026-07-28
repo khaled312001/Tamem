@@ -613,6 +613,17 @@ export class TamemClient {
   async adminListCustomers(params?: Record<string, unknown>): Promise<Paginated<unknown>> {
     return this.requestPaginated({ method: 'GET', url: '/admin/customers', params });
   }
+  /** Whole-table KPI counts for the customers page cards. */
+  async adminCustomerStats(): Promise<{
+    total: number;
+    active: number;
+    inactive: number;
+    withOrders: number;
+    withoutOrders: number;
+    new30d: number;
+  }> {
+    return this.request({ method: 'GET', url: '/admin/customers/stats' });
+  }
   /** All distinct customer cities (server-wide, not just the current page). */
   async adminCustomerCities(): Promise<string[]> {
     return this.request({ method: 'GET', url: '/admin/customers/cities' });
