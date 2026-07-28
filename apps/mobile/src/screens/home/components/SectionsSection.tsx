@@ -20,7 +20,7 @@ import { LIST_PERF } from '../../../lib/listPerf';
 import { colors, fontFamilies, radii, shadows, spacing } from '../../../theme/tokens';
 import { SectionHeader } from './SectionHeader';
 
-const TILE = 112;
+const TILE = 90;
 
 export interface HomeProductSection {
   id: string;
@@ -116,10 +116,10 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.lg,
   },
   sectionTitle: {
-    fontSize: 18,
+    fontSize: 16,
     color: colors.brand.dark,
     fontFamily: fontFamilies.headingBold,
-    lineHeight: 28,
+    lineHeight: 23,
     includeFontPadding: false,
     textAlign: 'auto',
   },

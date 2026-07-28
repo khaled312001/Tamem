@@ -18,8 +18,8 @@ import { QuickOrderSheet } from './QuickOrderSheet';
 
 import { colors, fontFamilies, spacing } from '../theme/tokens';
 
-const LAMP_SIZE = 76;
-const GLOW_PAD = 18; // halo extends this far past the lamp on every side
+const LAMP_SIZE = 54;
+const GLOW_PAD = 12; // halo extends this far past the lamp on every side
 const useNative = Platform.OS !== 'web';
 
 // eslint-disable-next-line @typescript-eslint/no-var-requires
@@ -159,7 +159,7 @@ export function QuickOrderFAB() {
 const styles = StyleSheet.create({
   layer: {
     position: 'absolute',
-    bottom: 24,
+    bottom: 18,
     insetInlineStart: spacing.md, // RTL: hugs the right side in Arabic
     alignItems: 'center',
     width: LAMP_SIZE + GLOW_PAD * 2,
@@ -209,7 +209,7 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: colors.white,
     borderRadius: LAMP_SIZE / 2,
-    borderWidth: 3,
+    borderWidth: 2,
     borderColor: '#FFE082',
     alignItems: 'center',
     justifyContent: 'center',

@@ -15,7 +15,7 @@ import { I18nManager, Image, Pressable, StyleSheet, Text, View } from 'react-nat
 import { colors, fontFamilies, gradients, radii, shadows, spacing } from '../../../theme/tokens';
 import { HomeSearchBar } from './HomeSearchBar';
 
-const AVATAR = 44;
+const AVATAR = 38;
 // RN already lays `flexDirection: 'row'` right-to-left under I18nManager RTL;
 // adding 'row-reverse' would flip it a second time. Plain 'row' is correct.
 const ROW = 'row' as const;
@@ -231,27 +231,27 @@ const styles = StyleSheet.create({
   badgeText: { color: colors.brand.dark, fontSize: 10, fontFamily: fontFamilies.bodyExtraBold },
 
   greeting: {
-    marginTop: spacing.md,
-    fontSize: 20,
+    marginTop: spacing.sm,
+    fontSize: 17,
     color: colors.white,
     fontFamily: fontFamilies.bodyExtraBold,
     alignSelf: 'stretch',
     textAlign: 'auto',
-    lineHeight: 28,
+    lineHeight: 23,
     includeFontPadding: false,
   },
   greetingName: { color: NAME_GOLD },
   subtitle: {
     marginTop: 1,
-    fontSize: 13,
+    fontSize: 11,
     color: 'rgba(255,255,255,0.9)',
     fontFamily: fontFamilies.body,
     alignSelf: 'stretch',
     textAlign: 'auto',
-    lineHeight: 19,
+    lineHeight: 16,
     includeFontPadding: false,
   },
 
-  searchWrap: { marginTop: spacing.md },
+  searchWrap: { marginTop: spacing.sm },
   pressed: { opacity: 0.7 },
 });

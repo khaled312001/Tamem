@@ -64,11 +64,12 @@ function ServiceCardBase({ title, subtitle, Icon, image, bg, fg, onPress }: Prop
 export const ServiceCard = memo(ServiceCardBase);
 
 const styles = StyleSheet.create({
-  // Full-image tile — square so the square artwork isn't cropped.
+  // Full-image tile — slightly wider than tall so the boxes read smaller;
+  // the square artwork keeps a small safe margin so this crop is invisible.
   imageCard: {
     flex: 1,
-    aspectRatio: 1,
-    borderRadius: 18,
+    aspectRatio: 1.12,
+    borderRadius: 16,
     overflow: 'hidden',
     backgroundColor: colors.white,
     ...shadows.sm,
@@ -77,24 +78,24 @@ const styles = StyleSheet.create({
 
   card: {
     flex: 1,
-    height: 158,
-    borderRadius: 18,
-    padding: spacing.md,
+    height: 126,
+    borderRadius: 16,
+    padding: spacing.sm,
     alignItems: I18nManager.isRTL ? 'flex-end' : 'flex-start',
     justifyContent: 'flex-start',
     ...shadows.sm,
   },
   iconWrap: {
-    width: 72,
-    height: 72,
-    borderRadius: 36,
+    width: 54,
+    height: 54,
+    borderRadius: 27,
     alignItems: 'center',
     justifyContent: 'center',
     alignSelf: 'center',
-    marginBottom: spacing.sm,
+    marginBottom: spacing.xs,
   },
   title: {
-    fontSize: 20,
+    fontSize: 16,
     fontFamily: fontFamilies.bodyExtraBold,
     textAlign: 'right',
     writingDirection: 'rtl',
@@ -102,7 +103,7 @@ const styles = StyleSheet.create({
   },
   subtitle: {
     marginTop: 1,
-    fontSize: 13,
+    fontSize: 11,
     color: colors.brand.gray,
     fontFamily: fontFamilies.body,
     textAlign: 'right',

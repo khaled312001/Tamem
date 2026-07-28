@@ -62,7 +62,7 @@ export const loginSchema = z
   .object({
     identifier: loginIdentifierSchema.optional(),
     phone: z.string().optional(),
-    password: z.string().min(1),
+    password: z.string().min(1, 'أدخل كلمة المرور'),
   })
   .transform((v) => {
     // Backwards-compat: older clients still POST { phone, password }.

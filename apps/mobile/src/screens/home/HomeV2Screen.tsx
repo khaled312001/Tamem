@@ -438,7 +438,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.lg,
     paddingBottom: BOTTOM_GAP,
   },
-  section: { marginTop: spacing.xl },
+  section: { marginTop: spacing.lg },
 
   errorBox: {
     borderRadius: radii.lg,
