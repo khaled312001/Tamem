@@ -43,6 +43,11 @@ import { cn } from '../lib/utils.js';
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Row = any;
 
+// isActive can arrive as a real boolean, or (from the PHP shim's tinyint) as
+// 1/0 or "1"/"0". Treat anything that isn't an explicit off-value as active, so
+// the status column is correct regardless of how the API serialises the flag.
+const accountActive = (v: unknown): boolean => v !== false && v !== 0 && v !== '0' && v != null;
+
 interface SavedAddress {
   id: string;
   label: string;
@@ -547,7 +552,7 @@ export function CustomersPage() {
               </thead>
               <tbody>
                 {rows.map((c) => {
-                  const active = c.isActive !== false;
+                  const active = accountActive(c.isActive);
                   return (
                     <tr
                       key={c.id}
@@ -835,7 +840,7 @@ function CustomerDetailDialog({
 
   const orders = (data?.customerOrders ?? []) as Row[];
   const lastOrder = orders[0];
-  const active = data?.isActive !== false;
+  const active = accountActive(data?.isActive);
 
   const toggleMut = useMutation({
     mutationFn: (isActive: boolean) => api.adminUpdateCustomer(customerId, { isActive }),

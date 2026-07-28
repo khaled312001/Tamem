@@ -4185,7 +4185,10 @@ if ($method === 'GET' && preg_match('#^/admin/customers/([^/]+)$#', $path, $m)) 
     $us->execute([$cid]);
     $cust = $us->fetch();
     if (!$cust) jsonErr('العميل غير موجود', 404, 'NOT_FOUND');
-    $cust = jsonizeRow($cust);
+    // Cast tinyint(1) flags to real JSON booleans — otherwise the dashboard's
+    // `isActive !== false` check never matches the string "0"/"1" and every
+    // customer renders as active.
+    $cust = boolCast(jsonizeRow($cust), ['isActive', 'isPhoneVerified']);
 
     $os = db()->prepare("SELECT id, orderNumber, status, category, finalPrice, quotedPrice, paymentStatus, createdAt FROM `Order` WHERE customerId = ? ORDER BY createdAt DESC LIMIT 30");
     $os->execute([$cid]);
@@ -4285,7 +4288,10 @@ if ($method === 'GET' && preg_match('#^/admin/(customers)$#', $path, $m)) {
     $st->execute($args);
     $rows = [];
     foreach ($st->fetchAll() as $r) {
-        $row = jsonizeRow($r);
+        // isActive / isPhoneVerified are tinyint(1) — cast to real booleans so
+        // the dashboard status column reflects the true state (a raw "0"/"1"
+        // string never equals JS boolean `false`, so every row looked active).
+        $row = boolCast(jsonizeRow($r), ['isActive', 'isPhoneVerified']);
         $cnt = (int) $r['orderCount'];
         // Nested _count so the existing UI (c._count.customerOrders) keeps working,
         // plus flat fields for the redesigned table.
