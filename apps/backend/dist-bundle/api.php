@@ -4155,6 +4155,28 @@ if ($method === 'GET' && $path === '/admin/customers/cities') {
     $rows = db()->query("SELECT DISTINCT city FROM `User` WHERE role = 'CUSTOMER' AND city IS NOT NULL AND city <> '' ORDER BY city")->fetchAll(PDO::FETCH_COLUMN);
     jsonOk(array_values($rows));
 }
+// GET /admin/customers/stats — totals for the KPI cards (whole table, not the
+// current page). Mirrors /admin/merchants/stats. MUST precede the
+// /admin/customers/:id catch below, which would otherwise match "stats".
+if ($method === 'GET' && $path === '/admin/customers/stats') {
+    authUser();
+    $row = db()->query("SELECT
+        COUNT(*) AS total,
+        SUM(CASE WHEN u.isActive = 1 THEN 1 ELSE 0 END) AS active,
+        SUM(CASE WHEN u.isActive = 1 THEN 0 ELSE 1 END) AS inactive,
+        SUM(CASE WHEN (SELECT COUNT(*) FROM `Order` o WHERE o.customerId = u.id) > 0 THEN 1 ELSE 0 END) AS with_orders,
+        SUM(CASE WHEN (SELECT COUNT(*) FROM `Order` o WHERE o.customerId = u.id) > 0 THEN 0 ELSE 1 END) AS without_orders,
+        SUM(CASE WHEN u.createdAt >= (NOW() - INTERVAL 30 DAY) THEN 1 ELSE 0 END) AS new_30d
+      FROM `User` u WHERE u.role = 'CUSTOMER'")->fetch();
+    jsonOk([
+        'total'         => (int) ($row['total'] ?? 0),
+        'active'        => (int) ($row['active'] ?? 0),
+        'inactive'      => (int) ($row['inactive'] ?? 0),
+        'withOrders'    => (int) ($row['with_orders'] ?? 0),
+        'withoutOrders' => (int) ($row['without_orders'] ?? 0),
+        'new30d'        => (int) ($row['new_30d'] ?? 0),
+    ]);
+}
 if ($method === 'GET' && preg_match('#^/admin/customers/([^/]+)$#', $path, $m)) {
     authUser();
     $cid = $m[1];

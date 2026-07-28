@@ -1,5 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
+  ArrowDown,
+  ArrowUp,
+  ArrowUpDown,
   Ban,
   CheckCircle2,
   Filter,
@@ -10,22 +13,32 @@ import {
   Plus,
   Save,
   Search,
+  ShieldCheck,
+  ShoppingBag,
   Trash2,
   Upload,
+  UserPlus,
   Users,
+  UserX,
   X,
 } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
 
 import { StatusBadge } from '../components/ui/Badge.js';
+import { Button } from '../components/ui/Button.js';
+import { ConfirmDialog } from '../components/ui/ConfirmDialog.js';
 import { Dialog } from '../components/ui/Dialog.js';
 import { Input } from '../components/ui/Input.js';
+import { PageHeader } from '../components/ui/PageHeader.js';
 import { PhoneInput } from '../components/ui/PhoneInput.js';
 import { Pagination } from '../components/ui/Pagination.js';
 import { EmptyState, TableSkeleton } from '../components/ui/Skeleton.js';
+import { StatCard } from '../components/ui/StatCard.js';
 import { api } from '../lib/api.js';
+import { formatCount, formatDate, formatDateTime } from '../lib/format.js';
 import { uploadFile } from '../lib/uploadFile.js';
+import { cn } from '../lib/utils.js';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Row = any;
@@ -89,16 +102,61 @@ function Avatar({
         loading="lazy"
         decoding="async"
         onError={() => setBroken(true)}
-        className={`${box} object-cover border border-border bg-white`}
+        className={`${box} object-cover border border-border bg-card`}
       />
     );
   }
   return <span className={`${box} ${tintFor(name || '?')}`}>{letter}</span>;
 }
 
-const fmtDate = (v?: string | null) => (v ? new Date(v).toLocaleDateString('ar-EG') : '—');
-const fmtDateTime = (v?: string | null) =>
-  v ? new Date(v).toLocaleString('ar-EG', { dateStyle: 'medium', timeStyle: 'short' }) : '—';
+/** On/off toggle — the primary control for enabling/disabling an account. RTL-safe
+ *  via logical inset properties, so the knob sits on the correct side either way. */
+function Switch({
+  on,
+  onClick,
+  disabled,
+  size = 'md',
+}: {
+  on: boolean;
+  onClick: () => void;
+  disabled?: boolean;
+  size?: 'sm' | 'md';
+}) {
+  const track = size === 'sm' ? 'w-9 h-5' : 'w-11 h-6';
+  const knob = size === 'sm' ? 'w-4 h-4' : 'w-5 h-5';
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={on}
+      disabled={disabled}
+      onClick={onClick}
+      className={cn(
+        'relative inline-flex items-center rounded-full transition-colors shrink-0 disabled:opacity-50',
+        track,
+        on ? 'bg-emerald-500' : 'bg-zinc-300 dark:bg-zinc-600',
+      )}
+      title={on ? 'مفعّل — اضغط للتعطيل' : 'معطّل — اضغط للتفعيل'}
+    >
+      <span
+        className={cn('absolute top-1/2 -translate-y-1/2 rounded-full bg-white shadow', knob)}
+        style={on ? { insetInlineEnd: 2 } : { insetInlineStart: 2 }}
+      />
+    </button>
+  );
+}
+
+function StatusPill({ active }: { active: boolean }) {
+  return active ? (
+    <span className="inline-flex items-center gap-1 text-xs font-bold px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-400">
+      <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" /> نشط
+    </span>
+  ) : (
+    <span className="inline-flex items-center gap-1 text-xs font-bold px-2 py-0.5 rounded-full bg-red-100 text-red-700 dark:bg-red-500/15 dark:text-red-400">
+      <span className="w-1.5 h-1.5 rounded-full bg-red-500" /> معطّل
+    </span>
+  );
+}
 
 interface Filters {
   status: '' | 'active' | 'inactive';
@@ -109,6 +167,8 @@ interface Filters {
 }
 const EMPTY_FILTERS: Filters = { status: '', hasOrders: '', city: '', from: '', to: '' };
 
+type SortCol = 'createdAt' | 'name' | 'orders' | 'lastActivity';
+
 export function CustomersPage() {
   const qc = useQueryClient();
   const [search, setSearch] = useState('');
@@ -117,11 +177,16 @@ export function CustomersPage() {
   const [checked, setChecked] = useState<Set<string>>(new Set());
   const [showFilters, setShowFilters] = useState(false);
   const [filters, setFilters] = useState<Filters>(EMPTY_FILTERS);
-  // Real paging: this screen used to ask for one capped page of 100 with no way
-  // to reach row 101. Page resets whenever the search or a filter changes.
+  const [sort, setSort] = useState<SortCol>('createdAt');
+  const [dir, setDir] = useState<'asc' | 'desc'>('desc');
+  // Confirmation state for the destructive/impactful actions.
+  const [confirmDisable, setConfirmDisable] = useState<Row | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState<Row | null>(null);
+  const [confirmBulk, setConfirmBulk] = useState<'delete' | 'deactivate' | null>(null);
+  // Real paging: page resets whenever the search or a filter changes.
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
-  useEffect(() => setPage(1), [debounced, filters, pageSize]);
+  useEffect(() => setPage(1), [debounced, filters, pageSize, sort, dir]);
 
   useEffect(() => {
     const t = setTimeout(() => setDebounced(search), 300);
@@ -136,10 +201,12 @@ export function CustomersPage() {
       city: filters.city || undefined,
       from: filters.from || undefined,
       to: filters.to || undefined,
+      sort,
+      dir,
       page,
       pageSize,
     }),
-    [debounced, filters, page, pageSize],
+    [debounced, filters, sort, dir, page, pageSize],
   );
 
   const { data, isLoading, isFetching } = useQuery({
@@ -148,8 +215,16 @@ export function CustomersPage() {
     placeholderData: (prev) => prev,
   });
   const total = data?.pagination.total ?? 0;
-
   const rows = (data?.items ?? []) as Row[];
+
+  // Whole-table KPI counts — near-static, refreshed on mutation, not polled.
+  const { data: stats } = useQuery({
+    queryKey: ['admin', 'customers', 'stats'],
+    queryFn: () => api.adminCustomerStats(),
+    staleTime: 300_000,
+    refetchInterval: false,
+  });
+
   const activeFilterCount =
     (filters.status ? 1 : 0) +
     (filters.hasOrders ? 1 : 0) +
@@ -158,8 +233,7 @@ export function CustomersPage() {
     (filters.to ? 1 : 0);
 
   // City options come from a server-wide DISTINCT query so the dropdown lists
-  // every city, not just the ones on the current page. Falls back to
-  // page-derived cities if the endpoint is unavailable.
+  // every city, not just the ones on the current page.
   const { data: allCities } = useQuery({
     queryKey: ['admin', 'customers', 'cities'],
     queryFn: () => api.adminCustomerCities(),
@@ -185,7 +259,7 @@ export function CustomersPage() {
     mutationFn: ({ id, isActive }: { id: string; isActive: boolean }) =>
       api.adminUpdateCustomer(id, { isActive }),
     onSuccess: (_r, v) => {
-      toast.success(v.isActive ? 'تم تفعيل العميل' : 'تم تعطيل العميل');
+      toast.success(v.isActive ? 'تم تفعيل الحساب' : 'تم تعطيل الحساب');
       invalidate();
     },
     onError: (err: Error) => toast.error(err.message),
@@ -204,7 +278,7 @@ export function CustomersPage() {
       }
     },
     onSuccess: (_r, v) => {
-      toast.success(`تم تنفيذ الإجراء على ${v.ids.length} عميل`);
+      toast.success(`تم تنفيذ الإجراء على ${formatCount(v.ids.length)} عميل`);
       setChecked(new Set());
       invalidate();
     },
@@ -217,26 +291,88 @@ export function CustomersPage() {
   const toggleOne = (id: string) =>
     setChecked((s) => {
       const n = new Set(s);
-      n.has(id) ? n.delete(id) : n.add(id);
+      if (n.has(id)) n.delete(id);
+      else n.add(id);
       return n;
     });
 
+  const onSort = (col: SortCol) => {
+    if (sort === col) setDir((d) => (d === 'asc' ? 'desc' : 'asc'));
+    else {
+      setSort(col);
+      setDir('desc');
+    }
+  };
+
+  // "جديد (٣٠ يوم)" card sets the registration lower-bound to 30 days ago.
+  const thirtyDaysAgo = () => new Date(Date.now() - 30 * 86_400_000).toISOString().slice(0, 10);
+
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between flex-wrap gap-3">
-        <div>
-          <h1 className="text-2xl font-black text-brand-dark inline-flex items-center gap-2">
-            <Users className="w-6 h-6" /> العملاء
-          </h1>
-          <p className="text-sm text-muted-foreground mt-1">
-            {data?.pagination.total ?? 0} عميل مسجّل
-            {isFetching && <Loader2 className="inline w-3 h-3 animate-spin ms-2 align-middle" />}
-          </p>
-        </div>
+      <PageHeader
+        title="العملاء"
+        icon={Users}
+        subtitle={
+          <span className="inline-flex items-center gap-2">
+            {formatCount(stats?.total ?? total)} عميل مسجّل
+            {isFetching && <Loader2 className="inline w-3 h-3 animate-spin" />}
+          </span>
+        }
+      />
+
+      {/* ── KPI cards (whole table) double as one-click filters ── */}
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
+        <StatBtn onClick={() => setFilters(EMPTY_FILTERS)}>
+          <StatCard
+            label="إجمالي العملاء"
+            value={formatCount(stats?.total ?? 0)}
+            icon={Users}
+            tone="zinc"
+          />
+        </StatBtn>
+        <StatBtn onClick={() => setFilters({ ...EMPTY_FILTERS, status: 'active' })}>
+          <StatCard
+            label="نشط"
+            value={formatCount(stats?.active ?? 0)}
+            icon={CheckCircle2}
+            tone="green"
+          />
+        </StatBtn>
+        <StatBtn onClick={() => setFilters({ ...EMPTY_FILTERS, status: 'inactive' })}>
+          <StatCard
+            label="معطّل"
+            value={formatCount(stats?.inactive ?? 0)}
+            icon={UserX}
+            tone="red"
+            emphasis={(stats?.inactive ?? 0) > 0}
+          />
+        </StatBtn>
+        <StatBtn onClick={() => setFilters({ ...EMPTY_FILTERS, hasOrders: 'yes' })}>
+          <StatCard
+            label="لديه طلبات"
+            value={formatCount(stats?.withOrders ?? 0)}
+            icon={ShoppingBag}
+            tone="blue"
+          />
+        </StatBtn>
+        <StatBtn
+          onClick={() => {
+            setFilters({ ...EMPTY_FILTERS, from: thirtyDaysAgo() });
+            setSort('createdAt');
+            setDir('desc');
+          }}
+        >
+          <StatCard
+            label="جديد (٣٠ يوم)"
+            value={formatCount(stats?.new30d ?? 0)}
+            icon={UserPlus}
+            tone="purple"
+          />
+        </StatBtn>
       </div>
 
       {/* Search + filter toggle */}
-      <div className="bg-white rounded-xl border border-border p-4 space-y-3">
+      <div className="sticky top-16 z-20 bg-card rounded-xl border border-border p-3 md:p-4 space-y-3 shadow-sm">
         <div className="flex items-center gap-2 flex-wrap">
           <div className="relative flex-1 min-w-[240px]">
             <Search className="absolute top-1/2 -translate-y-1/2 start-3 w-4 h-4 text-muted-foreground" />
@@ -250,11 +386,12 @@ export function CustomersPage() {
           </div>
           <button
             onClick={() => setShowFilters((s) => !s)}
-            className={`inline-flex items-center gap-2 px-3 py-2 rounded-lg border text-sm font-bold transition ${
+            className={cn(
+              'inline-flex items-center gap-2 px-3 py-2 rounded-lg border text-sm font-bold transition',
               showFilters || activeFilterCount
                 ? 'bg-brand-red/10 border-brand-red/30 text-brand-red'
-                : 'border-border text-brand-dark hover:bg-muted'
-            }`}
+                : 'border-border text-foreground hover:bg-muted',
+            )}
           >
             <Filter className="w-4 h-4" /> فلاتر
             {activeFilterCount > 0 && (
@@ -324,7 +461,7 @@ export function CustomersPage() {
       {/* Bulk action bar */}
       {checked.size > 0 && (
         <div className="bg-brand-dark text-white rounded-xl px-4 py-2.5 flex items-center gap-3 flex-wrap">
-          <span className="font-bold text-sm">{checked.size} محدّد</span>
+          <span className="font-bold text-sm">{formatCount(checked.size)} محدّد</span>
           <div className="flex-1" />
           <button
             onClick={() => bulkMut.mutate({ ids: [...checked], action: 'activate' })}
@@ -334,17 +471,14 @@ export function CustomersPage() {
             <CheckCircle2 className="w-3.5 h-3.5" /> تفعيل
           </button>
           <button
-            onClick={() => bulkMut.mutate({ ids: [...checked], action: 'deactivate' })}
+            onClick={() => setConfirmBulk('deactivate')}
             disabled={bulkMut.isPending}
             className="text-xs font-bold px-3 py-1.5 rounded bg-white/15 hover:bg-white/25 inline-flex items-center gap-1"
           >
             <Ban className="w-3.5 h-3.5" /> تعطيل
           </button>
           <button
-            onClick={() => {
-              if (confirm(`حذف ${checked.size} عميل نهائياً؟`))
-                bulkMut.mutate({ ids: [...checked], action: 'delete' });
-            }}
+            onClick={() => setConfirmBulk('delete')}
             disabled={bulkMut.isPending}
             className="text-xs font-bold px-3 py-1.5 rounded bg-red-500 hover:bg-red-600 inline-flex items-center gap-1"
           >
@@ -362,10 +496,10 @@ export function CustomersPage() {
       )}
 
       {/* Table */}
-      <div className="bg-white rounded-xl border border-border overflow-hidden">
+      <div className="bg-card rounded-xl border border-border overflow-hidden shadow-sm">
         {isLoading ? (
           <div className="p-6">
-            <TableSkeleton rows={8} cols={7} />
+            <TableSkeleton rows={8} cols={8} />
           </div>
         ) : !rows.length ? (
           <EmptyState
@@ -385,33 +519,47 @@ export function CustomersPage() {
                       type="checkbox"
                       checked={allChecked}
                       onChange={toggleAll}
-                      className="cursor-pointer"
+                      className="cursor-pointer accent-brand-red"
                     />
                   </th>
-                  <th className="px-3 py-3 font-bold">العميل</th>
+                  <SortTh label="العميل" col="name" sort={sort} dir={dir} onSort={onSort} />
                   <th className="px-3 py-3 font-bold">الهاتف</th>
                   <th className="px-3 py-3 font-bold">المدينة</th>
-                  <th className="px-3 py-3 font-bold text-center">الطلبات</th>
-                  <th className="px-3 py-3 font-bold">التسجيل</th>
-                  <th className="px-3 py-3 font-bold">آخر نشاط</th>
-                  <th className="px-3 py-3 w-28" />
+                  <SortTh
+                    label="الطلبات"
+                    col="orders"
+                    sort={sort}
+                    dir={dir}
+                    onSort={onSort}
+                    className="text-center"
+                  />
+                  <SortTh label="التسجيل" col="createdAt" sort={sort} dir={dir} onSort={onSort} />
+                  <SortTh
+                    label="آخر نشاط"
+                    col="lastActivity"
+                    sort={sort}
+                    dir={dir}
+                    onSort={onSort}
+                  />
+                  <th className="px-3 py-3 font-bold">الحالة</th>
+                  <th className="px-3 py-3 w-20" />
                 </tr>
               </thead>
               <tbody>
                 {rows.map((c) => {
-                  const inactive = c.isActive === false;
+                  const active = c.isActive !== false;
                   return (
                     <tr
                       key={c.id}
                       onClick={() => setSelectedId(c.id)}
-                      className={`border-b border-border/50 hover:bg-muted/30 cursor-pointer ${inactive ? 'opacity-60' : ''}`}
+                      className="border-b border-border/50 hover:bg-muted/30 cursor-pointer"
                     >
                       <td className="ps-4 py-2.5" onClick={(e) => e.stopPropagation()}>
                         <input
                           type="checkbox"
                           checked={checked.has(c.id)}
                           onChange={() => toggleOne(c.id)}
-                          className="cursor-pointer"
+                          className="cursor-pointer accent-brand-red"
                         />
                       </td>
                       <td className="px-3 py-2.5">
@@ -420,10 +568,11 @@ export function CustomersPage() {
                           <div className="min-w-0">
                             <div className="font-bold truncate flex items-center gap-1.5">
                               {c.name || '—'}
-                              {inactive && (
-                                <span className="text-[10px] font-bold text-red-600 bg-red-50 px-1.5 rounded">
-                                  معطّل
-                                </span>
+                              {c.isPhoneVerified && (
+                                <ShieldCheck
+                                  className="w-3.5 h-3.5 text-emerald-500 shrink-0"
+                                  aria-label="موثّق"
+                                />
                               )}
                             </div>
                             {c.email && (
@@ -434,26 +583,42 @@ export function CustomersPage() {
                           </div>
                         </div>
                       </td>
-                      <td className="px-3 py-2.5" dir="ltr">
+                      <td className="px-3 py-2.5 text-muted-foreground" dir="ltr">
                         {c.phone}
                       </td>
                       <td className="px-3 py-2.5">{c.city ?? '—'}</td>
                       <td className="px-3 py-2.5 text-center">
                         <span
-                          className={`inline-block min-w-[28px] px-2 py-0.5 rounded-full text-xs font-bold ${
+                          className={cn(
+                            'inline-block min-w-[28px] px-2 py-0.5 rounded-full text-xs font-bold',
                             (c.orderCount ?? 0) > 0
                               ? 'bg-brand-red/10 text-brand-red'
-                              : 'bg-muted text-muted-foreground'
-                          }`}
+                              : 'bg-muted text-muted-foreground',
+                          )}
                         >
-                          {c.orderCount ?? c._count?.customerOrders ?? 0}
+                          {formatCount(c.orderCount ?? c._count?.customerOrders ?? 0)}
                         </span>
                       </td>
                       <td className="px-3 py-2.5 text-xs text-muted-foreground">
-                        {fmtDate(c.createdAt)}
+                        {formatDate(c.createdAt)}
                       </td>
                       <td className="px-3 py-2.5 text-xs text-muted-foreground">
-                        {fmtDate(c.lastActivityAt)}
+                        {formatDate(c.lastActivityAt)}
+                      </td>
+                      <td className="px-3 py-2.5" onClick={(e) => e.stopPropagation()}>
+                        <div className="flex items-center gap-2">
+                          <Switch
+                            on={active}
+                            disabled={toggleActiveMut.isPending}
+                            size="sm"
+                            onClick={() =>
+                              active
+                                ? setConfirmDisable(c)
+                                : toggleActiveMut.mutate({ id: c.id, isActive: true })
+                            }
+                          />
+                          <StatusPill active={active} />
+                        </div>
                       </td>
                       <td className="px-3 py-2.5" onClick={(e) => e.stopPropagation()}>
                         <div className="flex items-center gap-0.5 justify-end">
@@ -465,21 +630,8 @@ export function CustomersPage() {
                             <Pencil className="w-4 h-4" />
                           </IconBtn>
                           <IconBtn
-                            title={inactive ? 'تفعيل' : 'تعطيل'}
-                            onClick={() => toggleActiveMut.mutate({ id: c.id, isActive: inactive })}
-                            className={inactive ? 'text-emerald-600' : 'text-amber-600'}
-                          >
-                            {inactive ? (
-                              <CheckCircle2 className="w-4 h-4" />
-                            ) : (
-                              <Ban className="w-4 h-4" />
-                            )}
-                          </IconBtn>
-                          <IconBtn
                             title="حذف"
-                            onClick={() => {
-                              if (confirm(`حذف العميل "${c.name}"؟`)) deleteMut.mutate(c.id);
-                            }}
+                            onClick={() => setConfirmDelete(c)}
                             className="text-destructive"
                           >
                             <Trash2 className="w-4 h-4" />
@@ -508,6 +660,57 @@ export function CustomersPage() {
       {selectedId && (
         <CustomerDetailDialog customerId={selectedId} onClose={() => setSelectedId(null)} />
       )}
+
+      {/* ── Confirmations ── */}
+      <ConfirmDialog
+        open={!!confirmDisable}
+        onOpenChange={(o) => !o && setConfirmDisable(null)}
+        title="تعطيل الحساب؟"
+        message={`سيتم منع «${confirmDisable?.name ?? 'العميل'}» من تسجيل الدخول وإنهاء جلسته الحالية فوراً. يمكنك إعادة تفعيله في أي وقت.`}
+        confirmLabel="تعطيل"
+        tone="danger"
+        loading={toggleActiveMut.isPending}
+        onConfirm={() =>
+          confirmDisable &&
+          toggleActiveMut.mutate(
+            { id: confirmDisable.id, isActive: false },
+            { onSuccess: () => setConfirmDisable(null) },
+          )
+        }
+      />
+      <ConfirmDialog
+        open={!!confirmDelete}
+        onOpenChange={(o) => !o && setConfirmDelete(null)}
+        title="حذف العميل نهائياً؟"
+        message={`سيتم حذف «${confirmDelete?.name ?? 'العميل'}» نهائياً. لا يمكن التراجع.`}
+        confirmLabel="حذف"
+        tone="danger"
+        loading={deleteMut.isPending}
+        onConfirm={() =>
+          confirmDelete &&
+          deleteMut.mutate(confirmDelete.id, { onSuccess: () => setConfirmDelete(null) })
+        }
+      />
+      <ConfirmDialog
+        open={!!confirmBulk}
+        onOpenChange={(o) => !o && setConfirmBulk(null)}
+        title={confirmBulk === 'delete' ? 'حذف العملاء المحددين؟' : 'تعطيل العملاء المحددين؟'}
+        message={
+          confirmBulk === 'delete'
+            ? `سيتم حذف ${formatCount(checked.size)} عميل نهائياً. لا يمكن التراجع.`
+            : `سيتم منع ${formatCount(checked.size)} عميل من الدخول فوراً.`
+        }
+        confirmLabel={confirmBulk === 'delete' ? 'حذف' : 'تعطيل'}
+        tone="danger"
+        loading={bulkMut.isPending}
+        onConfirm={() =>
+          confirmBulk &&
+          bulkMut.mutate(
+            { ids: [...checked], action: confirmBulk },
+            { onSuccess: () => setConfirmBulk(null) },
+          )
+        }
+      />
     </div>
   );
 }
@@ -534,6 +737,56 @@ function IconBtn({
   );
 }
 
+/** Stat cards double as filters — wrapping keeps StatCard itself presentational. */
+function StatBtn({ onClick, children }: { onClick: () => void; children: React.ReactNode }) {
+  return (
+    <button type="button" onClick={onClick} className="text-start">
+      {children}
+    </button>
+  );
+}
+
+function SortTh({
+  label,
+  col,
+  sort,
+  dir,
+  onSort,
+  className,
+}: {
+  label: string;
+  col: SortCol;
+  sort: SortCol;
+  dir: 'asc' | 'desc';
+  onSort: (c: SortCol) => void;
+  className?: string;
+}) {
+  const active = sort === col;
+  return (
+    <th className={cn('px-3 py-3 font-bold', className)}>
+      <button
+        type="button"
+        onClick={() => onSort(col)}
+        className={cn(
+          'inline-flex items-center gap-1 hover:text-foreground',
+          active && 'text-brand-red',
+        )}
+      >
+        {label}
+        {active ? (
+          dir === 'asc' ? (
+            <ArrowUp className="w-3.5 h-3.5" />
+          ) : (
+            <ArrowDown className="w-3.5 h-3.5" />
+          )
+        ) : (
+          <ArrowUpDown className="w-3.5 h-3.5 opacity-40" />
+        )}
+      </button>
+    </th>
+  );
+}
+
 function Select({
   label,
   value,
@@ -551,7 +804,7 @@ function Select({
       <select
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        className="w-full px-3 py-2 border border-border rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-brand-red/30"
+        className="w-full px-3 py-2 border border-border rounded-lg text-sm bg-popover text-foreground focus:outline-none focus:ring-2 focus:ring-brand-red/30"
       >
         {options.map((o) => (
           <option key={o.v} value={o.v}>
@@ -572,7 +825,9 @@ function CustomerDetailDialog({
   customerId: string;
   onClose: () => void;
 }) {
+  const qc = useQueryClient();
   const [tab, setTab] = useState<Tab>('info');
+  const [confirmDisable, setConfirmDisable] = useState(false);
   const { data, isLoading } = useQuery({
     queryKey: ['admin', 'customer', customerId],
     queryFn: () => api.adminGetCustomer(customerId) as Promise<Row>,
@@ -580,6 +835,18 @@ function CustomerDetailDialog({
 
   const orders = (data?.customerOrders ?? []) as Row[];
   const lastOrder = orders[0];
+  const active = data?.isActive !== false;
+
+  const toggleMut = useMutation({
+    mutationFn: (isActive: boolean) => api.adminUpdateCustomer(customerId, { isActive }),
+    onSuccess: (_r, isActive) => {
+      toast.success(isActive ? 'تم تفعيل الحساب' : 'تم تعطيل الحساب');
+      qc.invalidateQueries({ queryKey: ['admin', 'customer', customerId] });
+      qc.invalidateQueries({ queryKey: ['admin', 'customers'] });
+      setConfirmDisable(false);
+    },
+    onError: (err: Error) => toast.error(err.message),
+  });
 
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()} title={data?.name ?? '...'} size="lg">
@@ -587,26 +854,47 @@ function CustomerDetailDialog({
         <TableSkeleton rows={6} cols={1} />
       ) : (
         <div className="space-y-4">
-          {/* Header card: avatar + quick stats */}
-          <div className="flex items-center gap-4 p-4 rounded-xl bg-muted/40 border border-border">
+          {/* Header card: avatar + status + the prominent enable/disable control */}
+          <div
+            className={cn(
+              'flex items-center gap-4 p-4 rounded-xl border transition-colors',
+              active
+                ? 'bg-muted/40 border-border'
+                : 'bg-red-50 dark:bg-red-500/10 border-red-200 dark:border-red-500/30',
+            )}
+          >
             <Avatar name={data.name} url={data.avatarUrl} size="lg" />
             <div className="min-w-0 flex-1">
               <div className="font-black text-lg flex items-center gap-2">
                 {data.name}
-                {data.isActive === false && (
-                  <span className="text-[10px] font-bold text-red-600 bg-red-50 px-1.5 py-0.5 rounded">
-                    معطّل
-                  </span>
+                {data.isPhoneVerified && (
+                  <ShieldCheck className="w-4 h-4 text-emerald-500" aria-label="موثّق" />
                 )}
               </div>
               <div className="text-sm text-muted-foreground" dir="ltr">
                 {data.phone}
               </div>
+              <div className="mt-1.5">
+                <StatusPill active={active} />
+              </div>
             </div>
-            <div className="grid grid-cols-2 gap-3 text-center shrink-0">
-              <Stat value={data._count?.customerOrders ?? orders.length} label="طلب" />
-              <Stat value={fmtDate(lastOrder?.createdAt)} label="آخر طلب" small />
+            <div className="flex flex-col items-center gap-1.5 shrink-0">
+              <Switch
+                on={active}
+                disabled={toggleMut.isPending}
+                onClick={() => (active ? setConfirmDisable(true) : toggleMut.mutate(true))}
+              />
+              <span className="text-xs font-bold text-muted-foreground">
+                {active ? 'مفعّل' : 'معطّل'}
+              </span>
             </div>
+          </div>
+
+          {/* Quick stat tiles */}
+          <div className="grid grid-cols-3 gap-3">
+            <Stat value={formatCount(data._count?.customerOrders ?? orders.length)} label="طلب" />
+            <Stat value={formatDate(lastOrder?.createdAt)} label="آخر طلب" small />
+            <Stat value={formatDate(data.createdAt)} label="تاريخ التسجيل" small />
           </div>
 
           {/* Tabs */}
@@ -621,11 +909,12 @@ function CustomerDetailDialog({
               <button
                 key={t.key}
                 onClick={() => setTab(t.key)}
-                className={`px-4 py-2 text-sm font-bold border-b-2 transition-colors ${
+                className={cn(
+                  'px-4 py-2 text-sm font-bold border-b-2 transition-colors',
                   tab === t.key
                     ? 'border-brand-red text-brand-red'
-                    : 'border-transparent text-muted-foreground hover:text-foreground'
-                }`}
+                    : 'border-transparent text-muted-foreground hover:text-foreground',
+                )}
               >
                 {t.label}
               </button>
@@ -655,13 +944,13 @@ function CustomerDetailDialog({
                       <div className="min-w-0">
                         <div className="font-mono text-xs">{o.orderNumber}</div>
                         <div className="text-xs text-muted-foreground">
-                          {fmtDateTime(o.createdAt)}
+                          {formatDateTime(o.createdAt)}
                         </div>
                       </div>
                       <StatusBadge status={o.status} />
                       <div className="font-bold whitespace-nowrap">
                         {(o.finalPrice ?? o.quotedPrice)
-                          ? `${Number(o.finalPrice ?? o.quotedPrice).toLocaleString('ar-EG')} ج.م`
+                          ? `${formatCount(Number(o.finalPrice ?? o.quotedPrice))} ج.م`
                           : '—'}
                       </div>
                     </div>
@@ -672,15 +961,26 @@ function CustomerDetailDialog({
           )}
         </div>
       )}
+
+      <ConfirmDialog
+        open={confirmDisable}
+        onOpenChange={setConfirmDisable}
+        title="تعطيل الحساب؟"
+        message={`سيتم منع «${data?.name ?? 'العميل'}» من تسجيل الدخول وإنهاء جلسته الحالية فوراً. يمكنك إعادة تفعيله في أي وقت.`}
+        confirmLabel="تعطيل"
+        tone="danger"
+        loading={toggleMut.isPending}
+        onConfirm={() => toggleMut.mutate(false)}
+      />
     </Dialog>
   );
 }
 
 function Stat({ value, label, small }: { value: React.ReactNode; label: string; small?: boolean }) {
   return (
-    <div>
-      <div className={`font-black text-brand-red ${small ? 'text-xs' : 'text-xl'}`}>{value}</div>
-      <div className="text-[10px] text-muted-foreground">{label}</div>
+    <div className="rounded-xl border border-border bg-muted/30 p-3 text-center">
+      <div className={cn('font-black text-brand-red', small ? 'text-sm' : 'text-2xl')}>{value}</div>
+      <div className="text-[11px] text-muted-foreground mt-0.5">{label}</div>
     </div>
   );
 }
@@ -827,14 +1127,10 @@ function CustomerInfoForm({ customer, customerId }: { customer: Row; customerId:
       </div>
 
       <div className="flex justify-end pt-2 border-t border-border">
-        <button
-          onClick={onSave}
-          disabled={mut.isPending || uploading}
-          className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-brand-red text-white font-bold disabled:opacity-60"
-        >
+        <Button onClick={onSave} disabled={mut.isPending || uploading}>
           <Save className="w-4 h-4" />
           {mut.isPending ? 'جاري الحفظ…' : 'حفظ التغييرات'}
-        </button>
+        </Button>
       </div>
     </div>
   );
@@ -849,6 +1145,7 @@ function CustomerAddressesPane({
 }) {
   const qc = useQueryClient();
   const [editing, setEditing] = useState<SavedAddress | 'new' | null>(null);
+  const [confirmDel, setConfirmDel] = useState<SavedAddress | null>(null);
 
   const refresh = () => qc.invalidateQueries({ queryKey: ['admin', 'customer', customerId] });
 
@@ -856,6 +1153,7 @@ function CustomerAddressesPane({
     mutationFn: (addressId: string) => api.adminDeleteCustomerAddress(customerId, addressId),
     onSuccess: () => {
       toast.success('تم حذف العنوان');
+      setConfirmDel(null);
       refresh();
     },
     onError: (err: Error) => toast.error(err.message),
@@ -874,7 +1172,7 @@ function CustomerAddressesPane({
       </div>
 
       {addresses.length === 0 ? (
-        <div className="text-sm text-muted-foreground py-6 text-center border border-dashed rounded-lg">
+        <div className="text-sm text-muted-foreground py-6 text-center border border-dashed border-border rounded-lg">
           لا يوجد عناوين محفوظة
         </div>
       ) : (
@@ -885,7 +1183,10 @@ function CustomerAddressesPane({
               className="flex items-start gap-3 p-3 border border-border rounded-lg hover:bg-muted/30"
             >
               <MapPin
-                className={`w-4 h-4 mt-0.5 ${a.isDefault ? 'text-brand-red' : 'text-muted-foreground'}`}
+                className={cn(
+                  'w-4 h-4 mt-0.5',
+                  a.isDefault ? 'text-brand-red' : 'text-muted-foreground',
+                )}
               />
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2">
@@ -928,9 +1229,7 @@ function CustomerAddressesPane({
                   تعديل
                 </button>
                 <button
-                  onClick={() => {
-                    if (confirm(`حذف عنوان "${a.label}"؟`)) deleteMut.mutate(a.id);
-                  }}
+                  onClick={() => setConfirmDel(a)}
                   className="p-1.5 rounded hover:bg-red-50 text-red-600"
                   title="حذف"
                 >
@@ -953,6 +1252,17 @@ function CustomerAddressesPane({
           }}
         />
       )}
+
+      <ConfirmDialog
+        open={!!confirmDel}
+        onOpenChange={(o) => !o && setConfirmDel(null)}
+        title="حذف العنوان؟"
+        message={confirmDel ? `سيتم حذف عنوان «${confirmDel.label}».` : ''}
+        confirmLabel="حذف"
+        tone="danger"
+        loading={deleteMut.isPending}
+        onConfirm={() => confirmDel && deleteMut.mutate(confirmDel.id)}
+      />
     </div>
   );
 }
@@ -1001,7 +1311,7 @@ function AddressEditDialog({
             value={text}
             onChange={(e) => setText(e.target.value)}
             rows={3}
-            className="w-full px-3 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-red/30"
+            className="w-full px-3 py-2 border border-border rounded-lg text-sm bg-popover text-foreground focus:outline-none focus:ring-2 focus:ring-brand-red/30"
           />
         </Field>
         <Field label="ملاحظات (اختياري)">
@@ -1012,17 +1322,15 @@ function AddressEditDialog({
             type="checkbox"
             checked={isDefault}
             onChange={(e) => setIsDefault(e.target.checked)}
+            className="accent-brand-red"
           />
           <span className="text-sm">اجعله العنوان الافتراضي</span>
         </label>
         <div className="flex gap-2 justify-end pt-2 border-t border-border">
-          <button
-            onClick={onClose}
-            className="px-3 py-1.5 rounded border border-border text-sm font-bold hover:bg-muted"
-          >
+          <Button variant="outline" onClick={onClose}>
             إلغاء
-          </button>
-          <button
+          </Button>
+          <Button
             onClick={() =>
               mut.mutate({
                 label: label.trim(),
@@ -1032,10 +1340,9 @@ function AddressEditDialog({
               })
             }
             disabled={mut.isPending || !label.trim() || !text.trim()}
-            className="px-4 py-1.5 rounded bg-brand-red text-white text-sm font-bold disabled:opacity-60"
           >
             {mut.isPending ? 'جاري الحفظ…' : 'حفظ'}
-          </button>
+          </Button>
         </div>
       </div>
     </Dialog>

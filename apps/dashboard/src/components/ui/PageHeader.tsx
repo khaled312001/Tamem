@@ -23,7 +23,7 @@ export function PageHeader({
   className,
 }: {
   title: string;
-  subtitle?: string;
+  subtitle?: ReactNode;
   icon?: LucideIcon;
   crumbs?: Crumb[];
   actions?: ReactNode;
