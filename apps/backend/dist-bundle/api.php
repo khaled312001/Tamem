@@ -7536,8 +7536,10 @@ if (preg_match('#^/orders/([^/]+)$#', $path, $mm) && $method === 'GET') {
     unset($__it);
     $out['pickupPoints'] = $q('SELECT * FROM `OrderPickupPoint` WHERE orderId = ? ORDER BY sortOrder ASC', [$mm[1]]);
     $out['deliveryPoints'] = $q('SELECT * FROM `OrderDeliveryPoint` WHERE orderId = ? ORDER BY sortOrder ASC', [$mm[1]]);
-    // OrderTrackingScreen .map()s statusHistory with no guard.
-    $out['statusHistory'] = $q('SELECT * FROM `OrderStatusHistory` WHERE orderId = ? ORDER BY createdAt ASC', [$mm[1]]);
+    // OrderTrackingScreen .map()s statusHistory with no guard. jsonizeRow stamps
+    // the UTC 'Z' on createdAt — without it the app parses the timeline times as
+    // local and shows them 3h behind the (already-Z'd) order.createdAt.
+    $out['statusHistory'] = array_map('jsonizeRow', $q('SELECT * FROM `OrderStatusHistory` WHERE orderId = ? ORDER BY createdAt ASC', [$mm[1]]));
     $out['assignedDriver'] = null;
     if ($o['assignedDriverId']) {
         $ds = db()->prepare('SELECT id, name, phone FROM `User` WHERE id = ? LIMIT 1');
@@ -7564,7 +7566,7 @@ if (preg_match('#^/orders/([^/]+)$#', $path, $mm) && $method === 'GET') {
         $so['items'] = $i->fetchAll();
         $h = db()->prepare('SELECT * FROM `OrderStatusHistory` WHERE orderId = ? ORDER BY createdAt ASC');
         $h->execute([$s['id']]);
-        $so['statusHistory'] = $h->fetchAll();
+        $so['statusHistory'] = array_map('jsonizeRow', $h->fetchAll());
         $so['assignedDriver'] = null;
         if ($s['assignedDriverId']) {
             $d = db()->prepare('SELECT id, name, phone FROM `User` WHERE id = ? LIMIT 1');
