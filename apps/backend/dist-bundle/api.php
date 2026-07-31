@@ -3978,7 +3978,7 @@ if ($method === 'POST' && preg_match('#^/admin/merchants/([^/]+)/api-config/sync
     }
     $mapping = is_string($cfg['fieldMapping'] ?? null) ? (json_decode($cfg['fieldMapping'], true) ?: []) : ($cfg['fieldMapping'] ?? []);
     if (!is_array($mapping)) $mapping = [];
-    $pdo = db(); $added = 0; $updated = 0; $failed = 0; $seen = [];
+    $pdo = db(); $added = 0; $updated = 0; $failed = 0; $seen = []; $catSet = [];
     // Full-field upsert. imageUrls is stored as JSON; COALESCE(?, col) means an
     // unmapped (null) field keeps the existing value instead of wiping it.
     $ins = $pdo->prepare('INSERT INTO `Product`
@@ -4003,6 +4003,10 @@ if ($method === 'POST' && preg_match('#^/admin/merchants/([^/]+)/api-config/sync
     foreach ($res['items'] as $row) {
         $p = mapExternalProduct($row, $mapping);
         if ($p['name'] === '' && $p['nameAr'] === '') continue;
+        // Remember every section name this feed uses (keyed AND valued by the
+        // verbatim categoryName so the value survives PHP's numeric-key coercion)
+        // — used after the loop to auto-create any ProductSection that's missing.
+        if ($p['categoryName'] !== null && trim((string) $p['categoryName']) !== '') $catSet[$p['categoryName']] = $p['categoryName'];
         // De-dup within the merchant, best key first: SKU → externalId → name.
         $ex = null;
         if ($p['sku'] !== null) { $q = $pdo->prepare('SELECT id FROM `Product` WHERE merchantId = ? AND sku = ? LIMIT 1'); $q->execute([$m[1], $p['sku']]); $ex = $q->fetch(); }
@@ -4049,11 +4053,27 @@ if ($method === 'POST' && preg_match('#^/admin/merchants/([^/]+)/api-config/sync
             catch (Throwable $e) { error_log('[api.php] missing-policy: ' . $e->getMessage()); }
         }
     }
+    // Auto-create a ProductSection for every section name this feed introduced
+    // that has no row yet — so API-fed categories appear on the sections page
+    // (ready for artwork) instead of being invisible there. Created INACTIVE:
+    // an automated feed can carry many/rough category names, and the home only
+    // shows active sections — so the admin reviews, adds artwork, then activates,
+    // rather than the customer home flooding with imageless tiles. The UNIQUE
+    // nameAr key + INSERT IGNORE makes it race-safe and idempotent; the name is
+    // the join key so we store categoryName verbatim.
+    $sectionsCreated = 0;
+    if ($catSet) {
+        $insSec = $pdo->prepare('INSERT IGNORE INTO `ProductSection` (id, nameAr, imageUrl, sortOrder, isActive, createdAt) VALUES (?,?,NULL,0,0,NOW(3))');
+        foreach ($catSet as $cn) {
+            try { $insSec->execute([newId(), $cn]); $sectionsCreated += $insSec->rowCount(); }
+            catch (PDOException $e) { error_log('[api.php] auto product-section: ' . $e->getMessage()); }
+        }
+    }
     $status = $failed > 0 ? 'PARTIAL' : 'SUCCESS';
     $pdo->prepare('UPDATE `MerchantApiConfig` SET isConnected = 1, lastError = NULL, lastSyncedAt = NOW(3), updatedAt = NOW(3) WHERE merchantId = ?')->execute([$m[1]]);
     $writeSyncLog($status, count($res['items']), $added, $updated, $failed, $hidden, $failed > 0 ? "فشل $failed منتج" : null);
     jsonOk(['ok' => true, 'fetchedCount' => count($res['items']), 'createdCount' => $added, 'updatedCount' => $updated,
-        'failedCount' => $failed, 'hiddenCount' => $hidden, 'added' => $added, 'updated' => $updated, 'total' => count($res['items'])]);
+        'failedCount' => $failed, 'hiddenCount' => $hidden, 'sectionsCreated' => $sectionsCreated, 'added' => $added, 'updated' => $updated, 'total' => count($res['items'])]);
 }
 if ($method === 'DELETE' && preg_match('#^/admin/merchants/([^/]+)/api-config$#', $path, $m)) {
     authUser();
