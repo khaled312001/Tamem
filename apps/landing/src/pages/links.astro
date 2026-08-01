@@ -19,10 +19,19 @@ const BRAND = {
 
 const CHANNELS = [
   {
+    label: 'حمّل التطبيق — Google Play',
+    sub: 'ثبّت تميم على هاتفك',
+    href: 'https://play.google.com/store/apps/details?id=com.tamem.delivery',
+    bg: `linear-gradient(135deg, ${BRAND.red}, ${BRAND.gold})`,
+    iconBg: '#fff',
+    iconColor: BRAND.red,
+    icon: 'play-store',
+  },
+  {
     label: 'الموقع الرسمي',
     sub: 'deliverytamem.com',
     href: 'https://deliverytamem.com/',
-    bg: `linear-gradient(135deg, ${BRAND.red}, ${BRAND.gold})`,
+    bg: `linear-gradient(135deg, ${BRAND.dark}, ${BRAND.redDark})`,
     iconBg: '#fff',
     iconColor: BRAND.red,
     icon: 'globe',
@@ -207,6 +216,14 @@ const CHANNELS = [
                   <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                     <rect x="2" y="4" width="20" height="16" rx="3"/>
                     <path d="M22 7 12 13 2 7"/>
+                  </svg>
+                )}
+                {c.icon === 'play-store' && (
+                  <svg width="26" height="26" viewBox="0 0 512 512" aria-hidden="true">
+                    <path fill="#00D3FF" d="M47 30 296 256 47 482c-9-5-15-15-15-27V57c0-12 6-22 15-27z"/>
+                    <path fill="#00F076" d="M47 30c4-2 9-3 14-2 6 1 11 4 340 196l-105 32z"/>
+                    <path fill="#FFD500" d="M401 224l63 37c19 11 19 39 0 50l-63 37-105-92z"/>
+                    <path fill="#FF3A44" d="M47 482 296 256l105 92c-329 192-334 195-340 196-5 1-10 0-14-2z"/>
                   </svg>
                 )}
               </span>

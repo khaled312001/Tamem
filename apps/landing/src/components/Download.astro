@@ -1,5 +1,7 @@
 ---
 import Icon from './Icon.astro';
+
+const PLAY_URL = 'https://play.google.com/store/apps/details?id=com.tamem.delivery';
 ---
 
 <section
@@ -22,26 +24,30 @@ import Icon from './Icon.astro';
       خصم 20% على أول طلب
     </span>
     <h2 class="reveal reveal-delay-1 text-3xl md:text-5xl font-black leading-tight mb-5">
-      <span class="shine-text">التطبيق قريباً</span>
+      <span class="shine-text">التطبيق متاح الآن</span>
     </h2>
     <p class="reveal reveal-delay-2 text-white/85 text-lg mb-8 leading-relaxed max-w-2xl mx-auto">
-      تطبيق تميم للتوصيل — خفيف، سريع، عربي 100%. هينزل على Google Play و App Store قريباً.
+      تطبيق تميم للتوصيل — خفيف، سريع، عربي 100%. حمّله دلوقتي من Google Play. (نسخة iPhone قريباً)
     </p>
 
-    <div class="reveal reveal-delay-3 flex flex-wrap gap-3 justify-center">
-      <span
-        class="inline-flex items-center gap-3 backdrop-blur text-white font-bold px-6 py-3.5 rounded-2xl border cursor-not-allowed opacity-80"
-        style="background: rgba(255,255,255,0.10); border-color: rgba(255,255,255,0.20);"
+    <div class="reveal reveal-delay-3 flex flex-wrap gap-3 justify-center items-center">
+      <a
+        href={PLAY_URL}
+        target="_blank"
+        rel="noopener"
+        aria-label="حمّل تطبيق تميم من Google Play"
+        class="inline-flex items-center gap-3 text-white font-bold px-6 py-3.5 rounded-2xl border shadow-lg hover:scale-[1.03] transition"
+        style="background: rgba(255,255,255,0.14); border-color: rgba(255,255,255,0.30);"
       >
         <Icon name="play-store" size={36} class="text-brand-gold" />
         <span class="text-right">
-          <span class="block text-[10px] opacity-60 leading-none">قريباً على</span>
+          <span class="block text-[10px] opacity-70 leading-none">حمّل الآن من</span>
           <span class="block text-base leading-tight mt-0.5">Google Play</span>
         </span>
-      </span>
+      </a>
       <span
-        class="inline-flex items-center gap-3 backdrop-blur text-white font-bold px-6 py-3.5 rounded-2xl border cursor-not-allowed opacity-80"
-        style="background: rgba(255,255,255,0.10); border-color: rgba(255,255,255,0.20);"
+        class="inline-flex items-center gap-3 backdrop-blur text-white font-bold px-6 py-3.5 rounded-2xl border cursor-not-allowed opacity-70"
+        style="background: rgba(255,255,255,0.08); border-color: rgba(255,255,255,0.18);"
       >
         <Icon name="app-store" size={32} />
         <span class="text-right">
@@ -49,6 +55,17 @@ import Icon from './Icon.astro';
           <span class="block text-base leading-tight mt-0.5">App Store</span>
         </span>
       </span>
+    </div>
+
+    <!-- Install-by-QR — self-contained poster (logo + caption baked in) -->
+    <div class="reveal reveal-delay-3 mt-10 flex flex-col items-center gap-3">
+      <img
+        src="/qr-play.png"
+        alt="امسح الكود لتثبيت تطبيق تميم للتوصيل من Google Play"
+        width="300" height="300"
+        class="w-64 h-64 md:w-80 md:h-80 rounded-3xl shadow-2xl"
+      />
+      <p class="text-white/90 font-bold">امسح الكود بكاميرا هاتفك لتثبيت التطبيق</p>
     </div>
   </div>
 </section>
