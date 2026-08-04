@@ -512,11 +512,17 @@ async function main() {
   // prices start null — admin sets them via /admin/zones/areas later.
   await seedDeliveryZones();
 
+  // ============================================
+  // Demo Merchant — مطعم الإسكندراني
+  // ============================================
+  await seedAlexandrianMerchant();
+
   console.info('\n🎉 Seed complete!\n');
   console.info('Login credentials:');
   console.info(`  Admin    : ${adminPhone}      / (rotated — see DEPLOYMENT.md)`);
   console.info(`  Customer : +201000000001      / customer123`);
   console.info(`  Driver   : +201000000002      / driver123`);
+  console.info(`  Merchant : 01200000001        / Merchant@2024  (لوحة التاجر)`);
 }
 
 async function seedDeliveryZones(): Promise<void> {
@@ -640,6 +646,236 @@ async function seedDeliveryZones(): Promise<void> {
   console.info(
     `✅ Seeded 1 city (قفط), ${villageCount} villages, ${areaCount} areas. ` +
       `All prices null by default — admin sets via /admin/zones/areas`,
+  );
+}
+
+/**
+ * Seed a demo merchant account: "مطعم الإسكندراني" — an Alexandrian seafood
+ * restaurant with 15 realistic products. The merchant can log into the
+ * dashboard at /merchant-login using:
+ *   Phone:    01200000001
+ *   Password: Merchant@2024
+ */
+async function seedAlexandrianMerchant() {
+  const MERCHANT_PHONE = '01200000001';
+  const MERCHANT_PASSWORD = 'Merchant@2024';
+  const passwordHash = await bcrypt.hash(MERCHANT_PASSWORD, 12);
+
+  const user = await prisma.user.upsert({
+    where: { phone: MERCHANT_PHONE },
+    update: { passwordHash, name: 'مطعم الإسكندراني', role: 'MERCHANT' },
+    create: {
+      phone: MERCHANT_PHONE,
+      name: 'مطعم الإسكندراني',
+      passwordHash,
+      role: 'MERCHANT',
+      isPhoneVerified: true,
+      isActive: true,
+      city: 'الإسكندرية',
+      governorate: 'الإسكندرية',
+    },
+  });
+
+  // Ensure category exists
+  const restaurantsCat = await prisma.category.findFirst({
+    where: { id: 'restaurants' },
+  });
+  if (!restaurantsCat) {
+    console.warn('⚠️ No "restaurants" category found — skipping merchant seed');
+    return;
+  }
+
+  const profile = await prisma.merchantProfile.upsert({
+    where: { userId: user.id },
+    update: {
+      storeName: 'El-Eskandrani',
+      storeNameAr: 'مطعم الإسكندراني',
+      description:
+        'أشهر مطعم أكلات بحرية إسكندراني — صيادية وسمك مشوي وفواكه بحر طازة يومياً. خبرة أكتر من ٢٠ سنة في تقديم أطيب الوجبات البحرية الأصيلة.',
+      addressLine: 'شارع السلطان حسين، الأنفوشي، الإسكندرية',
+    },
+    create: {
+      userId: user.id,
+      storeName: 'El-Eskandrani',
+      storeNameAr: 'مطعم الإسكندراني',
+      categoryId: restaurantsCat.id,
+      description:
+        'أشهر مطعم أكلات بحرية إسكندراني — صيادية وسمك مشوي وفواكه بحر طازة يومياً. خبرة أكتر من ٢٠ سنة في تقديم أطيب الوجبات البحرية الأصيلة.',
+      addressLine: 'شارع السلطان حسين، الأنفوشي، الإسكندرية',
+      lat: 31.2001,
+      lng: 29.8894,
+      governorate: 'الإسكندرية',
+      city: 'الإسكندرية',
+      isOpen: true,
+      phone: '01200000001',
+    },
+  });
+
+  // Products — 15 authentic Alexandrian dishes
+  const products = [
+    {
+      name: 'Sayadeya',
+      nameAr: 'صيادية سمك',
+      description: 'أرز بالسمك على الطريقة الإسكندرانية مع صلصة الطحينة',
+      price: 85,
+      categoryName: 'الأطباق الرئيسية',
+      sortOrder: 1,
+    },
+    {
+      name: 'Grilled Fish',
+      nameAr: 'سمك مشوي',
+      description: 'سمك بلطي أو بوري مشوي على الفحم مع سلطة وأرز',
+      price: 120,
+      categoryName: 'الأطباق الرئيسية',
+      sortOrder: 2,
+    },
+    {
+      name: 'Fried Calamari',
+      nameAr: 'كاليماري مقلي',
+      description: 'حلقات كاليماري مقلية ومقرمشة مع صوص الكوكتيل',
+      price: 75,
+      categoryName: 'المقبلات',
+      sortOrder: 3,
+    },
+    {
+      name: 'Alexandrian Liver',
+      nameAr: 'كبدة إسكندراني',
+      description: 'كبدة بالفلفل الحار والتوابل الإسكندرانية الأصلية',
+      price: 55,
+      categoryName: 'الأطباق الرئيسية',
+      sortOrder: 4,
+    },
+    {
+      name: 'Shrimp Casserole',
+      nameAr: 'طاجن جمبري',
+      description: 'جمبري طازج مطبوخ في طاجن فخار مع الطماطم والبهارات',
+      price: 130,
+      categoryName: 'الأطباق الرئيسية',
+      sortOrder: 5,
+    },
+    {
+      name: 'Fish Koshary',
+      nameAr: 'كشري بالسمك',
+      description: 'كشري إسكندراني بقطع السمك المقلي والصلصة الحمراء',
+      price: 45,
+      categoryName: 'الأطباق الرئيسية',
+      sortOrder: 6,
+    },
+    {
+      name: 'Seafood Fettah',
+      nameAr: 'فتة بحرية',
+      description: 'فتة بالمأكولات البحرية المشكلة والأرز والخبز المحمص',
+      price: 95,
+      categoryName: 'الأطباق الرئيسية',
+      sortOrder: 7,
+    },
+    {
+      name: 'Grilled Shrimp',
+      nameAr: 'جمبري مشوي',
+      description: 'جمبري جامبو مشوي بالزبدة والثوم والليمون',
+      price: 150,
+      categoryName: 'الأطباق الرئيسية',
+      sortOrder: 8,
+    },
+    {
+      name: 'Tahini Salad',
+      nameAr: 'سلطة طحينة',
+      description: 'طحينة بالليمون والثوم وزيت الزيتون',
+      price: 20,
+      categoryName: 'المقبلات',
+      sortOrder: 9,
+    },
+    {
+      name: 'Baba Ghanoush',
+      nameAr: 'بابا غنوج',
+      description: 'باذنجان مشوي مهروس بالطحينة والثوم',
+      price: 25,
+      categoryName: 'المقبلات',
+      sortOrder: 10,
+    },
+    {
+      name: 'Mixed Seafood Grill',
+      nameAr: 'مشويات بحرية مشكلة',
+      description: 'تشكيلة سمك وجمبري وكاليماري مشوية على الفحم',
+      price: 180,
+      categoryName: 'الأطباق الرئيسية',
+      sortOrder: 11,
+    },
+    {
+      name: 'Fish Soup',
+      nameAr: 'شوربة سمك',
+      description: 'شوربة سمك كريمية على الطريقة الإسكندرانية',
+      price: 35,
+      categoryName: 'الشوربة',
+      sortOrder: 12,
+    },
+    {
+      name: 'Fried Fish Fillet',
+      nameAr: 'فيليه سمك مقلي',
+      description: 'فيليه سمك مقلي مقرمش مع بطاطس وسلطة كول سلو',
+      price: 90,
+      categoryName: 'الأطباق الرئيسية',
+      sortOrder: 13,
+    },
+    {
+      name: 'Molokhia with Shrimp',
+      nameAr: 'ملوخية بالجمبري',
+      description: 'ملوخية خضراء بالجمبري والثوم المحمر مع أرز',
+      price: 70,
+      categoryName: 'الأطباق الرئيسية',
+      sortOrder: 14,
+    },
+    {
+      name: 'Om Ali',
+      nameAr: 'أم علي',
+      description: 'أم علي بالمكسرات والقشطة — حلو ساخن',
+      price: 35,
+      salePrice: 28,
+      discount: 20,
+      categoryName: 'الحلويات',
+      sortOrder: 15,
+    },
+  ];
+
+  for (const p of products) {
+    // Use sku as a stable upsert key for re-seeding
+    const sku = `alex-${p.sortOrder.toString().padStart(3, '0')}`;
+    await prisma.product.upsert({
+      where: { merchantId_sku: { merchantId: profile.id, sku } },
+      update: {
+        name: p.name,
+        nameAr: p.nameAr,
+        description: p.description,
+        price: p.price,
+        salePrice: p.salePrice ?? null,
+        discount: p.discount ?? null,
+        categoryName: p.categoryName,
+        sortOrder: p.sortOrder,
+        isAvailable: true,
+        isHidden: false,
+      },
+      create: {
+        merchantId: profile.id,
+        name: p.name,
+        nameAr: p.nameAr,
+        description: p.description,
+        price: p.price,
+        salePrice: (p as { salePrice?: number }).salePrice ?? null,
+        discount: (p as { discount?: number }).discount ?? null,
+        categoryName: p.categoryName,
+        sortOrder: p.sortOrder,
+        sku,
+        isAvailable: true,
+        isHidden: false,
+      },
+    });
+  }
+
+  console.info(
+    `✅ Merchant "مطعم الإسكندراني" seeded:\n` +
+      `   Phone: ${MERCHANT_PHONE}\n` +
+      `   Password: ${MERCHANT_PASSWORD}\n` +
+      `   Products: ${products.length}`,
   );
 }
 

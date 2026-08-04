@@ -1612,6 +1612,7 @@ function EditMerchantDialog({ merchant, onClose }: { merchant: Row; onClose: () 
   const [store, setStore] = useState<StoreFields>(() => toStoreFields(merchant));
   const [ownerName, setOwnerName] = useState<string>(merchant.user?.name ?? '');
   const [ownerPhone, setOwnerPhone] = useState<string>(merchant.user?.phone ?? '');
+  const [ownerPassword, setOwnerPassword] = useState<string>('');
   const [secondaryPhones, setSecondaryPhones] = useState<string[]>(
     Array.isArray(merchant.user?.secondaryPhones) ? merchant.user.secondaryPhones : [],
   );
@@ -1647,7 +1648,7 @@ function EditMerchantDialog({ merchant, onClose }: { merchant: Row; onClose: () 
         onChange={setTab}
         tabs={[
           { key: 'basic', label: 'البيانات الأساسية', icon: Store },
-          { key: 'contact', label: 'بيانات التواصل', icon: Phone },
+          { key: 'contact', label: 'بيانات التواصل والحساب', icon: Phone },
           { key: 'location', label: 'الموقع', icon: MapPin },
           { key: 'api', label: 'التكامل', icon: Plug },
           { key: 'products', label: 'المنتجات', icon: Package },
@@ -1661,8 +1662,16 @@ function EditMerchantDialog({ merchant, onClose }: { merchant: Row; onClose: () 
         <Field label="اسم المالك">
           <Input value={ownerName} onChange={(e) => setOwnerName(e.target.value)} />
         </Field>
-        <Field label="رقم المالك الرئيسي (للدخول)">
+        <Field label="رقم الهاتف الرئيسي للدخول" hint="يستخدمه التاجر للدخول على لوحته">
           <Input value={ownerPhone} dir="ltr" onChange={(e) => setOwnerPhone(e.target.value)} />
+        </Field>
+        <Field label="كلمة المرور الجديدة للدخول" hint="اتركها فارغة إذا لم ترد تعديل كلمة المرور">
+          <Input
+            type="password"
+            value={ownerPassword}
+            onChange={(e) => setOwnerPassword(e.target.value)}
+            placeholder="••••••••"
+          />
         </Field>
         <Field label="رقم هاتف المتجر (اختياري)" hint="لو مختلف عن رقم المالك">
           <Input
@@ -1672,8 +1681,9 @@ function EditMerchantDialog({ merchant, onClose }: { merchant: Row; onClose: () 
             onChange={(e) => patch({ storePhone: e.target.value })}
           />
         </Field>
-        <div />
-        <SecondaryPhonesEditor phones={secondaryPhones} onChange={setSecondaryPhones} />
+        <div className="col-span-2">
+          <SecondaryPhonesEditor phones={secondaryPhones} onChange={setSecondaryPhones} />
+        </div>
       </Panel>
       <Panel show={tab === 'location'}>
         <LocationFields form={store} patch={patch} active={tab === 'location'} />
@@ -1695,6 +1705,7 @@ function EditMerchantDialog({ merchant, onClose }: { merchant: Row; onClose: () 
               ...storePayload(store),
               ownerName: ownerName.trim() || undefined,
               ownerPhone: ownerPhone.trim() || undefined,
+              ownerPassword: ownerPassword.trim() || undefined,
               ownerSecondaryPhones: secondaryPhones.map((p) => p.trim()).filter(Boolean),
             })
           }

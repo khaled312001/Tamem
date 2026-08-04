@@ -64,7 +64,7 @@ interface Props {
    * The parent dialog saves the product and the options together. It stores the
    * callback we hand it here and awaits it after the product PATCH succeeds.
    */
-  registerSave: (fn: () => Promise<void>) => void;
+  registerSave?: (fn: () => Promise<void>) => void;
 }
 
 export function ProductOptionsPanel({ productId, merchantId, basePrice, registerSave }: Props) {
@@ -102,20 +102,22 @@ export function ProductOptionsPanel({ productId, merchantId, basePrice, register
 
   // Registered with the parent on every render so it always calls the closure
   // that can see the current state, not the one from first mount.
-  registerSave(async () => {
-    if (variants === null || linked === null) return; // never loaded → nothing to save
-    await api.adminSaveProductOptions(productId, {
-      variants: variants
-        .filter((v) => v.nameAr.trim() !== '')
-        .map((v) => ({
-          nameAr: v.nameAr.trim(),
-          price: Number(v.price) || 0,
-          isActive: v.isActive,
-        })),
-      linkedAddonIds: linked,
+  useEffect(() => {
+    registerSave?.(async () => {
+      if (variants === null || linked === null) return; // never loaded → nothing to save
+      await api.adminSaveProductOptions(productId, {
+        variants: variants
+          .filter((v) => v.nameAr.trim() !== '')
+          .map((v) => ({
+            nameAr: v.nameAr.trim(),
+            price: Number(v.price) || 0,
+            isActive: v.isActive,
+          })),
+        linkedAddonIds: linked,
+      });
+      qc.invalidateQueries({ queryKey: ['admin', 'product-options', productId] });
     });
-    qc.invalidateQueries({ queryKey: ['admin', 'product-options', productId] });
-  });
+  }, [registerSave, variants, linked, productId, qc]);
 
   const addonMut = useMutation({
     mutationFn: async (next: MerchantAddon[]) => api.adminSaveMerchantAddons(merchantId, next),

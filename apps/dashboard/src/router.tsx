@@ -36,77 +36,113 @@ import { SupervisorsPage } from './routes/supervisors.js';
 import { NotificationTemplatesPage } from './routes/notification-templates.js';
 import { WhatsAppPage } from './routes/whatsapp.js';
 
+import { MerchantLoginPage } from './routes/merchant-login.js';
+import { MerchantLayout } from './routes/_merchant-layout.js';
+import { MerchantPanelPage } from './routes/merchant-panel.js';
+
 function RequireAuth({ children }: { children: React.ReactNode }) {
   const user = useAuth((s) => s.user);
   if (!user) return <Navigate to="/login" replace />;
   return <>{children}</>;
 }
 
+function MerchantWrapper() {
+  const user = useAuth((s) => s.user);
+  if (!user || (user as { role?: string }).role !== 'MERCHANT') {
+    return <MerchantLoginPage />;
+  }
+  return <MerchantLayout />;
+}
+
+const isMerchantSite =
+  typeof window !== 'undefined' && window.location.pathname.startsWith('/merchant');
+
 const routes: RouteObject[] = [
   { path: '/login', element: <LoginPage /> },
+  { path: '/merchant-login', element: <MerchantLoginPage /> },
+  {
+    path: '/merchant',
+    element: <MerchantWrapper />,
+    children: [
+      { index: true, element: <MerchantPanelPage /> },
+      { path: '*', element: <MerchantPanelPage /> },
+    ],
+  },
+  {
+    path: '/merchant-panel',
+    element: <MerchantWrapper />,
+    children: [
+      { index: true, element: <MerchantPanelPage /> },
+      { path: '*', element: <MerchantPanelPage /> },
+    ],
+  },
   {
     path: '/',
-    element: (
+    element: isMerchantSite ? (
+      <MerchantWrapper />
+    ) : (
       <RequireAuth>
         <DashboardLayout />
       </RequireAuth>
     ),
-    children: [
-      { index: true, element: <Navigate to="/overview" replace /> },
-      { path: 'overview', element: <OverviewPage /> },
-      { path: 'orders', element: <OrdersPage /> },
-      { path: 'orders/:id', element: <OrderDetailPage /> },
-      { path: 'customers', element: <CustomersPage /> },
-      { path: 'drivers', element: <DriversPage /> },
-      { path: 'merchants', element: <MerchantsPage /> },
-      { path: 'merchants/:id/hours', element: <MerchantHoursPage /> },
-      { path: 'merchants/:id/products-api', element: <MerchantProductsApiPage /> },
-      { path: 'services', element: <ServicesPage /> },
-      { path: 'services/new', element: <ServiceEditPage /> },
-      { path: 'services/:id/edit', element: <ServiceEditPage /> },
-      { path: 'products', element: <ProductsPage /> },
-      { path: 'categories', element: <CategoriesPage /> },
-      { path: 'product-sections', element: <ProductSectionsPage /> },
-      { path: 'deals', element: <DealsPage /> },
-      { path: 'products/import-history', element: <ImportHistoryPage /> },
-      { path: 'pricing', element: <PricingPage /> },
-      { path: 'payments', element: <PaymentsPage /> },
-      { path: 'payment-gateway', element: <PaymentGatewayPage /> },
-      { path: 'reports', element: <ReportsPage /> },
-      { path: 'reports/revenue', element: <RevenueReportPage /> },
-      { path: 'reviews', element: <ReviewsPage /> },
-      { path: 'alerts', element: <AlertsPage /> },
-      { path: 'whatsapp', element: <WhatsAppPage /> },
-      { path: 'whatsapp/templates', element: <NotificationTemplatesPage /> },
-      { path: 'broadcast', element: <BroadcastPage /> },
-      { path: 'supervisors', element: <SupervisorsPage /> },
-      { path: 'admins', element: <AdminsPage /> },
-      { path: 'coupons', element: <CouponsPage /> },
-      { path: 'settings', element: <SettingsPage /> },
-      { path: 'home-settings', element: <HomeSettingsPage /> },
-      { path: 'site-settings', element: <SiteSettingsPage /> },
-      { path: '*', element: <NotFoundPage /> },
-    ],
+    children: isMerchantSite
+      ? [
+          { index: true, element: <MerchantPanelPage /> },
+          { path: '*', element: <MerchantPanelPage /> },
+        ]
+      : [
+          { index: true, element: <Navigate to="/overview" replace /> },
+          { path: 'overview', element: <OverviewPage /> },
+          { path: 'orders', element: <OrdersPage /> },
+          { path: 'orders/:id', element: <OrderDetailPage /> },
+          { path: 'customers', element: <CustomersPage /> },
+          { path: 'drivers', element: <DriversPage /> },
+          { path: 'merchants', element: <MerchantsPage /> },
+          { path: 'merchants/:id/hours', element: <MerchantHoursPage /> },
+          { path: 'merchants/:id/products-api', element: <MerchantProductsApiPage /> },
+          { path: 'services', element: <ServicesPage /> },
+          { path: 'services/new', element: <ServiceEditPage /> },
+          { path: 'services/:id/edit', element: <ServiceEditPage /> },
+          { path: 'products', element: <ProductsPage /> },
+          { path: 'categories', element: <CategoriesPage /> },
+          { path: 'product-sections', element: <ProductSectionsPage /> },
+          { path: 'deals', element: <DealsPage /> },
+          { path: 'products/import-history', element: <ImportHistoryPage /> },
+          { path: 'pricing', element: <PricingPage /> },
+          { path: 'payments', element: <PaymentsPage /> },
+          { path: 'payment-gateway', element: <PaymentGatewayPage /> },
+          { path: 'reports', element: <ReportsPage /> },
+          { path: 'reports/revenue', element: <RevenueReportPage /> },
+          { path: 'reviews', element: <ReviewsPage /> },
+          { path: 'alerts', element: <AlertsPage /> },
+          { path: 'whatsapp', element: <WhatsAppPage /> },
+          { path: 'whatsapp/templates', element: <NotificationTemplatesPage /> },
+          { path: 'broadcast', element: <BroadcastPage /> },
+          { path: 'supervisors', element: <SupervisorsPage /> },
+          { path: 'admins', element: <AdminsPage /> },
+          { path: 'coupons', element: <CouponsPage /> },
+          { path: 'settings', element: <SettingsPage /> },
+          { path: 'home-settings', element: <HomeSettingsPage /> },
+          { path: 'site-settings', element: <SiteSettingsPage /> },
+          { path: '*', element: <NotFoundPage /> },
+        ],
   },
 ];
 
-// Dashboard is served from Vite's BASE_URL — locally that's `/`, in production
-// it's `/super_admin/`. Router needs the same base or clicks to `/login` will
-// fall off the base path onto the root domain (404).
-const routerBase = (import.meta as unknown as { env: { BASE_URL: string } }).env.BASE_URL.replace(
-  /\/$/,
-  '',
-);
+function getRouterBase(): string | undefined {
+  if (typeof window === 'undefined') return undefined;
+  const p = window.location.pathname;
+  if (p.startsWith('/merchant')) return '/merchant';
+  if (p.startsWith('/super_admin')) return '/super_admin';
+  const base = (import.meta as unknown as { env: { BASE_URL: string } }).env.BASE_URL.replace(
+    /\/$/,
+    '',
+  );
+  return base || undefined;
+}
 
 export const router: ReturnType<typeof createBrowserRouter> = createBrowserRouter(routes, {
-  basename: routerBase || undefined,
-  // Opt into v7 behavior early so the deprecation warning goes away.
-  // v7_startTransition wraps state updates in React.startTransition for smoother
-  // navigations; safe to enable now since we're on React 18.
-  // Only the two flags that are stable + supported in react-router-dom 6.28.
-  // The rest (v7_fetcherPersist, v7_normalizeFormMethod, v7_partialHydration)
-  // can break createBrowserRouter on routes that use React.Context consumers
-  // (e.g. /merchants which loads react-leaflet) → "render2 is not a function".
+  basename: getRouterBase(),
   future: {
     v7_startTransition: true,
     v7_relativeSplatPath: true,

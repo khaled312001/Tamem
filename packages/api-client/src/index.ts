@@ -1123,6 +1123,38 @@ export class TamemClient {
     });
   }
 
+  // ===== Merchant Dashboard =====
+  /** Dedicated login for the merchant panel — no OTP, returns merchantProfile. */
+  async merchantLogin(
+    phone: string,
+    password: string,
+  ): Promise<{ user: User; merchantProfile: unknown; tokens: AuthTokens }> {
+    return this.request({
+      method: 'POST',
+      url: '/auth/merchant-login',
+      data: { identifier: phone, phone, password },
+    });
+  }
+  /** Current merchant's profile + today KPIs. */
+  async merchantMe(): Promise<unknown> {
+    return this.request({ method: 'GET', url: '/merchant/me' });
+  }
+  async merchantListProducts(params?: Record<string, unknown>): Promise<Paginated<unknown>> {
+    return this.requestPaginated({ method: 'GET', url: '/merchant/products', params });
+  }
+  async merchantGetProduct(id: string): Promise<unknown> {
+    return this.request({ method: 'GET', url: `/merchant/products/${id}` });
+  }
+  async merchantCreateProduct(data: unknown): Promise<unknown> {
+    return this.request({ method: 'POST', url: '/merchant/products', data });
+  }
+  async merchantUpdateProduct(id: string, data: unknown): Promise<unknown> {
+    return this.request({ method: 'PATCH', url: `/merchant/products/${id}`, data });
+  }
+  async merchantDeleteProduct(id: string): Promise<void> {
+    await this.http.request({ method: 'DELETE', url: `/merchant/products/${id}` });
+  }
+
   // Raw escape hatch
   get raw(): AxiosInstance {
     return this.http;
