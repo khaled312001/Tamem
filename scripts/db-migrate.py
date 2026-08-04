@@ -107,6 +107,24 @@ TABLES = {
           UNIQUE KEY `ProductSection_nameAr_key` (`nameAr`)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     """,
+    # Per-user favourites (saved stores) + wishlist (saved products), so they
+    # survive reinstalls and sync across devices. `collection` distinguishes the
+    # two; `targetId` is a MerchantProfile.id or a Product.id (kept loose — no FK
+    # — so a deleted target just stops resolving instead of erroring the write).
+    "Favorite": """
+        CREATE TABLE `Favorite` (
+          `id` varchar(191) NOT NULL,
+          `userId` varchar(191) NOT NULL,
+          `collection` varchar(20) NOT NULL,
+          `targetId` varchar(191) NOT NULL,
+          `createdAt` datetime(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+          PRIMARY KEY (`id`),
+          UNIQUE KEY `Favorite_user_col_target_key` (`userId`,`collection`,`targetId`),
+          KEY `Favorite_userId_idx` (`userId`),
+          CONSTRAINT `Favorite_userId_fk` FOREIGN KEY (`userId`)
+            REFERENCES `User` (`id`) ON DELETE CASCADE
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
 }
 
 # One-time data seeds, run after the tables exist. Each is (table, sql) and runs

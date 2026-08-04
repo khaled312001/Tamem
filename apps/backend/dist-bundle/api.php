@@ -6214,6 +6214,85 @@ if ($method === 'GET' && $path === '/me/wallet') {
 }
 
 // ═══ /me/addresses ═════════════════════════════════════════════════════
+// ─── Favourites (saved stores) + wishlist (saved products) — per user ─────
+// Kept server-side so they survive a reinstall / new device and sync across
+// them. The mobile favorites store mirrors these ids locally for instant hearts.
+if ($method === 'GET' && $path === '/me/favorites') {
+    $u = authUser(); $uid = (string) ($u['sub'] ?? '');
+    // JOIN drops targets that were since deleted, so a stale favourite just
+    // disappears instead of rendering a broken card. Newest first.
+    $mq = db()->prepare(
+        "SELECT mp.id, mp.storeNameAr, mp.logoUrl, mp.rating, mp.isOpen, c.nameAr AS categoryNameAr
+         FROM `Favorite` f JOIN `MerchantProfile` mp ON mp.id = f.targetId
+         LEFT JOIN `Category` c ON c.id = mp.categoryId
+         WHERE f.userId = ? AND f.collection = 'merchant' ORDER BY f.createdAt DESC"
+    );
+    $mq->execute([$uid]);
+    $merchants = array_map(fn($r) => [
+        'id' => $r['id'], 'storeNameAr' => $r['storeNameAr'], 'logoUrl' => $r['logoUrl'],
+        'rating' => $r['rating'] !== null ? (float) $r['rating'] : null,
+        'isOpen' => (bool) (int) $r['isOpen'],
+        'category' => $r['categoryNameAr'] !== null ? ['nameAr' => $r['categoryNameAr']] : null,
+    ], $mq->fetchAll());
+
+    $pq = db()->prepare(
+        "SELECT p.id, p.nameAr, p.price, p.salePrice, p.discount, p.saleEndsAt, p.imageUrl,
+                mp.id AS merchantId, mp.storeNameAr AS merchantName
+         FROM `Favorite` f JOIN `Product` p ON p.id = f.targetId
+         LEFT JOIN `MerchantProfile` mp ON mp.id = p.merchantId
+         WHERE f.userId = ? AND f.collection = 'product' ORDER BY f.createdAt DESC"
+    );
+    $pq->execute([$uid]);
+    $products = array_map(fn($r) => [
+        'id' => $r['id'], 'nameAr' => $r['nameAr'],
+        'price' => $r['price'], 'salePrice' => $r['salePrice'], 'discount' => $r['discount'],
+        'saleEndsAt' => $r['saleEndsAt'] ? isoZ($r['saleEndsAt']) : null, 'imageUrl' => $r['imageUrl'],
+        'merchant' => $r['merchantId'] ? ['id' => $r['merchantId'], 'storeNameAr' => $r['merchantName']] : null,
+    ], $pq->fetchAll());
+
+    jsonOk(['merchant' => $merchants, 'product' => $products]);
+}
+if ($method === 'POST' && $path === '/me/favorites/merge') {
+    $u = authUser(); $uid = (string) ($u['sub'] ?? '');
+    $b = readJsonBody();
+    $ins = db()->prepare('INSERT IGNORE INTO `Favorite` (id, userId, `collection`, targetId, createdAt) VALUES (?,?,?,?,NOW(3))');
+    foreach (['merchant', 'product'] as $col) {
+        if (is_array($b[$col] ?? null)) {
+            foreach ($b[$col] as $tid) { $tid = trim((string) $tid); if ($tid !== '') $ins->execute([newId(), $uid, $col, $tid]); }
+        }
+    }
+    $out = [];
+    foreach (['merchant', 'product'] as $col) {
+        $q = db()->prepare('SELECT targetId FROM `Favorite` WHERE userId = ? AND `collection` = ?');
+        $q->execute([$uid, $col]);
+        $out[$col] = array_map('strval', array_column($q->fetchAll(), 'targetId'));
+    }
+    jsonOk($out);
+}
+if ($method === 'POST' && $path === '/me/favorites') {
+    $u = authUser(); $uid = (string) ($u['sub'] ?? '');
+    $b = readJsonBody();
+    $col = ($b['collection'] ?? '') === 'product' ? 'product' : 'merchant';
+    $tid = trim((string) ($b['targetId'] ?? ''));
+    if ($tid === '') jsonErr('targetId مطلوب', 422, 'VALIDATION_ERROR');
+    db()->prepare('INSERT IGNORE INTO `Favorite` (id, userId, `collection`, targetId, createdAt) VALUES (?,?,?,?,NOW(3))')
+        ->execute([newId(), $uid, $col, $tid]);
+    jsonOk(['ok' => true]);
+}
+if ($method === 'DELETE' && $path === '/me/favorites') {
+    $u = authUser(); $uid = (string) ($u['sub'] ?? '');
+    $b = readJsonBody();
+    $col = ($b['collection'] ?? '') === 'product' ? 'product' : 'merchant';
+    if (!empty($b['all'])) {
+        db()->prepare('DELETE FROM `Favorite` WHERE userId = ? AND `collection` = ?')->execute([$uid, $col]);
+    } else {
+        $tid = trim((string) ($b['targetId'] ?? ''));
+        if ($tid === '') jsonErr('targetId مطلوب', 422, 'VALIDATION_ERROR');
+        db()->prepare('DELETE FROM `Favorite` WHERE userId = ? AND `collection` = ? AND targetId = ?')->execute([$uid, $col, $tid]);
+    }
+    jsonOk(['ok' => true]);
+}
+
 if ($method === 'GET' && $path === '/me/addresses') {
     $u = authUser();
     // Return the zone (IDs + names + the live delivery fee) alongside each
