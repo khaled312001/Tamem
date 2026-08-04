@@ -37,13 +37,15 @@ import { PopularStoresSection } from './components/PopularStoresSection';
 import { ProductRail } from './components/ProductRail';
 import { PromoCardsRow } from './components/PromoCardsRow';
 import { QuickActionsSection, type QuickAction } from './components/QuickActionsSection';
-import type {
-  HomeCategory,
-  HomeProduct,
-  Merchant,
-  Offer,
-  ServiceKey,
-  ServiceRoute,
+import {
+  resolveHomeSections,
+  type HomeCategory,
+  type HomeProduct,
+  type HomeSectionKey,
+  type Merchant,
+  type Offer,
+  type ServiceKey,
+  type ServiceRoute,
 } from './homeData';
 import { useHomeData } from './useHomeData';
 
@@ -256,6 +258,89 @@ export function HomeV2Screen() {
 
   const locationLabel = defaultAddress?.label ?? (needsAddress ? 'أضف عنوان' : 'اختر العنوان');
 
+  // Admin-defined order + visibility (+ title override). Empty → built-in order.
+  const sections = useMemo(
+    () => resolveHomeSections(homeConfig?.sectionLayout),
+    [homeConfig?.sectionLayout],
+  );
+
+  // One node per section key. Returns null when the section has no data to show
+  // (empty rail, no live offer, trust strip toggled off) so it collapses fully.
+  const renderSection = (key: HomeSectionKey, title?: string): React.ReactNode => {
+    switch (key) {
+      case 'services':
+        return <MainServicesSection services={services} />;
+      case 'offersSlider':
+        return bannerOffers.length > 0 ? (
+          <OffersCarousel offers={bannerOffers} onPressOffer={onPressOffer} />
+        ) : null;
+      case 'categories':
+        return (
+          <CategoriesSection
+            categories={categories ?? []}
+            merchants={nearbyMerchants}
+            onPressCategory={onPressCategory}
+            onPressSeeAll={goStores}
+          />
+        );
+      case 'productSections':
+        return <SectionsSection onPressSection={onPressSection} />;
+      case 'featuredProducts':
+        return (
+          <ProductRail
+            title={title || 'الأكثر طلباً'}
+            products={featuredProducts}
+            onPressProduct={onPressProduct}
+          />
+        );
+      case 'deals':
+        return (
+          <ProductRail
+            title={title || 'عروض اليوم'}
+            subtitle="خصومات سارية الآن"
+            products={dealProducts}
+            onPressProduct={onPressProduct}
+            onPressSeeAll={goDeals}
+            onProductExpire={refetchAll}
+          />
+        );
+      case 'popularStores':
+        return (
+          <PopularStoresSection
+            merchants={featuredMerchants}
+            onPressMerchant={onPressMerchant}
+            onPressSeeAll={goStores}
+          />
+        );
+      case 'nearbyStores':
+        return (
+          <NearbyStoresSection
+            merchants={nearbyMerchants}
+            total={merchantsTotal}
+            hasLocation={hasLocation}
+            filter={storeFilter}
+            onChangeFilter={setStoreFilter}
+            onPressMerchant={onPressMerchant}
+            visibleCount={storesShown}
+            onShowMore={() => setStoresShown((n) => n + STORES_PAGE)}
+          />
+        );
+      case 'promoCards':
+        return <PromoCardsRow onPressTrack={goTracking} onPressFastDelivery={goFastDelivery} />;
+      case 'trustStrip':
+        return homeConfig?.showTrustStrip !== false ? (
+          <BenefitsBar
+            title={homeConfig?.trustStripTitle}
+            subtitle={homeConfig?.trustStripSubtitle}
+          />
+        ) : null;
+      case 'quickActions':
+        return <QuickActionsSection actions={quickActions} />;
+      default:
+        return null;
+    }
+  };
+
   if (isInitialLoading) {
     return (
       <SafeAreaView edges={['top']} style={styles.container}>
@@ -305,115 +390,27 @@ export function HomeV2Screen() {
           </View>
         )}
 
-        {/* ─────────────────────────────────────────────────────────────
-            Section order is by IMPORTANCE, top to bottom:
-              1. act        — a live order, then the 3 core services
-              2. promote    — the offers banner
-              3. discover   — browse by store type, then by food kind
-              4. drive      — most-ordered products, today's deals, popular
-              5. local      — stores near you
-              6. utility    — quick order / track shortcuts
-              7. reassure   — trust strip
-              8. shortcuts  — wallet / coupons / favourites
-            ───────────────────────────────────────────────────────────── */}
-
-        {/* 1 — Live order (only while one is in flight) + the 3 core actions. */}
+        {/* The live-order card is contextual — it stays pinned above the
+            reorderable list whenever an order is in flight. */}
         {!!activeOrder && (
           <View style={styles.section}>
             <ActiveOrderCard order={activeOrder} onPress={goActiveOrder} />
           </View>
         )}
 
-        <View style={styles.section}>
-          <MainServicesSection services={services} />
-        </View>
-
-        {/* 2 — Promotional banner (only when there's a live offer). */}
-        {bannerOffers.length > 0 && (
-          <View style={styles.section}>
-            <OffersCarousel offers={bannerOffers} onPressOffer={onPressOffer} />
-          </View>
-        )}
-
-        {/* 3 — Discovery: by store type (مطاعم/صيدليات), then by food kind
-            (بيتزا/كريب) across every store. Both are prime browse entry points,
-            so they sit high rather than at the bottom. */}
-        <View style={styles.section}>
-          <CategoriesSection
-            categories={categories ?? []}
-            merchants={nearbyMerchants}
-            onPressCategory={onPressCategory}
-            onPressSeeAll={goStores}
-          />
-        </View>
-
-        <View style={styles.section}>
-          <SectionsSection onPressSection={onPressSection} />
-        </View>
-
-        {/* 4 — Order-drivers. Each renders nothing when empty:
-            الأكثر طلباً only when admin pins products, عروض اليوم only while
-            something is on sale. */}
-        <View style={styles.section}>
-          <ProductRail
-            title="الأكثر طلباً"
-            products={featuredProducts}
-            onPressProduct={onPressProduct}
-          />
-        </View>
-
-        <View style={styles.section}>
-          <ProductRail
-            title="عروض اليوم"
-            subtitle="خصومات سارية الآن"
-            products={dealProducts}
-            onPressProduct={onPressProduct}
-            onPressSeeAll={goDeals}
-            onProductExpire={refetchAll}
-          />
-        </View>
-
-        <View style={styles.section}>
-          <PopularStoresSection
-            merchants={featuredMerchants}
-            onPressMerchant={onPressMerchant}
-            onPressSeeAll={goStores}
-          />
-        </View>
-
-        {/* 5 — Stores near the customer. */}
-        <View style={styles.section}>
-          <NearbyStoresSection
-            merchants={nearbyMerchants}
-            total={merchantsTotal}
-            hasLocation={hasLocation}
-            filter={storeFilter}
-            onChangeFilter={setStoreFilter}
-            onPressMerchant={onPressMerchant}
-            visibleCount={storesShown}
-            onShowMore={() => setStoresShown((n) => n + STORES_PAGE)}
-          />
-        </View>
-
-        {/* 6 — Quick-order / track shortcuts. */}
-        <View style={styles.section}>
-          <PromoCardsRow onPressTrack={goTracking} onPressFastDelivery={goFastDelivery} />
-        </View>
-
-        {/* 7 — Trust strip: informational, so it sits low. */}
-        {homeConfig?.showTrustStrip !== false && (
-          <View style={styles.section}>
-            <BenefitsBar
-              title={homeConfig?.trustStripTitle}
-              subtitle={homeConfig?.trustStripSubtitle}
-            />
-          </View>
-        )}
-
-        {/* 8 — Utility shortcuts (wallet / coupons / favourites). */}
-        <View style={styles.section}>
-          <QuickActionsSection actions={quickActions} />
-        </View>
+        {/* Every other section renders in the admin's order + visibility
+            (صفحة التطبيق › ترتيب الأقسام). An empty layout = the built-in order,
+            and each section still collapses to nothing when it has no data. */}
+        {sections.map(({ key, visible, title }) => {
+          if (!visible) return null;
+          const node = renderSection(key, title);
+          if (!node) return null;
+          return (
+            <View key={key} style={styles.section}>
+              {node}
+            </View>
+          );
+        })}
       </ScrollView>
 
       {/* Self-positioned (absolute, bottom-start) — same lamp as the old home. */}

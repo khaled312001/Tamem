@@ -2168,7 +2168,7 @@ if ($method === 'GET' && $path === '/admin/home-config') {
     $row = $rows[0] ?? null;
     // Prisma stores longtext JSON columns as raw strings — decode them
     // before sending so `.join()` / `.length` / `.map()` work client-side.
-    $jsonFields = ['heroGradient', 'visibleServiceKeys', 'featuredMerchantIds', 'featuredOfferIds', 'featuredProductIds'];
+    $jsonFields = ['heroGradient', 'visibleServiceKeys', 'featuredMerchantIds', 'featuredOfferIds', 'featuredProductIds', 'sectionLayout'];
     if ($row) {
         foreach ($jsonFields as $f) {
             if (isset($row[$f]) && is_string($row[$f]) && $row[$f] !== '') {
@@ -2190,6 +2190,8 @@ if ($method === 'GET' && $path === '/admin/home-config') {
             'visibleServiceKeys' => null,
             'featuredMerchantIds' => null,
             'featuredOfferIds' => null,
+            'featuredProductIds' => null,
+            'sectionLayout' => null,
             'showPromoBanner' => false,
             'showTrustStrip' => false,
         ]);
@@ -4928,7 +4930,9 @@ if ($method === 'PATCH' && $path === '/admin/home-config') {
     if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
     $b = readJsonBody();
     $stringFields = ['heroGreeting', 'heroSubtitle', 'trustStripTitle', 'trustStripSubtitle', 'promoBannerCouponId', 'promoBannerTitle', 'promoBannerCode'];
-    $jsonFields = ['heroGradient', 'visibleServiceKeys', 'featuredMerchantIds', 'featuredOfferIds'];
+    // featuredProductIds was read back but never written (the picker silently
+    // never saved); sectionLayout is the new home-section order/visibility.
+    $jsonFields = ['heroGradient', 'visibleServiceKeys', 'featuredMerchantIds', 'featuredOfferIds', 'featuredProductIds', 'sectionLayout'];
     $boolFields = ['showPromoBanner', 'showTrustStrip'];
 
     $sets = [];
@@ -7759,7 +7763,7 @@ if ($method === 'GET' && $path === '/home-config') {
     $cfg = boolCast(jsonizeRow($cfg), ['showPromoBanner', 'showTrustStrip']);
     // heroGradient / visibleServiceKeys / featuredMerchantIds / featuredOfferIds
     // are spread + .includes()-ed client-side — must be arrays or null, never {}.
-    foreach (['heroGradient', 'visibleServiceKeys', 'featuredMerchantIds', 'featuredOfferIds', 'featuredProductIds'] as $k) {
+    foreach (['heroGradient', 'visibleServiceKeys', 'featuredMerchantIds', 'featuredOfferIds', 'featuredProductIds', 'sectionLayout'] as $k) {
         if (!array_key_exists($k, $cfg) || !is_array($cfg[$k] ?? null)) $cfg[$k] = $cfg[$k] ?? null;
     }
     $cfg['promoCoupon'] = null;

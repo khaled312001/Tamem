@@ -109,6 +109,82 @@ export interface HomeConfig {
   featuredProductIds: string[] | null;
   showPromoBanner: boolean;
   showTrustStrip: boolean;
+  /** Admin-defined order + visibility (+ title override) for the home sections.
+   *  null → the built-in default order below. */
+  sectionLayout: HomeSectionConfig[] | null;
+}
+
+/** The reorderable/hideable sections of the home screen. Keep in sync with the
+ *  dashboard's home-settings "ترتيب الأقسام" tab (it can't import this file). */
+export type HomeSectionKey =
+  | 'services'
+  | 'offersSlider'
+  | 'categories'
+  | 'productSections'
+  | 'featuredProducts'
+  | 'deals'
+  | 'popularStores'
+  | 'nearbyStores'
+  | 'promoCards'
+  | 'trustStrip'
+  | 'quickActions';
+
+export interface HomeSectionConfig {
+  key: HomeSectionKey;
+  visible: boolean;
+  /** Optional title override — only honoured by the titled rails. */
+  title?: string | null;
+}
+
+/**
+ * Built-in order + default titles. This IS the current home order, so an empty
+ * `sectionLayout` reproduces today's screen exactly. `title` is only meaningful
+ * for the two product rails; the other sections carry their own headers.
+ */
+export const DEFAULT_HOME_SECTIONS: { key: HomeSectionKey; defaultTitle?: string }[] = [
+  { key: 'services' },
+  { key: 'offersSlider' },
+  { key: 'categories' },
+  { key: 'productSections' },
+  { key: 'featuredProducts', defaultTitle: 'الأكثر طلباً' },
+  { key: 'deals', defaultTitle: 'عروض اليوم' },
+  { key: 'popularStores' },
+  { key: 'nearbyStores' },
+  { key: 'promoCards' },
+  { key: 'trustStrip' },
+  { key: 'quickActions' },
+];
+
+/**
+ * Merge the admin's saved layout over the built-in order. Honours order,
+ * visibility and title for configured keys, drops unknown keys, and APPENDS any
+ * built-in section the saved layout predates — so shipping a new home section
+ * never requires the admin to re-save, it just shows up at the end.
+ */
+export function resolveHomeSections(
+  layout: HomeSectionConfig[] | null | undefined,
+): { key: HomeSectionKey; visible: boolean; title?: string }[] {
+  const defaults = DEFAULT_HOME_SECTIONS;
+  const titleOf = (k: HomeSectionKey) => defaults.find((s) => s.key === k)?.defaultTitle;
+  if (!Array.isArray(layout) || layout.length === 0) {
+    return defaults.map((s) => ({ key: s.key, visible: true, title: s.defaultTitle }));
+  }
+  const known = new Set(defaults.map((s) => s.key));
+  const seen = new Set<HomeSectionKey>();
+  const out: { key: HomeSectionKey; visible: boolean; title?: string }[] = [];
+  for (const item of layout) {
+    if (!item || !known.has(item.key) || seen.has(item.key)) continue;
+    seen.add(item.key);
+    out.push({
+      key: item.key,
+      visible: item.visible !== false,
+      title: (item.title && item.title.trim()) || titleOf(item.key),
+    });
+  }
+  for (const s of defaults) {
+    if (!seen.has(s.key)) out.push({ key: s.key, visible: true, title: s.defaultTitle });
+  }
+  return out;
 }
 
 /** Statuses that mean "this order is still in flight" → show the active card. */
