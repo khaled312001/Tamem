@@ -15,7 +15,7 @@ import { ScreenHeader } from '../components/ScreenHeader';
 import { DEFAULT_CONTACTS, TAMEM_ADDRESS_AR } from '../config/contact';
 import { colors, fontFamilies, fontSizes, radii, spacing } from '../theme/tokens';
 
-const SUPPORT_EMAIL = 'support@deliverytamem.com';
+const SUPPORT_EMAIL = 'info@deliverytamem.com';
 
 async function openURL(url: string) {
   try {
