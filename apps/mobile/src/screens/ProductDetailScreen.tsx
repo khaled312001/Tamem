@@ -325,7 +325,9 @@ export function ProductDetailScreen() {
             </Pressable>
             {hasSale && (
               <View style={styles.discountBadge}>
-                <Text style={styles.discountText}>خصم {discountPct}%</Text>
+                <Text
+                  style={styles.discountText}
+                >{`خصم ${Number(discountPct).toLocaleString('ar-EG')}٪`}</Text>
               </View>
             )}
           </SafeAreaView>
@@ -376,7 +378,9 @@ export function ProductDetailScreen() {
             )}
             {offPct > 0 && (
               <View style={styles.offPill}>
-                <Text style={styles.offPillText}>-{Math.round(offPct)}%</Text>
+                <Text
+                  style={styles.offPillText}
+                >{`خصم ${Math.round(offPct).toLocaleString('ar-EG')}٪`}</Text>
               </View>
             )}
             {data.unit ? <Text style={styles.unitText}>/ {data.unit}</Text> : null}
