@@ -8,14 +8,18 @@
  */
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
+  ArrowDown,
+  ArrowUp,
   Eye,
   EyeOff,
   Gift,
   Images,
+  ListOrdered,
   Package,
   Search,
   Loader2,
   Palette,
+  RotateCcw,
   Save,
   ShieldCheck,
   Smartphone,
@@ -47,6 +51,71 @@ interface HomeConfig {
   featuredProductIds: string[] | null;
   showPromoBanner: boolean;
   showTrustStrip: boolean;
+  sectionLayout: SectionItem[] | null;
+}
+
+/** One home section's order slot. Mirrors the mobile HomeSectionConfig. */
+interface SectionItem {
+  key: string;
+  visible: boolean;
+  title?: string | null;
+}
+
+/**
+ * The reorderable/hideable home sections — MUST stay in sync (keys + order) with
+ * the mobile DEFAULT_HOME_SECTIONS in apps/mobile/.../home/homeData.ts. Only the
+ * two product rails carry an editable title; the rest own their headers.
+ */
+const HOME_SECTIONS: {
+  key: string;
+  label: string;
+  hint?: string;
+  renamable?: boolean;
+  defaultTitle?: string;
+}[] = [
+  { key: 'services', label: 'الخدمات الرئيسية', hint: 'دليفري · شحن · تاجر' },
+  { key: 'offersSlider', label: 'سلايدر العروض', hint: 'يظهر فقط لو فيه شرائح' },
+  { key: 'categories', label: 'التصنيفات', hint: 'مطاعم · صيدليات …' },
+  { key: 'productSections', label: 'أقسام المنتجات', hint: 'بيتزا · كريب …' },
+  {
+    key: 'featuredProducts',
+    label: 'الأكثر طلباً',
+    hint: 'يظهر فقط لو اخترت منتجات',
+    renamable: true,
+    defaultTitle: 'الأكثر طلباً',
+  },
+  {
+    key: 'deals',
+    label: 'عروض اليوم',
+    hint: 'يظهر تلقائياً لو فيه خصومات',
+    renamable: true,
+    defaultTitle: 'عروض اليوم',
+  },
+  { key: 'popularStores', label: 'متاجر مميزة', hint: 'الرَّف الأفقي للمتاجر' },
+  { key: 'nearbyStores', label: 'متاجر قريبة منك', hint: 'القائمة الرأسية' },
+  { key: 'promoCards', label: 'بطاقات (تتبع الطلب / توصيل سريع)' },
+  { key: 'trustStrip', label: 'شريط الثقة', hint: 'يتحكم في إظهاره تبويب «شريط الثقة» أيضاً' },
+  { key: 'quickActions', label: 'اختصارات (محفظة · كوبونات · مفضلة)' },
+];
+
+/** Merge a saved layout over the canonical list: keep configured order, append
+ *  any new section the saved layout predates. Mirrors the mobile resolver. */
+function resolveLayout(saved: SectionItem[] | null | undefined): SectionItem[] {
+  const known = new Set(HOME_SECTIONS.map((s) => s.key));
+  if (!Array.isArray(saved) || saved.length === 0) {
+    return HOME_SECTIONS.map((s) => ({ key: s.key, visible: true, title: s.defaultTitle ?? null }));
+  }
+  const seen = new Set<string>();
+  const out: SectionItem[] = [];
+  for (const it of saved) {
+    if (!it || !known.has(it.key) || seen.has(it.key)) continue;
+    seen.add(it.key);
+    out.push({ key: it.key, visible: it.visible !== false, title: it.title ?? null });
+  }
+  for (const s of HOME_SECTIONS) {
+    if (!seen.has(s.key)) out.push({ key: s.key, visible: true, title: s.defaultTitle ?? null });
+  }
+  return out;
 }
 
 interface Service {
@@ -75,9 +144,18 @@ interface Coupon {
   maxDiscount?: number | string | null;
 }
 
-type TabKey = 'hero' | 'slider' | 'promo' | 'services' | 'merchants' | 'products' | 'trust';
+type TabKey =
+  | 'layout'
+  | 'hero'
+  | 'slider'
+  | 'promo'
+  | 'services'
+  | 'merchants'
+  | 'products'
+  | 'trust';
 
 const TABS: { key: TabKey; label: string; Icon: typeof Smartphone }[] = [
+  { key: 'layout', label: 'ترتيب الأقسام', Icon: ListOrdered },
   { key: 'hero', label: 'الرأس', Icon: Palette },
   { key: 'slider', label: 'سلايدر العروض', Icon: Images },
   { key: 'promo', label: 'بانر العروض', Icon: Gift },
@@ -92,7 +170,7 @@ const TABS: { key: TabKey; label: string; Icon: typeof Smartphone }[] = [
 export function HomeSettingsPage() {
   const qc = useQueryClient();
   const navigate = useNavigate();
-  const [tab, setTab] = useState<TabKey>('hero');
+  const [tab, setTab] = useState<TabKey>('layout');
 
   const { data: cfg, isLoading } = useQuery({
     queryKey: ['admin', 'home-config'],
@@ -202,6 +280,7 @@ export function HomeSettingsPage() {
       </div>
 
       {/* Tab content */}
+      {tab === 'layout' && <LayoutTab form={form} update={update} />}
       {tab === 'hero' && <HeroTab form={form} update={update} />}
       {tab === 'promo' && (
         <PromoTab
@@ -236,6 +315,122 @@ export function HomeSettingsPage() {
       {tab === 'slider' && <SliderTab />}
       {tab === 'trust' && <TrustTab form={form} update={update} />}
     </div>
+  );
+}
+
+// ── Tab: Layout (section order + visibility + rename) ────────────────────
+
+function LayoutTab({
+  form,
+  update,
+}: {
+  form: HomeConfig;
+  update: <K extends keyof HomeConfig>(key: K, value: HomeConfig[K]) => void;
+}) {
+  const items = resolveLayout(form.sectionLayout);
+  const metaOf = (key: string) => HOME_SECTIONS.find((s) => s.key === key);
+  const visibleCount = items.filter((s) => s.visible).length;
+
+  const commit = (next: SectionItem[]) => update('sectionLayout', next);
+  const move = (i: number, dir: -1 | 1) => {
+    const j = i + dir;
+    if (j < 0 || j >= items.length) return;
+    const next = items.slice();
+    const tmp = next[i]!;
+    next[i] = next[j]!;
+    next[j] = tmp;
+    commit(next);
+  };
+  const setAt = (i: number, patch: Partial<SectionItem>) => {
+    const next = items.slice();
+    next[i] = { ...next[i]!, ...patch };
+    commit(next);
+  };
+
+  return (
+    <SectionCard
+      hint="رتّب أقسام الصفحة الرئيسية، أظهِر/أخفِ أي قسم، وأعِد تسمية رفوف المنتجات. الترتيب من أعلى لأسفل — لا تنسَ الحفظ."
+      rightSlot={
+        form.sectionLayout ? (
+          <button
+            onClick={() => update('sectionLayout', null)}
+            className="inline-flex items-center gap-1.5 text-xs font-bold text-brand-red hover:underline"
+            title="العودة للترتيب الافتراضي"
+          >
+            <RotateCcw className="w-3.5 h-3.5" /> الترتيب الافتراضي
+          </button>
+        ) : (
+          <span className="text-xs text-muted-foreground">الترتيب الافتراضي مطبّق</span>
+        )
+      }
+    >
+      <div className="text-xs text-muted-foreground -mt-2">
+        {visibleCount} من {items.length} أقسام ظاهرة
+      </div>
+
+      <div className="space-y-2">
+        {items.map((s, i) => {
+          const meta = metaOf(s.key);
+          return (
+            <div
+              key={s.key}
+              className={`rounded-xl border p-3 transition ${
+                s.visible ? 'border-border bg-card' : 'border-dashed border-border bg-muted/40'
+              }`}
+            >
+              <div className="flex items-center gap-3">
+                <div className="flex flex-col">
+                  <button
+                    onClick={() => move(i, -1)}
+                    disabled={i === 0}
+                    className="p-0.5 rounded hover:bg-muted disabled:opacity-30"
+                    title="تحريك لأعلى"
+                  >
+                    <ArrowUp className="w-4 h-4" />
+                  </button>
+                  <button
+                    onClick={() => move(i, 1)}
+                    disabled={i === items.length - 1}
+                    className="p-0.5 rounded hover:bg-muted disabled:opacity-30"
+                    title="تحريك لأسفل"
+                  >
+                    <ArrowDown className="w-4 h-4" />
+                  </button>
+                </div>
+
+                <div className="grid place-items-center w-7 h-7 rounded-lg bg-muted text-xs font-black text-muted-foreground shrink-0">
+                  {i + 1}
+                </div>
+
+                <div className="flex-1 min-w-0">
+                  <div className={`font-bold truncate ${s.visible ? '' : 'text-muted-foreground'}`}>
+                    {meta?.label ?? s.key}
+                  </div>
+                  {meta?.hint && (
+                    <div className="text-xs text-muted-foreground truncate">{meta.hint}</div>
+                  )}
+                </div>
+
+                <Toggle value={s.visible} onChange={(v) => setAt(i, { visible: v })} />
+              </div>
+
+              {meta?.renamable && s.visible && (
+                <div className="mt-2 ps-16">
+                  <Field label="عنوان الرَّف">
+                    <Input
+                      value={s.title ?? ''}
+                      onChange={(e) => setAt(i, { title: e.target.value || null })}
+                      placeholder={meta.defaultTitle}
+                      maxLength={60}
+                    />
+                  </Field>
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </SectionCard>
   );
 }
 

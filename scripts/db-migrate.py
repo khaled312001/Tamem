@@ -34,6 +34,10 @@ MIGRATIONS = [
     # passes, the discount is ignored everywhere (price reverts) and the item
     # drops out of the deals rail, with no cron job. NULL = no time limit.
     ("Product", "saleEndsAt", "datetime(3) NULL"),
+    # Admin-defined ordering + visibility (+ optional title override) for the
+    # mobile home sections. JSON array of {key, visible, title?}. NULL = the
+    # app's built-in default order, so this is fully backward-compatible.
+    ("HomeConfig", "sectionLayout", "longtext NULL"),
 ]
 
 # Tables created if absent.
