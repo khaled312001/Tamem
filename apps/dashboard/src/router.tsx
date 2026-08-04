@@ -43,6 +43,10 @@ import { MerchantPanelPage } from './routes/merchant-panel.js';
 function RequireAuth({ children }: { children: React.ReactNode }) {
   const user = useAuth((s) => s.user);
   if (!user) return <Navigate to="/login" replace />;
+  // A merchant has no business on the admin pages: the API answers 403 for every
+  // /admin/* call, so without this they'd land on a shell full of error toasts.
+  // Send them to their own panel instead. (The real boundary is server-side.)
+  if ((user as { role?: string }).role === 'MERCHANT') return <Navigate to="/merchant" replace />;
   return <>{children}</>;
 }
 
