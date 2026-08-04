@@ -60,6 +60,8 @@ const updateMerchantSchema = createMerchantSchema
   .extend({
     isOpen: z.boolean().optional(),
     isActive: z.boolean().optional(),
+    ownerPassword: z.string().trim().min(6).max(100).optional(),
+    password: z.string().trim().min(6).max(100).optional(),
     // Admin can change the owner's login phone + secondary contacts.
     ownerPhone: z
       .string()
@@ -300,6 +302,10 @@ export const update: RequestHandler = async (req, res, next) => {
     const userPatch: Record<string, unknown> = {};
     if (input.ownerName) userPatch.name = input.ownerName;
     if (typeof input.isActive === 'boolean') userPatch.isActive = input.isActive;
+    const pwd = input.ownerPassword || input.password;
+    if (pwd && pwd.trim().length >= 6) {
+      userPatch.passwordHash = await bcrypt.hash(pwd.trim(), 12);
+    }
     if (input.ownerPhone) {
       // Prevent silent collision with another account.
       const clash = await prisma.user.findUnique({

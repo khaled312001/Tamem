@@ -31,9 +31,15 @@ import urllib.request
 # Derived from this script's location so the deploy points at the file being
 # edited regardless of where the repo is checked out. The old hardcoded
 # E:\Tamem\apps\... path pointed at a directory that doesn't exist.
-_REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_REPO = os.path.dirname(os.path.abspath(__file__))
 HANDOFF = os.path.join(os.path.dirname(_REPO), "HANDOFF.md")
-LOCAL = os.path.join(_REPO, "apps", "backend", "dist-bundle", "api.php")
+if not os.path.exists(HANDOFF):
+    HANDOFF = os.path.join(_REPO, "..", "HANDOFF.md")
+if not os.path.exists(HANDOFF):
+    HANDOFF = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "Tamem", "HANDOFF.md")
+if not os.path.exists(HANDOFF):
+    HANDOFF = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "HANDOFF.md"))
+LOCAL = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "apps", "backend", "dist-bundle", "api.php"))
 HOST, PORT, USER = "77.37.37.207", 65002, "u748721963"
 HEALTH_URL = "https://backendtamem.deliverytamem.com/api/v1/health"
 

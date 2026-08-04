@@ -38,18 +38,16 @@ export function Dialog({
             sizes[size],
           )}
         >
-          {(title || description) && (
+          {title && (
             <div className="mb-4">
-              {title && (
-                <DialogPrimitive.Title className="text-lg font-black text-brand-dark">
-                  {title}
-                </DialogPrimitive.Title>
-              )}
-              {description && (
-                <DialogPrimitive.Description className="text-sm text-muted-foreground mt-1">
-                  {description}
-                </DialogPrimitive.Description>
-              )}
+              <DialogPrimitive.Title className="text-lg font-black text-brand-dark">
+                {title}
+              </DialogPrimitive.Title>
+              <DialogPrimitive.Description
+                className={cn('text-sm text-muted-foreground mt-1', !description && 'sr-only')}
+              >
+                {description || title || 'تفاصيل النافذة'}
+              </DialogPrimitive.Description>
             </div>
           )}
           {children}

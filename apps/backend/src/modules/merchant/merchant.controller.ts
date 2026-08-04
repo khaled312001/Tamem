@@ -349,14 +349,23 @@ const createProductSchema = z.object({
   sortOrder: z.number().int().default(0),
 });
 
-const updateProductSchema = z
-  .object({
-    name: z.string().trim().min(1).max(255).optional(),
-    price: z.number().nonnegative().optional(),
-    unit: z.string().max(50).nullable().optional(),
-    isAvailable: z.boolean().optional(),
-  })
-  .strict();
+const updateProductSchema = z.object({
+  name: z.string().trim().min(1).max(255).optional(),
+  nameAr: z.string().trim().min(1).max(255).optional(),
+  description: z.string().max(2000).optional().nullable(),
+  imageUrl: z.string().url().optional().nullable(),
+  imageUrls: z.array(z.string().url()).max(5).optional(),
+  price: z.number().nonnegative().optional(),
+  salePrice: z.number().nonnegative().optional().nullable(),
+  discount: z.number().min(0).max(90).optional().nullable(),
+  availableFrom: hhmmSchema.optional().or(z.literal('')).or(z.null()),
+  availableTo: hhmmSchema.optional().or(z.literal('')).or(z.null()),
+  unit: z.string().max(50).nullable().optional(),
+  isAvailable: z.boolean().optional(),
+  stock: z.number().int().nonnegative().optional().nullable(),
+  sortOrder: z.number().int().optional(),
+  categoryName: z.string().trim().max(120).optional().nullable(),
+});
 
 /**
  * Strip empty-string sentinels the mobile form sends for cleared optional
@@ -444,6 +453,21 @@ export const removeProduct: RequestHandler = async (req, res, next) => {
       data: { isHidden: true },
     });
     noContent(res);
+  } catch (err) {
+    next(err);
+  }
+};
+
+/**
+ * GET /merchant/products/:id — fetch a single product for the edit form.
+ * Scoped to the current merchant so a merchant can't peek at another store's
+ * catalog by guessing product IDs.
+ */
+export const getProduct: RequestHandler = async (req, res, next) => {
+  try {
+    if (!req.user) throw new UnauthorizedError();
+    const product = await loadOwnProduct(req.user.id, param(req.params.id));
+    ok(res, product);
   } catch (err) {
     next(err);
   }

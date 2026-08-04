@@ -28,9 +28,13 @@ import urllib.request
 # Paths are derived from this script's own location so the deploy can't break
 # when the repo is checked out somewhere other than E:\Tamem\Tamem. (A hardcoded
 # E:\Tamem\apps\... path silently pointed at a directory that doesn't exist.)
-_REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_REPO = os.path.dirname(os.path.abspath(__file__))
 HANDOFF = os.path.join(os.path.dirname(_REPO), "HANDOFF.md")
-LOCAL_DIST = os.path.join(_REPO, "apps", "dashboard", "dist")
+if not os.path.exists(HANDOFF):
+    HANDOFF = os.path.join(_REPO, "..", "HANDOFF.md")
+if not os.path.exists(HANDOFF):
+    HANDOFF = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "HANDOFF.md"))
+LOCAL_DIST = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "apps", "dashboard", "dist"))
 REMOTE_BASE = "/home/u748721963/domains/deliverytamem.com/public_html"
 REMOTE_DIR = posixpath.join(REMOTE_BASE, "super_admin")
 URL = "https://deliverytamem.com/super_admin/"
@@ -110,6 +114,7 @@ def main() -> None:
     backup = f"{REMOTE_DIR}.bak.{stamp}"
     print(run(f"mv '{REMOTE_DIR}' '{backup}' && echo 'backup -> {backup}'"))
     print(run(f"mv '{staged}' '{REMOTE_DIR}' && echo 'swapped in new build'"))
+    print(run("ln -sfn super_admin /home/u748721963/domains/deliverytamem.com/public_html/merchant && echo 'Created/updated symlink /merchant -> super_admin'"))
 
     time.sleep(2)
     try:

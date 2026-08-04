@@ -6,6 +6,7 @@ import {
   googleLogin,
   login,
   logout,
+  merchantDashboardLogin,
   otpRequest,
   otpVerify,
   refresh,
@@ -25,3 +26,4 @@ authRouter.post('/otp/request', otpRequest);
 authRouter.post('/otp/verify', otpVerify);
 authRouter.post('/forgot-password', forgotPassword);
 authRouter.post('/reset-password', resetPassword);
+authRouter.post('/merchant-login', merchantDashboardLogin);

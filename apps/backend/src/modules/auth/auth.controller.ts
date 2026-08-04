@@ -165,6 +165,55 @@ export const login: RequestHandler = async (req, res, next) => {
   }
 };
 
+/**
+ * POST /auth/merchant-login — dedicated login for the merchant dashboard.
+ * Only MERCHANT users are allowed. No OTP is required. The response includes
+ * the full MerchantProfile so the frontend can render the store header and
+ * stats without a second round-trip.
+ */
+export const merchantDashboardLogin: RequestHandler = async (req, res, next) => {
+  try {
+    const input = loginSchema.parse(req.body);
+    const isEmail = input.identifier.includes('@');
+    const user = await prisma.user.findUnique({
+      where: isEmail ? { email: input.identifier } : { phone: input.identifier },
+    });
+    if (!user || !user.passwordHash) throw new UnauthorizedError('بيانات الدخول غير صحيحة');
+
+    const ok2 = await bcrypt.compare(input.password, user.passwordHash);
+    if (!ok2) throw new UnauthorizedError('بيانات الدخول غير صحيحة');
+    if (!user.isActive) throw new UnauthorizedError('الحساب غير مفعّل');
+
+    // Only MERCHANT users may use this endpoint.
+    if (user.role !== 'MERCHANT') {
+      throw new UnauthorizedError('هذا الحساب ليس حساب تاجر');
+    }
+
+    const profile = await prisma.merchantProfile.findUnique({
+      where: { userId: user.id },
+      include: {
+        category: { select: { id: true, name: true, nameAr: true } },
+      },
+    });
+    if (!profile) throw new UnauthorizedError('حساب المتجر غير مكتمل');
+
+    const tokens = await issueTokens(user.id, user.role as UserRole, req);
+    ok(res, {
+      user: {
+        id: user.id,
+        name: user.name,
+        phone: user.phone,
+        email: user.email,
+        role: user.role,
+      },
+      merchantProfile: profile,
+      tokens,
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
 export const refresh: RequestHandler = async (req, res, next) => {
   try {
     const input = refreshSchema.parse(req.body);

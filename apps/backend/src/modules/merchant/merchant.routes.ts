@@ -28,6 +28,7 @@ merchantRouter.patch('/orders/:id/reject', ctrl.rejectOrder);
 
 // Catalog
 merchantRouter.get('/products', ctrl.listProducts);
+merchantRouter.get('/products/:id', ctrl.getProduct);
 merchantRouter.post('/products', ctrl.createProduct);
 merchantRouter.patch('/products/:id', ctrl.updateProduct);
 merchantRouter.delete('/products/:id', ctrl.removeProduct);

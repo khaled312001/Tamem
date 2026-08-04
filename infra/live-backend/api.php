@@ -315,7 +315,11 @@ $ADMIN_PERM_MAP = [
 if (str_starts_with($path, '/admin/')) {
     $__admin = authUser();
     $__role = $__admin['role'] ?? '';
-    if (!in_array($__role, ['ADMIN', 'SUPER_ADMIN'], true)) {
+    $isMerchantAllowed = ($__role === 'MERCHANT') && (
+        preg_match('#^/admin/products/([^/]+)/options#', $path) ||
+        preg_match('#^/admin/merchants/([^/]+)/addons#', $path)
+    );
+    if (!in_array($__role, ['ADMIN', 'SUPER_ADMIN'], true) && !$isMerchantAllowed) {
         jsonErr('غير مسموح', 403, 'FORBIDDEN');
     }
     // SUPER_ADMIN bypasses granular checks. A scoped ADMIN is held to their
@@ -3281,6 +3285,7 @@ if ($method === 'PATCH' && preg_match('#^/admin/merchants/([^/]+)$#', $path, $m)
         $us = []; $ua = [];
         if (array_key_exists('ownerName', $b)) { $us[] = '`name` = ?'; $ua[] = (string)$b['ownerName']; }
         if (array_key_exists('ownerPhone', $b) || array_key_exists('phone', $b)) { $ph = (string)($b['ownerPhone'] ?? $b['phone']); $cl = preg_replace('/[\s\-()]/', '', $ph); if (preg_match('/^(?:\+?20|0)?(1[0125]\d{8})$/', $cl, $mm)) $ph = '+20' . $mm[1]; $us[] = '`phone` = ?'; $ua[] = $ph; }
+        if (array_key_exists('ownerPassword', $b) || array_key_exists('password', $b)) { $pwd = trim((string)($b['ownerPassword'] ?? $b['password'])); if ($pwd !== '' && strlen($pwd) >= 6) { $us[] = '`passwordHash` = ?'; $ua[] = password_hash($pwd, PASSWORD_BCRYPT); } }
         // The dashboard has always sent `ownerSecondaryPhones`, but only the bare
         // `secondaryPhones` key was read here — so extra numbers silently never
         // saved (0 rows in User.secondaryPhones live). Accept both spellings.
@@ -4998,6 +5003,355 @@ if ($method === 'GET' && $path === '/site-config') {
     exit;
 }
 
+// ─── Merchant Dashboard API ─────────────────────────────────────────────
+
+if ($method === 'POST' && $path === '/auth/merchant-login') {
+    $b = readJsonBody();
+    $raw = trim((string)($b['identifier'] ?? $b['phone'] ?? ''));
+    $password = (string)($b['password'] ?? '');
+    if ($raw === '' || $password === '') jsonErr('أدخل رقم الهاتف وكلمة المرور', 422, 'MISSING_FIELDS');
+
+    if (str_contains($raw, '@')) {
+        $identifier = strtolower($raw);
+        $stmt = db()->prepare("SELECT id, name, phone, email, role, isActive, passwordHash FROM `User` WHERE `email` = ? LIMIT 1");
+        $stmt->execute([$identifier]);
+    } else {
+        $cleaned = preg_replace('/[\s\-()]/', '', $raw) ?? '';
+        $p1 = $raw;
+        $p2 = $cleaned;
+        $p3 = $cleaned;
+        if (preg_match('/^(?:\+?20|0)?(1[0125]\d{8})$/', $cleaned, $m)) {
+            $p2 = '+20' . $m[1];
+            $p3 = '0' . $m[1];
+        }
+        $stmt = db()->prepare("SELECT id, name, phone, email, role, isActive, passwordHash FROM `User` WHERE `phone` = ? OR `phone` = ? OR `phone` = ? LIMIT 1");
+        $stmt->execute([$p1, $p2, $p3]);
+    }
+    $user = $stmt->fetch();
+    if (!$user || !$user['passwordHash']) jsonErr('بيانات الدخول غير صحيحة', 401, 'INVALID_CREDS');
+
+    if (!password_verify($password, $user['passwordHash'])) {
+        jsonErr('بيانات الدخول غير صحيحة', 401, 'INVALID_CREDS');
+    }
+    if (!(int) $user['isActive']) jsonErr('الحساب غير مفعّل', 403, 'INACTIVE');
+
+    if ($user['role'] !== 'MERCHANT') {
+        jsonErr('هذا الحساب ليس حساب تاجر', 403, 'NOT_MERCHANT');
+    }
+
+    $mst = db()->prepare("SELECT mp.*, c.name as categoryName, c.nameAr as categoryNameAr FROM `MerchantProfile` mp LEFT JOIN `Category` c ON c.id = mp.categoryId WHERE mp.userId = ? LIMIT 1");
+    $mst->execute([$user['id']]);
+    $profile = $mst->fetch();
+    if (!$profile) jsonErr('حساب المتجر غير مكتمل', 404, 'NO_PROFILE');
+
+    $accessSecret = env('JWT_ACCESS_SECRET');
+    $refreshSecret = env('JWT_REFRESH_SECRET');
+    if (!$accessSecret || !$refreshSecret) jsonErr('JWT secrets not configured', 500, 'CONFIG_MISSING');
+    $accessTtl = 30 * 24 * 3600;
+    $access = jwtSign(['sub' => $user['id'], 'role' => 'MERCHANT'], $accessSecret, $accessTtl);
+    $refresh = jwtSign(['sub' => $user['id'], 'typ' => 'refresh'], $refreshSecret, 30 * 24 * 3600);
+
+    jsonOk([
+        'user' => [
+            'id' => $user['id'], 'name' => $user['name'],
+            'phone' => $user['phone'], 'email' => $user['email'], 'role' => 'MERCHANT',
+        ],
+        'merchantProfile' => jsonizeRow($profile),
+        'tokens' => ['accessToken' => $access, 'refreshToken' => $refresh],
+    ]);
+}
+
+function getMyMerchantProfile(array $user): array {
+    $st = db()->prepare("SELECT * FROM `MerchantProfile` WHERE userId = ? LIMIT 1");
+    $st->execute([$user['sub'] ?? '']);
+    $p = $st->fetch();
+    if (!$p) jsonErr('حساب المتجر غير مكتمل', 404, 'NO_PROFILE');
+    return $p;
+}
+
+if ($method === 'GET' && $path === '/merchant/me') {
+    $u = authUser();
+    if (($u['role'] ?? '') !== 'MERCHANT') jsonErr('غير مسموح', 403, 'FORBIDDEN');
+    $p = getMyMerchantProfile($u);
+    $mid = $p['id'];
+
+    $startOfDay = date('Y-m-d 00:00:00');
+    $pdo = db();
+
+    $todayOrders = (int) $pdo->query("SELECT COUNT(*) FROM `Order` WHERE merchantId = '$mid' AND createdAt >= '$startOfDay'")->fetchColumn();
+    $todayRevenue = (float) $pdo->query("SELECT SUM(finalPrice) FROM `Order` WHERE merchantId = '$mid' AND createdAt >= '$startOfDay' AND status IN ('DELIVERED','COMPLETED')")->fetchColumn();
+    $pendingOrders = (int) $pdo->query("SELECT COUNT(*) FROM `Order` WHERE merchantId = '$mid' AND status IN ('NEW','UNDER_REVIEW','PRICED')")->fetchColumn();
+    $productsCount = (int) $pdo->query("SELECT COUNT(*) FROM `Product` WHERE merchantId = '$mid' AND (isHidden IS NULL OR isHidden = 0)")->fetchColumn();
+
+    $res = jsonizeRow($p);
+    $res['storeName'] = $p['storeNameAr'] ?: $p['storeName'];
+    $res['stats'] = [
+        'todayOrders' => $todayOrders,
+        'todayRevenue' => round($todayRevenue, 2),
+        'pendingOrders' => $pendingOrders,
+        'productsCount' => $productsCount,
+        'rating' => $p['rating'] !== null ? (float)$p['rating'] : null,
+    ];
+    jsonOk($res);
+}
+
+if ($method === 'GET' && $path === '/merchant/products') {
+    $u = authUser();
+    if (($u['role'] ?? '') !== 'MERCHANT') jsonErr('غير مسموح', 403, 'FORBIDDEN');
+    $p = getMyMerchantProfile($u);
+    $mid = $p['id'];
+
+    $page = max(1, (int)($_GET['page'] ?? 1));
+    $pageSize = min(100, max(1, (int)($_GET['pageSize'] ?? 20)));
+    $offset = ($page - 1) * $pageSize;
+
+    $where = ["merchantId = ?", "(isHidden IS NULL OR isHidden = 0)"];
+    $args = [$mid];
+
+    if (isset($_GET['isAvailable']) && $_GET['isAvailable'] !== '') {
+        $where[] = "isAvailable = ?";
+        $args[] = ($_GET['isAvailable'] === 'true' || $_GET['isAvailable'] === '1') ? 1 : 0;
+    }
+    if (!empty($_GET['search'])) {
+        $s = '%' . trim($_GET['search']) . '%';
+        $where[] = "(name LIKE ? OR nameAr LIKE ?)";
+        $args[] = $s; $args[] = $s;
+    }
+
+    $whereSql = implode(' AND ', $where);
+    $pdo = db();
+    $cst = $pdo->prepare("SELECT COUNT(*) FROM `Product` WHERE $whereSql");
+    $cst->execute($args);
+    $total = (int) $cst->fetchColumn();
+
+    $lst = $pdo->prepare("SELECT * FROM `Product` WHERE $whereSql ORDER BY sortOrder ASC, createdAt DESC LIMIT $pageSize OFFSET $offset");
+    $lst->execute($args);
+    $items = array_map('jsonizeRow', $lst->fetchAll());
+
+    http_response_code(200);
+    echo json_encode([
+        'data' => $items,
+        'meta' => [
+            'pagination' => [
+                'page' => $page,
+                'pageSize' => $pageSize,
+                'total' => $total,
+                'totalPages' => max(1, (int) ceil($total / $pageSize)),
+            ]
+        ]
+    ], JSON_UNESCAPED_UNICODE);
+    exit;
+}
+
+if ($method === 'GET' && $path === '/merchant/categories') {
+    $u = authUser();
+    if (($u['role'] ?? '') !== 'MERCHANT') jsonErr('غير مسموح', 403, 'FORBIDDEN');
+    $p = getMyMerchantProfile($u);
+    $mid = $p['id'];
+    $pdo = db();
+    $st = $pdo->prepare("SELECT categoryName, COUNT(*) as productCount FROM `Product` WHERE merchantId = ? AND (isHidden IS NULL OR isHidden = 0) GROUP BY categoryName ORDER BY categoryName ASC");
+    $st->execute([$mid]);
+    $rows = $st->fetchAll();
+    jsonOk($rows);
+}
+
+// GET /admin/products/{id}/options
+if ($method === 'GET' && preg_match('#^/admin/products/([^/]+)/options$#', $path, $m)) {
+    $u = authUser();
+    $pid = $m[1];
+    $pdo = db();
+    $pst = $pdo->prepare("SELECT merchantId FROM `Product` WHERE id = ? LIMIT 1");
+    $pst->execute([$pid]);
+    $prow = $pst->fetch();
+    if (!$prow) jsonErr('المنتج غير موجود', 404, 'NOT_FOUND');
+    $mid = $prow['merchantId'];
+
+    $vst = $pdo->prepare("SELECT * FROM `ProductVariant` WHERE productId = ? ORDER BY sortOrder ASC");
+    $vst->execute([$pid]);
+    $variants = array_map('jsonizeRow', $vst->fetchAll());
+
+    $ast = $pdo->prepare("SELECT * FROM `MerchantAddon` WHERE merchantId = ? ORDER BY sortOrder ASC");
+    $ast->execute([$mid]);
+    $merchantAddons = array_map('jsonizeRow', $ast->fetchAll());
+
+    $lst = $pdo->prepare("SELECT addonId FROM `ProductAddonLink` WHERE productId = ?");
+    $lst->execute([$pid]);
+    $linkedAddonIds = $lst->fetchAll(PDO::FETCH_COLUMN);
+
+    jsonOk([
+        'merchantId' => $mid,
+        'variants' => $variants,
+        'merchantAddons' => $merchantAddons,
+        'linkedAddonIds' => $linkedAddonIds ?: [],
+    ]);
+}
+
+// PUT /admin/products/{id}/options
+if ($method === 'PUT' && preg_match('#^/admin/products/([^/]+)/options$#', $path, $m)) {
+    $u = authUser();
+    $pid = $m[1];
+    $b = readJsonBody();
+    $pdo = db();
+
+    if (isset($b['variants']) && is_array($b['variants'])) {
+        $pdo->prepare("DELETE FROM `ProductVariant` WHERE productId = ?")->execute([$pid]);
+        $ist = $pdo->prepare("INSERT INTO `ProductVariant` (id, productId, nameAr, price, isActive, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, NOW(3), NOW(3))");
+        foreach ($b['variants'] as $idx => $v) {
+            $nameAr = trim((string)($v['nameAr'] ?? ''));
+            if ($nameAr === '') continue;
+            $ist->execute([newId(), $pid, $nameAr, (float)($v['price'] ?? 0), !empty($v['isActive']) ? 1 : 0]);
+        }
+    }
+
+    if (isset($b['linkedAddonIds']) && is_array($b['linkedAddonIds'])) {
+        $pdo->prepare("DELETE FROM `ProductAddonLink` WHERE productId = ?")->execute([$pid]);
+        $lst = $pdo->prepare("INSERT INTO `ProductAddonLink` (id, productId, addonId, createdAt) VALUES (?, ?, ?, NOW(3))");
+        foreach ($b['linkedAddonIds'] as $aid) {
+            $lst->execute([newId(), $pid, (string)$aid]);
+        }
+    }
+
+    jsonOk(['success' => true]);
+}
+
+// PUT /admin/merchants/{id}/addons
+if ($method === 'PUT' && preg_match('#^/admin/merchants/([^/]+)/addons$#', $path, $m)) {
+    $u = authUser();
+    $mid = $m[1];
+    $b = readJsonBody();
+    $pdo = db();
+
+    $addons = $b['addons'] ?? [];
+    if (is_array($addons)) {
+        $existing = $pdo->prepare("SELECT id FROM `MerchantAddon` WHERE merchantId = ?");
+        $existing->execute([$mid]);
+        $oldIds = $existing->fetchAll(PDO::FETCH_COLUMN);
+
+        $keptIds = [];
+        $ust = $pdo->prepare("UPDATE `MerchantAddon` SET nameAr = ?, price = ?, updatedAt = NOW(3) WHERE id = ?");
+        $ist = $pdo->prepare("INSERT INTO `MerchantAddon` (id, merchantId, nameAr, price, isActive, createdAt, updatedAt) VALUES (?, ?, ?, ?, 1, NOW(3), NOW(3))");
+
+        foreach ($addons as $a) {
+            $aid = (string)($a['id'] ?? '');
+            $nameAr = trim((string)($a['nameAr'] ?? ''));
+            $price = (float)($a['price'] ?? 0);
+            if ($nameAr === '') continue;
+
+            if ($aid !== '' && in_array($aid, $oldIds, true)) {
+                $ust->execute([$nameAr, $price, $aid]);
+                $keptIds[] = $aid;
+            } else {
+                $nid = newId();
+                $ist->execute([$nid, $mid, $nameAr, $price]);
+                $keptIds[] = $nid;
+            }
+        }
+
+        $toDel = array_diff($oldIds, $keptIds);
+        if ($toDel) {
+            $inClause = implode(',', array_fill(0, count($toDel), '?'));
+            $pdo->prepare("DELETE FROM `MerchantAddon` WHERE id IN ($inClause)")->execute(array_values($toDel));
+        }
+    }
+
+    jsonOk(['success' => true]);
+}
+
+if ($method === 'GET' && preg_match('#^/merchant/products/([^/]+)$#', $path, $m)) {
+    $u = authUser();
+    if (($u['role'] ?? '') !== 'MERCHANT') jsonErr('غير مسموح', 403, 'FORBIDDEN');
+    $p = getMyMerchantProfile($u);
+    $st = db()->prepare("SELECT * FROM `Product` WHERE id = ? AND merchantId = ? LIMIT 1");
+    $st->execute([$m[1], $p['id']]);
+    $prod = $st->fetch();
+    if (!$prod) jsonErr('المنتج غير موجود', 404, 'NOT_FOUND');
+    jsonOk(jsonizeRow($prod));
+}
+
+if ($method === 'POST' && $path === '/merchant/products') {
+    $u = authUser();
+    if (($u['role'] ?? '') !== 'MERCHANT') jsonErr('غير مسموح', 403, 'FORBIDDEN');
+    $p = getMyMerchantProfile($u);
+    $b = readJsonBody();
+
+    $nameAr = trim((string)($b['nameAr'] ?? $b['name'] ?? ''));
+    if ($nameAr === '') jsonErr('اسم المنتج بالعربي مطلوب', 422, 'MISSING_FIELDS');
+    $name = trim((string)($b['name'] ?? $nameAr));
+    $price = (float)($b['price'] ?? 0);
+    $id = newId();
+
+    $pdo = db();
+    $cols = tableColumns('Product');
+    $names = ['`id`', '`merchantId`', '`name`', '`nameAr`', '`price`', '`isAvailable`', '`isHidden`', '`createdAt`', '`updatedAt`'];
+    $place = ['?', '?', '?', '?', '?', '?', '0', 'NOW(3)', 'NOW(3)'];
+    $args = [$id, $p['id'], $name, $nameAr, $price, !empty($b['isAvailable']) ? 1 : 0];
+
+    $opt = ['description', 'imageUrl', 'salePrice', 'discount', 'categoryName', 'sortOrder', 'unit'];
+    foreach ($opt as $k) {
+        if (array_key_exists($k, $b) && isset($cols[$k])) {
+            $names[] = "`$k`";
+            $place[] = '?';
+            $args[] = coerceForColumn($b[$k], $cols[$k]);
+        }
+    }
+
+    $sql = "INSERT INTO `Product` (" . implode(',', $names) . ") VALUES (" . implode(',', $place) . ")";
+    $pdo->prepare($sql)->execute($args);
+
+    $st = $pdo->prepare("SELECT * FROM `Product` WHERE id = ?");
+    $st->execute([$id]);
+    jsonOk(jsonizeRow($st->fetch()), 201);
+}
+
+if (($method === 'PATCH' || $method === 'PUT') && preg_match('#^/merchant/products/([^/]+)$#', $path, $m)) {
+    $u = authUser();
+    if (($u['role'] ?? '') !== 'MERCHANT') jsonErr('غير مسموح', 403, 'FORBIDDEN');
+    $p = getMyMerchantProfile($u);
+    $pid = $m[1];
+    $b = readJsonBody();
+
+    $pdo = db();
+    $chk = $pdo->prepare("SELECT id FROM `Product` WHERE id = ? AND merchantId = ? LIMIT 1");
+    $chk->execute([$pid, $p['id']]);
+    if (!$chk->fetch()) jsonErr('المنتج غير موجود أو لا يخص متجرك', 404, 'NOT_FOUND');
+
+    $cols = tableColumns('Product');
+    $sets = []; $args = [];
+    $allowed = ['name', 'nameAr', 'description', 'imageUrl', 'price', 'salePrice', 'discount', 'isAvailable', 'categoryName', 'sortOrder', 'unit', 'stock'];
+    foreach ($b as $k => $v) {
+        if (!in_array($k, $allowed, true) || !isset($cols[$k])) continue;
+        $sets[] = "`$k` = ?";
+        $args[] = coerceForColumn($v, $cols[$k]);
+    }
+    if ($sets) {
+        $sets[] = '`updatedAt` = NOW(3)';
+        $args[] = $pid;
+        $pdo->prepare("UPDATE `Product` SET " . implode(',', $sets) . " WHERE id = ?")->execute($args);
+    }
+
+    $st = $pdo->prepare("SELECT * FROM `Product` WHERE id = ?");
+    $st->execute([$pid]);
+    jsonOk(jsonizeRow($st->fetch()));
+}
+
+if ($method === 'DELETE' && preg_match('#^/merchant/products/([^/]+)$#', $path, $m)) {
+    $u = authUser();
+    if (($u['role'] ?? '') !== 'MERCHANT') jsonErr('غير مسموح', 403, 'FORBIDDEN');
+    $p = getMyMerchantProfile($u);
+    $pid = $m[1];
+
+    $pdo = db();
+    $chk = $pdo->prepare("SELECT id FROM `Product` WHERE id = ? AND merchantId = ? LIMIT 1");
+    $chk->execute([$pid, $p['id']]);
+    if (!$chk->fetch()) jsonErr('المنتج غير موجود أو لا يخص متجرك', 404, 'NOT_FOUND');
+
+    $pdo->prepare("UPDATE `Product` SET isHidden = 1, updatedAt = NOW(3) WHERE id = ?")->execute([$pid]);
+    http_response_code(204);
+    exit;
+}
+
+
+
 // ─── Ultimate GET fallback — default to empty LIST wrapped in the paginated
 // envelope. Singular endpoints must be handled specifically above.
 if ($method === 'GET' && !str_starts_with($path, '/auth/') && $path !== '/health') {
@@ -5153,5 +5507,3 @@ if ($method === 'POST' && $path === '/auth/admin/otp/verify') {
     ]);
 }
 
-// Unknown route
-jsonErr('Endpoint not found: ' . $method . ' ' . $path, 404, 'NOT_FOUND');
