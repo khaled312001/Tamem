@@ -49,7 +49,11 @@ const ProductCard = memo(function ProductCard({
         )}
         {off > 0 && (
           <View style={styles.offBadge}>
-            <Text style={styles.offText}>-{off}%</Text>
+            {/* All-Arabic (digits + ٪) so the sign never drops in an RTL run,
+                and it matches the card's Arabic-Indic price. */}
+            <Text style={styles.offText} allowFontScaling={false}>
+              {`خصم ${off.toLocaleString('ar-EG')}٪`}
+            </Text>
           </View>
         )}
         {/* Timed offer — a live countdown over the image. When it hits zero the
@@ -166,14 +170,20 @@ const styles = StyleSheet.create({
   imgFallback: { flex: 1, backgroundColor: '#F1EBE7' },
   offBadge: {
     position: 'absolute',
-    top: 6,
-    left: 6,
+    top: 8,
+    left: 8,
     backgroundColor: colors.brand.red,
-    borderRadius: radii.sm,
-    paddingHorizontal: 7,
-    paddingVertical: 3,
+    borderRadius: 999,
+    paddingHorizontal: 9,
+    paddingVertical: 4,
+    ...shadows.sm,
   },
-  offText: { color: colors.white, fontSize: 11, fontFamily: fontFamilies.bodyExtraBold },
+  offText: {
+    color: colors.white,
+    fontSize: 11,
+    fontFamily: fontFamilies.bodyExtraBold,
+    includeFontPadding: false,
+  },
   timer: { position: 'absolute', bottom: 6, insetInlineStart: 6 },
 
   name: {

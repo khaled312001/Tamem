@@ -74,7 +74,9 @@ export function DealsScreen() {
             )}
             {price.off > 0 && (
               <View style={styles.offBadge}>
-                <Text style={styles.offText}>-{price.off}%</Text>
+                <Text style={styles.offText} allowFontScaling={false}>
+                  {`خصم ${Number(price.off).toLocaleString('ar-EG')}٪`}
+                </Text>
               </View>
             )}
             {!!item.saleEndsAt && (

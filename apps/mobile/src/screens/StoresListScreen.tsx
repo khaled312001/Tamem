@@ -210,7 +210,9 @@ export function StoresListScreen() {
               {pr.was != null && <Text style={styles.wasText}>{pr.was.toFixed(0)}</Text>}
               {pr.off > 0 && (
                 <View style={styles.offPill}>
-                  <Text style={styles.offPillText}>-{pr.off}%</Text>
+                  <Text
+                    style={styles.offPillText}
+                  >{`خصم ${Number(pr.off).toLocaleString('ar-EG')}٪`}</Text>
                 </View>
               )}
             </View>

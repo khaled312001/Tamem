@@ -92,7 +92,9 @@ function MerchantProductRowBase({
           )}
           {!showFrom && price.off > 0 && (
             <View style={styles.offPill}>
-              <Text style={styles.offPillText}>-{price.off}%</Text>
+              <Text
+                style={styles.offPillText}
+              >{`خصم ${Number(price.off).toLocaleString('ar-EG')}٪`}</Text>
             </View>
           )}
         </View>
