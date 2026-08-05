@@ -2749,13 +2749,121 @@ if ($method === 'POST' && $path === '/admin/orders') {
     }
     $id = newId();
     $orderNumber = 'TMM' . strtoupper(substr($id, 1, 9));
+
+    /*
+     * Optional basket: `merchants: [{merchantId, notes?, items:[{productId,
+     * quantity, variantId?, addonIds?[], notes?}]}]`.
+     *
+     * Priced HERE, never from the client, using the same rules as the app's
+     * cart: a size REPLACES the base price and takes the live discount, extras
+     * ADD at full price. That keeps a phone order and an app order costing the
+     * same thing for the same basket.
+     *
+     * Deliberately still ONE order even across stores — see the note in
+     * /orders/cart. Every line carries its own merchantId, so the per-store
+     * breakdown survives without making the admin price and assign N times.
+     */
+    $lines = []; $subtotal = 0.0; $perMerchant = [];
+    foreach ((array) ($b['merchants'] ?? []) as $mEntry) {
+        $mid = trim((string) ($mEntry['merchantId'] ?? ''));
+        if ($mid === '') continue;
+        $mSub = 0.0;
+        foreach ((array) ($mEntry['items'] ?? []) as $it) {
+            $qty = max(1, (int) ($it['quantity'] ?? 1));
+            $pid = trim((string) ($it['productId'] ?? ''));
+            $manualName = trim((string) ($it['nameAr'] ?? ''));
+            if ($pid !== '') {
+                $ps = db()->prepare('SELECT id, nameAr, price, salePrice, discount, saleEndsAt, merchantId FROM `Product` WHERE id = ? AND merchantId = ? LIMIT 1');
+                $ps->execute([$pid, $mid]);
+                $prod = $ps->fetch();
+                if (!$prod) jsonErr('منتج غير موجود في هذا المتجر', 422, 'BAD_PRODUCT');
+                $unit = effectiveUnitPrice($prod);
+                $vName = null;
+                if (!empty($it['variantId'])) {
+                    $vs = db()->prepare('SELECT nameAr, price FROM `ProductVariant` WHERE id = ? AND productId = ? LIMIT 1');
+                    $vs->execute([$it['variantId'], $pid]);
+                    if ($v = $vs->fetch()) {
+                        // A size REPLACES the base price, then takes the % off.
+                        $pct = activeDiscountPct($prod);
+                        $unit = round((float) $v['price'] * (1 - $pct / 100), 2);
+                        $vName = (string) $v['nameAr'];
+                    }
+                }
+                $addonSnap = [];
+                foreach ((array) ($it['addonIds'] ?? []) as $aid) {
+                    $as = db()->prepare(
+                        'SELECT ma.nameAr, ma.price FROM `MerchantAddon` ma
+                         JOIN `ProductAddonLink` pal ON pal.addonId = ma.id AND pal.productId = ?
+                         WHERE ma.id = ? AND ma.isActive = 1 LIMIT 1'
+                    );
+                    $as->execute([$pid, $aid]);
+                    if ($a = $as->fetch()) {
+                        $unit += (float) $a['price'];
+                        $addonSnap[] = ['nameAr' => $a['nameAr'], 'price' => (float) $a['price']];
+                    }
+                }
+                $lines[] = [$pid, (string) $prod['nameAr'], round($unit, 2), $qty, $mid,
+                    ($it['notes'] ?? null) ?: null, $vName, $addonSnap ? json_encode($addonSnap, JSON_UNESCAPED_UNICODE) : null];
+                $mSub += $unit * $qty;
+            } elseif ($manualName !== '') {
+                // "منتج غير موجود" — typed by the agent, priced by the agent.
+                $unit = round((float) ($it['unitPrice'] ?? 0), 2);
+                $lines[] = [null, $manualName, $unit, $qty, $mid, ($it['notes'] ?? null) ?: null, null, null];
+                $mSub += $unit * $qty;
+            }
+        }
+        $perMerchant[] = ['merchantId' => $mid, 'subtotal' => round($mSub, 2),
+            'deliveryFee' => isset($mEntry['deliveryFee']) && $mEntry['deliveryFee'] !== '' ? round((float) $mEntry['deliveryFee'], 2) : null];
+        $subtotal += $mSub;
+    }
+
+    /*
+     * Delivery fee. A missing zone price must NEVER block a phone order: the
+     * agent can type a fee, or leave it to be decided later (NULL), and either
+     * way the order is created.
+     */
+    $feeSource = null; $fee = null;
+    if (isset($b['deliveryFee']) && $b['deliveryFee'] !== '' && $b['deliveryFee'] !== null) {
+        $fee = round((float) $b['deliveryFee'], 2);
+        $feeSource = 'MANUAL';
+    } elseif (!empty($b['cityId']) && !empty($b['villageId']) && !empty($b['areaId'])) {
+        $zq = zoneQuote((string) $b['cityId'], (string) $b['villageId'], (string) $b['areaId']);
+        if (is_array($zq) && ($zq[0] ?? '') === 'OK') { $fee = round((float) $zq[1], 2); $feeSource = 'ZONE'; }
+        else { $feeSource = 'PENDING'; } // no tariff for the area — decided later
+    }
+
     $cols = ['id', 'orderNumber', 'serviceId', 'customerId', 'category', 'status', 'createdByAdminId'];
     $ph = ['?', '?', '?', '?', '?', '?', '?'];
     $args = [$id, $orderNumber, $serviceId, $customerId, $svc['category'], 'NEW', $u['sub'] ?? null];
+
+    // A manual total wins over the computed one, but the difference and the
+    // reason are recorded below so the override is never silent.
+    $quoted = isset($b['quotedPrice']) && $b['quotedPrice'] !== '' ? (float) $b['quotedPrice'] : null;
+    $computed = $lines ? round($subtotal + (float) ($fee ?? 0), 2) : null;
+
+    $audit = array_filter([
+        'byAdminId' => $u['sub'] ?? null,
+        'feeSource' => $feeSource,
+        'feeReason' => $feeSource === 'MANUAL' ? (trim((string) ($b['deliveryFeeReason'] ?? '')) ?: null) : null,
+        'computedTotal' => $computed,
+        'agreedTotal' => $quoted,
+        'totalReason' => ($quoted !== null && $computed !== null && abs($quoted - $computed) > 0.009)
+            ? (trim((string) ($b['quotedPriceReason'] ?? '')) ?: null) : null,
+        'perMerchant' => $perMerchant ?: null,
+    ], fn($v) => $v !== null);
+
     $opt = ['deliveryAddress' => $b['deliveryAddress'] ?? null, 'notes' => $b['notes'] ?? null,
         'deliveryLat' => isset($b['deliveryLat']) && $b['deliveryLat'] !== '' ? (float)$b['deliveryLat'] : null,
         'deliveryLng' => isset($b['deliveryLng']) && $b['deliveryLng'] !== '' ? (float)$b['deliveryLng'] : null,
-        'quotedPrice' => isset($b['quotedPrice']) && $b['quotedPrice'] !== '' ? (float)$b['quotedPrice'] : null,
+        'cityId' => !empty($b['cityId']) ? (string) $b['cityId'] : null,
+        'villageId' => !empty($b['villageId']) ? (string) $b['villageId'] : null,
+        'areaId' => !empty($b['areaId']) ? (string) $b['areaId'] : null,
+        'merchantId' => count($perMerchant) === 1 ? $perMerchant[0]['merchantId'] : null,
+        'merchantSubtotal' => $lines ? round($subtotal, 2) : null,
+        'deliveryFee' => $fee,
+        'finalPrice' => $quoted ?? $computed,
+        'customData' => $audit ? json_encode(['manualOrder' => $audit], JSON_UNESCAPED_UNICODE) : null,
+        'quotedPrice' => $quoted,
         'paymentMethod' => !empty($b['paymentMethod']) ? (string)$b['paymentMethod'] : null];
     foreach ($opt as $k => $v) if ($v !== null) { $cols[] = $k; $ph[] = '?'; $args[] = $v; }
     $cols[] = 'createdAt'; $ph[] = 'NOW(3)'; $cols[] = 'updatedAt'; $ph[] = 'NOW(3)';
@@ -2763,6 +2871,16 @@ if ($method === 'POST' && $path === '/admin/orders') {
     try {
         db()->prepare("INSERT INTO `Order` ($colStr) VALUES (" . implode(',', $ph) . ")")->execute($args);
     } catch (PDOException $e) { error_log('[api.php] manual order: ' . $e->getMessage()); jsonErr('تعذّر إنشاء الطلب، راجع البيانات', 422, 'CREATE_FAILED'); }
+
+    // Each line keeps its own merchantId, which is what lets the dashboard show
+    // a card per store without a child order per store.
+    if ($lines) {
+        $ins = db()->prepare('INSERT INTO `OrderItem` (id, orderId, productId, productNameSnapshot, unitPriceSnapshot, quantity, merchantId, notes, variantNameSnapshot, addonsSnapshot) VALUES (?,?,?,?,?,?,?,?,?,?)');
+        foreach ($lines as $ln) {
+            $ins->execute([newId(), $id, $ln[0], $ln[1], $ln[2], $ln[3], $ln[4], $ln[5], $ln[6], $ln[7]]);
+        }
+    }
+
     // Same money model as the app + reorder paths, so a manual order reports
     // its goods / delivery / commission / payout identically.
     computeOrderFinancials($id);

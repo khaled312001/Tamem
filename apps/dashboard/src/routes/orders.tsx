@@ -32,6 +32,7 @@ import type { OrderStatus } from '@tamem/types';
 import { Badge, StatusBadge } from '../components/ui/Badge.js';
 import { formatDate, formatDateTime, formatMoney } from '../lib/format.js';
 import { Button } from '../components/ui/Button.js';
+import { ManualOrderDialog as NewManualOrderDialog } from './manual-order.js';
 import { Dialog, Drawer } from '../components/ui/Dialog.js';
 import { Field, Input, Textarea } from '../components/ui/Input.js';
 import { OrdersMap, type OrdersMapOrder } from '../components/OrdersMap.js';
@@ -426,7 +427,12 @@ export function OrdersPage() {
         </div>
       </div>
 
-      {manualOpen && <ManualOrderDialog onClose={() => setManualOpen(false)} />}
+      {manualOpen && (
+        <NewManualOrderDialog
+          onClose={() => setManualOpen(false)}
+          onCreated={() => qc.invalidateQueries({ queryKey: ['admin', 'orders'] })}
+        />
+      )}
 
       {/* Summary cards — counts by stage + today's sales. Each card filters. */}
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-7 gap-2">
@@ -1511,129 +1517,6 @@ function NoteDialog({ orderId, onClose }: { orderId: string; onClose: () => void
         </Button>
         <Button onClick={() => mut.mutate()} disabled={!note || mut.isPending}>
           إضافة
-        </Button>
-      </div>
-    </Dialog>
-  );
-}
-
-function ManualOrderDialog({ onClose }: { onClose: () => void }) {
-  const qc = useQueryClient();
-  const { data: services } = useQuery({
-    queryKey: ['admin', 'services'],
-    queryFn: () =>
-      api.adminListServices() as Promise<Array<{ id: string; nameAr: string; isActive: boolean }>>,
-  });
-  const [form, setForm] = useState({
-    customerPhone: '+20',
-    customerName: '',
-    serviceId: '',
-    deliveryAddress: '',
-    notes: '',
-    quotedPrice: '',
-    paymentMethod: 'CASH' as 'CASH' | 'VODAFONE_CASH' | 'INSTAPAY',
-  });
-  const mut = useMutation({
-    mutationFn: () =>
-      api.adminCreateManualOrder({
-        customerPhone: form.customerPhone.trim(),
-        customerName: form.customerName.trim() || undefined,
-        serviceId: form.serviceId,
-        deliveryAddress: form.deliveryAddress.trim(),
-        notes: form.notes.trim() || undefined,
-        quotedPrice: form.quotedPrice ? Number(form.quotedPrice) : undefined,
-        paymentMethod: form.paymentMethod,
-      }),
-    onSuccess: () => {
-      toast.success('تم إنشاء الطلب');
-      qc.invalidateQueries({ queryKey: ['admin', 'orders'] });
-      onClose();
-    },
-    onError: (err: Error) => toast.error(err.message),
-  });
-  const canSave =
-    form.customerPhone.length >= 8 && form.serviceId && form.deliveryAddress.length >= 2;
-  const activeServices = services?.filter((s) => s.isActive) ?? [];
-  return (
-    <Dialog open onOpenChange={(o) => !o && onClose()} title="إنشاء طلب يدوي" size="lg">
-      <p className="text-sm text-muted-foreground mb-3">
-        للطلبات الواردة بالتليفون. لو العميل غير مسجل، هيتم إنشاء حساب باسمه ورقمه تلقائياً.
-      </p>
-      <div className="grid grid-cols-2 gap-3">
-        <Field label="رقم هاتف العميل" required>
-          <Input
-            value={form.customerPhone}
-            onChange={(e) => setForm({ ...form, customerPhone: e.target.value })}
-            dir="ltr"
-          />
-        </Field>
-        <Field label="اسم العميل">
-          <Input
-            value={form.customerName}
-            onChange={(e) => setForm({ ...form, customerName: e.target.value })}
-          />
-        </Field>
-        <Field label="الخدمة" required>
-          <select
-            value={form.serviceId}
-            onChange={(e) => setForm({ ...form, serviceId: e.target.value })}
-            className="w-full px-3 py-2 rounded-lg border border-input bg-white text-sm"
-          >
-            <option value="">— اختر —</option>
-            {activeServices.map((s) => (
-              <option key={s.id} value={s.id}>
-                {s.nameAr}
-              </option>
-            ))}
-          </select>
-        </Field>
-        <Field label="طريقة الدفع">
-          <select
-            value={form.paymentMethod}
-            onChange={(e) =>
-              setForm({ ...form, paymentMethod: e.target.value as typeof form.paymentMethod })
-            }
-            className="w-full px-3 py-2 rounded-lg border border-input bg-white text-sm"
-          >
-            <option value="CASH">كاش عند الاستلام</option>
-            <option value="VODAFONE_CASH">فودافون كاش</option>
-            <option value="INSTAPAY">إنستاباي</option>
-          </select>
-        </Field>
-        <div className="col-span-2">
-          <Field label="عنوان التوصيل" required>
-            <Input
-              value={form.deliveryAddress}
-              onChange={(e) => setForm({ ...form, deliveryAddress: e.target.value })}
-              placeholder="الشارع، رقم المنزل، علامة مميزة..."
-            />
-          </Field>
-        </div>
-        <div className="col-span-2">
-          <Field label="ملاحظات" hint="تفاصيل الطلب من العميل — أي معلومات إضافية">
-            <Textarea
-              value={form.notes}
-              onChange={(e) => setForm({ ...form, notes: e.target.value })}
-              placeholder="مثال: 2 كيلو سكر، زيت، 3 علب تونة..."
-              rows={5}
-            />
-          </Field>
-        </div>
-        <Field label="السعر المتفق عليه (ج.م)" hint="اتركه فاضي لو محتاج مراجعة">
-          <Input
-            type="number"
-            value={form.quotedPrice}
-            onChange={(e) => setForm({ ...form, quotedPrice: e.target.value })}
-          />
-        </Field>
-      </div>
-      <div className="flex justify-end gap-2 mt-4">
-        <Button variant="outline" size="md" onClick={onClose}>
-          إلغاء
-        </Button>
-        <Button onClick={() => canSave && mut.mutate()} disabled={!canSave || mut.isPending}>
-          {mut.isPending && <Loader2 className="w-4 h-4 animate-spin" />}
-          إنشاء الطلب
         </Button>
       </div>
     </Dialog>
