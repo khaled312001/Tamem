@@ -8116,9 +8116,12 @@ if ($method === 'POST' && $path === '/merchant/products') {
     $place = ['?', '?', '?', '?', '?', '?', '0', 'NOW(3)', 'NOW(3)'];
     $args = [$id, $p['id'], $name, $nameAr, $price, !empty($b['isAvailable']) ? 1 : 0];
 
-    // imageUrls/stock were missing, so the panel's extra photos and stock count
-    // were silently dropped on create (coerceForColumn json-encodes the array).
-    $opt = ['description', 'imageUrl', 'imageUrls', 'salePrice', 'discount', 'categoryName', 'sortOrder', 'unit', 'stock'];
+    // Keep this in step with the panel's form: anything the form sends that is
+    // NOT listed here is silently dropped (that is how imageUrls/stock/sku went
+    // missing). saleEndsAt gives the merchant the same timed-offer knob admins
+    // have on the deals page.
+    $opt = ['description', 'imageUrl', 'imageUrls', 'salePrice', 'discount', 'saleEndsAt',
+            'categoryName', 'sortOrder', 'unit', 'stock', 'sku', 'barcode'];
     foreach ($opt as $k) {
         if (array_key_exists($k, $b) && isset($cols[$k])) {
             $names[] = "`$k`";
@@ -8152,7 +8155,9 @@ if (($method === 'PATCH' || $method === 'PUT') && preg_match('#^/merchant/produc
     // NOTE: merchantId and isHidden are deliberately NOT writable here — a
     // merchant must not be able to move a product to another store or unhide
     // one. imageUrls was missing, so multi-image edits were silently dropped.
-    $allowed = ['name', 'nameAr', 'description', 'imageUrl', 'imageUrls', 'price', 'salePrice', 'discount', 'isAvailable', 'categoryName', 'sortOrder', 'unit', 'stock'];
+    $allowed = ['name', 'nameAr', 'description', 'imageUrl', 'imageUrls', 'price', 'salePrice',
+                'discount', 'saleEndsAt', 'isAvailable', 'categoryName', 'sortOrder', 'unit',
+                'stock', 'sku', 'barcode'];
     foreach ($b as $k => $v) {
         if (!in_array($k, $allowed, true) || !isset($cols[$k])) continue;
         $sets[] = "`$k` = ?";

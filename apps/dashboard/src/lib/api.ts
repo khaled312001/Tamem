@@ -21,6 +21,15 @@ export const api: TamemClient = new TamemClient({
   },
   onUnauthorized: () => {
     useAuth.getState().clear();
+    const path = window.location.pathname;
+    // The merchant portal is its own site: clearing the session already swaps
+    // the panel for the merchant sign-in form, so there is nothing to navigate
+    // to. Without this a merchant who mistyped their password was thrown onto
+    // the ADMIN login at /super_admin/login.
+    if (path.startsWith('/merchant')) return;
+    // Same idea on the admin side: a failed sign-in renders its own error, and
+    // reloading the page would wipe it.
+    if (/\/login\/?$/.test(path)) return;
     // Respect Vite's base path. In production the dashboard lives at
     // /super_admin/, so a naked `/login` would drop the base and 404.
     const base = (import.meta as unknown as { env: { BASE_URL: string } }).env.BASE_URL || '/';
