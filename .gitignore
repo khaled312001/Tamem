@@ -122,3 +122,7 @@ apps/mobile/android/*-log*.txt
 store-assets/_*.png
 # Kotlin incremental-compilation scratch, written on every gradle run
 apps/mobile/android/.kotlin/
+# Store builds. They are tens of MB each and a new one is produced every
+# release; the source that made them is what belongs in git.
+release/*.aab
+release/*.apk
