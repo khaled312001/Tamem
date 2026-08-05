@@ -4816,6 +4816,32 @@ if ($method === 'PUT' && preg_match('#^/admin/products/([^/]+)/options$#', $path
     $pid = $m[1];
     $b = readJsonBody();
 
+    // A merchant's option edit must go through review like every other change —
+    // otherwise sizes (which REPLACE the price) would be a way to re-price a
+    // product without approval. Admins keep writing straight through.
+    if (($u['role'] ?? '') === 'MERCHANT') {
+        $mp = getMyMerchantProfile($u);
+        mcrRequire($mp, 'products.update');
+        $ps = db()->prepare('SELECT nameAr FROM `Product` WHERE id = ? AND merchantId = ? LIMIT 1');
+        $ps->execute([$pid, $mp['id']]);
+        $pname = $ps->fetchColumn();
+        if ($pname === false) jsonErr('المنتج غير موجود أو لا يخص متجرك', 404, 'NOT_FOUND');
+        $payload = [];
+        foreach (['variants', 'addons'] as $k) {
+            if (!is_array($b[$k] ?? null)) continue;
+            $list = [];
+            foreach ($b[$k] as $r) {
+                if (!is_array($r)) continue;
+                $n = trim((string) ($r['nameAr'] ?? ''));
+                if ($n === '') continue;
+                $list[] = ['nameAr' => $n, 'price' => round((float) ($r['price'] ?? 0), 2)];
+            }
+            $payload[$k] = $list;
+        }
+        if (!$payload) jsonErr('لا يوجد تغيير', 422, 'NO_CHANGES');
+        mcrSubmit($mp, $u, 'PRODUCT_OPTIONS', $pid, 'تعديل الأحجام والإضافات: ' . $pname, $payload);
+    }
+
     if (array_key_exists('variants', $b)) {
         // Safe to delete-and-reinsert: nothing references a variant by id.
         // Past orders keep a NAME snapshot, not a foreign key.
@@ -8158,6 +8184,57 @@ function mcrCleanProduct(array $b): array {
     return $out;
 }
 
+/**
+ * Sizes + extras for a product, by NAME.
+ *
+ * Mirrors the `PUT /admin/products/{id}/options` name-based path so a merchant
+ * can describe options as plain {nameAr, price} without knowing any internal
+ * id — which is what makes them expressible in a create request, before the
+ * product (and therefore any variant id) exists.
+ */
+function mcrApplyOptions(string $productId, string $merchantId, ?array $variants, ?array $addons): void {
+    $pdo = db();
+    if (is_array($variants)) {
+        // Delete-and-reinsert is safe: past orders keep a NAME snapshot, not a
+        // foreign key to the variant row.
+        $pdo->prepare('DELETE FROM `ProductVariant` WHERE productId = ?')->execute([$productId]);
+        $pos = 0;
+        foreach ($variants as $r) {
+            $name = trim((string) ($r['nameAr'] ?? ''));
+            if ($name === '') continue;
+            $pdo->prepare('INSERT INTO `ProductVariant` (id, productId, nameAr, price, sortOrder, isActive, createdAt) VALUES (?,?,?,?,?,1,NOW(3))')
+                ->execute([newId(), $productId, $name, round((float) ($r['price'] ?? 0), 2), $pos]);
+            $pos++;
+        }
+    }
+    if (is_array($addons)) {
+        $ids = [];
+        foreach ($addons as $r) {
+            $name = trim((string) ($r['nameAr'] ?? ''));
+            if ($name === '') continue;
+            $price = round((float) ($r['price'] ?? 0), 2);
+            // The add-on belongs to the STORE, so it is reused across products
+            // instead of duplicated per product.
+            $find = $pdo->prepare('SELECT id FROM `MerchantAddon` WHERE merchantId = ? AND nameAr = ? LIMIT 1');
+            $find->execute([$merchantId, $name]);
+            $aid = (string) ($find->fetchColumn() ?: '');
+            if ($aid === '') {
+                $aid = newId();
+                $pdo->prepare('INSERT INTO `MerchantAddon` (id, merchantId, nameAr, price, sortOrder, isActive, createdAt) VALUES (?,?,?,?,0,1,NOW(3))')
+                    ->execute([$aid, $merchantId, $name, $price]);
+            } else {
+                $pdo->prepare('UPDATE `MerchantAddon` SET price = ? WHERE id = ?')->execute([$price, $aid]);
+            }
+            $ids[] = $aid;
+        }
+        $pdo->prepare('DELETE FROM `ProductAddonLink` WHERE productId = ?')->execute([$productId]);
+        foreach (array_unique($ids) as $aid) {
+            $pdo->prepare('INSERT IGNORE INTO `ProductAddonLink` (productId, addonId) VALUES (?,?)')
+                ->execute([$productId, $aid]);
+        }
+    }
+}
+
 /** Write a product row for a store. Used by BOTH the direct path and approvals,
  *  so an approved request produces exactly what auto-approve would have. */
 function mcrApplyProductCreate(string $merchantId, array $data): string {
@@ -8175,6 +8252,12 @@ function mcrApplyProductCreate(string $merchantId, array $data): string {
         $names[] = "`$k`"; $place[] = '?'; $args[] = coerceForColumn($v, $cols[$k]);
     }
     db()->prepare('INSERT INTO `Product` (' . implode(',', $names) . ') VALUES (' . implode(',', $place) . ')')->execute($args);
+    // Sizes/extras ride along on the create payload (they are not Product
+    // columns, so the loop above ignored them) and are applied now that the
+    // product finally has an id.
+    mcrApplyOptions($id, $merchantId,
+        is_array($data['variants'] ?? null) ? $data['variants'] : null,
+        is_array($data['addons'] ?? null) ? $data['addons'] : null);
     logProductHistory($id, $data['nameAr'] ?? null, 'CREATE', null);
     return $id;
 }
@@ -8292,6 +8375,16 @@ function mcrApply(array $req): array {
             } catch (Throwable $e) { $failed++; }
         }
         return ['created' => $created, 'updated' => $updated, 'failed' => $failed];
+    }
+    if ($type === 'PRODUCT_OPTIONS') {
+        if (!$target) jsonErr('الطلب بدون منتج', 422, 'BAD_REQUEST');
+        $chk = db()->prepare('SELECT id FROM `Product` WHERE id = ? AND merchantId = ? LIMIT 1');
+        $chk->execute([$target, $merchantId]);
+        if (!$chk->fetchColumn()) jsonErr('المنتج لم يعد موجوداً في هذا المتجر', 409, 'TARGET_GONE');
+        mcrApplyOptions($target, $merchantId,
+            is_array($payload['variants'] ?? null) ? $payload['variants'] : null,
+            is_array($payload['addons'] ?? null) ? $payload['addons'] : null);
+        return ['productId' => $target];
     }
     if (str_starts_with($type, 'SECTION_')) {
         return mcrApplySection($merchantId, $type, $target, $payload);
@@ -8437,6 +8530,19 @@ if ($method === 'POST' && $path === '/merchant/products') {
     if ($nameAr === '') jsonErr('اسم المنتج بالعربي مطلوب', 422, 'MISSING_FIELDS');
     $data = mcrCleanProduct($b);
     $data['nameAr'] = $nameAr;
+    // Sizes/extras are described by NAME so they can travel with a product that
+    // does not exist yet; they are created when the request is approved.
+    foreach (['variants', 'addons'] as $k) {
+        if (!is_array($b[$k] ?? null)) continue;
+        $list = [];
+        foreach ($b[$k] as $r) {
+            if (!is_array($r)) continue;
+            $n = trim((string) ($r['nameAr'] ?? ''));
+            if ($n === '') continue;
+            $list[] = ['nameAr' => $n, 'price' => round((float) ($r['price'] ?? 0), 2)];
+        }
+        if ($list) $data[$k] = $list;
+    }
     mcrSubmit($p, $u, 'PRODUCT_CREATE', null, 'إضافة منتج: ' . $nameAr, $data);
 }
 

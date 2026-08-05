@@ -50,7 +50,7 @@ type NavItem = {
   to: string;
   icon: typeof Home;
   label: string;
-  countKey?: 'orders' | 'alerts';
+  countKey?: 'orders' | 'alerts' | 'merchantRequests';
   urgent?: boolean;
   // When true the link is only active on an exact path match. Needed for
   // parent routes like /reports so they don't stay highlighted on /reports/revenue.
@@ -93,6 +93,7 @@ const NAV_SECTIONS: NavSection[] = [
         to: '/merchant-requests',
         icon: ClipboardList,
         label: 'طلبات التجّار',
+        countKey: 'merchantRequests',
         perm: 'merchants',
       },
       { to: '/supervisors', icon: UserCheck, label: 'المشرفون', perm: 'supervisors' },
@@ -227,9 +228,18 @@ export function DashboardLayout() {
     queryFn: () => api.adminListAlerts({ resolved: 'false' }),
     enabled: canSee('alerts'),
   });
+  const { data: mrStats } = useQuery({
+    queryKey: ['admin', 'merchant-requests', 'stats'],
+    queryFn: () => api.adminMerchantRequestStats(),
+    enabled: canSee('merchants'),
+    // A merchant can file one at any moment; 30s keeps the badge honest without
+    // hammering the shim.
+    refetchInterval: 30_000,
+  });
   const counts = {
     orders: overview?.openOrders ?? 0,
     alerts: alertsData?.alerts?.length ?? 0,
+    merchantRequests: mrStats?.PENDING ?? 0,
   };
 
   // Longest-prefix match so /reports/revenue resolves to its own title rather
@@ -438,7 +448,7 @@ function NavItemLink({
 }: {
   item: NavItem;
   collapsed: boolean;
-  counts: { orders: number; alerts: number };
+  counts: { orders: number; alerts: number; merchantRequests: number };
 }) {
   return (
     <NavLink

@@ -190,6 +190,9 @@ function ProductFormDialog({
     product?.saleEndsAt ? toLocalInput(String(product.saleEndsAt)) : '',
   );
   const [isAvailable, setIsAvailable] = useState(product?.isAvailable ?? true);
+  // Create-mode only: {nameAr, price} pairs that travel with the request.
+  const [newVariants, setNewVariants] = useState<{ nameAr: string; price: string }[]>([]);
+  const [newAddons, setNewAddons] = useState<{ nameAr: string; price: string }[]>([]);
   const [imageUrls, setImageUrls] = useState<string[]>(() => {
     if (!product) return [];
     if (product.imageUrl && !product.imageUrls?.length) return [product.imageUrl];
@@ -216,6 +219,17 @@ function ProductFormDialog({
       data.discount = discount.trim() ? Number(discount) : 0;
       // Null clears the expiry, so an offer can be made permanent again.
       data.saleEndsAt = timed && endsAt ? new Date(endsAt).toISOString() : null;
+
+      if (!isEdit) {
+        const pack = (rows: { nameAr: string; price: string }[]) =>
+          rows
+            .filter((r) => r.nameAr.trim())
+            .map((r) => ({ nameAr: r.nameAr.trim(), price: Number(r.price) || 0 }));
+        const v = pack(newVariants);
+        const a = pack(newAddons);
+        if (v.length) data.variants = v;
+        if (a.length) data.addons = a;
+      }
 
       if (isEdit) {
         await api.merchantUpdateProduct(product.id, data);
@@ -264,7 +278,7 @@ function ProductFormDialog({
         >
           السعر والمخزون
         </button>
-        {isEdit && (
+        {
           <button
             type="button"
             onClick={() => setTab('options')}
@@ -277,7 +291,7 @@ function ProductFormDialog({
             <Settings2 className="w-4 h-4" />
             الأحجام والإضافات
           </button>
-        )}
+        }
       </div>
 
       <form onSubmit={submit} className="space-y-4">
@@ -437,6 +451,27 @@ function ProductFormDialog({
               productId={product.id}
               merchantId={merchantId}
               basePrice={Number(price) || 0}
+            />
+          </div>
+        )}
+
+        {/* On a NEW product there is no id yet to hang variants off, so options
+            are collected by name here and created once the request is approved. */}
+        {tab === 'options' && !isEdit && (
+          <div className="pt-2 space-y-4">
+            <PairEditor
+              title="الأحجام / المقاسات"
+              hint="سعر الحجم بيحل محل السعر الأساسي (مش بيتضاف عليه)."
+              placeholder="مثال: وسط"
+              rows={newVariants}
+              onChange={setNewVariants}
+            />
+            <PairEditor
+              title="الإضافات"
+              hint="سعر الإضافة بيتضاف على سعر المنتج."
+              placeholder="مثال: جبنة زيادة"
+              rows={newAddons}
+              onChange={setNewAddons}
             />
           </div>
         )}
@@ -1213,6 +1248,83 @@ export function MerchantPanelPage() {
           onConfirm={() => deleteMut.mutate(confirmDel.id)}
         />
       )}
+    </div>
+  );
+}
+
+/**
+ * A tiny {name, price} list editor used for a NEW product's sizes and extras.
+ *
+ * The edit path uses ProductOptionsPanel, which talks to the options endpoint by
+ * product id. A product being created has no id yet, so here the pairs are just
+ * collected by name and sent with the request; the server creates them once an
+ * admin approves it.
+ */
+function PairEditor({
+  title,
+  hint,
+  placeholder,
+  rows,
+  onChange,
+}: {
+  title: string;
+  hint: string;
+  placeholder: string;
+  rows: { nameAr: string; price: string }[];
+  onChange: (rows: { nameAr: string; price: string }[]) => void;
+}) {
+  const set = (i: number, patch: Partial<{ nameAr: string; price: string }>) =>
+    onChange(rows.map((r, idx) => (idx === i ? { ...r, ...patch } : r)));
+
+  return (
+    <div className="rounded-xl border border-border p-3 space-y-2">
+      <div>
+        <p className="text-sm font-black text-brand-dark">{title}</p>
+        <p className="text-[11px] text-muted-foreground">{hint}</p>
+      </div>
+
+      {rows.length === 0 && (
+        <p className="text-xs text-muted-foreground py-1">لا يوجد — اضغط «إضافة» لو محتاج.</p>
+      )}
+
+      {rows.map((r, i) => (
+        <div key={i} className="flex items-center gap-2">
+          <Input
+            value={r.nameAr}
+            onChange={(e) => set(i, { nameAr: e.target.value })}
+            placeholder={placeholder}
+            className="flex-1"
+          />
+          <Input
+            type="number"
+            min="0"
+            step="0.01"
+            dir="ltr"
+            value={r.price}
+            onChange={(e) => set(i, { price: e.target.value })}
+            placeholder="السعر"
+            className="w-28"
+          />
+          <button
+            type="button"
+            onClick={() => onChange(rows.filter((_, idx) => idx !== i))}
+            className="p-2 rounded-lg hover:bg-red-50 text-red-500 transition"
+            aria-label="حذف"
+          >
+            <Trash2 className="w-4 h-4" />
+          </button>
+        </div>
+      ))}
+
+      <Button
+        type="button"
+        size="sm"
+        variant="outline"
+        onClick={() => onChange([...rows, { nameAr: '', price: '' }])}
+      >
+        <Plus className="w-4 h-4" />
+        إضافة
+      </Button>
     </div>
   );
 }
