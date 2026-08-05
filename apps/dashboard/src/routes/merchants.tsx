@@ -5,6 +5,7 @@ import {
   ArrowUpDown,
   CheckCircle2,
   Clock,
+  ShieldCheck,
   Download,
   ImagePlus,
   LayoutGrid,
@@ -1509,6 +1510,83 @@ function ProductsPanel({ merchant }: { merchant: Row }) {
           مواعيد العمل
         </Button>
       </Link>
+      <MerchantPermissionsCard merchantId={merchant.id} />
+    </div>
+  );
+}
+
+/** Capability switches for the merchant portal, plus the auto-approve escape
+ *  hatch for a store you trust enough to skip review. */
+const PERM_LABELS: { key: string; label: string; hint?: string }[] = [
+  { key: 'products.create', label: 'إضافة منتجات' },
+  { key: 'products.update', label: 'تعديل المنتجات' },
+  { key: 'products.delete', label: 'حذف المنتجات' },
+  { key: 'products.import', label: 'رفع منتجات من ملف Excel' },
+  { key: 'sections.manage', label: 'إدارة الأقسام' },
+  {
+    key: 'autoApprove',
+    label: 'تنفيذ فوري بدون مراجعة',
+    hint: 'لو مفعّل، تعديلات التاجر تتنفذ على طول من غير ما تعدّي عليك. سيبه مقفول لو عايز تراجع كل حاجة.',
+  },
+];
+
+function MerchantPermissionsCard({ merchantId }: { merchantId: string }) {
+  const qc = useQueryClient();
+  const { data, isLoading } = useQuery({
+    queryKey: ['admin', 'merchant-permissions', merchantId],
+    queryFn: () =>
+      api.adminGetMerchantPermissions(merchantId) as Promise<{
+        permissions: Record<string, boolean>;
+      }>,
+  });
+
+  const mut = useMutation({
+    mutationFn: (next: Record<string, boolean>) =>
+      api.adminSaveMerchantPermissions(merchantId, next),
+    onSuccess: () => {
+      toast.success('تم حفظ الصلاحيات');
+      qc.invalidateQueries({ queryKey: ['admin', 'merchant-permissions', merchantId] });
+    },
+    onError: (e: Error) => toast.error(e.message),
+  });
+
+  const perms = data?.permissions ?? {};
+
+  return (
+    <div className="rounded-xl border border-border p-3 space-y-2">
+      <div className="flex items-center gap-2 text-sm font-black text-brand-dark">
+        <ShieldCheck className="w-4 h-4 text-brand-red" />
+        صلاحيات لوحة التاجر
+      </div>
+      {isLoading ? (
+        <div className="h-24 rounded-lg bg-muted animate-pulse" />
+      ) : (
+        <div className="space-y-1.5">
+          {PERM_LABELS.map((p) => (
+            <label
+              key={p.key}
+              className="flex items-start gap-2 text-sm cursor-pointer py-1"
+              title={p.hint}
+            >
+              <input
+                type="checkbox"
+                checked={!!perms[p.key]}
+                disabled={mut.isPending}
+                onChange={(e) => mut.mutate({ ...perms, [p.key]: e.target.checked })}
+                className="w-4 h-4 accent-brand-red mt-0.5"
+              />
+              <span className="flex-1">
+                <span className={p.key === 'autoApprove' ? 'font-bold text-amber-700' : ''}>
+                  {p.label}
+                </span>
+                {p.hint && (
+                  <span className="block text-[11px] text-muted-foreground">{p.hint}</span>
+                )}
+              </span>
+            </label>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

@@ -38,6 +38,10 @@ MIGRATIONS = [
     # mobile home sections. JSON array of {key, visible, title?}. NULL = the
     # app's built-in default order, so this is fully backward-compatible.
     ("HomeConfig", "sectionLayout", "longtext NULL"),
+    # What this merchant may do from the merchant portal, as a JSON object of
+    # {"products.create": true, ..., "autoApprove": false}. NULL = the built-in
+    # defaults, so existing merchants keep working without a backfill.
+    ("MerchantProfile", "permissions", "longtext NULL"),
 ]
 
 # Tables created if absent.
@@ -105,6 +109,38 @@ TABLES = {
           `createdAt` datetime(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
           PRIMARY KEY (`id`),
           UNIQUE KEY `ProductSection_nameAr_key` (`nameAr`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    # Every write a merchant makes from the merchant portal lands here FIRST and
+    # only touches the catalogue once an admin approves it. The same row is the
+    # audit trail the spec asks for: who asked, what for, when, the outcome and
+    # (on a refusal) why — so approved/rejected rows are kept, never deleted.
+    #
+    # `payload` is the proposed change and `beforeData` the snapshot taken when
+    # the request was raised, which is what lets the review screen show a diff
+    # and lets an approval detect that the product moved on in the meantime.
+    "MerchantChangeRequest": """
+        CREATE TABLE `MerchantChangeRequest` (
+          `id` varchar(191) NOT NULL,
+          `merchantId` varchar(191) NOT NULL,
+          `requestedById` varchar(191) NULL,
+          `type` varchar(32) NOT NULL,
+          `targetId` varchar(191) NULL,
+          `title` varchar(255) NULL,
+          `payload` longtext NULL,
+          `beforeData` longtext NULL,
+          `status` varchar(16) NOT NULL DEFAULT 'PENDING',
+          `reviewedById` varchar(191) NULL,
+          `reviewedAt` datetime(3) NULL,
+          `rejectionReason` varchar(500) NULL,
+          `appliedResult` longtext NULL,
+          `createdAt` datetime(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+          `updatedAt` datetime(3) NULL,
+          PRIMARY KEY (`id`),
+          KEY `MerchantChangeRequest_merchantId_idx` (`merchantId`),
+          KEY `MerchantChangeRequest_status_idx` (`status`),
+          CONSTRAINT `MerchantChangeRequest_merchantId_fk` FOREIGN KEY (`merchantId`)
+            REFERENCES `MerchantProfile` (`id`) ON DELETE CASCADE
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     """,
     # Per-user favourites (saved stores) + wishlist (saved products), so they

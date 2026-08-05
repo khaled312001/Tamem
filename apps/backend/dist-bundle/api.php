@@ -8001,6 +8001,228 @@ function getMyMerchantProfile(array $user): array {
     return $p;
 }
 
+// ═══ Merchant permissions + approval workflow ═══════════════════════════
+//
+// A merchant may do everything an admin can do to THEIR OWN catalogue, but
+// nothing lands directly: each write is recorded as a MerchantChangeRequest and
+// only touches the catalogue once an admin approves it. `autoApprove` lets an
+// admin promote a trusted store to write straight through, and every individual
+// capability can be switched off per store from the admin panel.
+
+/** Defaults used when a store has never been configured (permissions IS NULL). */
+function mcrDefaultPerms(): array {
+    return [
+        'products.create' => true,
+        'products.update' => true,
+        'products.delete' => true,
+        'products.import' => true,
+        'sections.manage' => true,
+        'autoApprove'     => false,
+    ];
+}
+
+function mcrPerms(array $profile): array {
+    $raw = $profile['permissions'] ?? null;
+    $saved = is_string($raw) ? json_decode($raw, true) : (is_array($raw) ? $raw : null);
+    if (!is_array($saved)) return mcrDefaultPerms();
+    // Merge over the defaults so a key added later is never "missing = denied".
+    $out = mcrDefaultPerms();
+    foreach ($out as $k => $v) if (array_key_exists($k, $saved)) $out[$k] = (bool) $saved[$k];
+    return $out;
+}
+
+function mcrRequire(array $profile, string $key): void {
+    $perms = mcrPerms($profile);
+    if (empty($perms[$key])) jsonErr('هذه الصلاحية غير مفعّلة لمتجرك. تواصل مع الإدارة.', 403, 'PERMISSION_DISABLED');
+}
+
+function mcrAutoApprove(array $profile): bool {
+    return !empty(mcrPerms($profile)['autoApprove']);
+}
+
+/** Fields a merchant may set on a product. merchantId/isHidden stay off-limits. */
+function mcrProductFields(): array {
+    return ['name', 'nameAr', 'description', 'imageUrl', 'imageUrls', 'price', 'salePrice',
+            'discount', 'saleEndsAt', 'isAvailable', 'categoryName', 'sortOrder', 'unit',
+            'stock', 'sku', 'barcode', 'availableFrom', 'availableTo'];
+}
+
+function mcrCleanProduct(array $b): array {
+    $cols = tableColumns('Product');
+    $out = [];
+    foreach (mcrProductFields() as $k) {
+        if (!array_key_exists($k, $b) || !isset($cols[$k])) continue;
+        $out[$k] = $b[$k];
+    }
+    return $out;
+}
+
+/** Write a product row for a store. Used by BOTH the direct path and approvals,
+ *  so an approved request produces exactly what auto-approve would have. */
+function mcrApplyProductCreate(string $merchantId, array $data): string {
+    $cols = tableColumns('Product');
+    $id = newId();
+    $names = ['`id`', '`merchantId`', '`isHidden`', '`createdAt`', '`updatedAt`'];
+    $place = ['?', '?', '0', 'NOW(3)', 'NOW(3)'];
+    $args = [$id, $merchantId];
+    $data['nameAr'] = trim((string) ($data['nameAr'] ?? ''));
+    if ($data['nameAr'] === '') jsonErr('اسم المنتج بالعربي مطلوب', 422, 'MISSING_FIELDS');
+    if (trim((string) ($data['name'] ?? '')) === '') $data['name'] = $data['nameAr'];
+    if (!isset($data['isAvailable'])) $data['isAvailable'] = 1;
+    foreach ($data as $k => $v) {
+        if (!isset($cols[$k]) || in_array($k, ['id', 'merchantId', 'isHidden', 'createdAt', 'updatedAt'], true)) continue;
+        $names[] = "`$k`"; $place[] = '?'; $args[] = coerceForColumn($v, $cols[$k]);
+    }
+    db()->prepare('INSERT INTO `Product` (' . implode(',', $names) . ') VALUES (' . implode(',', $place) . ')')->execute($args);
+    logProductHistory($id, $data['nameAr'] ?? null, 'CREATE', null);
+    return $id;
+}
+
+function mcrApplyProductUpdate(string $merchantId, string $productId, array $data): bool {
+    $pdo = db();
+    $chk = $pdo->prepare('SELECT * FROM `Product` WHERE id = ? AND merchantId = ? LIMIT 1');
+    $chk->execute([$productId, $merchantId]);
+    $before = $chk->fetch();
+    if (!$before) return false;
+    $cols = tableColumns('Product');
+    $sets = []; $args = [];
+    foreach ($data as $k => $v) {
+        if (!in_array($k, mcrProductFields(), true) || !isset($cols[$k])) continue;
+        $sets[] = "`$k` = ?"; $args[] = coerceForColumn($v, $cols[$k]);
+    }
+    if (!$sets) return true;
+    $sets[] = '`updatedAt` = NOW(3)';
+    $args[] = $productId;
+    $pdo->prepare('UPDATE `Product` SET ' . implode(',', $sets) . ' WHERE id = ?')->execute($args);
+    $after = $pdo->prepare('SELECT * FROM `Product` WHERE id = ?'); $after->execute([$productId]);
+    logProductHistory($productId, $before['nameAr'] ?? null, 'UPDATE', diffProduct($before, $after->fetch() ?: []));
+    return true;
+}
+
+function mcrApplyProductDelete(string $merchantId, string $productId): bool {
+    $pdo = db();
+    $chk = $pdo->prepare('SELECT nameAr FROM `Product` WHERE id = ? AND merchantId = ? LIMIT 1');
+    $chk->execute([$productId, $merchantId]);
+    $row = $chk->fetch();
+    if (!$row) return false;
+    // Soft delete: a product referenced by past orders must not vanish.
+    $pdo->prepare('UPDATE `Product` SET isHidden = 1, updatedAt = NOW(3) WHERE id = ?')->execute([$productId]);
+    logProductHistory($productId, $row['nameAr'] ?? null, 'DELETE', null);
+    return true;
+}
+
+/**
+ * Section operations are scoped to the store's OWN catalogue.
+ *
+ * ProductSection is a GLOBAL taxonomy shared by every shop, so a merchant
+ * renaming or removing one must not rewrite other shops' products: a rename
+ * only re-tags this merchant's rows, and a delete only clears their rows. A
+ * create adds the shared decoration row when the name is new, which is additive
+ * and harmless.
+ */
+function mcrApplySection(string $merchantId, string $type, ?string $target, array $payload): array {
+    $pdo = db();
+    $name = trim((string) ($payload['nameAr'] ?? ''));
+    if ($type === 'SECTION_CREATE') {
+        if ($name === '') jsonErr('اسم القسم مطلوب', 422, 'MISSING_FIELDS');
+        $ex = $pdo->prepare('SELECT id FROM `ProductSection` WHERE nameAr = ? LIMIT 1');
+        $ex->execute([$name]);
+        if (!$ex->fetchColumn()) {
+            $pdo->prepare('INSERT INTO `ProductSection` (id, nameAr, imageUrl, sortOrder, isActive, createdAt) VALUES (?,?,?,?,1,NOW(3))')
+                ->execute([newId(), $name, ($payload['imageUrl'] ?? null) ?: null, (int) ($payload['sortOrder'] ?? 0)]);
+        }
+        return ['section' => $name];
+    }
+    if ($type === 'SECTION_RENAME') {
+        if ($target === null || $target === '' || $name === '') jsonErr('اسم القسم مطلوب', 422, 'MISSING_FIELDS');
+        $st = $pdo->prepare('UPDATE `Product` SET categoryName = ?, updatedAt = NOW(3) WHERE merchantId = ? AND categoryName = ?');
+        $st->execute([$name, $merchantId, $target]);
+        $ex = $pdo->prepare('SELECT id FROM `ProductSection` WHERE nameAr = ? LIMIT 1');
+        $ex->execute([$name]);
+        if (!$ex->fetchColumn()) {
+            $pdo->prepare('INSERT INTO `ProductSection` (id, nameAr, sortOrder, isActive, createdAt) VALUES (?,?,0,1,NOW(3))')
+                ->execute([newId(), $name]);
+        }
+        return ['renamed' => $st->rowCount()];
+    }
+    if ($type === 'SECTION_DELETE') {
+        if ($target === null || $target === '') jsonErr('اسم القسم مطلوب', 422, 'MISSING_FIELDS');
+        $st = $pdo->prepare('UPDATE `Product` SET categoryName = NULL, updatedAt = NOW(3) WHERE merchantId = ? AND categoryName = ?');
+        $st->execute([$merchantId, $target]);
+        return ['cleared' => $st->rowCount()];
+    }
+    jsonErr('نوع الطلب غير معروف', 422, 'BAD_TYPE');
+}
+
+/** Apply a whole approved request. Returns a small result summary for the log. */
+function mcrApply(array $req): array {
+    $merchantId = (string) $req['merchantId'];
+    $type = (string) $req['type'];
+    $payload = json_decode((string) ($req['payload'] ?? '{}'), true) ?: [];
+    $target = $req['targetId'] !== null ? (string) $req['targetId'] : null;
+
+    if ($type === 'PRODUCT_CREATE') {
+        return ['productId' => mcrApplyProductCreate($merchantId, $payload)];
+    }
+    if ($type === 'PRODUCT_UPDATE') {
+        if (!$target) jsonErr('الطلب بدون منتج', 422, 'BAD_REQUEST');
+        if (!mcrApplyProductUpdate($merchantId, $target, $payload)) {
+            jsonErr('المنتج لم يعد موجوداً في هذا المتجر', 409, 'TARGET_GONE');
+        }
+        return ['productId' => $target];
+    }
+    if ($type === 'PRODUCT_DELETE') {
+        if (!$target || !mcrApplyProductDelete($merchantId, $target)) {
+            jsonErr('المنتج لم يعد موجوداً في هذا المتجر', 409, 'TARGET_GONE');
+        }
+        return ['productId' => $target];
+    }
+    if ($type === 'PRODUCT_IMPORT') {
+        $rows = is_array($payload['rows'] ?? null) ? $payload['rows'] : [];
+        $created = 0; $updated = 0; $failed = 0;
+        foreach ($rows as $row) {
+            if (!is_array($row)) { $failed++; continue; }
+            $data = mcrCleanProduct($row);
+            $rid = isset($row['id']) ? trim((string) $row['id']) : '';
+            try {
+                if ($rid !== '' && mcrApplyProductUpdate($merchantId, $rid, $data)) { $updated++; continue; }
+                mcrApplyProductCreate($merchantId, $data);
+                $created++;
+            } catch (Throwable $e) { $failed++; }
+        }
+        return ['created' => $created, 'updated' => $updated, 'failed' => $failed];
+    }
+    if (str_starts_with($type, 'SECTION_')) {
+        return mcrApplySection($merchantId, $type, $target, $payload);
+    }
+    jsonErr('نوع الطلب غير معروف', 422, 'BAD_TYPE');
+}
+
+/** Queue a request (or apply it immediately when the store is auto-approved). */
+function mcrSubmit(array $profile, array $user, string $type, ?string $targetId, string $title, array $payload, ?array $before = null) {
+    $merchantId = (string) $profile['id'];
+    if (mcrAutoApprove($profile)) {
+        $res = mcrApply([
+            'merchantId' => $merchantId, 'type' => $type,
+            'payload' => json_encode($payload, JSON_UNESCAPED_UNICODE), 'targetId' => $targetId,
+        ]);
+        // Still logged, so the audit trail covers trusted stores too.
+        db()->prepare('INSERT INTO `MerchantChangeRequest` (id, merchantId, requestedById, type, targetId, title, payload, beforeData, status, reviewedById, reviewedAt, appliedResult, createdAt, updatedAt) VALUES (?,?,?,?,?,?,?,?,\'APPROVED\',?,NOW(3),?,NOW(3),NOW(3))')
+            ->execute([newId(), $merchantId, $user['sub'] ?? null, $type, $targetId, $title,
+                json_encode($payload, JSON_UNESCAPED_UNICODE),
+                $before ? json_encode($before, JSON_UNESCAPED_UNICODE) : null,
+                $user['sub'] ?? null, json_encode($res, JSON_UNESCAPED_UNICODE)]);
+        jsonOk(['applied' => true, 'autoApproved' => true, 'result' => $res]);
+    }
+    $id = newId();
+    db()->prepare('INSERT INTO `MerchantChangeRequest` (id, merchantId, requestedById, type, targetId, title, payload, beforeData, status, createdAt, updatedAt) VALUES (?,?,?,?,?,?,?,?,\'PENDING\',NOW(3),NOW(3))')
+        ->execute([$id, $merchantId, $user['sub'] ?? null, $type, $targetId, $title,
+            json_encode($payload, JSON_UNESCAPED_UNICODE),
+            $before ? json_encode($before, JSON_UNESCAPED_UNICODE) : null]);
+    jsonOk(['applied' => false, 'pending' => true, 'requestId' => $id,
+        'message' => 'تم إرسال الطلب للإدارة للمراجعة'], 202);
+}
+
 if ($method === 'GET' && $path === '/merchant/me') {
     $u = authUser();
     if (($u['role'] ?? '') !== 'MERCHANT') jsonErr('غير مسموح', 403, 'FORBIDDEN');
@@ -8015,13 +8237,19 @@ if ($method === 'GET' && $path === '/merchant/me') {
     $pendingOrders = (int) $pdo->query("SELECT COUNT(*) FROM `Order` WHERE merchantId = '$mid' AND status IN ('NEW','UNDER_REVIEW','PRICED')")->fetchColumn();
     $productsCount = (int) $pdo->query("SELECT COUNT(*) FROM `Product` WHERE merchantId = '$mid' AND (isHidden IS NULL OR isHidden = 0)")->fetchColumn();
 
+    $pendingReq = (int) $pdo->query("SELECT COUNT(*) FROM `MerchantChangeRequest` WHERE merchantId = '$mid' AND status = 'PENDING'")->fetchColumn();
+
     $res = jsonizeRow($p);
     $res['storeName'] = $p['storeNameAr'] ?: $p['storeName'];
+    // The panel hides/disables the actions this store may not use, and warns
+    // that saves go to review unless the store is auto-approved.
+    $res['permissions'] = mcrPerms($p);
     $res['stats'] = [
         'todayOrders' => $todayOrders,
         'todayRevenue' => round($todayRevenue, 2),
         'pendingOrders' => $pendingOrders,
         'productsCount' => $productsCount,
+        'pendingRequests' => $pendingReq,
         'rating' => $p['rating'] !== null ? (float)$p['rating'] : null,
     ];
     jsonOk($res);
@@ -8102,92 +8330,246 @@ if ($method === 'POST' && $path === '/merchant/products') {
     $u = authUser();
     if (($u['role'] ?? '') !== 'MERCHANT') jsonErr('غير مسموح', 403, 'FORBIDDEN');
     $p = getMyMerchantProfile($u);
+    mcrRequire($p, 'products.create');
     $b = readJsonBody();
-
-    $nameAr = trim((string)($b['nameAr'] ?? $b['name'] ?? ''));
+    $nameAr = trim((string) ($b['nameAr'] ?? $b['name'] ?? ''));
     if ($nameAr === '') jsonErr('اسم المنتج بالعربي مطلوب', 422, 'MISSING_FIELDS');
-    $name = trim((string)($b['name'] ?? $nameAr));
-    $price = (float)($b['price'] ?? 0);
-    $id = newId();
-
-    $pdo = db();
-    $cols = tableColumns('Product');
-    $names = ['`id`', '`merchantId`', '`name`', '`nameAr`', '`price`', '`isAvailable`', '`isHidden`', '`createdAt`', '`updatedAt`'];
-    $place = ['?', '?', '?', '?', '?', '?', '0', 'NOW(3)', 'NOW(3)'];
-    $args = [$id, $p['id'], $name, $nameAr, $price, !empty($b['isAvailable']) ? 1 : 0];
-
-    // Keep this in step with the panel's form: anything the form sends that is
-    // NOT listed here is silently dropped (that is how imageUrls/stock/sku went
-    // missing). saleEndsAt gives the merchant the same timed-offer knob admins
-    // have on the deals page.
-    $opt = ['description', 'imageUrl', 'imageUrls', 'salePrice', 'discount', 'saleEndsAt',
-            'categoryName', 'sortOrder', 'unit', 'stock', 'sku', 'barcode'];
-    foreach ($opt as $k) {
-        if (array_key_exists($k, $b) && isset($cols[$k])) {
-            $names[] = "`$k`";
-            $place[] = '?';
-            $args[] = coerceForColumn($b[$k], $cols[$k]);
-        }
-    }
-
-    $sql = "INSERT INTO `Product` (" . implode(',', $names) . ") VALUES (" . implode(',', $place) . ")";
-    $pdo->prepare($sql)->execute($args);
-
-    $st = $pdo->prepare("SELECT * FROM `Product` WHERE id = ?");
-    $st->execute([$id]);
-    jsonOk(jsonizeRow($st->fetch()), 201);
+    $data = mcrCleanProduct($b);
+    $data['nameAr'] = $nameAr;
+    mcrSubmit($p, $u, 'PRODUCT_CREATE', null, 'إضافة منتج: ' . $nameAr, $data);
 }
 
 if (($method === 'PATCH' || $method === 'PUT') && preg_match('#^/merchant/products/([^/]+)$#', $path, $m)) {
     $u = authUser();
     if (($u['role'] ?? '') !== 'MERCHANT') jsonErr('غير مسموح', 403, 'FORBIDDEN');
     $p = getMyMerchantProfile($u);
+    mcrRequire($p, 'products.update');
     $pid = $m[1];
-    $b = readJsonBody();
-
-    $pdo = db();
-    $chk = $pdo->prepare("SELECT id FROM `Product` WHERE id = ? AND merchantId = ? LIMIT 1");
+    $chk = db()->prepare('SELECT * FROM `Product` WHERE id = ? AND merchantId = ? LIMIT 1');
     $chk->execute([$pid, $p['id']]);
-    if (!$chk->fetch()) jsonErr('المنتج غير موجود أو لا يخص متجرك', 404, 'NOT_FOUND');
-
-    $cols = tableColumns('Product');
-    $sets = []; $args = [];
-    // NOTE: merchantId and isHidden are deliberately NOT writable here — a
-    // merchant must not be able to move a product to another store or unhide
-    // one. imageUrls was missing, so multi-image edits were silently dropped.
-    $allowed = ['name', 'nameAr', 'description', 'imageUrl', 'imageUrls', 'price', 'salePrice',
-                'discount', 'saleEndsAt', 'isAvailable', 'categoryName', 'sortOrder', 'unit',
-                'stock', 'sku', 'barcode'];
-    foreach ($b as $k => $v) {
-        if (!in_array($k, $allowed, true) || !isset($cols[$k])) continue;
-        $sets[] = "`$k` = ?";
-        $args[] = coerceForColumn($v, $cols[$k]);
+    $before = $chk->fetch();
+    if (!$before) jsonErr('المنتج غير موجود أو لا يخص متجرك', 404, 'NOT_FOUND');
+    $data = mcrCleanProduct(readJsonBody());
+    if (!$data) jsonErr('لا يوجد تغيير', 422, 'NO_CHANGES');
+    // Only keep what actually differs, so the review screen shows a real diff
+    // instead of every field the form happened to post back.
+    $changed = [];
+    foreach ($data as $k => $v) {
+        $old = $before[$k] ?? null;
+        if ((string) (is_array($v) ? json_encode($v, JSON_UNESCAPED_UNICODE) : $v) !== (string) $old) $changed[$k] = $v;
     }
-    if ($sets) {
-        $sets[] = '`updatedAt` = NOW(3)';
-        $args[] = $pid;
-        $pdo->prepare("UPDATE `Product` SET " . implode(',', $sets) . " WHERE id = ?")->execute($args);
-    }
-
-    $st = $pdo->prepare("SELECT * FROM `Product` WHERE id = ?");
-    $st->execute([$pid]);
-    jsonOk(jsonizeRow($st->fetch()));
+    if (!$changed) jsonOk(['applied' => false, 'pending' => false, 'message' => 'لا يوجد تغيير']);
+    $snap = [];
+    foreach (array_keys($changed) as $k) $snap[$k] = $before[$k] ?? null;
+    mcrSubmit($p, $u, 'PRODUCT_UPDATE', $pid, 'تعديل منتج: ' . ($before['nameAr'] ?? $pid), $changed, $snap);
 }
 
 if ($method === 'DELETE' && preg_match('#^/merchant/products/([^/]+)$#', $path, $m)) {
     $u = authUser();
     if (($u['role'] ?? '') !== 'MERCHANT') jsonErr('غير مسموح', 403, 'FORBIDDEN');
     $p = getMyMerchantProfile($u);
+    mcrRequire($p, 'products.delete');
     $pid = $m[1];
-
-    $pdo = db();
-    $chk = $pdo->prepare("SELECT id FROM `Product` WHERE id = ? AND merchantId = ? LIMIT 1");
+    $chk = db()->prepare('SELECT id, nameAr FROM `Product` WHERE id = ? AND merchantId = ? LIMIT 1');
     $chk->execute([$pid, $p['id']]);
-    if (!$chk->fetch()) jsonErr('المنتج غير موجود أو لا يخص متجرك', 404, 'NOT_FOUND');
+    $row = $chk->fetch();
+    if (!$row) jsonErr('المنتج غير موجود أو لا يخص متجرك', 404, 'NOT_FOUND');
+    mcrSubmit($p, $u, 'PRODUCT_DELETE', $pid, 'حذف منتج: ' . ($row['nameAr'] ?? $pid), [], ['nameAr' => $row['nameAr'] ?? null]);
+}
 
-    $pdo->prepare("UPDATE `Product` SET isHidden = 1, updatedAt = NOW(3) WHERE id = ?")->execute([$pid]);
-    http_response_code(204);
-    exit;
+// POST /merchant/products/import — the sheet is parsed and validated in the
+// browser (same productsSheet.ts the admin uses); only the resulting rows are
+// posted here, as ONE request, so the admin approves an import in one decision.
+if ($method === 'POST' && $path === '/merchant/products/import') {
+    $u = authUser();
+    if (($u['role'] ?? '') !== 'MERCHANT') jsonErr('غير مسموح', 403, 'FORBIDDEN');
+    $p = getMyMerchantProfile($u);
+    mcrRequire($p, 'products.import');
+    $b = readJsonBody();
+    $rows = is_array($b['rows'] ?? null) ? $b['rows'] : [];
+    if (!$rows) jsonErr('لا توجد صفوف صالحة في الملف', 422, 'NO_ROWS');
+    if (count($rows) > 2000) jsonErr('الحد الأقصى 2000 صف في الملف الواحد', 422, 'TOO_MANY_ROWS');
+    // Normalise here so an approval can never write a column the merchant is
+    // not allowed to set, no matter what the client posted.
+    $clean = [];
+    foreach ($rows as $r) {
+        if (!is_array($r)) continue;
+        $row = mcrCleanProduct($r);
+        if (!empty($r['id'])) $row['id'] = (string) $r['id'];
+        if (trim((string) ($row['nameAr'] ?? '')) === '') continue;
+        $clean[] = $row;
+    }
+    if (!$clean) jsonErr('لا توجد صفوف صالحة في الملف', 422, 'NO_ROWS');
+    $fileName = trim((string) ($b['fileName'] ?? '')) ?: 'ملف منتجات';
+    mcrSubmit($p, $u, 'PRODUCT_IMPORT', null,
+        'رفع ملف منتجات (' . count($clean) . ' صف): ' . $fileName,
+        ['rows' => $clean, 'fileName' => $fileName]);
+}
+
+// Sections. These act on the store's OWN products (see mcrApplySection).
+if ($method === 'POST' && $path === '/merchant/sections') {
+    $u = authUser();
+    if (($u['role'] ?? '') !== 'MERCHANT') jsonErr('غير مسموح', 403, 'FORBIDDEN');
+    $p = getMyMerchantProfile($u);
+    mcrRequire($p, 'sections.manage');
+    $b = readJsonBody();
+    $name = trim((string) ($b['nameAr'] ?? ''));
+    if ($name === '') jsonErr('اسم القسم مطلوب', 422, 'MISSING_FIELDS');
+    mcrSubmit($p, $u, 'SECTION_CREATE', null, 'إضافة قسم: ' . $name,
+        ['nameAr' => $name, 'imageUrl' => $b['imageUrl'] ?? null, 'sortOrder' => (int) ($b['sortOrder'] ?? 0)]);
+}
+
+if ($method === 'PATCH' && preg_match('#^/merchant/sections/(.+)$#', $path, $m)) {
+    $u = authUser();
+    if (($u['role'] ?? '') !== 'MERCHANT') jsonErr('غير مسموح', 403, 'FORBIDDEN');
+    $p = getMyMerchantProfile($u);
+    mcrRequire($p, 'sections.manage');
+    $old = urldecode($m[1]);
+    $b = readJsonBody();
+    $name = trim((string) ($b['nameAr'] ?? ''));
+    if ($name === '') jsonErr('اسم القسم مطلوب', 422, 'MISSING_FIELDS');
+    mcrSubmit($p, $u, 'SECTION_RENAME', $old, 'تعديل قسم: ' . $old . ' ← ' . $name, ['nameAr' => $name]);
+}
+
+if ($method === 'DELETE' && preg_match('#^/merchant/sections/(.+)$#', $path, $m)) {
+    $u = authUser();
+    if (($u['role'] ?? '') !== 'MERCHANT') jsonErr('غير مسموح', 403, 'FORBIDDEN');
+    $p = getMyMerchantProfile($u);
+    mcrRequire($p, 'sections.manage');
+    $old = urldecode($m[1]);
+    mcrSubmit($p, $u, 'SECTION_DELETE', $old, 'حذف قسم: ' . $old, []);
+}
+
+// The store's own request log — status, and why something was refused.
+if ($method === 'GET' && $path === '/merchant/requests') {
+    $u = authUser();
+    if (($u['role'] ?? '') !== 'MERCHANT') jsonErr('غير مسموح', 403, 'FORBIDDEN');
+    $p = getMyMerchantProfile($u);
+    $where = ['merchantId = ?']; $args = [$p['id']];
+    if (!empty($_GET['status'])) { $where[] = 'status = ?'; $args[] = strtoupper((string) $_GET['status']); }
+    $page = max(1, (int) ($_GET['page'] ?? 1));
+    $pageSize = min(100, max(1, (int) ($_GET['pageSize'] ?? 30)));
+    $off = ($page - 1) * $pageSize;
+    $w = implode(' AND ', $where);
+    $c = db()->prepare("SELECT COUNT(*) FROM `MerchantChangeRequest` WHERE $w");
+    $c->execute($args);
+    $total = (int) $c->fetchColumn();
+    $st = db()->prepare("SELECT * FROM `MerchantChangeRequest` WHERE $w ORDER BY createdAt DESC LIMIT $pageSize OFFSET $off");
+    $st->execute($args);
+    jsonList(array_map('jsonizeRow', $st->fetchAll()), $page, $pageSize, $total);
+}
+
+// A merchant may withdraw their own request while it is still waiting.
+if ($method === 'DELETE' && preg_match('#^/merchant/requests/([^/]+)$#', $path, $m)) {
+    $u = authUser();
+    if (($u['role'] ?? '') !== 'MERCHANT') jsonErr('غير مسموح', 403, 'FORBIDDEN');
+    $p = getMyMerchantProfile($u);
+    $st = db()->prepare("UPDATE `MerchantChangeRequest` SET status = 'CANCELLED', updatedAt = NOW(3) WHERE id = ? AND merchantId = ? AND status = 'PENDING'");
+    $st->execute([$m[1], $p['id']]);
+    if (!$st->rowCount()) jsonErr('الطلب غير موجود أو تمت مراجعته بالفعل', 404, 'NOT_FOUND');
+    jsonOk(['cancelled' => true]);
+}
+
+
+// ═══ Admin: merchant change requests (review queue + audit log) ═════════
+// The /admin/ guard above already enforces ADMIN/SUPER_ADMIN for everything here.
+
+if ($method === 'GET' && $path === '/admin/merchant-requests') {
+    $where = []; $args = [];
+    // Default to the queue; pass status=ALL for the full audit trail.
+    $status = strtoupper(trim((string) ($_GET['status'] ?? 'PENDING')));
+    if ($status !== '' && $status !== 'ALL') { $where[] = 'r.status = ?'; $args[] = $status; }
+    if (!empty($_GET['merchantId'])) { $where[] = 'r.merchantId = ?'; $args[] = $_GET['merchantId']; }
+    if (!empty($_GET['type'])) { $where[] = 'r.type = ?'; $args[] = $_GET['type']; }
+    $w = $where ? ('WHERE ' . implode(' AND ', $where)) : '';
+    $page = max(1, (int) ($_GET['page'] ?? 1));
+    $pageSize = min(100, max(1, (int) ($_GET['pageSize'] ?? 30)));
+    $off = ($page - 1) * $pageSize;
+
+    $c = db()->prepare("SELECT COUNT(*) FROM `MerchantChangeRequest` r $w");
+    $c->execute($args);
+    $total = (int) $c->fetchColumn();
+
+    $st = db()->prepare(
+        "SELECT r.*, m.storeNameAr, m.storeName, u.name AS requestedByName, a.name AS reviewedByName
+         FROM `MerchantChangeRequest` r
+         LEFT JOIN `MerchantProfile` m ON m.id = r.merchantId
+         LEFT JOIN `User` u ON u.id = r.requestedById
+         LEFT JOIN `User` a ON a.id = r.reviewedById
+         $w ORDER BY r.createdAt DESC LIMIT $pageSize OFFSET $off"
+    );
+    $st->execute($args);
+    $rows = array_map(function ($r) {
+        $r = jsonizeRow($r);
+        // Decode so the review screen can render a diff without re-parsing.
+        foreach (['payload', 'beforeData', 'appliedResult'] as $k) {
+            if (is_string($r[$k] ?? null)) {
+                $d = json_decode($r[$k], true);
+                if ($d !== null) $r[$k] = $d;
+            }
+        }
+        return $r;
+    }, $st->fetchAll());
+    jsonList($rows, $page, $pageSize, $total);
+}
+
+if ($method === 'GET' && $path === '/admin/merchant-requests/stats') {
+    $rows = db()->query("SELECT status, COUNT(*) c FROM `MerchantChangeRequest` GROUP BY status")->fetchAll();
+    $out = ['PENDING' => 0, 'APPROVED' => 0, 'REJECTED' => 0, 'CANCELLED' => 0];
+    foreach ($rows as $r) $out[(string) $r['status']] = (int) $r['c'];
+    jsonOk($out);
+}
+
+if ($method === 'POST' && preg_match('#^/admin/merchant-requests/([^/]+)/approve$#', $path, $m)) {
+    $u = authUser();
+    $st = db()->prepare("SELECT * FROM `MerchantChangeRequest` WHERE id = ? LIMIT 1");
+    $st->execute([$m[1]]);
+    $req = $st->fetch();
+    if (!$req) jsonErr('الطلب غير موجود', 404, 'NOT_FOUND');
+    if ($req['status'] !== 'PENDING') jsonErr('تمت مراجعة هذا الطلب بالفعل', 409, 'ALREADY_REVIEWED');
+
+    // mcrApply raises a jsonErr (and exits) when the target moved on, which
+    // leaves the request PENDING rather than marking it done in error.
+    $result = mcrApply($req);
+
+    db()->prepare("UPDATE `MerchantChangeRequest` SET status = 'APPROVED', reviewedById = ?, reviewedAt = NOW(3), appliedResult = ?, updatedAt = NOW(3) WHERE id = ?")
+        ->execute([$u['sub'] ?? null, json_encode($result, JSON_UNESCAPED_UNICODE), $m[1]]);
+    jsonOk(['approved' => true, 'result' => $result]);
+}
+
+if ($method === 'POST' && preg_match('#^/admin/merchant-requests/([^/]+)/reject$#', $path, $m)) {
+    $u = authUser();
+    $b = readJsonBody();
+    $reason = trim((string) ($b['reason'] ?? ''));
+    if ($reason === '') jsonErr('اكتب سبب الرفض', 422, 'REASON_REQUIRED');
+    $st = db()->prepare("SELECT status FROM `MerchantChangeRequest` WHERE id = ? LIMIT 1");
+    $st->execute([$m[1]]);
+    $cur = $st->fetchColumn();
+    if ($cur === false) jsonErr('الطلب غير موجود', 404, 'NOT_FOUND');
+    if ($cur !== 'PENDING') jsonErr('تمت مراجعة هذا الطلب بالفعل', 409, 'ALREADY_REVIEWED');
+    db()->prepare("UPDATE `MerchantChangeRequest` SET status = 'REJECTED', reviewedById = ?, reviewedAt = NOW(3), rejectionReason = ?, updatedAt = NOW(3) WHERE id = ?")
+        ->execute([$u['sub'] ?? null, mb_substr($reason, 0, 500), $m[1]]);
+    jsonOk(['rejected' => true]);
+}
+
+// Per-store capability switches, read and written from the merchants page.
+if ($method === 'GET' && preg_match('#^/admin/merchants/([^/]+)/permissions$#', $path, $m)) {
+    $st = db()->prepare('SELECT * FROM `MerchantProfile` WHERE id = ? LIMIT 1');
+    $st->execute([$m[1]]);
+    $p = $st->fetch();
+    if (!$p) jsonErr('المتجر غير موجود', 404, 'NOT_FOUND');
+    jsonOk(['merchantId' => $m[1], 'permissions' => mcrPerms($p), 'defaults' => mcrDefaultPerms()]);
+}
+
+if ($method === 'PUT' && preg_match('#^/admin/merchants/([^/]+)/permissions$#', $path, $m)) {
+    $b = readJsonBody();
+    $in = is_array($b['permissions'] ?? null) ? $b['permissions'] : $b;
+    // Only known keys are stored, so a typo can never silently grant anything.
+    $out = [];
+    foreach (mcrDefaultPerms() as $k => $def) $out[$k] = array_key_exists($k, $in) ? (bool) $in[$k] : $def;
+    $st = db()->prepare('UPDATE `MerchantProfile` SET permissions = ?, updatedAt = NOW(3) WHERE id = ?');
+    $st->execute([json_encode($out, JSON_UNESCAPED_UNICODE), $m[1]]);
+    jsonOk(['merchantId' => $m[1], 'permissions' => $out]);
 }
 
 // ─── Ultimate GET fallback — default to empty LIST wrapped in the paginated

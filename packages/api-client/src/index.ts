@@ -1154,6 +1154,69 @@ export class TamemClient {
   async merchantDeleteProduct(id: string): Promise<void> {
     await this.http.request({ method: 'DELETE', url: `/merchant/products/${id}` });
   }
+  /** Bulk upload from a sheet. Parsed client-side; the whole file is ONE request
+   *  so the admin approves an import in a single decision. */
+  async merchantImportProducts(rows: unknown[], fileName: string): Promise<unknown> {
+    return this.request({
+      method: 'POST',
+      url: '/merchant/products/import',
+      data: { rows, fileName },
+    });
+  }
+  async merchantCreateSection(data: unknown): Promise<unknown> {
+    return this.request({ method: 'POST', url: '/merchant/sections', data });
+  }
+  async merchantRenameSection(name: string, nameAr: string): Promise<unknown> {
+    return this.request({
+      method: 'PATCH',
+      url: `/merchant/sections/${encodeURIComponent(name)}`,
+      data: { nameAr },
+    });
+  }
+  async merchantDeleteSection(name: string): Promise<unknown> {
+    return this.request({
+      method: 'DELETE',
+      url: `/merchant/sections/${encodeURIComponent(name)}`,
+    });
+  }
+  /** The store's own change requests — status, and why one was refused. */
+  async merchantListRequests(params?: Record<string, unknown>): Promise<Paginated<unknown>> {
+    return this.requestPaginated({ method: 'GET', url: '/merchant/requests', params });
+  }
+  async merchantCancelRequest(id: string): Promise<unknown> {
+    return this.request({ method: 'DELETE', url: `/merchant/requests/${id}` });
+  }
+
+  // ===== Admin: merchant change requests + per-store permissions =====
+  async adminListMerchantRequests(params?: Record<string, unknown>): Promise<Paginated<unknown>> {
+    return this.requestPaginated({ method: 'GET', url: '/admin/merchant-requests', params });
+  }
+  async adminMerchantRequestStats(): Promise<Record<string, number>> {
+    return this.request({ method: 'GET', url: '/admin/merchant-requests/stats' });
+  }
+  async adminApproveMerchantRequest(id: string): Promise<unknown> {
+    return this.request({ method: 'POST', url: `/admin/merchant-requests/${id}/approve` });
+  }
+  async adminRejectMerchantRequest(id: string, reason: string): Promise<unknown> {
+    return this.request({
+      method: 'POST',
+      url: `/admin/merchant-requests/${id}/reject`,
+      data: { reason },
+    });
+  }
+  async adminGetMerchantPermissions(merchantId: string): Promise<unknown> {
+    return this.request({ method: 'GET', url: `/admin/merchants/${merchantId}/permissions` });
+  }
+  async adminSaveMerchantPermissions(
+    merchantId: string,
+    permissions: Record<string, boolean>,
+  ): Promise<unknown> {
+    return this.request({
+      method: 'PUT',
+      url: `/admin/merchants/${merchantId}/permissions`,
+      data: { permissions },
+    });
+  }
 
   // Raw escape hatch
   get raw(): AxiosInstance {
