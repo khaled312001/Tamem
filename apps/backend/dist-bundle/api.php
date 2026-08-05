@@ -8630,6 +8630,13 @@ if ($method === 'GET' && $path === '/merchant/products') {
         $where[] = "(name LIKE ? OR nameAr LIKE ?)";
         $args[] = $s; $args[] = $s;
     }
+    // Filtering by section has to happen here, not in the browser: the panel
+    // only ever holds one page, so a client-side filter would hide every
+    // matching product that lives on another page.
+    if (isset($_GET['categoryName']) && $_GET['categoryName'] !== '') {
+        $where[] = "categoryName = ?";
+        $args[] = trim((string) $_GET['categoryName']);
+    }
 
     $whereSql = implode(' AND ', $where);
     $pdo = db();
@@ -8662,7 +8669,7 @@ if ($method === 'GET' && $path === '/merchant/categories') {
     $p = getMyMerchantProfile($u);
     $mid = $p['id'];
     $pdo = db();
-    $st = $pdo->prepare("SELECT categoryName, COUNT(*) as productCount FROM `Product` WHERE merchantId = ? AND (isHidden IS NULL OR isHidden = 0) GROUP BY categoryName ORDER BY categoryName ASC");
+    $st = $pdo->prepare("SELECT categoryName, COUNT(*) as productCount FROM `Product` WHERE merchantId = ? AND (isHidden IS NULL OR isHidden = 0) AND categoryName IS NOT NULL AND categoryName <> '' GROUP BY categoryName ORDER BY categoryName ASC");
     $st->execute([$mid]);
     $rows = $st->fetchAll();
     jsonOk($rows);
