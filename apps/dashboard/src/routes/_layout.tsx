@@ -2,6 +2,7 @@ import { useQuery } from '@tanstack/react-query';
 import {
   Bell,
   AlertTriangle,
+  ClipboardList,
   BarChart3,
   Box,
   LayoutList,
@@ -88,6 +89,12 @@ const NAV_SECTIONS: NavSection[] = [
       { to: '/customers', icon: Users, label: 'العملاء', perm: 'customers' },
       { to: '/drivers', icon: Truck, label: 'السائقون', perm: 'drivers' },
       { to: '/merchants', icon: Store, label: 'التجار', perm: 'merchants' },
+      {
+        to: '/merchant-requests',
+        icon: ClipboardList,
+        label: 'طلبات التجّار',
+        perm: 'merchants',
+      },
       { to: '/supervisors', icon: UserCheck, label: 'المشرفون', perm: 'supervisors' },
     ],
   },

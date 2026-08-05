@@ -1,6 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Box,
+  ClipboardList,
+  FileSpreadsheet,
   Check,
   Edit3,
   FolderTree,
@@ -21,6 +23,7 @@ import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { toast } from 'sonner';
 
 import { ProductOptionsPanel } from '../components/ProductOptionsPanel.js';
+import { MerchantImportDialog, MerchantRequestsTab } from './merchant-extras.js';
 import { Button } from '../components/ui/Button.js';
 import { ConfirmDialog } from '../components/ui/ConfirmDialog.js';
 import { Dialog } from '../components/ui/Dialog.js';
@@ -174,11 +177,9 @@ function ProductFormDialog({
   );
   const [categoryName, setCategoryName] = useState(product?.categoryName ?? '');
   const [unit, setUnit] = useState(product?.unit ?? '');
-  const [stock, setStock] = useState<string>(
-    product?.stock !== null && product?.stock !== undefined ? String(product.stock) : '',
-  );
-  const [sku, setSku] = useState(product?.sku ?? '');
-  const [barcode, setBarcode] = useState(product?.barcode ?? '');
+  // stock / sku / barcode are deliberately NOT exposed to merchants — they add
+  // noise to the form for a catalogue that is not stock-tracked. Existing values
+  // are left untouched because the update only sends fields that changed.
   // Same offer knobs the admin deals page exposes: a percentage discount and an
   // optional expiry, after which the price reverts on its own (no cron).
   const [discount, setDiscount] = useState<string>(
@@ -208,9 +209,6 @@ function ProductFormDialog({
         imageUrl: imageUrls[0] ?? undefined,
         imageUrls: imageUrls.length ? imageUrls : undefined,
         unit: unit.trim() || undefined,
-        stock: stock.trim() !== '' ? Number(stock) : undefined,
-        sku: sku.trim() || undefined,
-        barcode: barcode.trim() || undefined,
         categoryName: categoryName.trim() || undefined,
       };
       if (salePrice.trim()) data.salePrice = Number(salePrice);
@@ -430,35 +428,6 @@ function ProductFormDialog({
                 </div>
               )}
             </div>
-
-            <Field label="كمية المخزون" hint="اتركها فارغة إذا كان التوفر غير محدود">
-              <Input
-                type="number"
-                min="0"
-                dir="ltr"
-                value={stock}
-                onChange={(e) => setStock(e.target.value)}
-                placeholder="غير محدود"
-              />
-            </Field>
-
-            <Field label="رمز SKU (الرمز التعريفي)">
-              <Input
-                dir="ltr"
-                value={sku}
-                onChange={(e) => setSku(e.target.value)}
-                placeholder="e.g. PRD-101"
-              />
-            </Field>
-
-            <Field label="الباركود Barcode">
-              <Input
-                dir="ltr"
-                value={barcode}
-                onChange={(e) => setBarcode(e.target.value)}
-                placeholder="e.g. 62911001122"
-              />
-            </Field>
           </div>
         )}
 
@@ -499,7 +468,8 @@ function ProductFormDialog({
 // ─── Main Merchant Panel ───
 export function MerchantPanelPage() {
   const qc = useQueryClient();
-  const [activeTab, setActiveTab] = useState<'products' | 'categories'>('products');
+  const [activeTab, setActiveTab] = useState<'products' | 'categories' | 'requests'>('products');
+  const [importOpen, setImportOpen] = useState(false);
 
   const [search, setSearch] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
@@ -533,6 +503,17 @@ export function MerchantPanelPage() {
   });
   const merchantProfile = profileData as Row;
   const merchantId = merchantProfile?.id ?? '';
+  // Capability switches come from the server; the UI only hides what the API
+  // would refuse anyway, so this is convenience and never the real boundary.
+  const perms: Record<string, boolean> = merchantProfile?.permissions ?? {
+    'products.create': true,
+    'products.update': true,
+    'products.delete': true,
+    'products.import': true,
+    'sections.manage': true,
+    autoApprove: false,
+  };
+  const pendingRequests = Number(merchantProfile?.stats?.pendingRequests ?? 0);
 
   // Query params for products list
   const queryParams = useMemo(() => {
@@ -641,18 +622,57 @@ export function MerchantPanelPage() {
             <FolderTree className="w-4 h-4" />
             الأقسام والتصنيفات ({categoriesList.length})
           </button>
+          <button
+            onClick={() => setActiveTab('requests')}
+            className={`flex items-center gap-2 px-5 py-2.5 rounded-xl font-bold text-sm transition-all ${
+              activeTab === 'requests'
+                ? 'bg-brand-red text-white shadow-md'
+                : 'text-muted-foreground hover:bg-muted hover:text-foreground'
+            }`}
+          >
+            <ClipboardList className="w-4 h-4" />
+            طلباتي
+            {pendingRequests > 0 && (
+              <span className="px-1.5 py-0.5 rounded-full text-[11px] bg-amber-400 text-amber-950">
+                {pendingRequests}
+              </span>
+            )}
+          </button>
         </div>
 
-        <Button
-          onClick={() => {
-            setEditing(null);
-            setFormOpen(true);
-          }}
-        >
-          <Plus className="w-4 h-4" />
-          إضافة منتج جديد
-        </Button>
+        <div className="flex items-center gap-2">
+          {perms['products.import'] && (
+            <Button variant="outline" onClick={() => setImportOpen(true)}>
+              <FileSpreadsheet className="w-4 h-4" />
+              رفع من ملف
+            </Button>
+          )}
+          {perms['products.create'] && (
+            <Button
+              onClick={() => {
+                setEditing(null);
+                setFormOpen(true);
+              }}
+            >
+              <Plus className="w-4 h-4" />
+              إضافة منتج جديد
+            </Button>
+          )}
+        </div>
       </div>
+
+      {/* Everything a merchant saves waits for the admin unless this store has
+          been trusted with auto-approve. Saying so up front avoids "I saved it
+          but nothing changed". */}
+      {!perms.autoApprove && (
+        <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900 flex items-start gap-2">
+          <ClipboardList className="w-4 h-4 mt-0.5 shrink-0" />
+          <span>
+            أي إضافة أو تعديل أو حذف بتتبعت للإدارة للمراجعة الأول، وبتظهر في التطبيق بعد الموافقة.
+            تقدر تتابع حالتها من تبويب <strong>طلباتي</strong>.
+          </span>
+        </div>
+      )}
 
       {/* TAB 1: PRODUCTS */}
       {activeTab === 'products' && (
@@ -1149,6 +1169,22 @@ export function MerchantPanelPage() {
             </div>
           </form>
         </Dialog>
+      )}
+
+      {/* TAB 3: MY REQUESTS — status of everything waiting on the admin. */}
+      {activeTab === 'requests' && <MerchantRequestsTab />}
+
+      {/* Bulk upload — same sheet format the admin uses. */}
+      {importOpen && (
+        <MerchantImportDialog
+          merchantId={merchantId}
+          storeName={merchantProfile?.storeNameAr ?? merchantProfile?.storeName ?? 'متجري'}
+          onClose={() => setImportOpen(false)}
+          onDone={() => {
+            qc.invalidateQueries({ queryKey: ['merchant', 'requests'] });
+            qc.invalidateQueries({ queryKey: ['merchant', 'me'] });
+          }}
+        />
       )}
 
       {/* Edit/Create Modal */}
