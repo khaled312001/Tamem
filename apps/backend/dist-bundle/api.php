@@ -8669,10 +8669,31 @@ if ($method === 'GET' && $path === '/merchant/categories') {
     $p = getMyMerchantProfile($u);
     $mid = $p['id'];
     $pdo = db();
-    $st = $pdo->prepare("SELECT categoryName, COUNT(*) as productCount FROM `Product` WHERE merchantId = ? AND (isHidden IS NULL OR isHidden = 0) AND categoryName IS NOT NULL AND categoryName <> '' GROUP BY categoryName ORDER BY categoryName ASC");
-    $st->execute([$mid]);
-    $rows = $st->fetchAll();
-    jsonOk($rows);
+
+    // Two different things were being conflated. `ProductSection` is the shared
+    // catalogue of sections the admin curates — that is the list a merchant
+    // picks from. `Product.categoryName` is only which of them a product has
+    // been put in. Returning just the latter meant a store with 51 products
+    // sitting in 3 sections looked like it *had* 3 sections, and there was no
+    // way to file the other 19 products anywhere.
+    $st = $pdo->query("SELECT nameAr FROM `ProductSection` WHERE isActive = 1 ORDER BY sortOrder ASC, nameAr ASC");
+    $names = array_map(fn($r) => (string) $r['nameAr'], $st->fetchAll());
+
+    $cnt = $pdo->prepare("SELECT categoryName, COUNT(*) AS n FROM `Product` WHERE merchantId = ? AND (isHidden IS NULL OR isHidden = 0) AND categoryName IS NOT NULL AND categoryName <> '' GROUP BY categoryName");
+    $cnt->execute([$mid]);
+    $counts = [];
+    foreach ($cnt->fetchAll() as $r) $counts[(string) $r['categoryName']] = (int) $r['n'];
+
+    // A section this merchant already uses but that is not (or no longer) in the
+    // shared catalogue still has to appear, or its products become unreachable.
+    foreach (array_keys($counts) as $used) {
+        if (!in_array($used, $names, true)) $names[] = $used;
+    }
+
+    jsonOk(array_map(
+        fn($n) => ['categoryName' => $n, 'productCount' => $counts[$n] ?? 0],
+        $names
+    ));
 }
 
 if ($method === 'GET' && preg_match('#^/merchant/products/([^/]+)$#', $path, $m)) {

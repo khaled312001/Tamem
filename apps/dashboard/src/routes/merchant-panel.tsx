@@ -587,6 +587,10 @@ export function MerchantPanelPage() {
     (categoryRows ?? []).forEach((c) => m.set(c.categoryName, Number(c.productCount) || 0));
     return m;
   }, [categoryRows]);
+  const usedCategoriesCount = useMemo(
+    () => Array.from(categoryCounts.values()).filter((n) => n > 0).length,
+    [categoryCounts],
+  );
   const categoriesList = useMemo(() => {
     // A section the merchant just created has no products yet, so the server
     // cannot know about it — keep it in the list until a product lands in it.
@@ -633,8 +637,10 @@ export function MerchantPanelPage() {
         <StatCard
           icon={FolderTree}
           tone="blue"
-          value={categoriesList.length}
-          label="الأقسام والتصنيفات"
+          // The stat is about this store: how many sections its products
+          // actually sit in. The tab below lists every section available.
+          value={usedCategoriesCount}
+          label="الأقسام المستخدمة"
         />
         <StatCard icon={Package} tone="green" value={stats.todayOrders ?? 0} label="طلبات اليوم" />
         <StatCard
@@ -1150,22 +1156,31 @@ export function MerchantPanelPage() {
               return (
                 <div
                   key={catName}
-                  className="bg-card rounded-2xl border border-border p-5 flex items-center justify-between hover:shadow-md transition"
+                  className={`bg-card rounded-2xl border p-5 flex items-center justify-between hover:shadow-md transition ${
+                    count === 0 ? 'border-dashed border-border/70' : 'border-border'
+                  }`}
                 >
                   <div className="flex items-center gap-3">
-                    <div className="w-12 h-12 rounded-xl bg-brand-red/10 text-brand-red flex items-center justify-center font-bold">
+                    <div
+                      className={`w-12 h-12 rounded-xl flex items-center justify-center font-bold ${
+                        count === 0
+                          ? 'bg-muted text-muted-foreground'
+                          : 'bg-brand-red/10 text-brand-red'
+                      }`}
+                    >
                       <FolderTree className="w-6 h-6" />
                     </div>
                     <div>
                       <h3 className="font-bold text-foreground text-base">{catName}</h3>
                       <p className="text-xs text-muted-foreground font-medium">
-                        {count} منتجات في هذا القسم
+                        {count === 0 ? 'متاح — لا منتجات فيه بعد' : `${count} منتج في هذا القسم`}
                       </p>
                     </div>
                   </div>
                   <Button
                     variant="outline"
                     size="sm"
+                    disabled={count === 0}
                     onClick={() => {
                       setSelectedCategory(catName);
                       setPage(1);
