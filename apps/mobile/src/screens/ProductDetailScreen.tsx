@@ -35,6 +35,7 @@ import { showToast } from '../lib/toast';
 import type { HomeStackParamList } from '../navigation/HomeStack';
 import type { NativeScrollEvent, NativeSyntheticEvent } from 'react-native';
 
+import { HeartButton } from '../components/HeartButton';
 import { ImageViewer } from '../components/ImageViewer';
 import { activeDiscountPct, applyPct, productPrice } from '../lib/productPrice';
 import { addToCart } from '../stores/cart';
@@ -323,6 +324,10 @@ export function ProductDetailScreen() {
             >
               <BackChevron size={20} color={colors.ink} />
             </Pressable>
+            {/* Wishlist. Without this there was no way to add a PRODUCT to
+                favourites anywhere in the app, so «قائمة الرغبات» could only
+                ever be empty. */}
+            <HeartButton collection="product" id={data.id} merchantName={data.nameAr} size="md" />
             {hasSale && (
               <View style={styles.discountBadge}>
                 <Text
