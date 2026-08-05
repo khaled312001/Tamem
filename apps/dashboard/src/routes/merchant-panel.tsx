@@ -53,6 +53,14 @@ function firstImage(p: Row): string | null {
   return list[0] ?? null;
 }
 
+/** UTC ISO → the value a datetime-local input expects, in the viewer's zone. */
+function toLocalInput(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
 // ─── Multi-Image Uploader Field ───
 function MultiImageUploader({
   imageUrls,
@@ -171,6 +179,15 @@ function ProductFormDialog({
   );
   const [sku, setSku] = useState(product?.sku ?? '');
   const [barcode, setBarcode] = useState(product?.barcode ?? '');
+  // Same offer knobs the admin deals page exposes: a percentage discount and an
+  // optional expiry, after which the price reverts on its own (no cron).
+  const [discount, setDiscount] = useState<string>(
+    product?.discount ? String(Number(product.discount)) : '',
+  );
+  const [timed, setTimed] = useState(!!product?.saleEndsAt);
+  const [endsAt, setEndsAt] = useState<string>(
+    product?.saleEndsAt ? toLocalInput(String(product.saleEndsAt)) : '',
+  );
   const [isAvailable, setIsAvailable] = useState(product?.isAvailable ?? true);
   const [imageUrls, setImageUrls] = useState<string[]>(() => {
     if (!product) return [];
@@ -198,6 +215,9 @@ function ProductFormDialog({
       };
       if (salePrice.trim()) data.salePrice = Number(salePrice);
       else data.salePrice = null;
+      data.discount = discount.trim() ? Number(discount) : 0;
+      // Null clears the expiry, so an offer can be made permanent again.
+      data.saleEndsAt = timed && endsAt ? new Date(endsAt).toISOString() : null;
 
       if (isEdit) {
         await api.merchantUpdateProduct(product.id, data);
@@ -368,6 +388,48 @@ function ProductFormDialog({
                 placeholder="اتركه فارغاً إذا لا يوجد خصم"
               />
             </Field>
+
+            <Field label="نسبة الخصم %" hint="بديل لسعر الخصم — يُحسب من السعر الأساسي">
+              <Input
+                type="number"
+                min="0"
+                max="99"
+                dir="ltr"
+                value={discount}
+                onChange={(e) => setDiscount(e.target.value)}
+                placeholder="0"
+              />
+              {Number(discount) > 0 && Number(price) > 0 && (
+                <p className="text-xs text-emerald-600 font-bold mt-1">
+                  السعر بعد الخصم: {formatMoney(Number(price) * (1 - Number(discount) / 100))}
+                </p>
+              )}
+            </Field>
+
+            <div className="md:col-span-2 rounded-xl border border-border p-3 bg-muted/30">
+              <label className="flex items-center gap-2 text-sm font-bold cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={timed}
+                  onChange={(e) => setTimed(e.target.checked)}
+                  className="w-4 h-4 accent-brand-red"
+                />
+                عرض لفترة محدودة (عرض اليوم)
+              </label>
+              {timed && (
+                <div className="mt-2">
+                  <Input
+                    type="datetime-local"
+                    dir="ltr"
+                    value={endsAt}
+                    onChange={(e) => setEndsAt(e.target.value)}
+                  />
+                  <p className="text-xs text-muted-foreground mt-1">
+                    بعد انتهاء الوقت يرجع السعر الأصلي تلقائياً ويختفي المنتج من «عروض اليوم».
+                  </p>
+                </div>
+              )}
+            </div>
 
             <Field label="كمية المخزون" hint="اتركها فارغة إذا كان التوفر غير محدود">
               <Input
@@ -713,86 +775,64 @@ export function MerchantPanelPage() {
                 }
               />
             ) : viewMode === 'table' ? (
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead className="bg-muted/50 border-b border-border text-muted-foreground">
-                    <tr className="text-right">
-                      <th className="px-4 py-3 font-bold">المنتج</th>
-                      <th className="px-4 py-3 font-bold">القسم</th>
-                      <th className="px-4 py-3 font-bold">السعر</th>
-                      <th className="px-4 py-3 font-bold">المخزون</th>
-                      <th className="px-4 py-3 font-bold text-center">الحالة</th>
-                      <th className="px-4 py-3 font-bold text-center">إجراءات</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-border">
-                    {items.map((p: Row) => {
-                      const img = firstImage(p);
-                      return (
-                        <tr key={p.id} className="hover:bg-muted/40 transition-colors">
-                          <td className="px-4 py-3">
-                            <div className="flex items-center gap-3">
-                              {img ? (
-                                <img
-                                  src={img}
-                                  alt={p.nameAr}
-                                  className="w-12 h-12 rounded-xl object-cover border border-border"
-                                />
-                              ) : (
-                                <div className="w-12 h-12 rounded-xl bg-muted grid place-items-center border border-border text-muted-foreground">
-                                  <Box className="w-6 h-6" />
-                                </div>
-                              )}
-                              <div>
-                                <p className="font-bold text-foreground">{p.nameAr}</p>
-                                {p.name && p.name !== p.nameAr && (
-                                  <p className="text-xs text-muted-foreground font-mono" dir="ltr">
-                                    {p.name}
-                                  </p>
-                                )}
-                              </div>
-                            </div>
-                          </td>
-                          <td className="px-4 py-3">
-                            {p.categoryName ? (
+              <>
+                {/* Phones get cards — a 6-column table forces a sideways scroll
+                  and shrinks the tap targets to nothing. */}
+                <ul className="md:hidden divide-y divide-border">
+                  {items.map((p: Row) => {
+                    const img = firstImage(p);
+                    const onSale = p.salePrice && Number(p.salePrice) > 0;
+                    return (
+                      <li key={p.id} className="p-3 flex gap-3">
+                        {img ? (
+                          <img
+                            src={img}
+                            alt={p.nameAr}
+                            className="w-16 h-16 rounded-xl object-cover border border-border shrink-0"
+                          />
+                        ) : (
+                          <div className="w-16 h-16 rounded-xl bg-muted grid place-items-center border border-border text-muted-foreground shrink-0">
+                            <Box className="w-6 h-6" />
+                          </div>
+                        )}
+                        <div className="flex-1 min-w-0">
+                          <p className="font-bold text-foreground leading-tight break-words">
+                            {p.nameAr}
+                          </p>
+                          <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs">
+                            {p.categoryName && (
                               <span
-                                className={`inline-flex px-2.5 py-0.5 rounded-full text-xs font-bold ${TONE.zinc.badge}`}
+                                className={`inline-flex px-2 py-0.5 rounded-full font-bold ${TONE.zinc.badge}`}
                               >
                                 {p.categoryName}
                               </span>
-                            ) : (
-                              <span className="text-muted-foreground/50">—</span>
                             )}
-                          </td>
-                          <td className="px-4 py-3 font-bold">
-                            {p.salePrice && Number(p.salePrice) > 0 ? (
-                              <div className="flex items-center gap-1.5">
-                                <span className="text-emerald-600">
-                                  {formatMoney(Number(p.salePrice))}
-                                </span>
-                                <span className="text-xs text-muted-foreground line-through font-normal">
-                                  {formatMoney(Number(p.price))}
-                                </span>
-                              </div>
-                            ) : (
-                              <span>{formatMoney(Number(p.price))}</span>
-                            )}
-                          </td>
-                          <td className="px-4 py-3 text-xs">
-                            {p.stock !== null && p.stock !== undefined ? (
-                              <span className="font-bold text-foreground">
-                                {formatCount(p.stock)}
-                              </span>
-                            ) : (
-                              <span className="text-muted-foreground">غير محدود</span>
-                            )}
-                          </td>
-                          <td className="px-4 py-3 text-center">
+                            <span className="font-bold text-foreground">
+                              {onSale ? (
+                                <>
+                                  <span className="text-emerald-600">
+                                    {formatMoney(Number(p.salePrice))}
+                                  </span>{' '}
+                                  <span className="text-muted-foreground line-through font-normal">
+                                    {formatMoney(Number(p.price))}
+                                  </span>
+                                </>
+                              ) : (
+                                formatMoney(Number(p.price))
+                              )}
+                            </span>
+                            <span className="text-muted-foreground">
+                              {p.stock !== null && p.stock !== undefined
+                                ? `مخزون: ${formatCount(p.stock)}`
+                                : 'مخزون: غير محدود'}
+                            </span>
+                          </div>
+                          <div className="mt-2 flex items-center gap-2">
                             <button
                               onClick={() =>
                                 toggleMut.mutate({ id: p.id, isAvailable: !p.isAvailable })
                               }
-                              className={`inline-flex items-center gap-1 px-3 py-1 rounded-full text-xs font-bold transition ${
+                              className={`inline-flex items-center gap-1 px-3 py-1.5 rounded-full text-xs font-bold transition ${
                                 p.isAvailable ? TONE.green.badge : TONE.red.badge
                               }`}
                             >
@@ -803,34 +843,151 @@ export function MerchantPanelPage() {
                               )}
                               {p.isAvailable ? 'متاح' : 'غير متاح'}
                             </button>
-                          </td>
-                          <td className="px-4 py-3 text-center">
-                            <div className="flex items-center justify-center gap-1">
+                            <button
+                              onClick={() => {
+                                setEditing(p);
+                                setFormOpen(true);
+                              }}
+                              className="ms-auto p-2 rounded-lg hover:bg-muted text-blue-600 transition"
+                              aria-label="تعديل"
+                            >
+                              <Edit3 className="w-5 h-5" />
+                            </button>
+                            <button
+                              onClick={() => setConfirmDel(p)}
+                              className="p-2 rounded-lg hover:bg-red-50 text-red-500 transition"
+                              aria-label="حذف"
+                            >
+                              <Trash2 className="w-5 h-5" />
+                            </button>
+                          </div>
+                        </div>
+                      </li>
+                    );
+                  })}
+                </ul>
+                <div className="hidden md:block overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead className="bg-muted/50 border-b border-border text-muted-foreground">
+                      <tr className="text-right">
+                        <th className="px-4 py-3 font-bold">المنتج</th>
+                        <th className="px-4 py-3 font-bold">القسم</th>
+                        <th className="px-4 py-3 font-bold">السعر</th>
+                        <th className="px-4 py-3 font-bold">المخزون</th>
+                        <th className="px-4 py-3 font-bold text-center">الحالة</th>
+                        <th className="px-4 py-3 font-bold text-center">إجراءات</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-border">
+                      {items.map((p: Row) => {
+                        const img = firstImage(p);
+                        return (
+                          <tr key={p.id} className="hover:bg-muted/40 transition-colors">
+                            <td className="px-4 py-3">
+                              <div className="flex items-center gap-3">
+                                {img ? (
+                                  <img
+                                    src={img}
+                                    alt={p.nameAr}
+                                    className="w-12 h-12 rounded-xl object-cover border border-border"
+                                  />
+                                ) : (
+                                  <div className="w-12 h-12 rounded-xl bg-muted grid place-items-center border border-border text-muted-foreground">
+                                    <Box className="w-6 h-6" />
+                                  </div>
+                                )}
+                                <div>
+                                  <p className="font-bold text-foreground">{p.nameAr}</p>
+                                  {p.name && p.name !== p.nameAr && (
+                                    <p
+                                      className="text-xs text-muted-foreground font-mono"
+                                      dir="ltr"
+                                    >
+                                      {p.name}
+                                    </p>
+                                  )}
+                                </div>
+                              </div>
+                            </td>
+                            <td className="px-4 py-3">
+                              {p.categoryName ? (
+                                <span
+                                  className={`inline-flex px-2.5 py-0.5 rounded-full text-xs font-bold ${TONE.zinc.badge}`}
+                                >
+                                  {p.categoryName}
+                                </span>
+                              ) : (
+                                <span className="text-muted-foreground/50">—</span>
+                              )}
+                            </td>
+                            <td className="px-4 py-3 font-bold">
+                              {p.salePrice && Number(p.salePrice) > 0 ? (
+                                <div className="flex items-center gap-1.5">
+                                  <span className="text-emerald-600">
+                                    {formatMoney(Number(p.salePrice))}
+                                  </span>
+                                  <span className="text-xs text-muted-foreground line-through font-normal">
+                                    {formatMoney(Number(p.price))}
+                                  </span>
+                                </div>
+                              ) : (
+                                <span>{formatMoney(Number(p.price))}</span>
+                              )}
+                            </td>
+                            <td className="px-4 py-3 text-xs">
+                              {p.stock !== null && p.stock !== undefined ? (
+                                <span className="font-bold text-foreground">
+                                  {formatCount(p.stock)}
+                                </span>
+                              ) : (
+                                <span className="text-muted-foreground">غير محدود</span>
+                              )}
+                            </td>
+                            <td className="px-4 py-3 text-center">
                               <button
-                                onClick={() => {
-                                  setEditing(p);
-                                  setFormOpen(true);
-                                }}
-                                className="p-2 rounded-lg hover:bg-muted text-blue-600 transition"
-                                title="تعديل المنتج والأوبشنز"
+                                onClick={() =>
+                                  toggleMut.mutate({ id: p.id, isAvailable: !p.isAvailable })
+                                }
+                                className={`inline-flex items-center gap-1 px-3 py-1 rounded-full text-xs font-bold transition ${
+                                  p.isAvailable ? TONE.green.badge : TONE.red.badge
+                                }`}
                               >
-                                <Edit3 className="w-4 h-4" />
+                                {p.isAvailable ? (
+                                  <Check className="w-3 h-3" />
+                                ) : (
+                                  <X className="w-3 h-3" />
+                                )}
+                                {p.isAvailable ? 'متاح' : 'غير متاح'}
                               </button>
-                              <button
-                                onClick={() => setConfirmDel(p)}
-                                className="p-2 rounded-lg hover:bg-red-50 text-red-500 transition"
-                                title="حذف"
-                              >
-                                <Trash2 className="w-4 h-4" />
-                              </button>
-                            </div>
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
+                            </td>
+                            <td className="px-4 py-3 text-center">
+                              <div className="flex items-center justify-center gap-1">
+                                <button
+                                  onClick={() => {
+                                    setEditing(p);
+                                    setFormOpen(true);
+                                  }}
+                                  className="p-2 rounded-lg hover:bg-muted text-blue-600 transition"
+                                  title="تعديل المنتج والأوبشنز"
+                                >
+                                  <Edit3 className="w-4 h-4" />
+                                </button>
+                                <button
+                                  onClick={() => setConfirmDel(p)}
+                                  className="p-2 rounded-lg hover:bg-red-50 text-red-500 transition"
+                                  title="حذف"
+                                >
+                                  <Trash2 className="w-4 h-4" />
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </>
             ) : (
               /* Grid view */
               <div className="p-4 grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">

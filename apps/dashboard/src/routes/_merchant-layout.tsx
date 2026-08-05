@@ -65,9 +65,14 @@ export function MerchantLayout() {
       {/* Sidebar */}
       <aside
         className={cn(
-          'fixed md:sticky top-0 h-screen z-50 flex flex-col transition-all duration-300',
-          'w-[260px] bg-brand-dark text-white shadow-xl',
-          mobileOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0',
+          // RTL: the drawer lives on the RIGHT. In RTL the inline-START edge IS
+          // the right edge, so it anchors with `start-0`; hiding it then means
+          // sliding +X (transforms are physical, not logical). The original
+          // `-translate-x-full` slid it the wrong way, leaving the sidebar
+          // parked on top of the page on every phone.
+          'fixed inset-y-0 start-0 md:sticky md:top-0 h-screen z-50 flex flex-col',
+          'transition-transform duration-300 w-[260px] max-w-[85vw] bg-brand-dark text-white shadow-xl',
+          mobileOpen ? 'translate-x-0' : 'translate-x-full md:translate-x-0',
         )}
         dir="rtl"
       >
