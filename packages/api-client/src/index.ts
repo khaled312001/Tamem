@@ -1142,6 +1142,11 @@ export class TamemClient {
   async merchantListProducts(params?: Record<string, unknown>): Promise<Paginated<unknown>> {
     return this.requestPaginated({ method: 'GET', url: '/merchant/products', params });
   }
+  /** Every section this merchant has, with its product count — computed over the
+   *  whole catalogue, so the list stays complete no matter which page is open. */
+  async merchantListCategories(): Promise<{ categoryName: string; productCount: number }[]> {
+    return this.request({ method: 'GET', url: '/merchant/categories' });
+  }
   async merchantGetProduct(id: string): Promise<unknown> {
     return this.request({ method: 'GET', url: `/merchant/products/${id}` });
   }

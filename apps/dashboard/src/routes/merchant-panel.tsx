@@ -556,8 +556,9 @@ export function MerchantPanelPage() {
     if (debouncedSearch.trim()) p.search = debouncedSearch.trim();
     if (statusFilter === 'available') p.isAvailable = true;
     if (statusFilter === 'disabled') p.isAvailable = false;
+    if (selectedCategory) p.categoryName = selectedCategory;
     return p;
-  }, [page, pageSize, debouncedSearch, statusFilter]);
+  }, [page, pageSize, debouncedSearch, statusFilter, selectedCategory]);
 
   const { data, isLoading, isError, refetch } = useQuery({
     queryKey: ['merchant', 'products', queryParams],
@@ -565,25 +566,34 @@ export function MerchantPanelPage() {
     enabled: !!merchantId,
   });
 
-  // Extract products items from standardPaginated response
-  const rawItems = (data?.items as Row[]) ?? [];
-  // Filter by selected category locally if selected
-  const items = useMemo(() => {
-    if (!selectedCategory) return rawItems;
-    return rawItems.filter((p: Row) => p.categoryName === selectedCategory);
-  }, [rawItems, selectedCategory]);
+  // The server already applied every filter, including the section — the page
+  // it returns IS what should be drawn.
+  const items = (data?.items as Row[]) ?? [];
 
   const total = data?.pagination?.total ?? 0;
   const stats = merchantProfile?.stats ?? {};
 
-  // Extract distinct category list
+  // Sections come from their own endpoint, which groups over the whole
+  // catalogue. Deriving them from the current page instead only ever showed the
+  // sections that happened to appear in the first 20 products.
+  const { data: categoryRows } = useQuery({
+    queryKey: ['merchant', 'categories'],
+    queryFn: () => api.merchantListCategories(),
+    enabled: !!merchantId,
+    staleTime: 60_000,
+  });
+  const categoryCounts = useMemo(() => {
+    const m = new Map<string, number>();
+    (categoryRows ?? []).forEach((c) => m.set(c.categoryName, Number(c.productCount) || 0));
+    return m;
+  }, [categoryRows]);
   const categoriesList = useMemo(() => {
-    const set = new Set<string>(customCategories);
-    rawItems.forEach((p: Row) => {
-      if (p.categoryName) set.add(p.categoryName);
-    });
-    return Array.from(set);
-  }, [rawItems, customCategories]);
+    // A section the merchant just created has no products yet, so the server
+    // cannot know about it — keep it in the list until a product lands in it.
+    const set = new Set<string>(categoryCounts.keys());
+    customCategories.forEach((c) => set.add(c));
+    return Array.from(set).sort((a, b) => a.localeCompare(b, 'ar'));
+  }, [categoryCounts, customCategories]);
 
   // Mutations
   const toggleMut = useMutation({
@@ -603,6 +613,7 @@ export function MerchantPanelPage() {
       setConfirmDel(null);
       qc.invalidateQueries({ queryKey: ['merchant', 'products'] });
       qc.invalidateQueries({ queryKey: ['merchant', 'me'] });
+      qc.invalidateQueries({ queryKey: ['merchant', 'categories'] });
     },
     onError: (err: Error) => toast.error(err.message),
   });
@@ -610,6 +621,8 @@ export function MerchantPanelPage() {
   const onSaved = () => {
     qc.invalidateQueries({ queryKey: ['merchant', 'products'] });
     qc.invalidateQueries({ queryKey: ['merchant', 'me'] });
+    // A saved product can introduce (or empty out) a section.
+    qc.invalidateQueries({ queryKey: ['merchant', 'categories'] });
   };
 
   return (
@@ -739,7 +752,10 @@ export function MerchantPanelPage() {
                 {categoriesList.length > 0 && (
                   <select
                     value={selectedCategory}
-                    onChange={(e) => setSelectedCategory(e.target.value)}
+                    onChange={(e) => {
+                      setSelectedCategory(e.target.value);
+                      setPage(1);
+                    }}
                     className="px-3 py-2 rounded-xl border border-input bg-background text-xs font-bold text-foreground focus:border-brand-red outline-none"
                   >
                     <option value="">كل الأقسام</option>
@@ -1130,7 +1146,7 @@ export function MerchantPanelPage() {
 
           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
             {categoriesList.map((catName) => {
-              const count = rawItems.filter((p: Row) => p.categoryName === catName).length;
+              const count = categoryCounts.get(catName) ?? 0;
               return (
                 <div
                   key={catName}
@@ -1152,6 +1168,7 @@ export function MerchantPanelPage() {
                     size="sm"
                     onClick={() => {
                       setSelectedCategory(catName);
+                      setPage(1);
                       setActiveTab('products');
                     }}
                   >
