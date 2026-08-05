@@ -120,3 +120,5 @@ STORE-UPLOAD-GUIDE.md
 /google-services.json
 apps/mobile/android/*-log*.txt
 store-assets/_*.png
+# Kotlin incremental-compilation scratch, written on every gradle run
+apps/mobile/android/.kotlin/

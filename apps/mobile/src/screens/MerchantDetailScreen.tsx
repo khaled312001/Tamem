@@ -8,7 +8,6 @@ import {
   ActivityIndicator,
   Alert,
   FlatList,
-  Image,
   Linking,
   Pressable,
   Share,
@@ -17,6 +16,8 @@ import {
   TextInput,
   View,
 } from 'react-native';
+
+import { Image } from '../components/ui/CachedImage';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { HeartButton } from '../components/HeartButton';

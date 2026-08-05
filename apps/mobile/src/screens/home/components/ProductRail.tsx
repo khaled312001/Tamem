@@ -10,7 +10,9 @@
  * is on sale.
  */
 import { memo, useCallback } from 'react';
-import { FlatList, Image, Pressable, StyleSheet, Text, View } from 'react-native';
+import { FlatList, Pressable, StyleSheet, Text, View } from 'react-native';
+
+import { Image } from '../../../components/ui/CachedImage';
 
 import { LIST_PERF } from '../../../lib/listPerf';
 import { productPrice } from '../../../lib/productPrice';

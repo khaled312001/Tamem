@@ -16,7 +16,6 @@ import { Clock, Minus, Package, Plus, ShoppingCart, Star, Store, Zap } from 'luc
 import { useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
-  Image,
   Dimensions,
   FlatList,
   Pressable,
@@ -25,6 +24,8 @@ import {
   Text,
   View,
 } from 'react-native';
+
+import { Image } from '../components/ui/CachedImage';
 import { Image as ImageIcon } from 'lucide-react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 

@@ -7,7 +7,9 @@
  */
 import { Clock, ImageOff, Star } from 'lucide-react-native';
 import { memo, useCallback } from 'react';
-import { FlatList, I18nManager, Image, Pressable, StyleSheet, Text, View } from 'react-native';
+import { FlatList, I18nManager, Pressable, StyleSheet, Text, View } from 'react-native';
+
+import { Image } from '../../../components/ui/CachedImage';
 
 import { HeartButton } from '../../../components/HeartButton';
 import { LIST_PERF } from '../../../lib/listPerf';
