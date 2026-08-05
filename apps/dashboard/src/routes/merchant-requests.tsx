@@ -51,6 +51,11 @@ const TYPES: Record<string, { label: string; Icon: typeof Package; tone: string 
     Icon: FileSpreadsheet,
     tone: 'bg-amber-100 text-amber-900',
   },
+  PRODUCT_OPTIONS: {
+    label: 'تعديل الأحجام والإضافات',
+    Icon: PencilLine,
+    tone: 'bg-blue-100 text-blue-800',
+  },
   SECTION_CREATE: { label: 'إضافة قسم', Icon: FolderTree, tone: 'bg-emerald-100 text-emerald-800' },
   SECTION_RENAME: { label: 'تعديل قسم', Icon: FolderTree, tone: 'bg-blue-100 text-blue-800' },
   SECTION_DELETE: { label: 'حذف قسم', Icon: FolderTree, tone: 'bg-red-100 text-red-800' },
@@ -81,12 +86,25 @@ const FIELD_AR: Record<string, string> = {
   imageUrl: 'الصورة',
   imageUrls: 'الصور',
   sortOrder: 'الترتيب',
+  variants: 'الأحجام',
+  addons: 'الإضافات',
 };
 
 function fmt(v: unknown): string {
   if (v === null || v === undefined || v === '') return '—';
   if (typeof v === 'boolean') return v ? 'نعم' : 'لا';
-  if (Array.isArray(v)) return `${v.length} عنصر`;
+  if (Array.isArray(v)) {
+    // Sizes/extras arrive as {nameAr, price} — spell them out, because "2 عنصر"
+    // tells the reviewer nothing about what they are approving.
+    const pairs = v.filter(
+      (x): x is { nameAr: string; price?: unknown } =>
+        !!x && typeof x === 'object' && 'nameAr' in (x as object),
+    );
+    if (pairs.length === v.length && pairs.length > 0) {
+      return pairs.map((p) => `${p.nameAr}: ${Number(p.price ?? 0)}`).join('، ');
+    }
+    return `${v.length} عنصر`;
+  }
   const s = String(v);
   return s.length > 60 ? `${s.slice(0, 60)}…` : s;
 }
@@ -106,6 +124,8 @@ const CREATE_FIELDS = [
   'unit',
   'description',
   'isAvailable',
+  'variants',
+  'addons',
 ];
 
 /** Pull the image list off a payload, tolerating the legacy singular column. */
