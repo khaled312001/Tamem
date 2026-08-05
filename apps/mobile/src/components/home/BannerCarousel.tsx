@@ -25,7 +25,6 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Animated,
   Dimensions,
-  Image,
   Linking,
   type NativeScrollEvent,
   type NativeSyntheticEvent,
@@ -36,6 +35,8 @@ import {
   Text,
   View,
 } from 'react-native';
+
+import { Image } from '../ui/CachedImage';
 
 import { api } from '../../lib/api';
 import { haptic } from '../../lib/haptics';

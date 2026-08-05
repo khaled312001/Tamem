@@ -13,7 +13,9 @@
  * category has no uploaded artwork, so a tile is never blank.
  */
 import { memo, useCallback, useMemo } from 'react';
-import { FlatList, Image, Pressable, StyleSheet, Text, View } from 'react-native';
+import { FlatList, Pressable, StyleSheet, Text, View } from 'react-native';
+
+import { Image } from '../../../components/ui/CachedImage';
 
 import { iconFor } from '../../../components/home/CategoriesStrip';
 import { colors, fontFamilies, radii, shadows, spacing } from '../../../theme/tokens';

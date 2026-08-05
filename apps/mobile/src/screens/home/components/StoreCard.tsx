@@ -12,7 +12,9 @@
  */
 import { Clock, ImageOff, Package, Star } from 'lucide-react-native';
 import { memo } from 'react';
-import { Image, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
+
+import { Image } from '../../../components/ui/CachedImage';
 
 import { HeartButton } from '../../../components/HeartButton';
 import { colors, fontFamilies, radii, shadows, spacing } from '../../../theme/tokens';

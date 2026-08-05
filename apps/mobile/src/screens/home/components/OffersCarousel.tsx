@@ -11,7 +11,6 @@ import { memo, useCallback, useRef, useState } from 'react';
 import {
   FlatList,
   I18nManager,
-  Image,
   type NativeScrollEvent,
   type NativeSyntheticEvent,
   Pressable,
@@ -20,6 +19,8 @@ import {
   View,
   useWindowDimensions,
 } from 'react-native';
+
+import { Image } from '../../../components/ui/CachedImage';
 
 import { colors, fontFamilies, radii, shadows, spacing } from '../../../theme/tokens';
 import type { Offer } from '../homeData';

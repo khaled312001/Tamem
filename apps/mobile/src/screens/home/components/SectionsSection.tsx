@@ -13,7 +13,9 @@
  */
 import { useQuery } from '@tanstack/react-query';
 import { memo, useCallback } from 'react';
-import { FlatList, Image, Pressable, StyleSheet, Text, View } from 'react-native';
+import { FlatList, Pressable, StyleSheet, Text, View } from 'react-native';
+
+import { Image } from '../../../components/ui/CachedImage';
 
 import { api } from '../../../lib/api';
 import { LIST_PERF } from '../../../lib/listPerf';

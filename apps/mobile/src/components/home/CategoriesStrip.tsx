@@ -38,7 +38,9 @@ import {
   type LucideIcon,
   UtensilsCrossed,
 } from 'lucide-react-native';
-import { Image, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+
+import { Image } from '../ui/CachedImage';
 
 import { api } from '../../lib/api';
 import { haptic } from '../../lib/haptics';

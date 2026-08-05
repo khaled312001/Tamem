@@ -10,7 +10,9 @@
 import { LinearGradient } from 'expo-linear-gradient';
 import { Bell, ChevronDown, MapPin } from 'lucide-react-native';
 import { memo } from 'react';
-import { I18nManager, Image, Pressable, StyleSheet, Text, View } from 'react-native';
+import { I18nManager, Pressable, StyleSheet, Text, View } from 'react-native';
+
+import { Image } from '../../../components/ui/CachedImage';
 
 import { colors, fontFamilies, gradients, radii, shadows, spacing } from '../../../theme/tokens';
 import { HomeSearchBar } from './HomeSearchBar';
