@@ -7253,11 +7253,40 @@ if ($method === 'GET' && $path === '/orders/mine') {
     $uid = (string) ($u['sub'] ?? '');
     $page = max(1, (int) ($_GET['page'] ?? 1));
     $pageSize = min(50, max(1, (int) ($_GET['pageSize'] ?? 20))); // caps at 50 here
-    $where = 'o.customerId = ? AND o.parentOrderId IS NULL'; $args = [$uid];
+    $base = 'o.customerId = ? AND o.parentOrderId IS NULL'; $baseArgs = [$uid];
+    $where = $base; $args = $baseArgs;
     if (!empty($_GET['status'])) { $where .= ' AND o.status = ?'; $args[] = $_GET['status']; }
+
+    // The app's tabs are status GROUPS, not single statuses. Filtering them on
+    // the client only works while the whole history fits in one page — which is
+    // exactly how "الطلبات" ended up showing a handful of orders next to a much
+    // larger total. Grouping here lets each tab paginate on its own.
+    $GROUPS = [
+        'current'   => ['NEW', 'UNDER_REVIEW', 'PRICED', 'AWAITING_CUSTOMER_APPROVAL', 'ACCEPTED', 'DRIVER_ASSIGNED', 'PICKED_UP', 'IN_ROUTE'],
+        'completed' => ['DELIVERED', 'COMPLETED'],
+        'cancelled' => ['CANCELLED', 'REJECTED'],
+    ];
+    $group = strtolower(trim((string) ($_GET['group'] ?? '')));
+    if (isset($GROUPS[$group])) {
+        $in = implode(',', array_fill(0, count($GROUPS[$group]), '?'));
+        $where .= " AND o.status IN ($in)";
+        foreach ($GROUPS[$group] as $s) $args[] = $s;
+    }
+
     $c = db()->prepare('SELECT COUNT(*) n FROM `Order` o WHERE ' . $where);
     $c->execute($args);
     $total = (int) $c->fetch()['n'];
+
+    // True per-tab totals, so the badges match the real history rather than
+    // whatever happened to be on the current page.
+    $gc = db()->prepare('SELECT o.status, COUNT(*) n FROM `Order` o WHERE ' . $base . ' GROUP BY o.status');
+    $gc->execute($baseArgs);
+    $counts = ['current' => 0, 'completed' => 0, 'cancelled' => 0];
+    foreach ($gc->fetchAll() as $r) {
+        foreach ($GROUPS as $k => $set) {
+            if (in_array($r['status'], $set, true)) { $counts[$k] += (int) $r['n']; break; }
+        }
+    }
     $st = db()->prepare('SELECT o.*, s.nameAr AS s_nameAr, s.category AS s_category,
         (SELECT COUNT(*) FROM `Order` so WHERE so.parentOrderId = o.id) AS subCount
         FROM `Order` o LEFT JOIN `Service` s ON s.id = o.serviceId WHERE ' . $where . '
@@ -7271,7 +7300,19 @@ if ($method === 'GET' && $path === '/orders/mine') {
         foreach (['s_nameAr', 's_category', 'subCount'] as $k) unset($o[$k]);
         $rows[] = $o;
     }
-    jsonList($rows, $page, $pageSize, $total);
+    // Same envelope jsonList produces, plus the per-tab counts.
+    http_response_code(200);
+    echo json_encode([
+        'data' => $rows,
+        'meta' => [
+            'pagination' => [
+                'page' => $page, 'pageSize' => $pageSize, 'total' => $total,
+                'totalPages' => $pageSize > 0 ? (int) ceil($total / $pageSize) : 0,
+            ],
+            'counts' => $counts,
+        ],
+    ], JSON_UNESCAPED_UNICODE);
+    exit;
 }
 
 if ($method === 'POST' && $path === '/orders/cart') {

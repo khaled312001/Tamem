@@ -3,7 +3,7 @@ import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import * as Haptics from 'expo-haptics';
 import { Package, RotateCcw } from 'lucide-react-native';
-import { memo, useMemo, useState } from 'react';
+import { memo, useEffect, useState } from 'react';
 import {
   FlatList,
   Platform,
@@ -47,18 +47,8 @@ const TABS = [
 ] as const;
 type TabKey = (typeof TABS)[number]['key'];
 
-const ACTIVE_STATUSES = new Set<OrderStatus>([
-  'NEW',
-  'UNDER_REVIEW',
-  'PRICED',
-  'AWAITING_CUSTOMER_APPROVAL',
-  'ACCEPTED',
-  'DRIVER_ASSIGNED',
-  'PICKED_UP',
-  'IN_ROUTE',
-]);
-const COMPLETED_STATUSES = new Set<OrderStatus>(['DELIVERED', 'COMPLETED']);
-const CANCELLED_STATUSES = new Set<OrderStatus>(['CANCELLED', 'REJECTED']);
+/** Orders per page. The tab groups + paging are resolved server-side. */
+const PAGE_SIZE = 10;
 
 /** Module-level so the array identity never changes across renders. */
 const SOCKET_EVENTS = ['order:status', 'order:new'];
@@ -161,36 +151,56 @@ export function OrdersScreen() {
   const navigation = useNavigation<Nav>();
   const qc = useQueryClient();
 
-  const { data, isLoading, refetch, isFetching } = useQuery<OrderListItem[]>({
-    queryKey: ['orders-mine'],
-    queryFn: () => api.raw.get('/orders/mine').then((r) => r.data.data),
+  // Server-side paging, one page per tab. Filtering the whole history on the
+  // client only worked while it fitted in a single response — which is why a
+  // customer with 58 open orders saw a fraction of them next to a correct total.
+  const [page, setPage] = useState(1);
+  useEffect(() => setPage(1), [tab]);
+
+  interface OrdersPage {
+    rows: OrderListItem[];
+    total: number;
+    totalPages: number;
+    counts: Record<TabKey, number>;
+  }
+
+  const { data, isLoading, refetch, isFetching } = useQuery<OrdersPage>({
+    queryKey: ['orders-mine', tab, page],
+    queryFn: () =>
+      api.raw
+        .get('/orders/mine', { params: { group: tab, page, pageSize: PAGE_SIZE } })
+        .then((r) => ({
+          rows: (r.data?.data ?? []) as OrderListItem[],
+          total: Number(r.data?.meta?.pagination?.total ?? 0),
+          totalPages: Number(r.data?.meta?.pagination?.totalPages ?? 0),
+          counts: (r.data?.meta?.counts ?? {
+            current: 0,
+            completed: 0,
+            cancelled: 0,
+          }) as Record<TabKey, number>,
+        })),
     // The socket below is the real live channel. This poll is only a safety net
     // for a dropped socket, so it can be slow — it used to run every 20s and
     // duplicate work the socket had already done.
     refetchInterval: 60_000,
     refetchIntervalInBackground: false,
     staleTime: 15_000,
+    // Keeps the current page on screen while the next one loads.
+    placeholderData: (prev) => prev,
   });
 
   useSocketEvents(SOCKET_EVENTS, () => {
     void qc.invalidateQueries({ queryKey: ['orders-mine'] });
   });
 
-  const filtered = useMemo(() => {
-    const list = data ?? [];
-    if (tab === 'current') return list.filter((o) => ACTIVE_STATUSES.has(o.status));
-    if (tab === 'completed') return list.filter((o) => COMPLETED_STATUSES.has(o.status));
-    return list.filter((o) => CANCELLED_STATUSES.has(o.status));
-  }, [data, tab]);
-
-  const counts = useMemo(() => {
-    const list = data ?? [];
-    return {
-      current: list.filter((o) => ACTIVE_STATUSES.has(o.status)).length,
-      completed: list.filter((o) => COMPLETED_STATUSES.has(o.status)).length,
-      cancelled: list.filter((o) => CANCELLED_STATUSES.has(o.status)).length,
-    };
-  }, [data]);
+  const filtered = data?.rows ?? [];
+  const totalPages = data?.totalPages ?? 0;
+  // True totals from the server, not "whatever is on this page".
+  const counts: Record<TabKey, number> = data?.counts ?? {
+    current: 0,
+    completed: 0,
+    cancelled: 0,
+  };
 
   const openOrder = (id: string) => navigation.navigate('OrderTracking', { orderId: id });
 
@@ -301,6 +311,40 @@ export function OrdersScreen() {
               reorderingId={reorderMut.isPending ? (reorderMut.variables ?? null) : null}
             />
           )}
+          ListFooterComponent={
+            totalPages > 1 ? (
+              <View style={styles.pager}>
+                <Pressable
+                  onPress={() => {
+                    tickHaptic();
+                    setPage((p) => Math.max(1, p - 1));
+                  }}
+                  disabled={page <= 1 || isFetching}
+                  style={[styles.pagerBtn, (page <= 1 || isFetching) && styles.pagerBtnOff]}
+                >
+                  <Text style={styles.pagerBtnText}>السابق</Text>
+                </Pressable>
+
+                <Text style={styles.pagerLabel}>
+                  صفحة {page} من {totalPages}
+                </Text>
+
+                <Pressable
+                  onPress={() => {
+                    tickHaptic();
+                    setPage((p) => Math.min(totalPages, p + 1));
+                  }}
+                  disabled={page >= totalPages || isFetching}
+                  style={[
+                    styles.pagerBtn,
+                    (page >= totalPages || isFetching) && styles.pagerBtnOff,
+                  ]}
+                >
+                  <Text style={styles.pagerBtnText}>التالي</Text>
+                </Pressable>
+              </View>
+            ) : null
+          }
         />
       )}
     </SafeAreaView>
@@ -356,6 +400,32 @@ const styles = StyleSheet.create({
   tabBadgeTextOn: { color: colors.white },
   // List
   listPad: { paddingHorizontal: spacing.lg, paddingBottom: spacing.xl },
+  pager: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing.sm,
+    paddingVertical: spacing.md,
+  },
+  pagerBtn: {
+    paddingHorizontal: spacing.lg,
+    paddingVertical: 8,
+    borderRadius: radii.pill,
+    backgroundColor: colors.brand.red,
+    minWidth: 84,
+    alignItems: 'center',
+  },
+  pagerBtnOff: { backgroundColor: colors.line2 },
+  pagerBtnText: {
+    color: colors.white,
+    fontSize: fontSizes.sm,
+    fontFamily: fontFamilies.bodyExtraBold,
+  },
+  pagerLabel: {
+    fontSize: fontSizes.sm,
+    color: colors.text.muted,
+    fontFamily: fontFamilies.bodyBold,
+  },
   // Card — Talabat-style: clean, no chevron, hierarchy by typography weight
   card: {
     backgroundColor: colors.white,
