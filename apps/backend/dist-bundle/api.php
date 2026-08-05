@@ -5589,6 +5589,107 @@ if ($method === 'POST' && $path === '/admin/push/test') {
     jsonOk(['sent' => true, 'devices' => $has]);
 }
 
+// ═══ Admin: merchant change requests (review queue + audit log) ═════════
+// The /admin/ guard above already enforces ADMIN/SUPER_ADMIN for everything here.
+
+if ($method === 'GET' && $path === '/admin/merchant-requests') {
+    $where = []; $args = [];
+    // Default to the queue; pass status=ALL for the full audit trail.
+    $status = strtoupper(trim((string) ($_GET['status'] ?? 'PENDING')));
+    if ($status !== '' && $status !== 'ALL') { $where[] = 'r.status = ?'; $args[] = $status; }
+    if (!empty($_GET['merchantId'])) { $where[] = 'r.merchantId = ?'; $args[] = $_GET['merchantId']; }
+    if (!empty($_GET['type'])) { $where[] = 'r.type = ?'; $args[] = $_GET['type']; }
+    $w = $where ? ('WHERE ' . implode(' AND ', $where)) : '';
+    $page = max(1, (int) ($_GET['page'] ?? 1));
+    $pageSize = min(100, max(1, (int) ($_GET['pageSize'] ?? 30)));
+    $off = ($page - 1) * $pageSize;
+
+    $c = db()->prepare("SELECT COUNT(*) FROM `MerchantChangeRequest` r $w");
+    $c->execute($args);
+    $total = (int) $c->fetchColumn();
+
+    $st = db()->prepare(
+        "SELECT r.*, m.storeNameAr, m.storeName, u.name AS requestedByName, a.name AS reviewedByName
+         FROM `MerchantChangeRequest` r
+         LEFT JOIN `MerchantProfile` m ON m.id = r.merchantId
+         LEFT JOIN `User` u ON u.id = r.requestedById
+         LEFT JOIN `User` a ON a.id = r.reviewedById
+         $w ORDER BY r.createdAt DESC LIMIT $pageSize OFFSET $off"
+    );
+    $st->execute($args);
+    $rows = array_map(function ($r) {
+        $r = jsonizeRow($r);
+        // Decode so the review screen can render a diff without re-parsing.
+        foreach (['payload', 'beforeData', 'appliedResult'] as $k) {
+            if (is_string($r[$k] ?? null)) {
+                $d = json_decode($r[$k], true);
+                if ($d !== null) $r[$k] = $d;
+            }
+        }
+        return $r;
+    }, $st->fetchAll());
+    jsonList($rows, $page, $pageSize, $total);
+}
+
+if ($method === 'GET' && $path === '/admin/merchant-requests/stats') {
+    $rows = db()->query("SELECT status, COUNT(*) c FROM `MerchantChangeRequest` GROUP BY status")->fetchAll();
+    $out = ['PENDING' => 0, 'APPROVED' => 0, 'REJECTED' => 0, 'CANCELLED' => 0];
+    foreach ($rows as $r) $out[(string) $r['status']] = (int) $r['c'];
+    jsonOk($out);
+}
+
+if ($method === 'POST' && preg_match('#^/admin/merchant-requests/([^/]+)/approve$#', $path, $m)) {
+    $u = authUser();
+    $st = db()->prepare("SELECT * FROM `MerchantChangeRequest` WHERE id = ? LIMIT 1");
+    $st->execute([$m[1]]);
+    $req = $st->fetch();
+    if (!$req) jsonErr('الطلب غير موجود', 404, 'NOT_FOUND');
+    if ($req['status'] !== 'PENDING') jsonErr('تمت مراجعة هذا الطلب بالفعل', 409, 'ALREADY_REVIEWED');
+
+    // mcrApply raises a jsonErr (and exits) when the target moved on, which
+    // leaves the request PENDING rather than marking it done in error.
+    $result = mcrApply($req);
+
+    db()->prepare("UPDATE `MerchantChangeRequest` SET status = 'APPROVED', reviewedById = ?, reviewedAt = NOW(3), appliedResult = ?, updatedAt = NOW(3) WHERE id = ?")
+        ->execute([$u['sub'] ?? null, json_encode($result, JSON_UNESCAPED_UNICODE), $m[1]]);
+    jsonOk(['approved' => true, 'result' => $result]);
+}
+
+if ($method === 'POST' && preg_match('#^/admin/merchant-requests/([^/]+)/reject$#', $path, $m)) {
+    $u = authUser();
+    $b = readJsonBody();
+    $reason = trim((string) ($b['reason'] ?? ''));
+    if ($reason === '') jsonErr('اكتب سبب الرفض', 422, 'REASON_REQUIRED');
+    $st = db()->prepare("SELECT status FROM `MerchantChangeRequest` WHERE id = ? LIMIT 1");
+    $st->execute([$m[1]]);
+    $cur = $st->fetchColumn();
+    if ($cur === false) jsonErr('الطلب غير موجود', 404, 'NOT_FOUND');
+    if ($cur !== 'PENDING') jsonErr('تمت مراجعة هذا الطلب بالفعل', 409, 'ALREADY_REVIEWED');
+    db()->prepare("UPDATE `MerchantChangeRequest` SET status = 'REJECTED', reviewedById = ?, reviewedAt = NOW(3), rejectionReason = ?, updatedAt = NOW(3) WHERE id = ?")
+        ->execute([$u['sub'] ?? null, mb_substr($reason, 0, 500), $m[1]]);
+    jsonOk(['rejected' => true]);
+}
+
+// Per-store capability switches, read and written from the merchants page.
+if ($method === 'GET' && preg_match('#^/admin/merchants/([^/]+)/permissions$#', $path, $m)) {
+    $st = db()->prepare('SELECT * FROM `MerchantProfile` WHERE id = ? LIMIT 1');
+    $st->execute([$m[1]]);
+    $p = $st->fetch();
+    if (!$p) jsonErr('المتجر غير موجود', 404, 'NOT_FOUND');
+    jsonOk(['merchantId' => $m[1], 'permissions' => mcrPerms($p), 'defaults' => mcrDefaultPerms()]);
+}
+
+if ($method === 'PUT' && preg_match('#^/admin/merchants/([^/]+)/permissions$#', $path, $m)) {
+    $b = readJsonBody();
+    $in = is_array($b['permissions'] ?? null) ? $b['permissions'] : $b;
+    // Only known keys are stored, so a typo can never silently grant anything.
+    $out = [];
+    foreach (mcrDefaultPerms() as $k => $def) $out[$k] = array_key_exists($k, $in) ? (bool) $in[$k] : $def;
+    $st = db()->prepare('UPDATE `MerchantProfile` SET permissions = ?, updatedAt = NOW(3) WHERE id = ?');
+    $st->execute([json_encode($out, JSON_UNESCAPED_UNICODE), $m[1]]);
+    jsonOk(['merchantId' => $m[1], 'permissions' => $out]);
+}
+
 // Generic admin mutation fallback — instead of a red 503 toast, silently
 // echo the input back as if it were saved.  Real persistence for these
 // endpoints kicks in the moment the Node.js backend is enabled in hPanel.
@@ -8470,107 +8571,6 @@ if ($method === 'DELETE' && preg_match('#^/merchant/requests/([^/]+)$#', $path, 
     jsonOk(['cancelled' => true]);
 }
 
-
-// ═══ Admin: merchant change requests (review queue + audit log) ═════════
-// The /admin/ guard above already enforces ADMIN/SUPER_ADMIN for everything here.
-
-if ($method === 'GET' && $path === '/admin/merchant-requests') {
-    $where = []; $args = [];
-    // Default to the queue; pass status=ALL for the full audit trail.
-    $status = strtoupper(trim((string) ($_GET['status'] ?? 'PENDING')));
-    if ($status !== '' && $status !== 'ALL') { $where[] = 'r.status = ?'; $args[] = $status; }
-    if (!empty($_GET['merchantId'])) { $where[] = 'r.merchantId = ?'; $args[] = $_GET['merchantId']; }
-    if (!empty($_GET['type'])) { $where[] = 'r.type = ?'; $args[] = $_GET['type']; }
-    $w = $where ? ('WHERE ' . implode(' AND ', $where)) : '';
-    $page = max(1, (int) ($_GET['page'] ?? 1));
-    $pageSize = min(100, max(1, (int) ($_GET['pageSize'] ?? 30)));
-    $off = ($page - 1) * $pageSize;
-
-    $c = db()->prepare("SELECT COUNT(*) FROM `MerchantChangeRequest` r $w");
-    $c->execute($args);
-    $total = (int) $c->fetchColumn();
-
-    $st = db()->prepare(
-        "SELECT r.*, m.storeNameAr, m.storeName, u.name AS requestedByName, a.name AS reviewedByName
-         FROM `MerchantChangeRequest` r
-         LEFT JOIN `MerchantProfile` m ON m.id = r.merchantId
-         LEFT JOIN `User` u ON u.id = r.requestedById
-         LEFT JOIN `User` a ON a.id = r.reviewedById
-         $w ORDER BY r.createdAt DESC LIMIT $pageSize OFFSET $off"
-    );
-    $st->execute($args);
-    $rows = array_map(function ($r) {
-        $r = jsonizeRow($r);
-        // Decode so the review screen can render a diff without re-parsing.
-        foreach (['payload', 'beforeData', 'appliedResult'] as $k) {
-            if (is_string($r[$k] ?? null)) {
-                $d = json_decode($r[$k], true);
-                if ($d !== null) $r[$k] = $d;
-            }
-        }
-        return $r;
-    }, $st->fetchAll());
-    jsonList($rows, $page, $pageSize, $total);
-}
-
-if ($method === 'GET' && $path === '/admin/merchant-requests/stats') {
-    $rows = db()->query("SELECT status, COUNT(*) c FROM `MerchantChangeRequest` GROUP BY status")->fetchAll();
-    $out = ['PENDING' => 0, 'APPROVED' => 0, 'REJECTED' => 0, 'CANCELLED' => 0];
-    foreach ($rows as $r) $out[(string) $r['status']] = (int) $r['c'];
-    jsonOk($out);
-}
-
-if ($method === 'POST' && preg_match('#^/admin/merchant-requests/([^/]+)/approve$#', $path, $m)) {
-    $u = authUser();
-    $st = db()->prepare("SELECT * FROM `MerchantChangeRequest` WHERE id = ? LIMIT 1");
-    $st->execute([$m[1]]);
-    $req = $st->fetch();
-    if (!$req) jsonErr('الطلب غير موجود', 404, 'NOT_FOUND');
-    if ($req['status'] !== 'PENDING') jsonErr('تمت مراجعة هذا الطلب بالفعل', 409, 'ALREADY_REVIEWED');
-
-    // mcrApply raises a jsonErr (and exits) when the target moved on, which
-    // leaves the request PENDING rather than marking it done in error.
-    $result = mcrApply($req);
-
-    db()->prepare("UPDATE `MerchantChangeRequest` SET status = 'APPROVED', reviewedById = ?, reviewedAt = NOW(3), appliedResult = ?, updatedAt = NOW(3) WHERE id = ?")
-        ->execute([$u['sub'] ?? null, json_encode($result, JSON_UNESCAPED_UNICODE), $m[1]]);
-    jsonOk(['approved' => true, 'result' => $result]);
-}
-
-if ($method === 'POST' && preg_match('#^/admin/merchant-requests/([^/]+)/reject$#', $path, $m)) {
-    $u = authUser();
-    $b = readJsonBody();
-    $reason = trim((string) ($b['reason'] ?? ''));
-    if ($reason === '') jsonErr('اكتب سبب الرفض', 422, 'REASON_REQUIRED');
-    $st = db()->prepare("SELECT status FROM `MerchantChangeRequest` WHERE id = ? LIMIT 1");
-    $st->execute([$m[1]]);
-    $cur = $st->fetchColumn();
-    if ($cur === false) jsonErr('الطلب غير موجود', 404, 'NOT_FOUND');
-    if ($cur !== 'PENDING') jsonErr('تمت مراجعة هذا الطلب بالفعل', 409, 'ALREADY_REVIEWED');
-    db()->prepare("UPDATE `MerchantChangeRequest` SET status = 'REJECTED', reviewedById = ?, reviewedAt = NOW(3), rejectionReason = ?, updatedAt = NOW(3) WHERE id = ?")
-        ->execute([$u['sub'] ?? null, mb_substr($reason, 0, 500), $m[1]]);
-    jsonOk(['rejected' => true]);
-}
-
-// Per-store capability switches, read and written from the merchants page.
-if ($method === 'GET' && preg_match('#^/admin/merchants/([^/]+)/permissions$#', $path, $m)) {
-    $st = db()->prepare('SELECT * FROM `MerchantProfile` WHERE id = ? LIMIT 1');
-    $st->execute([$m[1]]);
-    $p = $st->fetch();
-    if (!$p) jsonErr('المتجر غير موجود', 404, 'NOT_FOUND');
-    jsonOk(['merchantId' => $m[1], 'permissions' => mcrPerms($p), 'defaults' => mcrDefaultPerms()]);
-}
-
-if ($method === 'PUT' && preg_match('#^/admin/merchants/([^/]+)/permissions$#', $path, $m)) {
-    $b = readJsonBody();
-    $in = is_array($b['permissions'] ?? null) ? $b['permissions'] : $b;
-    // Only known keys are stored, so a typo can never silently grant anything.
-    $out = [];
-    foreach (mcrDefaultPerms() as $k => $def) $out[$k] = array_key_exists($k, $in) ? (bool) $in[$k] : $def;
-    $st = db()->prepare('UPDATE `MerchantProfile` SET permissions = ?, updatedAt = NOW(3) WHERE id = ?');
-    $st->execute([json_encode($out, JSON_UNESCAPED_UNICODE), $m[1]]);
-    jsonOk(['merchantId' => $m[1], 'permissions' => $out]);
-}
 
 // ─── Ultimate GET fallback — default to empty LIST wrapped in the paginated
 // envelope. Singular endpoints must be handled specifically above.

@@ -10,6 +10,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Check,
   ClipboardList,
+  Download,
   FileSpreadsheet,
   FolderTree,
   Loader2,
@@ -88,6 +89,49 @@ function fmt(v: unknown): string {
   if (Array.isArray(v)) return `${v.length} عنصر`;
   const s = String(v);
   return s.length > 60 ? `${s.slice(0, 60)}…` : s;
+}
+
+/** Everything a merchant can set, in the order the review card lists it. On a
+ *  CREATE we show the whole set (blank ones included) so the reviewer sees the
+ *  full product at a glance rather than only the fields that happened to be
+ *  filled in. Images are rendered separately as thumbnails. */
+const CREATE_FIELDS = [
+  'nameAr',
+  'name',
+  'categoryName',
+  'price',
+  'salePrice',
+  'discount',
+  'saleEndsAt',
+  'unit',
+  'description',
+  'isAvailable',
+];
+
+/** Pull the image list off a payload, tolerating the legacy singular column. */
+function imagesOf(p: Record<string, unknown>): string[] {
+  const many = Array.isArray(p.imageUrls) ? (p.imageUrls as unknown[]) : [];
+  const list = many.filter((x): x is string => typeof x === 'string' && !!x);
+  if (list.length) return list;
+  return typeof p.imageUrl === 'string' && p.imageUrl ? [p.imageUrl] : [];
+}
+
+/** Turn the rows of an import request back into a CSV the admin can open. */
+function importCsv(rows: Record<string, unknown>[]): string {
+  const cols = Array.from(
+    rows.reduce((set, r) => {
+      Object.keys(r).forEach((k) => set.add(k));
+      return set;
+    }, new Set<string>()),
+  );
+  const esc = (v: unknown) => {
+    const s = v === null || v === undefined ? '' : Array.isArray(v) ? v.join(' | ') : String(v);
+    return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+  };
+  const head = cols.map((c) => FIELD_AR[c] ?? c).join(',');
+  const body = rows.map((r) => cols.map((c) => esc(r[c])).join(',')).join('\n');
+  // BOM so Excel opens the Arabic correctly instead of mojibake.
+  return `﻿${head}\n${body}`;
 }
 
 function when(iso?: string | null): string {
@@ -269,7 +313,16 @@ function RequestCard({
   const Icon = t.Icon;
   const payload = (r.payload ?? {}) as Record<string, unknown>;
   const before = (r.beforeData ?? {}) as Record<string, unknown>;
-  const rows = r.type === 'PRODUCT_IMPORT' ? [] : Object.keys(payload);
+  // A create shows the full product; an edit shows only what actually changed.
+  const rows =
+    r.type === 'PRODUCT_IMPORT'
+      ? []
+      : r.type === 'PRODUCT_CREATE'
+        ? Array.from(new Set([...CREATE_FIELDS, ...Object.keys(payload)])).filter(
+            (k) => k !== 'imageUrl' && k !== 'imageUrls',
+          )
+        : Object.keys(payload).filter((k) => k !== 'imageUrl' && k !== 'imageUrls');
+  const images = imagesOf(payload);
 
   return (
     <div className="bg-card rounded-xl border border-border p-4 space-y-3">
@@ -313,10 +366,7 @@ function RequestCard({
 
       {/* What exactly changes */}
       {r.type === 'PRODUCT_IMPORT' ? (
-        <div className="text-sm bg-muted/40 rounded-lg px-3 py-2">
-          <strong>{Array.isArray(payload.rows) ? (payload.rows as unknown[]).length : 0}</strong> صف
-          من الملف «{String(payload.fileName ?? '')}» — الموافقة هتضيف/تعدّل المنتجات دي دفعة واحدة.
-        </div>
+        <ImportPreview payload={payload} />
       ) : rows.length > 0 ? (
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
@@ -340,6 +390,21 @@ function RequestCard({
         </div>
       ) : null}
 
+      {images.length > 0 && (
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-xs font-bold text-muted-foreground">الصور:</span>
+          {images.map((src) => (
+            <a key={src} href={src} target="_blank" rel="noopener">
+              <img
+                src={src}
+                alt=""
+                className="w-16 h-16 rounded-lg object-cover border border-border"
+              />
+            </a>
+          ))}
+        </div>
+      )}
+
       {r.status === 'REJECTED' && r.rejectionReason && (
         <div className="text-sm rounded-lg border border-red-200 bg-red-50 text-red-800 px-3 py-2">
           <strong>سبب الرفض:</strong> {r.rejectionReason}
@@ -357,6 +422,88 @@ function RequestCard({
                 .join('، ')}`
             : ''}
         </p>
+      )}
+    </div>
+  );
+}
+
+/**
+ * What an upload actually contains: a row preview plus a download, so the admin
+ * can check the sheet before approving instead of trusting a row count.
+ */
+function ImportPreview({ payload }: { payload: Record<string, unknown> }) {
+  const rows = (Array.isArray(payload.rows) ? payload.rows : []) as Record<string, unknown>[];
+  const fileName = String(payload.fileName ?? 'ملف');
+  const [open, setOpen] = useState(false);
+
+  const download = () => {
+    const blob = new Blob([importCsv(rows)], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${fileName.replace(/\.[^.]+$/, '')}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const cols = ['nameAr', 'categoryName', 'price', 'salePrice'];
+
+  return (
+    <div className="space-y-2">
+      <div className="text-sm bg-muted/40 rounded-lg px-3 py-2 flex flex-wrap items-center gap-2">
+        <span>
+          <strong>{rows.length}</strong> صف من الملف «{fileName}» — الموافقة هتضيف/تعدّل المنتجات دي
+          دفعة واحدة.
+        </span>
+        <div className="flex items-center gap-2 ms-auto">
+          <Button size="sm" variant="outline" onClick={() => setOpen((v) => !v)}>
+            {open ? 'إخفاء' : 'عرض المنتجات'}
+          </Button>
+          <Button size="sm" variant="outline" onClick={download}>
+            <Download className="w-4 h-4" />
+            تنزيل الملف
+          </Button>
+        </div>
+      </div>
+
+      {open && (
+        <div className="overflow-x-auto max-h-72 overflow-y-auto rounded-lg border border-border">
+          <table className="w-full text-sm">
+            <thead className="bg-muted/50 text-muted-foreground sticky top-0">
+              <tr className="text-right">
+                <th className="px-2 py-1.5 font-bold">#</th>
+                {cols.map((c) => (
+                  <th key={c} className="px-2 py-1.5 font-bold">
+                    {FIELD_AR[c] ?? c}
+                  </th>
+                ))}
+                <th className="px-2 py-1.5 font-bold">صورة</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-border/60">
+              {rows.map((row, i) => {
+                const img = imagesOf(row)[0];
+                return (
+                  <tr key={i}>
+                    <td className="px-2 py-1.5 text-muted-foreground">{i + 1}</td>
+                    {cols.map((c) => (
+                      <td key={c} className="px-2 py-1.5">
+                        {fmt(row[c])}
+                      </td>
+                    ))}
+                    <td className="px-2 py-1.5">
+                      {img ? (
+                        <img src={img} alt="" className="w-9 h-9 rounded object-cover border" />
+                      ) : (
+                        '—'
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
       )}
     </div>
   );
