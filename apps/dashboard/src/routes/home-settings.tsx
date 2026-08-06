@@ -68,10 +68,37 @@ interface ServiceCardOverride {
 /** The three cards the app draws, with the built-in copy shown as placeholder
  *  text so the admin can see what they are replacing. MUST match the mobile
  *  SERVICE_CARD_COPY keys. */
-const SERVICE_CARDS: { key: string; label: string; title: string; subtitle: string }[] = [
-  { key: 'delivery', label: 'دليفري', title: 'دليفري', subtitle: 'داخل المدينة' },
-  { key: 'shipping', label: 'شحن', title: 'شحن', subtitle: 'بين المناطق' },
-  { key: 'merchant', label: 'تاجر', title: 'تاجر', subtitle: 'طلبات جملة' },
+const SERVICE_CARDS: {
+  key: string;
+  label: string;
+  title: string;
+  subtitle: string;
+  /** Copy of the artwork the app ships, served from the dashboard's own public
+   *  folder. Showing a grey "الصورة الأصلية" box instead was the whole problem:
+   *  the admin could not see what they were about to replace. */
+  art: string;
+}[] = [
+  {
+    key: 'delivery',
+    label: 'دليفري',
+    title: 'دليفري',
+    subtitle: 'داخل المدينة',
+    art: '/super_admin/app-art/service-delivery.jpg',
+  },
+  {
+    key: 'shipping',
+    label: 'شحن',
+    title: 'شحن',
+    subtitle: 'بين المناطق',
+    art: '/super_admin/app-art/service-shipping.jpg',
+  },
+  {
+    key: 'merchant',
+    label: 'تاجر',
+    title: 'تاجر',
+    subtitle: 'طلبات جملة',
+    art: '/super_admin/app-art/service-merchant.jpg',
+  },
 ];
 
 /** The card is drawn at a fixed 1.12:1 box and the image is cropped to fill it,
@@ -200,6 +227,8 @@ interface Merchant {
   isOpen?: boolean;
   /** Where the STORE is — drives which restaurant rail it appears in. */
   city?: string | null;
+  logoUrl?: string | null;
+  coverUrl?: string | null;
 }
 
 interface Coupon {
@@ -898,7 +927,7 @@ function ServiceCardEditor({
   value,
   onChange,
 }: {
-  def: { key: string; label: string; title: string; subtitle: string };
+  def: (typeof SERVICE_CARDS)[number];
   value: ServiceCardOverride;
   onChange: (patch: ServiceCardOverride) => void;
 }) {
@@ -942,10 +971,16 @@ function ServiceCardEditor({
               className="absolute inset-0 h-full w-full object-cover"
             />
           ) : (
-            <div className="absolute inset-0 flex flex-col items-center justify-center gap-1 text-muted-foreground">
-              <Images className="w-6 h-6" />
-              <span className="text-[11px] font-bold">الصورة الأصلية من التطبيق</span>
-            </div>
+            <>
+              <img
+                src={def.art}
+                alt={def.label}
+                className="absolute inset-0 h-full w-full object-cover"
+              />
+              <span className="absolute bottom-1 start-1 rounded bg-black/60 px-1.5 py-0.5 text-[10px] font-bold text-white">
+                الصورة الأصلية
+              </span>
+            </>
           )}
           {busy && (
             <div className="absolute inset-0 grid place-items-center bg-black/40 text-xs font-bold text-white">
@@ -1018,7 +1053,8 @@ function MerchantsTab({
             <CheckRow
               key={m.id}
               label={m.storeNameAr}
-              hint={`${m.rating ? `★ ${Number(m.rating).toFixed(1)}` : '—'} · ${m.isOpen ? 'مفتوح' : 'مغلق'}`}
+              hint={`${m.rating ? `★ ${Number(m.rating).toFixed(1)}` : '—'} · ${m.isOpen ? 'مفتوح' : 'مغلق'}${m.city ? ` · ${m.city}` : ''}`}
+              imageUrl={m.logoUrl ?? m.coverUrl ?? null}
               checked={selected}
               onChange={() => onToggle(m.id)}
             />
@@ -1183,11 +1219,15 @@ function CheckRow({
   hint,
   checked,
   onChange,
+  imageUrl,
 }: {
   label: string;
   hint?: string;
   checked: boolean;
   onChange: () => void;
+  /** Thumbnail of the thing being picked. A name-only list made the admin guess
+   *  which store or product they were putting on the customer's home screen. */
+  imageUrl?: string | null;
 }) {
   return (
     <label
@@ -1203,6 +1243,17 @@ function CheckRow({
         onChange={onChange}
         className="w-4 h-4 accent-brand-red"
       />
+      {imageUrl !== undefined && (
+        <div className="h-11 w-11 shrink-0 overflow-hidden rounded-lg border border-border bg-muted/50">
+          {imageUrl ? (
+            <img src={imageUrl} alt="" className="h-full w-full object-cover" loading="lazy" />
+          ) : (
+            <div className="grid h-full w-full place-items-center text-muted-foreground">
+              <Images className="h-4 w-4" />
+            </div>
+          )}
+        </div>
+      )}
       <div className="flex-1 min-w-0">
         <div className="text-sm font-bold truncate">{label}</div>
         {hint && <div className="text-xs text-muted-foreground truncate">{hint}</div>}
