@@ -26,7 +26,7 @@ import {
   Sparkles,
   Store,
 } from 'lucide-react';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 
@@ -832,37 +832,35 @@ function ServicesTab({
   const allSelected = !form.visibleServiceKeys;
   return (
     <>
-      <SectionCard hint="رفّي المطاعم اللي بتظهر في أول الشاشة. الرَّف الأول للمطاعم المحلية، والتاني لمطاعم مدينة تانية بتوصّل لهنا — اكتب اسم المدينة زي ما هي مكتوبة في بيانات المتجر بالظبط.">
+      <SectionCard hint="أول الشاشة الرئيسية فيه صفّين مطاعم: واحد لمطاعم نفس مدينة العميل، وواحد لمطاعم مدينة تانية بتوصّله.">
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          <Field label="مدينة رَف المطاعم الأول" hint="سيبها فاضية عشان يعرض مطاعم كل المدن">
-            <Input
-              value={form.spotlightCity ?? ''}
-              onChange={(e) => update('spotlightCity', e.target.value.trim() || null)}
-              placeholder="كل المدن"
-              list="home-cities"
+          <Field label="١ — مطاعم نفس المدينة" hint="«كل المدن» = يعرض مطاعم أي مدينة">
+            <CityPicker
+              value={form.spotlightCity}
+              cities={cities}
+              emptyLabel="كل المدن"
+              onChange={(v) => update('spotlightCity', v)}
             />
           </Field>
-          <Field
-            label="مدينة رَف «مطاعم من مدينة تانية»"
-            hint="سيبها فاضية عشان يختفي الرَّف ده خالص"
-          >
-            <Input
-              value={form.intercityCity ?? ''}
-              onChange={(e) => update('intercityCity', e.target.value.trim() || null)}
-              placeholder="مثال: قنا"
-              list="home-cities"
+          <Field label="٢ — مطاعم مدينة تانية" hint="اختار «قنا» عشان عميل قفط يطلب من مطاعم قنا">
+            <CityPicker
+              value={form.intercityCity}
+              cities={cities}
+              emptyLabel="مقفول — الصف ده مش بيظهر"
+              onChange={(v) => update('intercityCity', v)}
             />
           </Field>
         </div>
-        <datalist id="home-cities">
-          {cities.map((c) => (
-            <option key={c} value={c} />
-          ))}
-        </datalist>
-        <p className="text-xs text-muted-foreground leading-relaxed">
-          المدن الموجودة فعلاً في بيانات المتاجر: {cities.length ? cities.join(' · ') : '—'}. عشان
-          تضيف مطعم في قنا، افتح «التجار › إضافة تاجر» وحط المدينة «قنا».
-        </p>
+        <div className="rounded-lg bg-muted/40 p-3 text-xs leading-relaxed text-muted-foreground space-y-1">
+          <div>
+            المدن اللي عندك فيها متاجر دلوقتي:{' '}
+            <b className="text-foreground">{cities.length ? cities.join(' · ') : 'مفيش'}</b>
+          </div>
+          <div>
+            عشان تشغّل الطلب من قنا لقفط: «التجار» ← «إضافة تاجر» ← المدينة «قنا» والتصنيف «مطاعم» ←
+            ارجع هنا واكتب «قنا» في خانة رقم ٢.
+          </div>
+        </div>
       </SectionCard>
 
       <SectionCard
@@ -999,20 +997,20 @@ function ServiceCardEditor({
         />
       </label>
 
+      {/* Loaded with the live text, not left blank behind a placeholder — the
+          admin has to see the words the customer is reading. */}
       <input
-        value={value.title ?? ''}
+        value={value.title ?? def.title}
         onChange={(e) => onChange({ title: e.target.value })}
-        placeholder={def.title}
         className="w-full px-3 py-2 rounded-lg border border-input bg-background text-sm outline-none focus:border-brand-red"
       />
       <input
-        value={value.subtitle ?? ''}
+        value={value.subtitle ?? def.subtitle}
         onChange={(e) => onChange({ subtitle: e.target.value })}
-        placeholder={def.subtitle}
         className="w-full px-3 py-2 rounded-lg border border-input bg-background text-sm outline-none focus:border-brand-red"
       />
       <p className="text-[11px] text-muted-foreground leading-relaxed">
-        العنوان والوصف بيظهروا بس لو مفيش صورة — الصور الحالية العنوان مرسوم جواها.
+        السطرين دول بيظهروا بس لو الكارت من غير صورة. الصور الحالية العنوان متكتب جواها.
       </p>
     </div>
   );
@@ -1032,20 +1030,54 @@ function MerchantsTab({
   onClear: () => void;
 }) {
   const auto = !form.featuredMerchantIds;
+  // Mirrors the app's own fallback in useHomeData: first 8 of the list.
+  const autoPicked = merchants.slice(0, 8);
   return (
-    <SectionCard hint='المتاجر اللي تظهر في قائمة "متاجر قريبة منك". اتركها فارغة لاختيار أعلى تقييماً تلقائياً.'>
+    <SectionCard hint="المتاجر اللي تظهر في صف «متاجر مميزة». سيبها من غير اختيار عشان التطبيق يختار لوحده.">
       <div className="flex items-center justify-between">
-        <span className="text-xs text-muted-foreground">
+        <span className="text-xs font-bold text-muted-foreground">
           {auto
-            ? '✓ اختيار تلقائي (أعلى 4 تقييماً)'
-            : `محدد ${form.featuredMerchantIds?.length} متجر`}
+            ? 'اختيار تلقائي — شغّال دلوقتي'
+            : `أنت اخترت ${form.featuredMerchantIds?.length} متجر`}
         </span>
         {!auto && (
           <button onClick={onClear} className="text-xs text-brand-red hover:underline">
-            اختيار تلقائي
+            رجّع للاختيار التلقائي
           </button>
         )}
       </div>
+
+      {/* "Nothing selected" is not the same as "nothing shows". Until the admin
+          picks, the app falls back to the first stores in the list — so show
+          exactly which ones a customer is seeing right now. */}
+      {auto && (
+        <div className="rounded-lg bg-muted/40 p-3 space-y-2">
+          <div className="text-xs font-bold text-foreground">
+            الظاهر حالياً في التطبيق ({autoPicked.length}) — علّم على أي متجر تحت عشان تتحكم بنفسك
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {autoPicked.map((m) => (
+              <span
+                key={m.id}
+                className="inline-flex items-center gap-1.5 rounded-full border border-border bg-white py-1 pe-2.5 ps-1 text-xs font-bold"
+              >
+                {m.logoUrl || m.coverUrl ? (
+                  <img
+                    src={m.logoUrl ?? m.coverUrl ?? ''}
+                    alt=""
+                    className="h-5 w-5 rounded-full object-cover"
+                  />
+                ) : (
+                  <span className="grid h-5 w-5 place-items-center rounded-full bg-muted">
+                    <Store className="h-3 w-3" />
+                  </span>
+                )}
+                {m.storeNameAr}
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-96 overflow-y-auto">
         {merchants.map((m) => {
           const selected = form.featuredMerchantIds?.includes(m.id) ?? false;
@@ -1175,6 +1207,65 @@ function DefaultableField({
   );
 }
 
+/**
+ * City chooser for the two restaurant rails.
+ *
+ * A <datalist> was the wrong control here: it renders as a plain text box whose
+ * suggestions only appear once you start typing, so it read as a dropdown that
+ * did nothing. This is a real <select> over the cities that actually have
+ * stores, plus an explicit escape for a city that has none yet — which is the
+ * normal case when you are about to open one.
+ */
+function CityPicker({
+  value,
+  cities,
+  emptyLabel,
+  onChange,
+}: {
+  value: string | null;
+  cities: string[];
+  emptyLabel: string;
+  onChange: (v: string | null) => void;
+}) {
+  const known = value !== null && cities.includes(value);
+  const [freeText, setFreeText] = useState(!known && value !== null);
+
+  return (
+    <div className="space-y-2">
+      <select
+        value={freeText ? '__other__' : (value ?? '')}
+        onChange={(e) => {
+          const v = e.target.value;
+          if (v === '__other__') {
+            setFreeText(true);
+            return;
+          }
+          setFreeText(false);
+          onChange(v || null);
+        }}
+        className="w-full px-3 py-2 rounded-lg border border-input bg-background text-sm font-bold outline-none focus:border-brand-red"
+      >
+        <option value="">{emptyLabel}</option>
+        {cities.map((c) => (
+          <option key={c} value={c}>
+            {c}
+          </option>
+        ))}
+        <option value="__other__">مدينة تانية (اكتبها)…</option>
+      </select>
+
+      {freeText && (
+        <Input
+          value={value ?? ''}
+          onChange={(e) => onChange(e.target.value.trim() || null)}
+          placeholder="اسم المدينة زي ما هي في بيانات المتجر — مثال: قنا"
+          autoFocus
+        />
+      )}
+    </div>
+  );
+}
+
 function SectionCard({
   children,
   hint,
@@ -1298,6 +1389,13 @@ const EMPTY_OFFER = {
 function SliderTab() {
   const qc = useQueryClient();
   const [editing, setEditing] = useState<Partial<Offer> | null>(null);
+  // The form used to render below the whole list, so pressing "تعديل" on a
+  // slide opened it off-screen and the button read as broken. It now sits above
+  // the list and pulls itself into view.
+  const editorRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (editing) editorRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }, [editing]);
 
   const { data: offers, isLoading } = useQuery({
     queryKey: ['admin-offers'],
@@ -1339,6 +1437,35 @@ function SliderTab() {
 
   const list = offers ?? [];
 
+  const editor = editing && (
+    <div className="rounded-xl border-2 border-brand-red/40 p-4 space-y-3 bg-card">
+      <div className="font-black">{editing.id ? 'تعديل الشريحة' : 'شريحة جديدة'}</div>
+      <OfferImageField
+        value={editing.imageUrl ?? ''}
+        onChange={(url) => setEditing({ ...editing, imageUrl: url })}
+      />
+      <Field label="العنوان">
+        <Input
+          value={editing.titleAr ?? ''}
+          onChange={(e) => setEditing({ ...editing, titleAr: e.target.value })}
+          placeholder="مثال: خصم 20% على أول طلب"
+        />
+      </Field>
+      <div className="flex items-center gap-2">
+        <Button
+          onClick={() => save.mutate(editing)}
+          disabled={save.isPending || !editing.imageUrl || !editing.titleAr}
+        >
+          {save.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : 'حفظ'}
+        </Button>
+        <Button variant="ghost" onClick={() => setEditing(null)}>
+          إلغاء
+        </Button>
+        {!editing.imageUrl && <span className="text-xs text-muted-foreground">الصورة مطلوبة</span>}
+      </div>
+    </div>
+  );
+
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
@@ -1352,6 +1479,8 @@ function SliderTab() {
           إضافة شريحة
         </Button>
       </div>
+
+      {editing && <div ref={editorRef}>{editor}</div>}
 
       {list.length === 0 ? (
         <div className="rounded-xl border-2 border-dashed border-border p-8 text-center text-muted-foreground">
@@ -1416,40 +1545,6 @@ function SliderTab() {
               </div>
             </div>
           ))}
-        </div>
-      )}
-
-      {editing && (
-        <div className="rounded-xl border border-border p-4 space-y-3 bg-card">
-          <div className="font-black">{editing.id ? 'تعديل شريحة' : 'شريحة جديدة'}</div>
-
-          <OfferImageField
-            value={editing.imageUrl ?? ''}
-            onChange={(url) => setEditing({ ...editing, imageUrl: url })}
-          />
-
-          <Field label="العنوان">
-            <Input
-              value={editing.titleAr ?? ''}
-              onChange={(e) => setEditing({ ...editing, titleAr: e.target.value })}
-              placeholder="مثال: خصم 20% على أول طلب"
-            />
-          </Field>
-
-          <div className="flex items-center gap-2">
-            <Button
-              onClick={() => save.mutate(editing)}
-              disabled={save.isPending || !editing.imageUrl || !editing.titleAr}
-            >
-              {save.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : 'حفظ'}
-            </Button>
-            <Button variant="ghost" onClick={() => setEditing(null)}>
-              إلغاء
-            </Button>
-            {!editing.imageUrl && (
-              <span className="text-xs text-muted-foreground">الصورة مطلوبة</span>
-            )}
-          </div>
         </div>
       )}
     </div>
@@ -1570,6 +1665,13 @@ function FeaturedProductsTab({
         </div>
       </div>
 
+      {selected.length === 0 && (
+        <div className="rounded-lg border border-dashed border-border bg-muted/40 p-3 text-xs font-bold leading-relaxed text-muted-foreground">
+          مفيش منتجات مختارة — يعني قسم «الأكثر طلباً» <b className="text-foreground">مش ظاهر</b> في
+          التطبيق دلوقتي. ابحث تحت وعلّم على المنتجات اللي عايز تظهرها.
+        </div>
+      )}
+
       {selected.length > 0 && (
         <div className="rounded-xl border border-border p-3 space-y-2">
           <div className="text-xs font-bold text-muted-foreground">المختار ({selected.length})</div>
@@ -1607,7 +1709,7 @@ function FeaturedProductsTab({
         <CardSkeleton />
       ) : results.length === 0 ? (
         <div className="text-sm text-muted-foreground text-center py-6">
-          {debounced ? `لا توجد منتجات تطابق «${debounced}»` : 'ابحث للعثور على منتجات'}
+          {debounced ? `مفيش منتجات بالاسم «${debounced}»` : 'مفيش منتجات لعرضها'}
         </div>
       ) : (
         <div className="space-y-2">
