@@ -6,8 +6,9 @@
  */
 import type { LucideIcon } from 'lucide-react-native';
 import { memo } from 'react';
-import { I18nManager, Image, Pressable, StyleSheet, Text, View } from 'react-native';
+import { I18nManager, Pressable, StyleSheet, Text, View } from 'react-native';
 
+import { Image } from '../../../components/ui/CachedImage';
 import { colors, fontFamilies, shadows, spacing } from '../../../theme/tokens';
 
 interface Props {
@@ -16,6 +17,9 @@ interface Props {
   Icon: LucideIcon;
   /** Illustration for this service. Falls back to `Icon` when absent. */
   image?: number;
+  /** Admin-uploaded artwork from home settings. Wins over the bundled one, so
+   *  the row can be re-skinned without shipping an app update. */
+  imageUrl?: string | null;
   /** Card tint. */
   bg: string;
   /** Icon + title colour. */
@@ -23,11 +27,16 @@ interface Props {
   onPress: () => void;
 }
 
-function ServiceCardBase({ title, subtitle, Icon, image, bg, fg, onPress }: Props) {
-  // The artwork now IS the whole card — the title + subtitle are baked into the
-  // square image — so it fills the tile and no separate text is drawn. The old
-  // tinted-card layout stays as a fallback for when an image is missing.
-  if (image) {
+function ServiceCardBase({ title, subtitle, Icon, image, imageUrl, bg, fg, onPress }: Props) {
+  // The artwork IS the whole card — the title + subtitle are baked into the
+  // image — so it fills the tile and no separate text is drawn. The old tinted
+  // layout stays as a fallback for when there is no artwork at all.
+  //
+  // The tile keeps its own aspect ratio and crops to it. That is deliberate:
+  // the three cards must stay the same size as each other whatever the admin
+  // uploads, so a wrongly-proportioned upload can never make the row ragged.
+  const art = imageUrl ? { uri: imageUrl } : image ? image : null;
+  if (art) {
     return (
       <Pressable
         onPress={onPress}
@@ -35,7 +44,7 @@ function ServiceCardBase({ title, subtitle, Icon, image, bg, fg, onPress }: Prop
         accessibilityRole="button"
         accessibilityLabel={`${title} — ${subtitle}`}
       >
-        <Image source={image} style={styles.fullImg} resizeMode="cover" />
+        <Image source={art} style={styles.fullImg} resizeMode="cover" instant={!imageUrl} />
       </Pressable>
     );
   }

@@ -42,6 +42,18 @@ MIGRATIONS = [
     # {"products.create": true, ..., "autoApprove": false}. NULL = the built-in
     # defaults, so existing merchants keep working without a backfill.
     ("MerchantProfile", "permissions", "longtext NULL"),
+    # Per-service overrides for the three headline cards on home, as
+    # {"delivery": {"title": ..., "subtitle": ..., "imageUrl": ...}, ...}.
+    # Any missing key falls back to the copy and artwork bundled in the app, so
+    # NULL reproduces today's screen exactly.
+    ("HomeConfig", "serviceCards", "longtext NULL"),
+    # Which merchant city each of the two restaurant rails on home draws from,
+    # matched against MerchantProfile.city. NULL on the first = every city;
+    # NULL on the second hides the inter-city rail entirely. Config rather than
+    # a hardcoded "قنا" so opening a third city is a dashboard edit, not a
+    # release.
+    ("HomeConfig", "spotlightCity", "varchar(120) NULL"),
+    ("HomeConfig", "intercityCity", "varchar(120) NULL"),
 ]
 
 # Tables created if absent.
