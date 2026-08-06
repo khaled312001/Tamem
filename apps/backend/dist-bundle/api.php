@@ -6159,10 +6159,48 @@ if ($method === 'POST' && $path === '/auth/register') {
     if ($email !== '' && !filter_var($email, FILTER_VALIDATE_EMAIL)) jsonErr('البريد الإلكتروني غير صحيح', 422, 'VALIDATION_ERROR');
     $role = ((string) ($b['role'] ?? '')) === 'MERCHANT' ? 'MERCHANT' : 'CUSTOMER';
 
-    $st = db()->prepare('SELECT id FROM `User` WHERE phone = ? LIMIT 1');
+    $st = db()->prepare('SELECT id, passwordHash, role FROM `User` WHERE phone = ? LIMIT 1');
     $st->execute([$phone]);
-    // ConflictError(message, messageAr) → code CONFLICT, English in `message`.
-    if ($st->fetch()) {
+    $exists = $st->fetch();
+    if ($exists) {
+        /*
+         * A phone order creates a CUSTOMER row so the order has an owner, but
+         * that row has no password — nobody has ever signed in as it. When the
+         * same person later installed the app, "هذا الرقم مسجل بالفعل" locked
+         * them out of a platform they had never actually joined: they could not
+         * register (taken) and could not log in (no password).
+         *
+         * So a passwordless customer row is claimable. Ownership still has to
+         * be proven — we send the reset code to that WhatsApp number and point
+         * them at the reset screen, which sets the password and signs them in.
+         * Their existing phone orders come with them, which is the point.
+         *
+         * Deliberately NOT auto-claimed here: registering would otherwise hand
+         * anyone who knows the number that customer's name, addresses and order
+         * history without ever proving they hold the phone.
+         */
+        $claimable = empty($exists['passwordHash']) && ($exists['role'] ?? '') === 'CUSTOMER';
+        if ($claimable) {
+            // Nothing about the account is touched beyond arming the reset —
+            // the requester has not proven anything yet. One code per minute so
+            // this cannot be used to spam somebody's WhatsApp.
+            $cd = db()->prepare('SELECT 1 FROM `User` WHERE id = ? AND passwordResetExpiresAt > DATE_ADD(NOW(3), INTERVAL 9 MINUTE) LIMIT 1');
+            $cd->execute([$exists['id']]);
+            if (!$cd->fetch()) {
+                $code = str_pad((string) random_int(0, 999999), 6, '0', STR_PAD_LEFT);
+                db()->prepare('UPDATE `User` SET passwordResetHash = ?, passwordResetExpiresAt = DATE_ADD(NOW(3), INTERVAL 10 MINUTE), updatedAt = NOW(3) WHERE id = ?')
+                    ->execute([hash('sha256', $code), $exists['id']]);
+                waEnqueue($phone, "تميم للتوصيل 🚚\nعندك حساب من طلب سابق بالهاتف.\nكود تعيين كلمة السر: *$code*\nصالح لمدة 10 دقائق.");
+            }
+            http_response_code(409);
+            echo json_encode(['error' => [
+                'code' => 'ACCOUNT_NEEDS_PASSWORD',
+                'message' => 'Account exists from a phone order — set a password to claim it',
+                'messageAr' => 'رقمك مسجّل عندنا من طلب سابق بالهاتف. بعتنالك كود على واتساب — افتح «نسيت كلمة المرور» واستخدمه لتعيين كلمة السر والدخول لحسابك.',
+            ]], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+        // ConflictError(message, messageAr) → code CONFLICT, English in `message`.
         http_response_code(409);
         echo json_encode(['error' => ['code' => 'CONFLICT', 'message' => 'Phone already registered', 'messageAr' => 'هذا الرقم مسجل بالفعل']], JSON_UNESCAPED_UNICODE);
         exit;
@@ -7135,7 +7173,10 @@ function zoneQuote(?string $cityId, ?string $villageId, ?string $areaId): ?array
     if (!(int) $r['aActive'] || !(int) $r['vActive'] || !(int) $r['cActive']) return ['INACTIVE', null, null];
     $price = $r['aPrice'] !== null ? $r['aPrice'] : $r['vPrice'];
     if ($price === null) return ['NO_PRICE', null, null];
-    return ['OK', $price, ['source' => $r['aPrice'] !== null ? 'AREA' : 'VILLAGE', 'cityName' => $r['cName'], 'villageName' => $r['vName'], 'areaName' => $r['aName']]];
+    // Cast: PDO hands DECIMAL back as a string, so the quote used to serialise
+    // as "20.00". Anything checking `typeof price === 'number'` then read a
+    // priced area as having no tariff at all.
+    return ['OK', (float) $price, ['source' => $r['aPrice'] !== null ? 'AREA' : 'VILLAGE', 'cityName' => $r['cName'], 'villageName' => $r['vName'], 'areaName' => $r['aName']]];
 }
 if ($method === 'POST' && $path === '/zones/quote-delivery') {
     $b = readJsonBody();
@@ -8909,7 +8950,13 @@ if ($method === 'POST' && $path === '/auth/login') {
     $stmt = db()->prepare("SELECT id, name, phone, email, role, isActive, passwordHash FROM `User` WHERE `$col` = ? LIMIT 1");
     $stmt->execute([$identifier]);
     $user = $stmt->fetch();
-    if (!$user || !$user['passwordHash']) jsonErr('بيانات الدخول غير صحيحة', 401, 'INVALID_CREDS');
+    if (!$user) jsonErr('بيانات الدخول غير صحيحة', 401, 'INVALID_CREDS');
+    // An account created by a phone order has no password yet. "Wrong
+    // credentials" sent those customers in circles — there was no password to
+    // get right. Point them at the reset flow, which is how they claim it.
+    if (!$user['passwordHash']) {
+        jsonErr('لسه مفيش كلمة سر لحسابك. اضغط «نسيت كلمة المرور» عشان تعيّن واحدة وتدخل.', 401, 'ACCOUNT_NEEDS_PASSWORD');
+    }
 
     // password_verify handles $2a$ / $2b$ / $2y$ bcrypt hashes
     if (!password_verify($password, $user['passwordHash'])) {

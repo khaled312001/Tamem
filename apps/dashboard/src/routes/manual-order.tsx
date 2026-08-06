@@ -133,11 +133,16 @@ export function ManualOrderDialog({
     queryFn: () =>
       api.raw
         .post('/zones/quote-delivery', { cityId, villageId, areaId })
-        .then((r) => r.data.data as { price?: number })
+        .then((r) => r.data.data as { price?: number | string })
         .catch(() => ({ price: undefined })),
     enabled: !!(cityId && villageId && areaId),
   });
-  const zoneFee = typeof quote?.price === 'number' ? quote.price : null;
+  // Tolerate a stringified decimal: MySQL DECIMAL comes back as a string
+  // through PDO, and an older API build is still allowed to say "20.00".
+  const zoneFee = (() => {
+    const n = Number(quote?.price);
+    return quote?.price != null && Number.isFinite(n) ? n : null;
+  })();
   const zoneMissing = !!(cityId && villageId && areaId) && !quoting && zoneFee === null;
 
   const [manualFee, setManualFee] = useState('');
@@ -294,6 +299,12 @@ export function ManualOrderDialog({
             </div>
 
             {searching && <p className="text-xs text-muted-foreground">جاري البحث…</p>}
+            {!customerId && !searching && phone.trim().length >= 8 && matches.length === 0 && (
+              <p className="text-xs text-muted-foreground leading-relaxed">
+                عميل جديد — هيتعمل له حساب بالرقم ده. لو حبّ ينزّل التطبيق بعد كده، يدخل بنفس الرقم
+                من «نسيت كلمة المرور» عشان يعيّن كلمة سر، وطلباته دي هيلاقيها في حسابه.
+              </p>
+            )}
             {!customerId && matches.length > 0 && (
               <div className="rounded-lg border border-border divide-y divide-border">
                 {matches.map((c) => (
