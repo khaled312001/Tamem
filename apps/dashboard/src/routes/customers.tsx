@@ -43,6 +43,29 @@ import { cn } from '../lib/utils.js';
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Row = any;
 
+interface DeletePreview {
+  orders: number;
+  addresses: number;
+  reviews: number;
+  payments: number;
+  revenue: number;
+}
+
+/** Spells out what goes with the customer, so the confirmation is an informed
+ *  one. Falls back to the plain warning while the counts are still loading. */
+function deletePreviewText(name: string | undefined, p: DeletePreview | undefined): string {
+  const who = `«${name ?? 'العميل'}»`;
+  if (!p) return `سيتم حذف ${who} نهائياً. لا يمكن التراجع.`;
+  if (!p.orders) return `سيتم حذف ${who} نهائياً. مفيش طلبات مرتبطة بيه. لا يمكن التراجع.`;
+  const bits = [`${p.orders} طلب`];
+  if (p.payments) bits.push(`${p.payments} عملية دفع`);
+  if (p.reviews) bits.push(`${p.reviews} تقييم`);
+  if (p.addresses) bits.push(`${p.addresses} عنوان`);
+  const money =
+    p.revenue > 0 ? ` وده هيشيل ${p.revenue.toLocaleString('ar-EG')} ج.م من إجمالي المبيعات.` : '';
+  return `سيتم حذف ${who} ومعاه ${bits.join(' و')} نهائياً.${money} لا يمكن التراجع.`;
+}
+
 // isActive can arrive as a real boolean, or (from the PHP shim's tinyint) as
 // 1/0 or "1"/"0". Treat anything that isn't an explicit off-value as active, so
 // the status column is correct regardless of how the API serialises the flag.
@@ -187,6 +210,17 @@ export function CustomersPage() {
   // Confirmation state for the destructive/impactful actions.
   const [confirmDisable, setConfirmDisable] = useState<Row | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<Row | null>(null);
+  // What this deletion actually destroys. The dialog used to say only "لا يمكن
+  // التراجع" — clearing a duplicate contact and wiping a customer with 77
+  // orders were the same button.
+  const { data: deletePreview } = useQuery({
+    queryKey: ['admin', 'customers', 'delete-preview', confirmDelete?.id],
+    queryFn: () =>
+      api.raw
+        .get(`/admin/customers/${confirmDelete!.id}/delete-preview`)
+        .then((r) => r.data.data as DeletePreview),
+    enabled: !!confirmDelete?.id,
+  });
   const [confirmBulk, setConfirmBulk] = useState<'delete' | 'deactivate' | null>(null);
   // Real paging: page resets whenever the search or a filter changes.
   const [page, setPage] = useState(1);
@@ -254,9 +288,13 @@ export function CustomersPage() {
 
   const deleteMut = useMutation({
     mutationFn: (id: string) => api.raw.delete(`/admin/customers/${id}`),
-    onSuccess: () => {
-      toast.success('تم حذف العميل');
+    onSuccess: (res) => {
+      const n = Number(
+        (res as { data?: { data?: { ordersDeleted?: number } } })?.data?.data?.ordersDeleted ?? 0,
+      );
+      toast.success(n > 0 ? `تم حذف العميل و${n} طلب` : 'تم حذف العميل');
       invalidate();
+      qc.invalidateQueries({ queryKey: ['admin', 'orders'] });
     },
     onError: (err: Error) => toast.error(err.message),
   });
@@ -687,7 +725,7 @@ export function CustomersPage() {
         open={!!confirmDelete}
         onOpenChange={(o) => !o && setConfirmDelete(null)}
         title="حذف العميل نهائياً؟"
-        message={`سيتم حذف «${confirmDelete?.name ?? 'العميل'}» نهائياً. لا يمكن التراجع.`}
+        message={deletePreviewText(confirmDelete?.name, deletePreview)}
         confirmLabel="حذف"
         tone="danger"
         loading={deleteMut.isPending}

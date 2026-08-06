@@ -3614,6 +3614,9 @@ if ($method === 'GET' && $path === '/admin/merchants') {
     }
     if (!empty($_GET['categoryId'])) { $where .= ' AND mp.categoryId = ?'; $args[] = $_GET['categoryId']; }
     if (!empty($_GET['governorate'])) { $where .= ' AND mp.governorate = ?'; $args[] = $_GET['governorate']; }
+    // Filter by the store's own city. It decides which home rail a restaurant
+    // appears in, so admins need to see and correct it per city.
+    if (!empty($_GET['city'])) { $where .= ' AND mp.city = ?'; $args[] = trim((string) $_GET['city']); }
     $status = (string)($_GET['status'] ?? '');
     if ($status === 'active') $where .= ' AND u.isActive = 1';
     elseif ($status === 'inactive') $where .= ' AND (u.isActive = 0 OR u.isActive IS NULL)';
@@ -5427,12 +5430,80 @@ if ($method === 'PATCH' && preg_match('#^/admin/customers/([^/]+)$#', $path, $m)
     $r = db()->prepare('SELECT * FROM `User` WHERE id = ?'); $r->execute([$id]);
     jsonOk(jsonizeRow($r->fetch()) ?: []);
 }
+/**
+ * GET /admin/customers/{id}/delete-preview — what deleting this customer costs.
+ *
+ * The dialog used to say "لا يمكن التراجع" without saying what would be lost.
+ * An admin clearing a duplicate contact and an admin wiping a customer with 77
+ * orders were pressing the same button.
+ */
+if ($method === 'GET' && preg_match('#^/admin/customers/([^/]+)/delete-preview$#', $path, $m)) {
+    $u = authUser(); if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
+    $pdo = db();
+    $one = function (string $sql, array $a) use ($pdo): int {
+        $st = $pdo->prepare($sql); $st->execute($a); return (int) $st->fetchColumn();
+    };
+    $orders = $one('SELECT COUNT(*) FROM `Order` WHERE customerId = ?', [$m[1]]);
+    jsonOk([
+        'orders' => $orders,
+        'addresses' => $one('SELECT COUNT(*) FROM `CustomerAddress` WHERE userId = ?', [$m[1]]),
+        'reviews' => $one('SELECT COUNT(*) FROM `OrderReview` r JOIN `Order` o ON o.id = r.orderId WHERE o.customerId = ?', [$m[1]]),
+        'payments' => $one('SELECT COUNT(*) FROM `Payment` p JOIN `Order` o ON o.id = p.orderId WHERE o.customerId = ?', [$m[1]]),
+        'revenue' => (float) (function () use ($pdo, $m) {
+            $st = $pdo->prepare("SELECT COALESCE(SUM(COALESCE(finalPrice, quotedPrice, 0)), 0) FROM `Order` WHERE customerId = ? AND status = 'DELIVERED'");
+            $st->execute([$m[1]]);
+            return $st->fetchColumn();
+        })(),
+    ]);
+}
+
 if ($method === 'DELETE' && preg_match('#^/admin/customers/([^/]+)$#', $path, $m)) {
     $u = authUser(); if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
+    $id = $m[1];
+    $pdo = db();
+
+    $st = $pdo->prepare("SELECT id, name FROM `User` WHERE id = ? AND role = 'CUSTOMER' LIMIT 1");
+    $st->execute([$id]);
+    $victim = $st->fetch();
+    if (!$victim) jsonErr('العميل غير موجود', 404, 'NOT_FOUND');
+
+    /*
+     * Two RESTRICT foreign keys blocked this, and only one of them was obvious:
+     *   Order.customerId            → the customer's own orders
+     *   OrderStatusHistory.changedById → rows where this user was the ACTOR,
+     *                                    which can sit on somebody else's order
+     *                                    (a customer cancelling, for instance).
+     * Everything else under Order and User already cascades, so removing those
+     * two by hand is enough — no orphan rows are left behind.
+     *
+     * All of it in one transaction: a half-deleted customer whose orders are
+     * gone but whose login still works is worse than either outcome.
+     */
     try {
-        db()->prepare("DELETE FROM `User` WHERE id = ? AND role = 'CUSTOMER'")->execute([$m[1]]);
-        jsonOk(['deleted' => true]);
-    } catch (PDOException $e) { error_log('[api.php] customer delete: ' . $e->getMessage()); jsonErr('تعذّر الحذف — قد يكون العميل مرتبط بطلبات', 422, 'DELETE_FAILED'); }
+        $pdo->beginTransaction();
+        $ids = $pdo->prepare('SELECT id FROM `Order` WHERE customerId = ?');
+        $ids->execute([$id]);
+        $orderIds = array_column($ids->fetchAll(), 'id');
+
+        $pdo->prepare('DELETE FROM `OrderStatusHistory` WHERE changedById = ?')->execute([$id]);
+        if ($orderIds) {
+            $in = implode(',', array_fill(0, count($orderIds), '?'));
+            $pdo->prepare("DELETE FROM `OrderStatusHistory` WHERE orderId IN ($in)")->execute($orderIds);
+            // Child orders point at a parent that is about to vanish.
+            $pdo->prepare("UPDATE `Order` SET parentOrderId = NULL WHERE parentOrderId IN ($in)")->execute($orderIds);
+            $pdo->prepare("DELETE FROM `Order` WHERE id IN ($in)")->execute($orderIds);
+        }
+        $pdo->prepare("DELETE FROM `User` WHERE id = ? AND role = 'CUSTOMER'")->execute([$id]);
+        $pdo->commit();
+    } catch (PDOException $e) {
+        if ($pdo->inTransaction()) $pdo->rollBack();
+        error_log('[api.php] customer delete: ' . $e->getMessage());
+        jsonErr('تعذّر الحذف — راجع سجل الأخطاء', 422, 'DELETE_FAILED');
+    }
+
+    error_log(sprintf('[api.php] customer %s (%s) deleted with %d orders by admin %s',
+        $id, (string) ($victim['name'] ?? ''), count($orderIds), (string) ($u['sub'] ?? '')));
+    jsonOk(['deleted' => true, 'ordersDeleted' => count($orderIds)]);
 }
 
 // ─── Broadcast — persist an in-app Notification for every targeted user ─

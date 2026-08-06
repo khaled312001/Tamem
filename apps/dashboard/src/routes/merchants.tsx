@@ -29,7 +29,7 @@ import {
   X,
   XCircle,
 } from 'lucide-react';
-import { lazy, Suspense, useEffect, useRef, useState } from 'react';
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { toast } from 'sonner';
 
@@ -85,6 +85,7 @@ export function MerchantsPage() {
   const [status, setStatus] = useState<StatusFilter>('');
   const [categoryId, setCategoryId] = useState('');
   const [hasProducts, setHasProducts] = useState<YesNo>('');
+  const [city, setCity] = useState('');
   const [hasApi, setHasApi] = useState<YesNo>('');
   const [sort, setSort] = useState('createdAt');
   const [dir, setDir] = useState<'asc' | 'desc'>('desc');
@@ -113,7 +114,7 @@ export function MerchantsPage() {
     }
   };
 
-  const filters = { search, status, categoryId, hasProducts, hasApi };
+  const filters = { search, status, categoryId, hasProducts, hasApi, city };
   // Near-static, and every refetch costs a DB connection from the shared
   // 500/hour cap — so no background polling, refreshed on demand instead.
   const { data: stats } = useQuery({
@@ -129,6 +130,22 @@ export function MerchantsPage() {
     refetchInterval: false,
   });
 
+  // Every city spelling currently on a store — same source the store form
+  // offers, so the filter and the form can never disagree.
+  const { data: allPlaces } = useQuery({
+    queryKey: ['admin', 'merchants', 'places'],
+    queryFn: () =>
+      api.adminListMerchants({ pageSize: 200 }) as Promise<{ items: { city?: string | null }[] }>,
+    staleTime: 5 * 60_000,
+  });
+  const cityOptions = useMemo(
+    () =>
+      Array.from(
+        new Set((allPlaces?.items ?? []).map((m) => (m.city ?? '').trim()).filter(Boolean)),
+      ).sort((a, b) => a.localeCompare(b, 'ar')),
+    [allPlaces],
+  );
+
   const { data, isLoading, isError, refetch, isFetching } = useQuery({
     queryKey: ['admin', 'merchants', filters, sort, dir, page, pageSize],
     queryFn: () =>
@@ -141,6 +158,7 @@ export function MerchantsPage() {
         ...(status ? { status } : {}),
         ...(categoryId ? { categoryId } : {}),
         ...(hasProducts ? { hasProducts } : {}),
+        ...(city ? { city } : {}),
         ...(hasApi ? { hasApi } : {}),
       }),
     placeholderData: (prev) => prev,
@@ -418,6 +436,23 @@ export function MerchantsPage() {
             {((categories as Row[] | undefined) ?? []).map((c) => (
               <option key={c.id} value={c.id}>
                 {c.nameAr}
+              </option>
+            ))}
+          </select>
+          {/* The store's city is what puts a restaurant in the local rail or the
+              inter-city one, so it needs to be filterable, not just visible. */}
+          <select
+            value={city}
+            onChange={(e) => {
+              setCity(e.target.value);
+              setPage(1);
+            }}
+            className="px-3 py-2 rounded-lg border border-input bg-popover text-sm min-w-[120px]"
+          >
+            <option value="">كل المدن</option>
+            {cityOptions.map((c: string) => (
+              <option key={c} value={c}>
+                {c}
               </option>
             ))}
           </select>
@@ -1014,6 +1049,74 @@ interface StoreFields {
   city: string;
 }
 
+/**
+ * Pick a place that is already in use, or type a new one.
+ *
+ * The city is not decoration: it decides which home rail a store lands in. As
+ * free text, «قنا» and «قنا » were two different cities and half the
+ * restaurants quietly fell out of the rail. Existing spellings are offered
+ * first; a genuinely new place still goes in by hand.
+ */
+function PlacePicker({
+  value,
+  options,
+  onChange,
+  placeholder,
+}: {
+  value: string;
+  options: string[];
+  onChange: (v: string) => void;
+  placeholder?: string;
+}) {
+  const known = value !== '' && options.includes(value);
+  const [typing, setTyping] = useState(value !== '' && !known);
+
+  if (typing) {
+    return (
+      <div className="space-y-1.5">
+        <Input
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder={placeholder}
+          autoFocus
+        />
+        {options.length > 0 && (
+          <button
+            type="button"
+            onClick={() => setTyping(false)}
+            className="text-[11px] text-brand-red hover:underline"
+          >
+            اختار من الموجود بدل الكتابة
+          </button>
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <select
+      value={value}
+      onChange={(e) => {
+        if (e.target.value === '__new__') {
+          onChange('');
+          setTyping(true);
+          return;
+        }
+        onChange(e.target.value);
+      }}
+      className="w-full px-3 py-2 rounded-lg border border-input bg-background text-sm font-bold outline-none focus:border-brand-red"
+    >
+      <option value="">— اختار —</option>
+      {options.map((o) => (
+        <option key={o} value={o}>
+          {o}
+        </option>
+      ))}
+      <option value="__new__">مكان جديد (اكتبه)…</option>
+    </select>
+  );
+}
+
 /** Single-image uploader (logo / cover) — reuses the shared uploadFile flow. */
 function SingleImageField({
   label,
@@ -1368,6 +1471,26 @@ function LocationFields({
    *  fields around it stay mounted, so nothing typed is lost. */
   active: boolean;
 }) {
+  // Spellings already in use, read off the list the page has cached. Free text
+  // let «قنا» and «قنا » become two different cities, which silently split the
+  // home rails — the city is what decides which rail a store lands in.
+  const { data: all } = useQuery({
+    queryKey: ['admin', 'merchants', 'places'],
+    queryFn: () =>
+      api.adminListMerchants({ pageSize: 200 }) as Promise<{
+        items: { city?: string | null; governorate?: string | null }[];
+      }>,
+    staleTime: 5 * 60_000,
+  });
+  const uniq = (
+    pick: (m: { city?: string | null; governorate?: string | null }) => string | null | undefined,
+  ) =>
+    Array.from(new Set((all?.items ?? []).map((m) => (pick(m) ?? '').trim()).filter(Boolean))).sort(
+      (a, b) => a.localeCompare(b, 'ar'),
+    );
+  const knownCities = uniq((m) => m.city);
+  const knownGovernorates = uniq((m) => m.governorate);
+
   return (
     <>
       <div className="col-span-2">
@@ -1401,10 +1524,24 @@ function LocationFields({
         </Field>
       </div>
       <Field label="المحافظة" required>
-        <Input value={form.governorate} onChange={(e) => patch({ governorate: e.target.value })} />
+        <PlacePicker
+          value={form.governorate}
+          options={knownGovernorates}
+          onChange={(governorate) => patch({ governorate })}
+          placeholder="مثال: قنا"
+        />
       </Field>
-      <Field label="المدينة" required>
-        <Input value={form.city} onChange={(e) => patch({ city: e.target.value })} />
+      <Field
+        label="المدينة"
+        required
+        hint="ده اللي بيحدد المطعم يظهر في أي صف على الشاشة الرئيسية — اكتبها بنفس الإملاء كل مرة"
+      >
+        <PlacePicker
+          value={form.city}
+          options={knownCities}
+          onChange={(city) => patch({ city })}
+          placeholder="مثال: قنا"
+        />
       </Field>
       <div className="col-span-2 rounded-lg bg-muted/40 p-2.5 text-xs text-muted-foreground">
         الإحداثيات المحفوظة:{' '}
