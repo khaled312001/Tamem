@@ -851,6 +851,16 @@ function ServicesTab({
             />
           </Field>
         </div>
+        {/* Same city in both boxes empties the first rail: the local one excludes
+            whatever the inter-city one claims, so no store can sit in both. */}
+        {!!form.intercityCity && form.spotlightCity === form.intercityCity && (
+          <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-xs font-bold leading-relaxed text-amber-900">
+            الخانتين فيهم نفس المدينة «{form.intercityCity}» — كده الصف الأول هيبقى فاضي، لأن المطعم
+            مبيظهرش في الصفّين. المفروض خانة ١ = مدينة العميل (قفط)، وخانة ٢ = المدينة التانية
+            (قنا).
+          </div>
+        )}
+
         <div className="rounded-lg bg-muted/40 p-3 text-xs leading-relaxed text-muted-foreground space-y-1">
           <div>
             المدن اللي عندك فيها متاجر دلوقتي:{' '}
