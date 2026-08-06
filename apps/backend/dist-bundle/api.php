@@ -2190,7 +2190,9 @@ if ($method === 'GET' && $path === '/admin/home-config') {
     $row = $rows[0] ?? null;
     // Prisma stores longtext JSON columns as raw strings — decode them
     // before sending so `.join()` / `.length` / `.map()` work client-side.
-    $jsonFields = ['heroGradient', 'visibleServiceKeys', 'featuredMerchantIds', 'featuredOfferIds', 'featuredProductIds', 'sectionLayout'];
+    // serviceCards is an OBJECT keyed by service key, not a list — the admin's
+    // title/subtitle/image overrides for the three headline cards.
+    $jsonFields = ['heroGradient', 'visibleServiceKeys', 'featuredMerchantIds', 'featuredOfferIds', 'featuredProductIds', 'sectionLayout', 'serviceCards'];
     if ($row) {
         foreach ($jsonFields as $f) {
             if (isset($row[$f]) && is_string($row[$f]) && $row[$f] !== '') {
@@ -5098,10 +5100,12 @@ if ($method === 'PATCH' && $path === '/admin/home-config') {
     $u = authUser();
     if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
     $b = readJsonBody();
-    $stringFields = ['heroGreeting', 'heroSubtitle', 'trustStripTitle', 'trustStripSubtitle', 'promoBannerCouponId', 'promoBannerTitle', 'promoBannerCode'];
+    $stringFields = ['heroGreeting', 'heroSubtitle', 'trustStripTitle', 'trustStripSubtitle', 'promoBannerCouponId', 'promoBannerTitle', 'promoBannerCode', 'spotlightCity', 'intercityCity'];
     // featuredProductIds was read back but never written (the picker silently
     // never saved); sectionLayout is the new home-section order/visibility.
-    $jsonFields = ['heroGradient', 'visibleServiceKeys', 'featuredMerchantIds', 'featuredOfferIds', 'featuredProductIds', 'sectionLayout'];
+    // serviceCards is an OBJECT keyed by service key, not a list — the admin's
+    // title/subtitle/image overrides for the three headline cards.
+    $jsonFields = ['heroGradient', 'visibleServiceKeys', 'featuredMerchantIds', 'featuredOfferIds', 'featuredProductIds', 'sectionLayout', 'serviceCards'];
     $boolFields = ['showPromoBanner', 'showTrustStrip'];
 
     $sets = [];
@@ -8194,7 +8198,7 @@ if ($method === 'GET' && $path === '/home-config') {
     $cfg = boolCast(jsonizeRow($cfg), ['showPromoBanner', 'showTrustStrip']);
     // heroGradient / visibleServiceKeys / featuredMerchantIds / featuredOfferIds
     // are spread + .includes()-ed client-side — must be arrays or null, never {}.
-    foreach (['heroGradient', 'visibleServiceKeys', 'featuredMerchantIds', 'featuredOfferIds', 'featuredProductIds', 'sectionLayout'] as $k) {
+    foreach (['heroGradient', 'visibleServiceKeys', 'featuredMerchantIds', 'featuredOfferIds', 'featuredProductIds', 'sectionLayout', 'serviceCards'] as $k) {
         if (!array_key_exists($k, $cfg) || !is_array($cfg[$k] ?? null)) $cfg[$k] = $cfg[$k] ?? null;
     }
     $cfg['promoCoupon'] = null;

@@ -14,7 +14,13 @@ import { memo } from 'react';
 import { StyleSheet, View } from 'react-native';
 
 import { spacing } from '../../../theme/tokens';
-import { SERVICE_CARD_COPY, SERVICE_IMAGE, SERVICE_THEME, type ServiceKey } from '../homeData';
+import {
+  SERVICE_CARD_COPY,
+  SERVICE_IMAGE,
+  SERVICE_THEME,
+  type HomeConfig,
+  type ServiceKey,
+} from '../homeData';
 
 import { ServiceCard } from './ServiceCard';
 
@@ -33,22 +39,27 @@ export interface HomeServiceItem {
 
 interface Props {
   services: HomeServiceItem[];
+  /** Admin overrides from home settings. Each field is optional and falls back
+   *  to the bundled copy/artwork, so a partially-filled override is fine. */
+  overrides?: HomeConfig['serviceCards'];
 }
 
-function MainServicesSectionBase({ services }: Props) {
+function MainServicesSectionBase({ services, overrides }: Props) {
   if (!services.length) return null;
   return (
     <View style={[styles.row, { flexDirection: ROW }]}>
       {services.map((s) => {
         const copy = SERVICE_CARD_COPY[s.key];
         const theme = SERVICE_THEME[s.key];
+        const o = overrides?.[s.key];
         return (
           <ServiceCard
             key={s.key}
-            title={copy.title}
-            subtitle={copy.subtitle}
+            title={o?.title?.trim() || copy.title}
+            subtitle={o?.subtitle?.trim() || copy.subtitle}
             Icon={s.Icon}
             image={SERVICE_IMAGE[s.key]}
+            imageUrl={o?.imageUrl?.trim() || null}
             bg={theme.bg}
             fg={theme.fg}
             onPress={s.onPress}

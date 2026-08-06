@@ -26,7 +26,7 @@ import {
   Sparkles,
   Store,
 } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 
@@ -52,7 +52,47 @@ interface HomeConfig {
   showPromoBanner: boolean;
   showTrustStrip: boolean;
   sectionLayout: SectionItem[] | null;
+  serviceCards: Record<string, ServiceCardOverride> | null;
+  spotlightCity: string | null;
+  intercityCity: string | null;
 }
+
+/** Admin override for one headline service card. Every field is optional; an
+ *  empty one falls back to the copy and artwork bundled in the app. */
+interface ServiceCardOverride {
+  title?: string | null;
+  subtitle?: string | null;
+  imageUrl?: string | null;
+}
+
+/** The three cards the app draws, with the built-in copy shown as placeholder
+ *  text so the admin can see what they are replacing. MUST match the mobile
+ *  SERVICE_CARD_COPY keys. */
+const SERVICE_CARDS: { key: string; label: string; title: string; subtitle: string }[] = [
+  { key: 'delivery', label: 'دليفري', title: 'دليفري', subtitle: 'داخل المدينة' },
+  { key: 'shipping', label: 'شحن', title: 'شحن', subtitle: 'بين المناطق' },
+  { key: 'merchant', label: 'تاجر', title: 'تاجر', subtitle: 'طلبات جملة' },
+];
+
+/** The card is drawn at a fixed 1.12:1 box and the image is cropped to fill it,
+ *  so the three tiles stay identical whatever gets uploaded. Telling the admin
+ *  the ratio is what stops them uploading something that crops badly. */
+const SERVICE_ART_HINT = 'مقاس مثالي 560×500 بكسل (نسبة 1.12:1) — الصورة بتتقص للمقاس ده';
+
+/**
+ * The copy the APP itself draws when a field has never been overridden. Kept
+ * here so the editor can show the live text instead of an empty box — a blank
+ * field never told the admin what the customer was actually reading.
+ *
+ * MUST match the mobile fallbacks (HomeHeader / TrustStrip / CouponBanner).
+ */
+const APP_DEFAULTS = {
+  heroGreeting: 'أهلاً بك',
+  heroSubtitle: 'ايه اللي محتاج توصيله النهارده؟',
+  trustStripTitle: 'توصيل سريع خلال 30 دقيقة',
+  trustStripSubtitle: 'داخل مدينة قفط — للطلبات القريبة',
+  promoBannerTitle: 'خصم على أول طلب',
+} as const;
 
 /** One home section's order slot. Mirrors the mobile HomeSectionConfig. */
 interface SectionItem {
@@ -73,7 +113,21 @@ const HOME_SECTIONS: {
   renamable?: boolean;
   defaultTitle?: string;
 }[] = [
+  {
+    key: 'spotlightRestaurants',
+    label: 'واجهة المطاعم',
+    hint: 'الرَّف الكبير اللي بيفتح الشاشة — مطاعم المدينة بصورها',
+    renamable: true,
+    defaultTitle: 'مطاعم قنا',
+  },
   { key: 'services', label: 'الخدمات الرئيسية', hint: 'دليفري · شحن · تاجر' },
+  {
+    key: 'intercityRestaurants',
+    label: 'مطاعم من مدينة تانية',
+    hint: 'مطاعم بره المدينة بتوصّل لهنا — يظهر بس لما تحدد المدينة',
+    renamable: true,
+    defaultTitle: 'من قنا لحد باب بيتك',
+  },
   { key: 'offersSlider', label: 'سلايدر العروض', hint: 'يظهر فقط لو فيه شرائح' },
   { key: 'categories', label: 'التصنيفات', hint: 'مطاعم · صيدليات …' },
   { key: 'productSections', label: 'أقسام المنتجات', hint: 'بيتزا · كريب …' },
@@ -98,8 +152,10 @@ const HOME_SECTIONS: {
   { key: 'quickActions', label: 'اختصارات (محفظة · كوبونات · مفضلة)' },
 ];
 
-/** Merge a saved layout over the canonical list: keep configured order, append
- *  any new section the saved layout predates. Mirrors the mobile resolver. */
+/** Merge a saved layout over the canonical list: keep configured order, and slot
+ *  any new section the saved layout predates in at its canonical position (NOT
+ *  at the end — a section meant to open the screen would otherwise arrive
+ *  buried). Mirrors the mobile resolver exactly. */
 function resolveLayout(saved: SectionItem[] | null | undefined): SectionItem[] {
   const known = new Set(HOME_SECTIONS.map((s) => s.key));
   if (!Array.isArray(saved) || saved.length === 0) {
@@ -112,9 +168,21 @@ function resolveLayout(saved: SectionItem[] | null | undefined): SectionItem[] {
     seen.add(it.key);
     out.push({ key: it.key, visible: it.visible !== false, title: it.title ?? null });
   }
-  for (const s of HOME_SECTIONS) {
-    if (!seen.has(s.key)) out.push({ key: s.key, visible: true, title: s.defaultTitle ?? null });
-  }
+  HOME_SECTIONS.forEach((s, i) => {
+    if (seen.has(s.key)) return;
+    let at = 0;
+    for (let j = i - 1; j >= 0; j--) {
+      const prev = HOME_SECTIONS[j];
+      if (!prev) continue;
+      const idx = out.findIndex((o) => o.key === prev.key);
+      if (idx !== -1) {
+        at = idx + 1;
+        break;
+      }
+    }
+    out.splice(at, 0, { key: s.key, visible: true, title: s.defaultTitle ?? null });
+    seen.add(s.key);
+  });
   return out;
 }
 
@@ -130,6 +198,8 @@ interface Merchant {
   storeNameAr: string;
   rating?: number | null;
   isOpen?: boolean;
+  /** Where the STORE is — drives which restaurant rail it appears in. */
+  city?: string | null;
 }
 
 interface Coupon {
@@ -187,6 +257,15 @@ export function HomeSettingsPage() {
     queryFn: () => api.adminListMerchants({ pageSize: 100 }) as Promise<{ items: Merchant[] }>,
   });
   const merchants = merchantsPage?.items ?? [];
+  // Offered as suggestions for the two rail-city fields. Derived from the real
+  // records so a rail can only ever be pointed at a city that has stores.
+  const cities = useMemo(
+    () =>
+      Array.from(new Set(merchants.map((m) => (m.city ?? '').trim()).filter(Boolean))).sort(
+        (a, b) => a.localeCompare(b, 'ar'),
+      ),
+    [merchants],
+  );
 
   const { data: coupons } = useQuery({
     queryKey: ['admin', 'coupons'],
@@ -224,6 +303,24 @@ export function HomeSettingsPage() {
 
   const update = <K extends keyof HomeConfig>(key: K, value: HomeConfig[K]) => {
     setForm((prev) => (prev ? { ...prev, [key]: value } : prev));
+  };
+
+  /** Patch one service card, dropping any field the admin blanked so it falls
+   *  back to the app's own copy instead of saving an empty string. */
+  const setServiceCard = (key: string, patch: ServiceCardOverride) => {
+    setForm((prev) => {
+      if (!prev) return prev;
+      const merged: ServiceCardOverride = { ...(prev.serviceCards?.[key] ?? {}), ...patch };
+      const cleaned: ServiceCardOverride = {};
+      for (const [k, v] of Object.entries(merged)) {
+        const s = typeof v === 'string' ? v.trim() : v;
+        if (s) cleaned[k as keyof ServiceCardOverride] = s as string;
+      }
+      const next = { ...(prev.serviceCards ?? {}) };
+      if (Object.keys(cleaned).length) next[key] = cleaned;
+      else delete next[key];
+      return { ...prev, serviceCards: Object.keys(next).length ? next : null };
+    });
   };
 
   return (
@@ -294,8 +391,11 @@ export function HomeSettingsPage() {
         <ServicesTab
           form={form}
           services={services ?? []}
+          cities={cities}
           onToggle={(key) => toggleInArray('visibleServiceKeys', key)}
           onClear={() => update('visibleServiceKeys', null)}
+          onSetCard={setServiceCard}
+          update={update}
         />
       )}
       {tab === 'merchants' && (
@@ -446,22 +546,22 @@ function HeroTab({
   const gradient = form.heroGradient ?? ['#E0301E', '#EC7A2C'];
   return (
     <SectionCard hint="السطرين اللي بيظهروا أعلى الصفحة الرئيسية ولون الخلفية.">
-      <Field label="التحية" hint="مثال: «أهلاً بك» — اتركها فارغة لاستخدام «أهلاً {اسم}» الافتراضي">
-        <Input
-          value={form.heroGreeting ?? ''}
-          onChange={(e) => update('heroGreeting', e.target.value || null)}
-          maxLength={120}
-          placeholder="أهلاً بك"
-        />
-      </Field>
-      <Field label="السطر الترويجي" hint="السطر اللي تحت التحية مباشرة">
-        <Input
-          value={form.heroSubtitle ?? ''}
-          onChange={(e) => update('heroSubtitle', e.target.value || null)}
-          maxLength={160}
-          placeholder="ايه اللي محتاج توصيله النهارده؟"
-        />
-      </Field>
+      <DefaultableField
+        label="التحية"
+        hint="لو سيبتها الأصلية بيظهر «أهلاً {اسم العميل}»"
+        value={form.heroGreeting}
+        fallback={APP_DEFAULTS.heroGreeting}
+        onChange={(v) => update('heroGreeting', v)}
+        maxLength={120}
+      />
+      <DefaultableField
+        label="السطر الترويجي"
+        hint="السطر اللي تحت التحية مباشرة"
+        value={form.heroSubtitle}
+        fallback={APP_DEFAULTS.heroSubtitle}
+        onChange={(v) => update('heroSubtitle', v)}
+        maxLength={160}
+      />
 
       {/* Gradient preset chips — way easier than typing hex codes */}
       <div>
@@ -684,49 +784,202 @@ function PromoPreview({
 function ServicesTab({
   form,
   services,
+  cities,
   onToggle,
   onClear,
+  onSetCard,
+  update,
 }: {
   form: HomeConfig;
   services: Service[];
+  /** Cities that actually appear on merchant records — typing one by hand that
+   *  no store uses would silently produce an empty rail. */
+  cities: string[];
   onToggle: (key: string) => void;
   onClear: () => void;
+  onSetCard: (key: string, patch: ServiceCardOverride) => void;
+  update: <K extends keyof HomeConfig>(key: K, value: HomeConfig[K]) => void;
 }) {
   const allSelected = !form.visibleServiceKeys;
   return (
-    <SectionCard hint="حدد الخدمات اللي تظهر في تطبيق العميل. اتركها كلها لإظهار الكل.">
+    <>
+      <SectionCard hint="رفّي المطاعم اللي بتظهر في أول الشاشة. الرَّف الأول للمطاعم المحلية، والتاني لمطاعم مدينة تانية بتوصّل لهنا — اكتب اسم المدينة زي ما هي مكتوبة في بيانات المتجر بالظبط.">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <Field label="مدينة رَف المطاعم الأول" hint="سيبها فاضية عشان يعرض مطاعم كل المدن">
+            <Input
+              value={form.spotlightCity ?? ''}
+              onChange={(e) => update('spotlightCity', e.target.value.trim() || null)}
+              placeholder="كل المدن"
+              list="home-cities"
+            />
+          </Field>
+          <Field
+            label="مدينة رَف «مطاعم من مدينة تانية»"
+            hint="سيبها فاضية عشان يختفي الرَّف ده خالص"
+          >
+            <Input
+              value={form.intercityCity ?? ''}
+              onChange={(e) => update('intercityCity', e.target.value.trim() || null)}
+              placeholder="مثال: قنا"
+              list="home-cities"
+            />
+          </Field>
+        </div>
+        <datalist id="home-cities">
+          {cities.map((c) => (
+            <option key={c} value={c} />
+          ))}
+        </datalist>
+        <p className="text-xs text-muted-foreground leading-relaxed">
+          المدن الموجودة فعلاً في بيانات المتاجر: {cities.length ? cities.join(' · ') : '—'}. عشان
+          تضيف مطعم في قنا، افتح «التجار › إضافة تاجر» وحط المدينة «قنا».
+        </p>
+      </SectionCard>
+
+      <SectionCard
+        hint={`عدّل صورة وعنوان كل كارت من الكروت الثلاثة اللي بتفتح بيها الشاشة الرئيسية. سيب الحقل فاضي عشان يرجع للأصلي. ${SERVICE_ART_HINT}.`}
+      >
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+          {SERVICE_CARDS.map((c) => (
+            <ServiceCardEditor
+              key={c.key}
+              def={c}
+              value={form.serviceCards?.[c.key] ?? {}}
+              onChange={(patch) => onSetCard(c.key, patch)}
+            />
+          ))}
+        </div>
+      </SectionCard>
+
+      <SectionCard hint="حدد الخدمات اللي تظهر في تطبيق العميل. اتركها كلها لإظهار الكل.">
+        <div className="flex items-center justify-between">
+          <span className="text-xs text-muted-foreground">
+            {allSelected
+              ? '✓ كل الخدمات تظهر (الافتراضي)'
+              : `محدد ${form.visibleServiceKeys?.length}/${services.length}`}
+          </span>
+          {!allSelected && (
+            <button onClick={onClear} className="text-xs text-brand-red hover:underline">
+              إظهار الكل
+            </button>
+          )}
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+          {services.map((s) => {
+            // visibleServiceKeys === null means "show every service" — paint
+            // every checkbox as ticked so the UI matches the badge above
+            // ("✓ كل الخدمات تظهر"). The first untick will switch the field
+            // to an explicit array (handled by the parent's toggleInArray).
+            const selected =
+              form.visibleServiceKeys === null ? true : form.visibleServiceKeys.includes(s.key);
+            return (
+              <CheckRow
+                key={s.id}
+                label={s.nameAr}
+                hint={s.isActive ? '✓ نشطة' : '⚠ غير نشطة في إعدادات الخدمات'}
+                checked={selected}
+                onChange={() => onToggle(s.key)}
+              />
+            );
+          })}
+        </div>
+      </SectionCard>
+    </>
+  );
+}
+
+/**
+ * One service card's overrides. The preview is drawn at the app's real aspect
+ * ratio with the same crop, so what the admin sees here is what the phone
+ * renders — an image that crops badly is visible before it ships.
+ */
+function ServiceCardEditor({
+  def,
+  value,
+  onChange,
+}: {
+  def: { key: string; label: string; title: string; subtitle: string };
+  value: ServiceCardOverride;
+  onChange: (patch: ServiceCardOverride) => void;
+}) {
+  const [busy, setBusy] = useState(false);
+
+  const pick = async (file: File | undefined) => {
+    if (!file) return;
+    setBusy(true);
+    try {
+      const { url } = await uploadFile(file);
+      onChange({ imageUrl: url });
+      toast.success(`تم رفع صورة «${def.label}»`);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'تعذّر رفع الصورة');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="rounded-xl border border-border p-3 space-y-3">
       <div className="flex items-center justify-between">
-        <span className="text-xs text-muted-foreground">
-          {allSelected
-            ? '✓ كل الخدمات تظهر (الافتراضي)'
-            : `محدد ${form.visibleServiceKeys?.length}/${services.length}`}
-        </span>
-        {!allSelected && (
-          <button onClick={onClear} className="text-xs text-brand-red hover:underline">
-            إظهار الكل
+        <span className="text-sm font-bold text-foreground">{def.label}</span>
+        {!!value.imageUrl && (
+          <button
+            type="button"
+            onClick={() => onChange({ imageUrl: null })}
+            className="text-xs text-brand-red hover:underline"
+          >
+            رجّع الصورة الأصلية
           </button>
         )}
       </div>
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-        {services.map((s) => {
-          // visibleServiceKeys === null means "show every service" — paint
-          // every checkbox as ticked so the UI matches the badge above
-          // ("✓ كل الخدمات تظهر"). The first untick will switch the field
-          // to an explicit array (handled by the parent's toggleInArray).
-          const selected =
-            form.visibleServiceKeys === null ? true : form.visibleServiceKeys.includes(s.key);
-          return (
-            <CheckRow
-              key={s.id}
-              label={s.nameAr}
-              hint={s.isActive ? '✓ نشطة' : '⚠ غير نشطة في إعدادات الخدمات'}
-              checked={selected}
-              onChange={() => onToggle(s.key)}
+
+      <label className="block cursor-pointer">
+        <div className="relative w-full overflow-hidden rounded-lg border border-dashed border-border bg-muted/40 aspect-[1.12/1]">
+          {value.imageUrl ? (
+            <img
+              src={value.imageUrl}
+              alt={def.label}
+              className="absolute inset-0 h-full w-full object-cover"
             />
-          );
-        })}
-      </div>
-    </SectionCard>
+          ) : (
+            <div className="absolute inset-0 flex flex-col items-center justify-center gap-1 text-muted-foreground">
+              <Images className="w-6 h-6" />
+              <span className="text-[11px] font-bold">الصورة الأصلية من التطبيق</span>
+            </div>
+          )}
+          {busy && (
+            <div className="absolute inset-0 grid place-items-center bg-black/40 text-xs font-bold text-white">
+              جاري الرفع…
+            </div>
+          )}
+        </div>
+        <input
+          type="file"
+          accept="image/*"
+          className="hidden"
+          onChange={(e) => {
+            void pick(e.target.files?.[0]);
+            e.target.value = '';
+          }}
+        />
+      </label>
+
+      <input
+        value={value.title ?? ''}
+        onChange={(e) => onChange({ title: e.target.value })}
+        placeholder={def.title}
+        className="w-full px-3 py-2 rounded-lg border border-input bg-background text-sm outline-none focus:border-brand-red"
+      />
+      <input
+        value={value.subtitle ?? ''}
+        onChange={(e) => onChange({ subtitle: e.target.value })}
+        placeholder={def.subtitle}
+        className="w-full px-3 py-2 rounded-lg border border-input bg-background text-sm outline-none focus:border-brand-red"
+      />
+      <p className="text-[11px] text-muted-foreground leading-relaxed">
+        العنوان والوصف بيظهروا بس لو مفيش صورة — الصور الحالية العنوان مرسوم جواها.
+      </p>
+    </div>
   );
 }
 
@@ -798,22 +1051,20 @@ function TrustTab({
         </p>
       ) : (
         <>
-          <Field label="العنوان">
-            <Input
-              value={form.trustStripTitle ?? ''}
-              onChange={(e) => update('trustStripTitle', e.target.value || null)}
-              maxLength={120}
-              placeholder="توصيل سريع خلال 30 دقيقة"
-            />
-          </Field>
-          <Field label="السطر الفرعي">
-            <Input
-              value={form.trustStripSubtitle ?? ''}
-              onChange={(e) => update('trustStripSubtitle', e.target.value || null)}
-              maxLength={160}
-              placeholder="داخل مدينة قفط — للطلبات القريبة"
-            />
-          </Field>
+          <DefaultableField
+            label="العنوان"
+            value={form.trustStripTitle}
+            fallback={APP_DEFAULTS.trustStripTitle}
+            onChange={(v) => update('trustStripTitle', v)}
+            maxLength={120}
+          />
+          <DefaultableField
+            label="السطر الفرعي"
+            value={form.trustStripSubtitle}
+            fallback={APP_DEFAULTS.trustStripSubtitle}
+            onChange={(v) => update('trustStripSubtitle', v)}
+            maxLength={160}
+          />
         </>
       )}
     </SectionCard>
@@ -821,6 +1072,72 @@ function TrustTab({
 }
 
 // ── Shared bits ─────────────────────────────────────────────────────────
+
+/**
+ * A text field for a setting that falls back to copy baked into the app.
+ *
+ * These used to render EMPTY whenever nothing had been saved, with the real
+ * text only hinted in the placeholder — so the page never showed what the app
+ * was actually displaying, and editing meant retyping the whole line from
+ * memory. It now loads the live value (the stored override, or the app's own
+ * default when there is none), says which of the two it is, and offers a way
+ * back to the default. Nothing is written until Save, so merely opening the
+ * page still cannot turn a default into an override.
+ */
+function DefaultableField({
+  label,
+  hint,
+  value,
+  fallback,
+  onChange,
+  maxLength,
+  multiline,
+}: {
+  label: string;
+  hint?: string;
+  value: string | null;
+  /** What the app draws when `value` is null. */
+  fallback: string;
+  onChange: (v: string | null) => void;
+  maxLength?: number;
+  multiline?: boolean;
+}) {
+  const isCustom = value !== null && value !== '';
+  const shown = isCustom ? value : fallback;
+  return (
+    <Field label={label} hint={hint}>
+      <div className="space-y-1.5">
+        {multiline ? (
+          <textarea
+            value={shown}
+            onChange={(e) => onChange(e.target.value)}
+            maxLength={maxLength}
+            rows={2}
+            className="w-full px-3 py-2 rounded-lg border border-input bg-background text-sm outline-none focus:border-brand-red resize-y"
+          />
+        ) : (
+          <Input value={shown} onChange={(e) => onChange(e.target.value)} maxLength={maxLength} />
+        )}
+        <div className="flex items-center justify-between gap-2">
+          <span
+            className={`text-[11px] font-bold ${isCustom ? 'text-brand-red' : 'text-muted-foreground'}`}
+          >
+            {isCustom ? '✎ نص مخصص' : '✓ النص الأصلي من التطبيق'}
+          </span>
+          {isCustom && (
+            <button
+              type="button"
+              onClick={() => onChange(null)}
+              className="text-[11px] text-brand-red hover:underline"
+            >
+              رجّع للأصلي
+            </button>
+          )}
+        </div>
+      </div>
+    </Field>
+  );
+}
 
 function SectionCard({
   children,

@@ -29,6 +29,10 @@ export interface Merchant {
   /// `message` is human copy like "يفتح غداً 10ص"; showing it instead of a bare
   /// "مغلق" keeps a closed store useful rather than a dead end.
   openness?: { isOpenNow: boolean; message: string | null; nextOpenAt?: string | null };
+  /// Where the STORE is — not the customer. This is what separates the
+  /// same-city rail from the inter-city one.
+  city?: string | null;
+  governorate?: string | null;
   /// Only present when the merchant list was queried with lat/lng.
   distanceKm?: number;
   /// Customer-visible product count (excludes hidden/unavailable rows).
@@ -112,11 +116,27 @@ export interface HomeConfig {
   /** Admin-defined order + visibility (+ title override) for the home sections.
    *  null → the built-in default order below. */
   sectionLayout: HomeSectionConfig[] | null;
+  /** Per-service overrides for the three headline cards. Any absent key (or
+   *  absent field within a key) falls back to the copy and artwork bundled in
+   *  the app, so this is safe to leave unset. */
+  serviceCards: Partial<
+    Record<
+      ServiceKey,
+      { title?: string | null; subtitle?: string | null; imageUrl?: string | null }
+    >
+  > | null;
+  /** Merchant city the opening restaurants rail draws from. null = every city. */
+  spotlightCity: string | null;
+  /** Merchant city the inter-city restaurants rail draws from — stores in
+   *  another city that still deliver here. null hides that rail. */
+  intercityCity: string | null;
 }
 
 /** The reorderable/hideable sections of the home screen. Keep in sync with the
  *  dashboard's home-settings "ترتيب الأقسام" tab (it can't import this file). */
 export type HomeSectionKey =
+  | 'spotlightRestaurants'
+  | 'intercityRestaurants'
   | 'services'
   | 'offersSlider'
   | 'categories'
@@ -142,7 +162,15 @@ export interface HomeSectionConfig {
  * for the two product rails; the other sections carry their own headers.
  */
 export const DEFAULT_HOME_SECTIONS: { key: HomeSectionKey; defaultTitle?: string }[] = [
+  // First on purpose: restaurants are what most people open the app for, and
+  // the rail leads with photography. Rename or move it from the home layout
+  // control — it is a section, not a hardcoded block.
+  { key: 'spotlightRestaurants', defaultTitle: 'مطاعم قنا' },
   { key: 'services' },
+  // Stores in another city that still deliver here. Sits right under the
+  // services row rather than next to the local rail, so the two are not read as
+  // one long list of restaurants that all arrive equally fast.
+  { key: 'intercityRestaurants', defaultTitle: 'من قنا لحد باب بيتك' },
   { key: 'offersSlider' },
   { key: 'categories' },
   { key: 'productSections' },
@@ -157,9 +185,14 @@ export const DEFAULT_HOME_SECTIONS: { key: HomeSectionKey; defaultTitle?: string
 
 /**
  * Merge the admin's saved layout over the built-in order. Honours order,
- * visibility and title for configured keys, drops unknown keys, and APPENDS any
+ * visibility and title for configured keys, drops unknown keys, and slots in any
  * built-in section the saved layout predates — so shipping a new home section
- * never requires the admin to re-save, it just shows up at the end.
+ * never requires the admin to re-save.
+ *
+ * A new section lands at its DEFAULT position, not at the end. Appending was
+ * fine while every new section belonged at the bottom, but a section designed to
+ * open the screen would have shipped buried under everything else on any
+ * installation that had ever saved a layout — which is all of them.
  */
 export function resolveHomeSections(
   layout: HomeSectionConfig[] | null | undefined,
@@ -181,9 +214,24 @@ export function resolveHomeSections(
       title: (item.title && item.title.trim()) || titleOf(item.key),
     });
   }
-  for (const s of defaults) {
-    if (!seen.has(s.key)) out.push({ key: s.key, visible: true, title: s.defaultTitle });
-  }
+  // Slot each unsaved built-in after the nearest section that precedes it in the
+  // built-in order and does appear in the saved layout; with no such anchor it
+  // belongs at the top, which is exactly where a lead section should land.
+  defaults.forEach((s, i) => {
+    if (seen.has(s.key)) return;
+    let at = 0;
+    for (let j = i - 1; j >= 0; j--) {
+      const prev = defaults[j];
+      if (!prev) continue;
+      const idx = out.findIndex((o) => o.key === prev.key);
+      if (idx !== -1) {
+        at = idx + 1;
+        break;
+      }
+    }
+    out.splice(at, 0, { key: s.key, visible: true, title: s.defaultTitle });
+    seen.add(s.key);
+  });
   return out;
 }
 

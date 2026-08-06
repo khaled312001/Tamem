@@ -37,12 +37,13 @@ import { PopularStoresSection } from './components/PopularStoresSection';
 import { ProductRail } from './components/ProductRail';
 import { PromoCardsRow } from './components/PromoCardsRow';
 import { QuickActionsSection, type QuickAction } from './components/QuickActionsSection';
+import { SpotlightStoresSection } from './components/SpotlightStoresSection';
 import {
   resolveHomeSections,
   type HomeCategory,
   type HomeProduct,
   type HomeSectionKey,
-  type Merchant,
+  Merchant,
   type Offer,
   type ServiceKey,
   type ServiceRoute,
@@ -63,6 +64,12 @@ const BOTTOM_GAP = 130;
 
 /** Store cards rendered per "عرض المزيد" press. */
 const STORES_PAGE = 6;
+
+/** The seeded Category row id — matched case-insensitively against the name too,
+ *  so renaming the category in the dashboard cannot empty the spotlight rail. */
+const RESTAURANTS_CATEGORY_ID = 'restaurants';
+/** How many restaurants the opening rail carries before "كل المطاعم". */
+const SPOTLIGHT_MAX = 10;
 
 export function HomeV2Screen() {
   const navigation = useNavigation<NavProp>();
@@ -95,6 +102,48 @@ export function HomeV2Screen() {
   } = useHomeData();
 
   const tick = useCallback(() => haptic.tap(), []);
+
+  /**
+   * The opening rail. Derived from the merchant list the screen already holds —
+   * no second request, which is the whole reason it can sit above the fold.
+   *
+   * Open stores come first: a rail of closed restaurants is a worse first
+   * impression than a shorter one. Within each group the incoming order is
+   * kept, so a located user still gets the nearest first.
+   */
+  const pickRestaurants = useCallback(
+    (city: string | null | undefined, exclude?: string | null) => {
+      const want = city?.trim().toLowerCase() || null;
+      const not = exclude?.trim().toLowerCase() || null;
+      const isRestaurant = (m: Merchant) =>
+        m.category?.id === RESTAURANTS_CATEGORY_ID || (m.category?.nameAr ?? '').trim() === 'مطاعم';
+      const open: Merchant[] = [];
+      const shut: Merchant[] = [];
+      for (const m of nearbyMerchants) {
+        if (!isRestaurant(m)) continue;
+        const mCity = (m.city ?? '').trim().toLowerCase();
+        if (want && mCity !== want) continue;
+        if (not && mCity === not) continue;
+        ((m.openness?.isOpenNow ?? m.isOpen) ? open : shut).push(m);
+      }
+      return [...open, ...shut].slice(0, SPOTLIGHT_MAX);
+    },
+    [nearbyMerchants],
+  );
+
+  // The opening rail. `spotlightCity` unset = every city, and the inter-city
+  // stores are excluded so the same restaurant never sits in both rails.
+  const spotlightRestaurants = useMemo(
+    () => pickRestaurants(homeConfig?.spotlightCity, homeConfig?.intercityCity),
+    [pickRestaurants, homeConfig?.spotlightCity, homeConfig?.intercityCity],
+  );
+
+  // Stores in another city that still deliver here. Hidden entirely until an
+  // admin names that city in home settings.
+  const intercityRestaurants = useMemo(
+    () => (homeConfig?.intercityCity ? pickRestaurants(homeConfig.intercityCity) : []),
+    [pickRestaurants, homeConfig?.intercityCity],
+  );
 
   // ── navigation (identical targets to HomeScreen) ──
   const goNotifications = useCallback(() => {
@@ -151,6 +200,11 @@ export function HomeV2Screen() {
   const goStores = useCallback(() => {
     tick();
     navigation.navigate('StoresList');
+  }, [navigation, tick]);
+
+  const goRestaurants = useCallback(() => {
+    tick();
+    navigation.navigate('StoresList', { categoryId: RESTAURANTS_CATEGORY_ID });
   }, [navigation, tick]);
 
   const goDeals = useCallback(() => {
@@ -268,8 +322,27 @@ export function HomeV2Screen() {
   // (empty rail, no live offer, trust strip toggled off) so it collapses fully.
   const renderSection = (key: HomeSectionKey, title?: string): React.ReactNode => {
     switch (key) {
+      case 'spotlightRestaurants':
+        return (
+          <SpotlightStoresSection
+            merchants={spotlightRestaurants}
+            title={title || 'مطاعم قنا'}
+            onPressMerchant={onPressMerchant}
+            onPressSeeAll={goRestaurants}
+          />
+        );
+      case 'intercityRestaurants':
+        return (
+          <SpotlightStoresSection
+            merchants={intercityRestaurants}
+            title={title || 'من قنا لحد باب بيتك'}
+            subtitle={`${intercityRestaurants.length} مطعم في ${homeConfig?.intercityCity ?? ''} بيوصّلك`}
+            onPressMerchant={onPressMerchant}
+            onPressSeeAll={goRestaurants}
+          />
+        );
       case 'services':
-        return <MainServicesSection services={services} />;
+        return <MainServicesSection services={services} overrides={homeConfig?.serviceCards} />;
       case 'offersSlider':
         return bannerOffers.length > 0 ? (
           <OffersCarousel offers={bannerOffers} onPressOffer={onPressOffer} />
