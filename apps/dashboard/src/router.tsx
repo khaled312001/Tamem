@@ -16,6 +16,7 @@ import { NotFoundPage } from './routes/not-found.js';
 import { OrderDetailPage } from './routes/order-detail.js';
 import { OrdersPage } from './routes/orders.js';
 import { OverviewPage } from './routes/overview.js';
+import { IntercityRatesPage } from './routes/intercity-rates.js';
 import { PaymentGatewayPage } from './routes/payment-gateway.js';
 import { PaymentsPage } from './routes/payments.js';
 import { PricingPage } from './routes/pricing.js';
@@ -115,6 +116,7 @@ const routes: RouteObject[] = [
           { path: 'deals', element: <DealsPage /> },
           { path: 'products/import-history', element: <ImportHistoryPage /> },
           { path: 'pricing', element: <PricingPage /> },
+          { path: 'pricing/intercity', element: <IntercityRatesPage /> },
           { path: 'payments', element: <PaymentsPage /> },
           { path: 'payment-gateway', element: <PaymentGatewayPage /> },
           { path: 'reports', element: <ReportsPage /> },
