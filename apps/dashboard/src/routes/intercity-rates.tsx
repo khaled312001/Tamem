@@ -24,6 +24,14 @@ import { Field, Input } from '../components/ui/Input.js';
 import { CardSkeleton, EmptyState } from '../components/ui/Skeleton.js';
 import { api } from '../lib/api.js';
 
+interface Window {
+  label: string;
+  /** آخر موعد لاستلام الطلب ضمن هذه الرحلة (HH:MM). */
+  cutoff: string;
+  /** الموعد المتوقع للتسليم (HH:MM). */
+  delivery: string;
+}
+
 interface Rate {
   id: string;
   fromCity: string;
@@ -35,6 +43,7 @@ interface Rate {
   minMinutes: number | null;
   maxMinutes: number | null;
   note: string | null;
+  windows: Window[];
   isActive: boolean;
 }
 
@@ -53,6 +62,7 @@ const EMPTY = {
   minMinutes: '',
   maxMinutes: '',
   note: '',
+  windows: [] as Window[],
 };
 type Draft = typeof EMPTY;
 
@@ -93,6 +103,7 @@ export function IntercityRatesPage() {
         minMinutes: d.minMinutes === '' ? null : Number(d.minMinutes),
         maxMinutes: d.maxMinutes === '' ? null : Number(d.maxMinutes),
         note: d.note.trim() || null,
+        windows: d.windows.filter((w) => w.label.trim() && w.cutoff && w.delivery),
       };
       return d.id
         ? api.raw.patch(`/admin/intercity-rates/${d.id}`, body)
@@ -131,9 +142,10 @@ export function IntercityRatesPage() {
         <div>
           <h1 className="text-2xl font-black text-brand-dark">التوصيل بين المدن</h1>
           <p className="text-sm text-muted-foreground mt-1 max-w-2xl leading-relaxed">
-            سعر ومدة التوصيل لما يكون المطعم في مدينة والعميل في مدينة تانية. القاعدة دي بتكسب
-            تسعيرة المنطقة العادية. تقدر تحط سعر للمدينة كلها، وبعدين سعر مختلف لقرية أو منطقة
-            معيّنة — الأخص هو اللي بيتطبّق.
+            لما المطعم يكون في مدينة والعميل في مدينة تانية. الرقم اللي بتحطه هنا{' '}
+            <b className="text-foreground">بيتضاف فوق</b> سعر التوصيل العادي بتاع منطقة العميل — مش
+            بيستبدله. يعني قرية في قفط = سعر توصيل القرية + رسوم النقل من قنا. تقدر تحط رسوم للمدينة
+            كلها، وبعدين رسوم مختلفة لقرية أو منطقة معيّنة — الأخص هو اللي بيتطبّق.
           </p>
         </div>
         <Button onClick={() => setEditing({ ...EMPTY, fromCity: fromCities[0] ?? '' })}>
@@ -171,10 +183,23 @@ export function IntercityRatesPage() {
                   )}
                 </div>
                 {!!r.note && <div className="text-xs text-muted-foreground mt-0.5">{r.note}</div>}
+                {(r.windows?.length ?? 0) > 0 && (
+                  <div className="flex flex-wrap gap-1.5 mt-1.5">
+                    {r.windows.map((w, i) => (
+                      <span
+                        key={i}
+                        className="inline-flex items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-[11px] font-bold text-muted-foreground"
+                      >
+                        <Clock className="w-3 h-3" />
+                        {w.label} · آخر طلب {w.cutoff} · تسليم {w.delivery}
+                      </span>
+                    ))}
+                  </div>
+                )}
               </div>
 
               <div className="text-sm font-black text-brand-red whitespace-nowrap">
-                {r.price} ج.م
+                + {r.price} ج.م
               </div>
 
               <div className="text-xs text-muted-foreground flex items-center gap-1 whitespace-nowrap">
@@ -203,6 +228,7 @@ export function IntercityRatesPage() {
                       minMinutes: r.minMinutes != null ? String(r.minMinutes) : '',
                       maxMinutes: r.maxMinutes != null ? String(r.maxMinutes) : '',
                       note: r.note ?? '',
+                      windows: r.windows ?? [],
                     })
                   }
                 >
@@ -370,7 +396,7 @@ function RateDialog({
         </div>
 
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-          <Field label="سعر التوصيل" required>
+          <Field label="رسوم النقل" required hint="بتتضاف فوق سعر المنطقة">
             <Input
               type="number"
               inputMode="decimal"
@@ -399,6 +425,11 @@ function RateDialog({
           </Field>
         </div>
 
+        {/* Orders between cities are collected and driven in batches, not
+            dispatched one by one, so the customer has to be told WHEN. Set on
+            the city-wide rule; the narrower rules inherit it. */}
+        <WindowsEditor value={draft.windows} onChange={(windows) => patch({ windows })} />
+
         <Field label="ملاحظة للعميل (اختياري)" hint="بتظهر جنب المدة في التطبيق">
           <Input
             value={draft.note}
@@ -417,5 +448,75 @@ function RateDialog({
         </div>
       </div>
     </Dialog>
+  );
+}
+
+/**
+ * مواعيد الرحلات. Two a day here — noon and night — so this is a small list,
+ * not a weekly schedule. Each entry is what the customer needs to decide: the
+ * last moment to get into this run, and when it lands.
+ */
+function WindowsEditor({ value, onChange }: { value: Window[]; onChange: (v: Window[]) => void }) {
+  const patch = (i: number, p: Partial<Window>) =>
+    onChange(value.map((w, j) => (i === j ? { ...w, ...p } : w)));
+
+  return (
+    <div className="rounded-lg bg-muted/40 p-3 space-y-2">
+      <div className="flex items-center justify-between">
+        <div className="text-xs font-bold text-foreground">مواعيد الرحلات</div>
+        <button
+          type="button"
+          onClick={() => onChange([...value, { label: '', cutoff: '', delivery: '' }])}
+          className="text-xs font-bold text-brand-red hover:underline"
+        >
+          + إضافة رحلة
+        </button>
+      </div>
+
+      {value.length === 0 ? (
+        <p className="text-[11px] text-muted-foreground leading-relaxed">
+          سيبها فاضية لو التوصيل متاح طول اليوم. لو الطلبات بتتجمّع وتتشحن على دفعات، ضيف كل رحلة
+          بموعدها — العميل هيشوفها في التطبيق قبل ما يطلب.
+        </p>
+      ) : (
+        <div className="space-y-2">
+          {value.map((w, i) => (
+            <div key={i} className="grid grid-cols-[1fr_auto_auto_auto] gap-2 items-center">
+              <Input
+                value={w.label}
+                onChange={(e) => patch(i, { label: e.target.value })}
+                placeholder="مثال: رحلة الظهر"
+              />
+              <label className="text-[11px] text-muted-foreground whitespace-nowrap">
+                آخر طلب
+                <input
+                  type="time"
+                  value={w.cutoff}
+                  onChange={(e) => patch(i, { cutoff: e.target.value })}
+                  className="block px-2 py-1.5 rounded-lg border border-input bg-background text-sm"
+                />
+              </label>
+              <label className="text-[11px] text-muted-foreground whitespace-nowrap">
+                التسليم
+                <input
+                  type="time"
+                  value={w.delivery}
+                  onChange={(e) => patch(i, { delivery: e.target.value })}
+                  className="block px-2 py-1.5 rounded-lg border border-input bg-background text-sm"
+                />
+              </label>
+              <button
+                type="button"
+                onClick={() => onChange(value.filter((_, j) => j !== i))}
+                className="text-red-600 p-1.5 rounded hover:bg-red-50"
+                aria-label="حذف الرحلة"
+              >
+                <Trash2 className="w-4 h-4" />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }

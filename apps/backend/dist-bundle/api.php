@@ -5992,6 +5992,10 @@ if ($method === 'GET' && $path === '/admin/intercity-rates') {
             'minMinutes' => $r['minMinutes'] !== null ? (int) $r['minMinutes'] : null,
             'maxMinutes' => $r['maxMinutes'] !== null ? (int) $r['maxMinutes'] : null,
             'note' => $r['note'] ?: null,
+            'windows' => (function () use ($r) {
+                $w = json_decode((string) ($r['windows'] ?? ''), true);
+                return is_array($w) ? array_values($w) : [];
+            })(),
             'isActive' => (bool) (int) $r['isActive'],
         ];
     }, $st->fetchAll()));
@@ -6021,13 +6025,18 @@ if (($method === 'POST' || $method === 'PATCH') && preg_match('#^/admin/intercit
         'minMinutes' => isset($b['minMinutes']) && $b['minMinutes'] !== '' ? (int) $b['minMinutes'] : null,
         'maxMinutes' => isset($b['maxMinutes']) && $b['maxMinutes'] !== '' ? (int) $b['maxMinutes'] : null,
         'note' => trim((string) ($b['note'] ?? '')) ?: null,
+        // [{label, cutoff, delivery}] — when the convoy is collected and when it
+        // arrives. Stored as sent; the app only ever reads it back.
+        'windows' => is_array($b['windows'] ?? null) && $b['windows']
+            ? json_encode(array_values($b['windows']), JSON_UNESCAPED_UNICODE)
+            : null,
         'isActive' => array_key_exists('isActive', $b) ? ((int) !!$b['isActive']) : 1,
     ];
 
     if ($id === null) {
         $id = newId();
-        db()->prepare('INSERT INTO `IntercityRate` (id, fromCity, toCityId, toVillageId, toAreaId, price, minMinutes, maxMinutes, note, isActive, createdAt, updatedAt) VALUES (?,?,?,?,?,?,?,?,?,?,NOW(3),NOW(3))')
-            ->execute([$id, $cols['fromCity'], $cols['toCityId'], $cols['toVillageId'], $cols['toAreaId'], $cols['price'], $cols['minMinutes'], $cols['maxMinutes'], $cols['note'], $cols['isActive']]);
+        db()->prepare('INSERT INTO `IntercityRate` (id, fromCity, toCityId, toVillageId, toAreaId, price, minMinutes, maxMinutes, note, windows, isActive, createdAt, updatedAt) VALUES (?,?,?,?,?,?,?,?,?,?,?,NOW(3),NOW(3))')
+            ->execute([$id, $cols['fromCity'], $cols['toCityId'], $cols['toVillageId'], $cols['toAreaId'], $cols['price'], $cols['minMinutes'], $cols['maxMinutes'], $cols['note'], $cols['windows'], $cols['isActive']]);
         jsonOk(['id' => $id], 201);
     }
 
@@ -7477,18 +7486,32 @@ if (preg_match('#^/zones/villages/([^/]+)/areas$#', $path, $mm) && $method === '
     jsonOk($st->fetchAll());
 }
 /** Area price → Village base price → refuse. Returns [price, source] or null. */
+/** True when this city is configured as an inter-city ORIGIN at all. Lets the
+ *  order paths tell "no route to your area" apart from "an ordinary local
+ *  store", so a local order is never refused by mistake. */
+function intercityOriginExists(string $fromCity): bool {
+    $st = db()->prepare('SELECT 1 FROM `IntercityRate` WHERE isActive = 1 AND fromCity = ? LIMIT 1');
+    $st->execute([trim($fromCity)]);
+    return (bool) $st->fetchColumn();
+}
+
 /**
- * What a delivery FROM another city costs, and how long it takes.
+ * The SURCHARGE for hauling an order in from another city, plus when it runs.
  *
- * The zone tariff prices the customer's address on its own, which is right
- * while every store is in the same town. It cannot say that قنا → قفط costs
- * more than قفط → قفط, nor that قنا → a village inside قفط costs more again:
- * the fee depends on BOTH ends of the trip.
+ * Deliberately additive, not a replacement. Getting an order from قنا to a
+ * village inside قفط is two legs: the قنا → قفط transfer, and then the ordinary
+ * local delivery out to that village — which the zone tariff already prices
+ * correctly and per-area. So the caller adds this on top rather than swapping
+ * the zone fee out, and one قنا → قفط row keeps working as villages are added.
  *
  * Resolution is most-specific-first — area, then village, then the whole city —
- * so one city-wide row covers everything and a single far village can be
- * overridden without touching it. Returns null when the store is local or no
- * rule matches, and the caller falls back to the ordinary zone tariff.
+ * so that single city-wide row covers everything and one awkward village can
+ * still be given its own surcharge. `windows` is inherited from the city-wide
+ * row when a narrower row does not set its own, because the convoy leaves at
+ * the same times regardless of which village it ends at.
+ *
+ * Returns null when the store is local or nothing matches, and the caller is
+ * left with the plain zone tariff.
  */
 function intercityRate(?string $fromCity, ?string $cityId, ?string $villageId, ?string $areaId): ?array {
     $from = trim((string) $fromCity);
@@ -7507,12 +7530,23 @@ function intercityRate(?string $fromCity, ?string $cityId, ?string $villageId, ?
     $r = $st->fetch();
     if (!$r) return null;
 
+    // The convoy leaves at the same times whichever village it ends at, so a
+    // narrower row without its own windows inherits the route's.
+    $windows = json_decode((string) ($r['windows'] ?? ''), true);
+    if (!is_array($windows) || !$windows) {
+        $ws = db()->prepare('SELECT windows FROM `IntercityRate` WHERE isActive = 1 AND fromCity = ? AND toAreaId IS NULL AND toVillageId IS NULL AND windows IS NOT NULL AND windows <> "" LIMIT 1');
+        $ws->execute([$from]);
+        $inherited = json_decode((string) ($ws->fetchColumn() ?: ''), true);
+        $windows = is_array($inherited) ? $inherited : [];
+    }
+
     return [
         'price' => (float) $r['price'],
         'minMinutes' => $r['minMinutes'] !== null ? (int) $r['minMinutes'] : null,
         'maxMinutes' => $r['maxMinutes'] !== null ? (int) $r['maxMinutes'] : null,
         'note' => $r['note'] ?: null,
         'fromCity' => $from,
+        'windows' => array_values($windows),
     ];
 }
 
@@ -7551,13 +7585,20 @@ if ($method === 'POST' && $path === '/zones/quote-delivery') {
     }
     $ic = intercityRate($fromCity, $b['cityId'] ?? null, $b['villageId'] ?? null, $b['areaId'] ?? null);
     if ($ic) {
+        // Two legs, two fees: the local delivery the zone tariff already prices
+        // for this exact area, PLUS the transfer in from the other city. A
+        // village with no local tariff still gets the transfer quoted.
+        $local = $q[0] === 'OK' ? (float) $q[1] : 0.0;
         jsonOk(array_merge($q[2] ?? [], [
-            'price' => $ic['price'],
+            'price' => round($local + $ic['price'], 2),
             'source' => 'INTERCITY',
+            'localFee' => $local,
+            'intercityFee' => $ic['price'],
             'fromCity' => $ic['fromCity'],
             'minMinutes' => $ic['minMinutes'],
             'maxMinutes' => $ic['maxMinutes'],
             'note' => $ic['note'],
+            'windows' => $ic['windows'],
         ]));
     }
 
@@ -7593,6 +7634,10 @@ if ($method === 'GET' && $path === '/intercity-rates') {
             'minMinutes' => $r['minMinutes'] !== null ? (int) $r['minMinutes'] : null,
             'maxMinutes' => $r['maxMinutes'] !== null ? (int) $r['maxMinutes'] : null,
             'note' => $r['note'] ?: null,
+            'windows' => (function () use ($r) {
+                $w = json_decode((string) ($r['windows'] ?? ''), true);
+                return is_array($w) ? array_values($w) : [];
+            })(),
         ];
     }, $st->fetchAll()));
 }
@@ -7945,8 +7990,15 @@ if ($method === 'POST' && $path === '/orders/cart') {
         if ($firstMid !== '') {
             $__cs = db()->prepare('SELECT city FROM `MerchantProfile` WHERE id = ? LIMIT 1');
             $__cs->execute([$firstMid]);
-            $__ic = intercityRate((string) ($__cs->fetchColumn() ?: ''), $b['cityId'] ?? null, $b['villageId'] ?? null, $b['areaId'] ?? null);
-            if ($__ic) $fee = $__ic['price'];
+            $__fromCity = (string) ($__cs->fetchColumn() ?: '');
+            $__ic = intercityRate($__fromCity, $b['cityId'] ?? null, $b['villageId'] ?? null, $b['areaId'] ?? null);
+            // A store in another city with no route configured cannot be
+            // delivered from — better a clear refusal than an order nobody can
+            // fulfil at a price nobody agreed.
+            if (!$__ic && $__fromCity !== '' && intercityOriginExists($__fromCity)) {
+                conflictErr('NO_INTERCITY_ROUTE', 'المتجر ده في ' . $__fromCity . ' ولسه مفيش توصيل لمنطقتك. اختار متجر من مدينتك.');
+            }
+            if ($__ic) $fee = round((float) $fee + $__ic['price'], 2);
         }
     }
     $pm = (string) ($b['paymentMethod'] ?? 'CASH');
@@ -8218,8 +8270,12 @@ if ($method === 'POST' && $path === '/orders') {
         if (!empty($b['merchantId'])) {
             $__cs = db()->prepare('SELECT city FROM `MerchantProfile` WHERE id = ? LIMIT 1');
             $__cs->execute([(string) $b['merchantId']]);
-            $__ic = intercityRate((string) ($__cs->fetchColumn() ?: ''), $cityId, $villageId, $areaId);
-            if ($__ic) $fee = $__ic['price'];
+            $__fromCity = (string) ($__cs->fetchColumn() ?: '');
+            $__ic = intercityRate($__fromCity, $cityId, $villageId, $areaId);
+            if (!$__ic && $__fromCity !== '' && intercityOriginExists($__fromCity)) {
+                conflictErr('NO_INTERCITY_ROUTE', 'المتجر ده في ' . $__fromCity . ' ولسه مفيش توصيل لمنطقتك. اختار متجر من مدينتك.');
+            }
+            if ($__ic) $fee = round((float) $fee + $__ic['price'], 2);
         }
     }
     // Shipping between named regions is priced from the admin route table.

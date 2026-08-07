@@ -54,6 +54,12 @@ MIGRATIONS = [
     # release.
     ("HomeConfig", "spotlightCity", "varchar(120) NULL"),
     ("HomeConfig", "intercityCity", "varchar(120) NULL"),
+    # Collection windows for a city-to-city route, as a JSON array of
+    # {label, cutoff, delivery}. Orders between cities are batched and driven
+    # twice a day, not dispatched one by one, so the customer has to be told
+    # WHEN — a fee on its own is only half the answer. Lives on the city-wide
+    # row; the area rows inherit it.
+    ("IntercityRate", "windows", "longtext NULL"),
 ]
 
 # Tables created if absent.
