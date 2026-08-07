@@ -7932,6 +7932,22 @@ if ($method === 'POST' && $path === '/orders/cart') {
         if ($q[0] === 'INACTIVE') jsonErr('هذه المنطقة غير مفعّلة حالياً. اختر منطقة أخرى.', 400, 'INACTIVE_ZONE');
         if ($q[0] === 'NO_PRICE') jsonErr('لا يوجد سعر توصيل لهذه المنطقة، تواصل مع الدعم', 400, 'NO_DELIVERY_PRICE');
         $fee = (float) $q[1];
+
+        // A store in another city is a different trip. Quoting the inter-city
+        // rate to the customer and then charging the local one at checkout
+        // would be the worst of both, so the same rule applies here. Uses the
+        // first store in the basket — a basket spanning cities is priced by
+        // where it starts.
+        $firstMid = '';
+        foreach ($merchants as $__m) {
+            if (!empty($__m['merchantId'])) { $firstMid = (string) $__m['merchantId']; break; }
+        }
+        if ($firstMid !== '') {
+            $__cs = db()->prepare('SELECT city FROM `MerchantProfile` WHERE id = ? LIMIT 1');
+            $__cs->execute([$firstMid]);
+            $__ic = intercityRate((string) ($__cs->fetchColumn() ?: ''), $b['cityId'] ?? null, $b['villageId'] ?? null, $b['areaId'] ?? null);
+            if ($__ic) $fee = $__ic['price'];
+        }
     }
     $pm = (string) ($b['paymentMethod'] ?? 'CASH');
     if (!in_array($pm, ['CASH', 'VODAFONE_CASH', 'INSTAPAY'], true)) $pm = 'CASH';
@@ -8197,6 +8213,14 @@ if ($method === 'POST' && $path === '/orders') {
         if ($q[0] === 'INACTIVE') jsonErr('هذه المنطقة غير مفعّلة حالياً. اختر منطقة أخرى.', 400, 'INACTIVE_ZONE');
         if ($q[0] === 'NO_PRICE') jsonErr('لا يوجد سعر توصيل لهذه المنطقة، تواصل مع الدعم', 400, 'NO_DELIVERY_PRICE');
         $fee = (float) $q[1];
+
+        // Same rule as the cart: a named store in another city prices the trip.
+        if (!empty($b['merchantId'])) {
+            $__cs = db()->prepare('SELECT city FROM `MerchantProfile` WHERE id = ? LIMIT 1');
+            $__cs->execute([(string) $b['merchantId']]);
+            $__ic = intercityRate((string) ($__cs->fetchColumn() ?: ''), $cityId, $villageId, $areaId);
+            if ($__ic) $fee = $__ic['price'];
+        }
     }
     // Shipping between named regions is priced from the admin route table.
     if ($fee === null && $cat === 'SHIPPING' && !empty($b['fromRegion']) && !empty($b['toRegion'])) {
