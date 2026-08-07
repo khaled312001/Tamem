@@ -24,7 +24,7 @@ export interface DeliveryZoneSelection {
   /** Price returned by /zones/quote-delivery (decimal as number) — null if not yet quoted. */
   deliveryFee: number | null;
   /** Which tier the price came from ('AREA' or 'VILLAGE') — surfaced for debugging only. */
-  priceSource?: 'AREA' | 'VILLAGE';
+  priceSource?: 'AREA' | 'VILLAGE' | 'INTERCITY';
 }
 
 interface ZoneOption {
@@ -35,17 +35,34 @@ interface ZoneOption {
   deliveryPrice?: string | number | null;
 }
 
+interface DeliveryWindow {
+  label: string;
+  cutoff: string;
+  delivery: string;
+}
+
 interface QuoteResponse {
   price: string | number;
   cityName: string;
   villageName: string;
   areaName: string;
-  source: 'AREA' | 'VILLAGE';
+  source: 'AREA' | 'VILLAGE' | 'INTERCITY';
+  /** Only on an INTERCITY quote: the two legs the total is made of, and when
+   *  the convoy runs. Orders from another city are batched, not dispatched one
+   *  by one, so the price alone would not tell the customer what they need. */
+  localFee?: number;
+  intercityFee?: number;
+  fromCity?: string;
+  windows?: DeliveryWindow[];
+  note?: string | null;
 }
 
 interface DeliveryZonePickerProps {
   value: DeliveryZoneSelection | null;
   onChange: (selection: DeliveryZoneSelection | null) => void;
+  /** The store being ordered from. Without it the quote cannot know the order
+   *  crosses cities, and would price it as a local one. */
+  merchantId?: string | null;
   /** Override the heading shown above the three selects. */
   heading?: string;
   /** Hide the price banner — e.g. when caller already shows it in the totals card. */
@@ -66,6 +83,7 @@ interface DeliveryZonePickerProps {
 export function DeliveryZonePicker({
   value,
   onChange,
+  merchantId,
   heading,
   hidePriceBanner,
 }: DeliveryZonePickerProps) {
@@ -120,11 +138,15 @@ export function DeliveryZonePicker({
 
   // ─── Quote delivery once all three picked ──────────────────────────────
   const [quoteError, setQuoteError] = useState<string | null>(null);
+  const [quote, setQuote] = useState<QuoteResponse | null>(null);
   const quoteMut = useMutation({
     mutationFn: (ids: { cityId: string; villageId: string; areaId: string }) =>
-      api.raw.post('/zones/quote-delivery', ids).then((r) => r.data.data as QuoteResponse),
+      api.raw
+        .post('/zones/quote-delivery', merchantId ? { ...ids, merchantId } : ids)
+        .then((r) => r.data.data as QuoteResponse),
     onSuccess: (q) => {
       setQuoteError(null);
+      setQuote(q);
       if (!value) return;
       const price = typeof q.price === 'string' ? Number(q.price) : q.price;
       // Avoid an infinite render loop — only push back if anything actually
@@ -268,11 +290,36 @@ export function DeliveryZonePicker({
             </Text>
           </View>
         ) : value?.deliveryFee != null ? (
-          <View style={styles.priceBanner}>
-            <Truck size={16} color={colors.brand.red} />
-            <Text style={styles.priceLabel}>سعر التوصيل:</Text>
-            <View style={{ flex: 1 }} />
-            <MoneyText amount={value.deliveryFee} size="md" tone="brand" />
+          <View>
+            <View style={styles.priceBanner}>
+              <Truck size={16} color={colors.brand.red} />
+              <Text style={styles.priceLabel}>سعر التوصيل:</Text>
+              <View style={{ flex: 1 }} />
+              <MoneyText amount={value.deliveryFee} size="md" tone="brand" />
+            </View>
+
+            {/* An order coming in from another city is two legs and a fixed
+                departure time. Showing only the total would leave the customer
+                to discover both at checkout. */}
+            {quote?.source === 'INTERCITY' && (
+              <View style={styles.interWrap}>
+                <Text style={styles.interSplit}>
+                  توصيل داخل {quote.cityName}: {quote.localFee ?? 0} ج.م + نقل من {quote.fromCity}:{' '}
+                  {quote.intercityFee ?? 0} ج.م
+                </Text>
+                {(quote.windows?.length ?? 0) > 0 && (
+                  <>
+                    <Text style={styles.interTitle}>مواعيد الشحن من {quote.fromCity}</Text>
+                    {quote.windows!.map((w, i) => (
+                      <Text key={i} style={styles.interWindow}>
+                        • {w.label}: اطلب قبل {w.cutoff} — يوصلك حوالي {w.delivery}
+                      </Text>
+                    ))}
+                  </>
+                )}
+                {!!quote.note && <Text style={styles.interNote}>{quote.note}</Text>}
+              </View>
+            )}
           </View>
         ) : null
       ) : null}
@@ -490,6 +537,44 @@ const styles = StyleSheet.create({
     fontSize: fontSizes.sm,
     color: colors.ink,
     textAlign: 'right',
+  },
+  interWrap: {
+    marginTop: spacing.xs,
+    backgroundColor: '#FFF7ED',
+    borderRadius: radii.md,
+    borderWidth: 1,
+    borderColor: '#F5D8B4',
+    padding: spacing.sm,
+    gap: 3,
+  },
+  interSplit: {
+    fontSize: 11.5,
+    lineHeight: 18,
+    color: colors.brand.gray,
+    fontFamily: fontFamilies.bodyBold,
+    textAlign: 'auto',
+  },
+  interTitle: {
+    marginTop: 4,
+    fontSize: 12,
+    color: colors.brand.dark,
+    fontFamily: fontFamilies.bodyExtraBold,
+    textAlign: 'auto',
+  },
+  interWindow: {
+    fontSize: 11.5,
+    lineHeight: 18,
+    color: colors.brand.gray,
+    fontFamily: fontFamilies.body,
+    textAlign: 'auto',
+  },
+  interNote: {
+    marginTop: 3,
+    fontSize: 11,
+    lineHeight: 17,
+    color: colors.brand.gray,
+    fontFamily: fontFamilies.body,
+    textAlign: 'auto',
   },
   priceBanner: {
     flexDirection: 'row',

@@ -313,7 +313,13 @@ export function CartCheckoutScreen() {
 
         {/* ─────── Shared address ─────── */}
         <Text style={styles.sectionTitle}>عنوان التوصيل</Text>
-        <AddressPicker value={address} onChange={setAddress} />
+        {/* The first store in the basket decides the route: a basket spanning
+            cities is priced from where it starts, same rule the server uses. */}
+        <AddressPicker
+          merchantId={groups[0]?.merchantId ?? null}
+          value={address}
+          onChange={setAddress}
+        />
 
         {/* ─────── Schedule (hidden for now — SCHEDULING_ENABLED) ─────── */}
         {SCHEDULING_ENABLED && (
