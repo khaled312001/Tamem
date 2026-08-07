@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Eye, EyeOff, Lock, MapPin, Plus, Save, Sliders, User as UserIcon, X } from 'lucide-react';
 import { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { toast } from 'sonner';
 
 import { Button } from '../components/ui/Button.js';
@@ -15,6 +16,68 @@ type TabKey = 'account' | 'system';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type SettingRow = any;
+
+/**
+ * Arabic labels for the rows that fall through to "إعدادات متقدمة".
+ *
+ * They used to render with their raw database key as the label —
+ * `notification_templates`, `__audit` — which told an admin nothing about what
+ * they were looking at.
+ *
+ * `managedAt` matters more than the label: several of these hold JSON that a
+ * dedicated screen writes. Editing them here through a single-line text box is
+ * how you break every WhatsApp message with one stray keystroke, so those are
+ * shown read-only with a link to the screen that owns them.
+ */
+const ADVANCED_LABELS: Record<
+  string,
+  { label: string; hint?: string; managedAt?: { to: string; name: string }; internal?: boolean }
+> = {
+  __audit: {
+    label: 'سجل داخلي',
+    hint: 'بيتكتب تلقائياً — متعدلوش',
+    internal: true,
+  },
+  default_commission_pct: {
+    label: 'نسبة العمولة الافتراضية',
+    hint: 'بتتطبق على أي تاجر ملهوش نسبة خاصة (%)',
+  },
+  easykash_payment_options: {
+    label: 'وسائل الدفع في EasyKash',
+    managedAt: { to: '/payment-gateway', name: 'بوابة الدفع' },
+  },
+  notification_templates: {
+    label: 'نصوص رسائل الواتساب',
+    managedAt: { to: '/whatsapp/templates', name: 'قوالب الإشعارات' },
+  },
+  notification_recipients: {
+    label: 'مستقبلو الإشعارات',
+    managedAt: { to: '/whatsapp/templates', name: 'قوالب الإشعارات' },
+  },
+  notification_extra_recipients: {
+    label: 'مستقبلون إضافيون للإشعارات',
+    managedAt: { to: '/whatsapp/templates', name: 'قوالب الإشعارات' },
+  },
+  whatsapp_order_group: {
+    label: 'جروب الواتساب اللي بتوصله الطلبات',
+    managedAt: { to: '/whatsapp/templates', name: 'قوالب الإشعارات' },
+  },
+};
+
+/** Landing-page copy lives on its own screen; these keys are generated per
+ *  block (service1Title, stat1Value …) so they are matched by shape. */
+function siteCopyLabel(key: string): string | null {
+  let m = /^service(\d+)(Title|Desc|Icon)$/.exec(key);
+  if (m) {
+    const what = m[2] === 'Title' ? 'عنوان' : m[2] === 'Desc' ? 'وصف' : 'أيقونة';
+    return `${what} الخدمة رقم ${m[1]} في الموقع`;
+  }
+  m = /^stat(\d+)(Value|Label)$/.exec(key);
+  if (m) {
+    return `${m[2] === 'Value' ? 'رقم' : 'عنوان'} الإحصائية رقم ${m[1]} في الموقع`;
+  }
+  return null;
+}
 
 // All known system settings — typed, labeled, with sensible inputs.
 // Anything else from the backend renders as a generic key/value text input below.
@@ -436,23 +499,44 @@ function SystemSection() {
           <div className="pt-4 border-t border-border">
             <div className="text-xs text-muted-foreground mb-3">إعدادات متقدمة</div>
           </div>
-          {unknownSettings.map((s) => (
-            <Field key={s.key} label={s.key} hint={s.description ?? undefined}>
-              <div className="flex gap-2">
-                <Input
-                  value={draftScalar[s.key] ?? ''}
-                  onChange={(e) => onScalarChange(s.key, e.target.value)}
-                />
-                <Button
-                  onClick={() => saveScalar(s.key, 'text')}
-                  disabled={mut.isPending || !dirty[s.key]}
-                  variant={dirty[s.key] ? 'primary' : 'outline'}
-                >
-                  <Save className="w-4 h-4" />
-                </Button>
-              </div>
-            </Field>
-          ))}
+          {unknownSettings.map((s) => {
+            const meta = ADVANCED_LABELS[s.key];
+            const siteLabel = siteCopyLabel(s.key);
+            const label = meta?.label ?? siteLabel ?? s.key;
+            const hint = meta?.hint ?? s.description ?? (label === s.key ? undefined : s.key);
+            const locked = !!meta?.managedAt || !!meta?.internal;
+
+            return (
+              <Field key={s.key} label={label} hint={hint}>
+                <div className="flex gap-2">
+                  <Input
+                    value={draftScalar[s.key] ?? ''}
+                    onChange={(e) => onScalarChange(s.key, e.target.value)}
+                    disabled={locked}
+                    className={locked ? 'opacity-60' : undefined}
+                  />
+                  {locked ? (
+                    meta?.managedAt ? (
+                      <Link
+                        to={meta.managedAt.to}
+                        className="whitespace-nowrap rounded-lg border border-input px-3 py-2 text-xs font-bold text-brand-red hover:bg-muted"
+                      >
+                        افتح {meta.managedAt.name}
+                      </Link>
+                    ) : null
+                  ) : (
+                    <Button
+                      onClick={() => saveScalar(s.key, 'text')}
+                      disabled={mut.isPending || !dirty[s.key]}
+                      variant={dirty[s.key] ? 'primary' : 'outline'}
+                    >
+                      <Save className="w-4 h-4" />
+                    </Button>
+                  )}
+                </div>
+              </Field>
+            );
+          })}
         </>
       )}
     </div>
