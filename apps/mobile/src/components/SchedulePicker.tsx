@@ -3,6 +3,7 @@ import { useMemo, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { BottomSheet, Button } from './ui';
+import { TimeDial } from './TimeDial';
 import { haptic } from '../lib/haptics';
 import { colors, palette, radii, spacing, typography } from '../theme/tokens';
 
@@ -40,18 +41,9 @@ const MONTH_LABELS = [
   'ديسمبر',
 ];
 
-// Half-hour slots 10:00 → 22:00 inclusive.
-const SLOTS: Array<{ h: number; m: number }> = [];
-for (let h = 10; h <= 22; h++) {
-  SLOTS.push({ h, m: 0 });
-  if (h < 22) SLOTS.push({ h, m: 30 });
-}
-
-function formatTime(h: number, m: number): string {
-  const period = h >= 12 ? 'م' : 'ص';
-  const display = h === 0 ? 12 : h > 12 ? h - 12 : h;
-  return `${display}:${m.toString().padStart(2, '0')} ${period}`;
-}
+/** Service window. The dial greys out everything outside it. */
+const OPEN_HOUR = 10;
+const CLOSE_HOUR = 22;
 
 function isToday(d: Date): boolean {
   const now = new Date();
@@ -207,45 +199,27 @@ export function SchedulePicker({ visible, onClose, onConfirm, initial }: Schedul
         })}
       </ScrollView>
 
-      {/* Time slot chips */}
+      {/* Time — a dial rather than 25 chips. Hours already gone are drawn dim
+          and refuse the tap, which is the one thing the chip grid got right. */}
       {selectedDay && (
         <>
           <Text style={[typography.captionBold, styles.sectionLabel]}>اختر الميعاد</Text>
-          <View style={styles.slotGrid}>
-            {SLOTS.map((s) => {
-              const slotDate = new Date(selectedDay);
-              slotDate.setHours(s.h, s.m, 0, 0);
-              const inPast = slotDate.getTime() < Date.now() + 30 * 60 * 1000;
-              const selected = !asap && slot?.h === s.h && slot?.m === s.m;
-              const label = formatTime(s.h, s.m);
-              return (
-                <Pressable
-                  key={`${s.h}:${s.m}`}
-                  onPress={() => {
-                    if (inPast) return;
-                    haptic.tap();
-                    setAsap(false);
-                    setSlot(s);
-                  }}
-                  disabled={inPast}
-                  style={[
-                    styles.slotChip,
-                    selected && {
-                      backgroundColor: palette.red[500],
-                      borderColor: palette.red[500],
-                    },
-                    inPast && { opacity: 0.35 },
-                  ]}
-                >
-                  <Text
-                    style={[typography.smallBold, { color: selected ? colors.white : colors.ink }]}
-                  >
-                    {label}
-                  </Text>
-                </Pressable>
-              );
-            })}
-          </View>
+          <TimeDial
+            value={slot ?? { h: 12, m: 0 }}
+            onChange={(t) => {
+              haptic.tap();
+              setAsap(false);
+              setSlot(t);
+            }}
+            isHourEnabled={(h24) => {
+              // Same rule the chips used: at least half an hour out, and inside
+              // the service window.
+              if (h24 < OPEN_HOUR || h24 > CLOSE_HOUR) return false;
+              const d = new Date(selectedDay);
+              d.setHours(h24, 59, 0, 0);
+              return d.getTime() >= Date.now() + 30 * 60 * 1000;
+            }}
+          />
         </>
       )}
 

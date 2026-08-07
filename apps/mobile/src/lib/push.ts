@@ -131,6 +131,10 @@ export async function clearAppBadge(): Promise<void> {
  *   { type: 'promo' }             → Notifications tab
  */
 const HANDLED_RESP_KEY = '@tamem/handled-notif-id';
+/** How recent a cold-start notification response has to be to count as the tap
+ *  that opened the app. Generous enough to cover a slow launch, far short of
+ *  the "last tap ever" the OS otherwise keeps handing back. */
+const COLD_TAP_MAX_AGE_MS = 60_000;
 
 /** A key that is STABLE across launches for the same tapped notification, even
  *  when expo doesn't populate a request identifier — so a plain app launch can
@@ -156,6 +160,21 @@ export function usePushTapNavigation(): void {
     // Home. We only navigate the FIRST time we ever see a given response key.
     void Notifications.getLastNotificationResponseAsync().then(async (resp) => {
       if (!resp) return; // launched normally (icon) → stay on Home
+
+      /*
+       * Freshness is the guard that actually holds. The stored-key check below
+       * depends on the response carrying a stable identifier across launches,
+       * and when it does not, every plain open looked like a brand new tap and
+       * dumped the user on Notifications instead of Home — which is exactly
+       * what people were seeing after locking the phone.
+       *
+       * A tap that launched the app is seconds old by definition. Anything
+       * older is the OS handing back an ancient response on a normal launch,
+       * so it is ignored no matter what its key says.
+       */
+      const when = Number((resp.notification as { date?: number }).date ?? 0);
+      if (when > 0 && Date.now() - when > COLD_TAP_MAX_AGE_MS) return;
+
       const key = responseKey(resp);
       const alreadyHandled = await AsyncStorage.getItem(HANDLED_RESP_KEY);
       if (key === alreadyHandled) return; // already consumed → a plain launch, stay on Home

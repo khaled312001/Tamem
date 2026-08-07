@@ -34,7 +34,7 @@ import {
   VolumeX,
   X,
 } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 
 import { Logo } from '../components/Logo.js';
@@ -196,6 +196,12 @@ export function DashboardLayout() {
     permissions?: string[] | null;
   } | null;
   const sections = visibleSections(authUser?.role, authUser?.permissions);
+  // Flat list of every visible destination, so each row can tell whether a
+  // deeper row owns the page — see the note in NavItemLink.
+  const allNavPaths = useMemo(
+    () => sections.flatMap((sec) => sec.items.map((i) => i.to)),
+    [sections],
+  );
   const canSee = (perm: string): boolean =>
     authUser?.role === 'SUPER_ADMIN' ||
     authUser?.permissions == null ||
@@ -355,7 +361,13 @@ export function DashboardLayout() {
                   <div className="hidden md:block mx-3 mb-1 border-t border-border/50" />
                 )}
                 {section.items.map((item) => (
-                  <NavItemLink key={item.to} item={item} collapsed={collapsed} counts={counts} />
+                  <NavItemLink
+                    key={item.to}
+                    item={item}
+                    collapsed={collapsed}
+                    counts={counts}
+                    allPaths={allNavPaths}
+                  />
                 ))}
               </div>
             ))}
@@ -447,17 +459,47 @@ function NavItemLink({
   item,
   collapsed,
   counts,
+  allPaths,
 }: {
   item: NavItem;
   collapsed: boolean;
   counts: { orders: number; alerts: number; merchantRequests: number };
+  /** Every path in the sidebar, so an entry can tell whether a deeper entry
+   *  owns the current page. */
+  allPaths: string[];
 }) {
+  const { pathname } = useLocation();
+
+  /*
+   * Most specific wins.
+   *
+   * NavLink matches by prefix, so adding /pricing/intercity lit up /pricing at
+   * the same time — two rows highlighted for one page. Marking the parent `end`
+   * fixes that pair but breaks detail pages, where /merchants/:id should still
+   * highlight المتاجر.
+   *
+   * So: an entry is active on an exact match, or on a prefix match when no
+   * OTHER entry is a longer prefix of the same URL. That is right for both
+   * shapes at once and needs no per-item flags.
+   */
+  const isActive = (() => {
+    if (pathname === item.to) return true;
+    if (item.end) return false;
+    if (!pathname.startsWith(item.to.endsWith('/') ? item.to : item.to + '/')) return false;
+    return !allPaths.some(
+      (p) =>
+        p !== item.to &&
+        p.length > item.to.length &&
+        (pathname === p || pathname.startsWith(p + '/')),
+    );
+  })();
+
   return (
     <NavLink
       to={item.to}
       end={item.end}
       title={collapsed ? item.label : undefined}
-      className={({ isActive }) =>
+      className={() =>
         cn(
           'group relative flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm overflow-hidden',
           'transition-all duration-200',
@@ -468,7 +510,7 @@ function NavItemLink({
         )
       }
     >
-      {({ isActive }) => (
+      {() => (
         <>
           {isActive && (
             <span className="absolute inset-0 bg-gradient-to-l from-brand-red via-[#d12818] to-brand-orange" />

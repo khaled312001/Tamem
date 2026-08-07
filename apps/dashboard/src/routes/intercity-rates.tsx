@@ -22,6 +22,7 @@ import { ConfirmDialog } from '../components/ui/ConfirmDialog.js';
 import { Dialog } from '../components/ui/Dialog.js';
 import { Field, Input } from '../components/ui/Input.js';
 import { CardSkeleton, EmptyState } from '../components/ui/Skeleton.js';
+import { TimeDial } from '../components/ui/TimeDial.js';
 import { api } from '../lib/api.js';
 
 interface Window {
@@ -481,38 +482,34 @@ function WindowsEditor({ value, onChange }: { value: Window[]; onChange: (v: Win
       ) : (
         <div className="space-y-2">
           {value.map((w, i) => (
-            <div key={i} className="grid grid-cols-[1fr_auto_auto_auto] gap-2 items-center">
-              <Input
-                value={w.label}
-                onChange={(e) => patch(i, { label: e.target.value })}
-                placeholder="مثال: رحلة الظهر"
-              />
-              <label className="text-[11px] text-muted-foreground whitespace-nowrap">
-                آخر طلب
-                <input
-                  type="time"
-                  value={w.cutoff}
-                  onChange={(e) => patch(i, { cutoff: e.target.value })}
-                  className="block px-2 py-1.5 rounded-lg border border-input bg-background text-sm"
+            <div key={i} className="rounded-xl border border-border bg-card p-3 space-y-3">
+              <div className="flex items-center gap-2">
+                <Input
+                  value={w.label}
+                  onChange={(e) => patch(i, { label: e.target.value })}
+                  placeholder="مثال: رحلة الظهر"
                 />
-              </label>
-              <label className="text-[11px] text-muted-foreground whitespace-nowrap">
-                التسليم
-                <input
-                  type="time"
-                  value={w.delivery}
-                  onChange={(e) => patch(i, { delivery: e.target.value })}
-                  className="block px-2 py-1.5 rounded-lg border border-input bg-background text-sm"
+                <button
+                  type="button"
+                  onClick={() => onChange(value.filter((_, j) => j !== i))}
+                  className="text-red-600 p-1.5 rounded hover:bg-red-50 shrink-0"
+                  aria-label="حذف الرحلة"
+                >
+                  <Trash2 className="w-4 h-4" />
+                </button>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <TimeDial
+                  label="آخر موعد للطلب"
+                  value={w.cutoff || '11:00'}
+                  onChange={(cutoff) => patch(i, { cutoff })}
                 />
-              </label>
-              <button
-                type="button"
-                onClick={() => onChange(value.filter((_, j) => j !== i))}
-                className="text-red-600 p-1.5 rounded hover:bg-red-50"
-                aria-label="حذف الرحلة"
-              >
-                <Trash2 className="w-4 h-4" />
-              </button>
+                <TimeDial
+                  label="موعد التسليم"
+                  value={w.delivery || '14:00'}
+                  onChange={(delivery) => patch(i, { delivery })}
+                />
+              </div>
             </div>
           ))}
         </div>
