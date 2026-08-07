@@ -195,8 +195,23 @@ export function DynamicServiceFlowScreen() {
     await createOrder.mutateAsync(payload);
   };
 
-  const basePrice = estimatedPrice ?? Number(service.basePrice ?? 0);
-  const finalPrice = coupon ? coupon.finalAmount : basePrice;
+  /*
+   * Two different numbers used to sit on this one screen and neither was the
+   * price: the zone picker showed the delivery fee (20), while the card below
+   * showed Service.basePrice (25) labelled "سعر الخدمة" and then repeated it as
+   * "الإجمالي".
+   *
+   * For a QUOTE service basePrice is not a price at all — the order is priced
+   * by an admin after review, which is what the live orders show: they carry
+   * the zone fee plus a subtotal set later, and never 25. So a QUOTE service
+   * states what is actually known (the delivery fee) and says plainly that the
+   * rest comes after review, instead of inventing a total.
+   */
+  const isQuoted = service.pricingMethod === 'QUOTE' && estimatedPrice === null;
+  const servicePrice = estimatedPrice ?? (isQuoted ? 0 : Number(service.basePrice ?? 0));
+  const zoneFee = Number(address?.zone?.deliveryFee ?? 0) || 0;
+  const basePrice = servicePrice;
+  const finalPrice = (coupon ? coupon.finalAmount : servicePrice) + zoneFee;
 
   return (
     <SafeAreaView edges={['top']} style={styles.container}>
@@ -279,12 +294,20 @@ export function DynamicServiceFlowScreen() {
         />
 
         {/* ─────── Price breakdown ─────── */}
-        {basePrice > 0 ? (
+        {basePrice > 0 || zoneFee > 0 ? (
           <View style={[styles.priceCard, shadows.sm]}>
-            <View style={styles.priceLine}>
-              <Text style={styles.priceLineLabel}>سعر الخدمة</Text>
-              <MoneyText amount={basePrice} size="sm" />
-            </View>
+            {basePrice > 0 ? (
+              <View style={styles.priceLine}>
+                <Text style={styles.priceLineLabel}>سعر الخدمة</Text>
+                <MoneyText amount={basePrice} size="sm" />
+              </View>
+            ) : null}
+            {zoneFee > 0 ? (
+              <View style={styles.priceLine}>
+                <Text style={styles.priceLineLabel}>رسوم التوصيل</Text>
+                <MoneyText amount={zoneFee} size="sm" />
+              </View>
+            ) : null}
             {coupon ? (
               <View style={styles.priceLine}>
                 <Text style={styles.priceLineDiscountLabel}>خصم الكوبون ({coupon.code})</Text>
@@ -292,10 +315,22 @@ export function DynamicServiceFlowScreen() {
               </View>
             ) : null}
             <View style={styles.priceDivider} />
-            <View style={styles.priceLine}>
-              <Text style={styles.priceTotalLabel}>الإجمالي</Text>
-              <MoneyText amount={finalPrice} size="lg" tone="brand" />
-            </View>
+            {isQuoted ? (
+              <>
+                <View style={styles.priceLine}>
+                  <Text style={styles.priceTotalLabel}>المدفوع الآن</Text>
+                  <MoneyText amount={finalPrice} size="lg" tone="brand" />
+                </View>
+                <Text style={styles.priceNote}>
+                  قيمة الطلب نفسه هتتحدد بعد المراجعة وهنبعتهالك قبل ما نبدأ.
+                </Text>
+              </>
+            ) : (
+              <View style={styles.priceLine}>
+                <Text style={styles.priceTotalLabel}>الإجمالي</Text>
+                <MoneyText amount={finalPrice} size="lg" tone="brand" />
+              </View>
+            )}
           </View>
         ) : null}
 
@@ -393,6 +428,14 @@ const styles = StyleSheet.create({
     fontFamily: fontFamilies.bodyExtraBold,
     color: colors.success,
     fontSize: fontSizes.sm,
+  },
+  priceNote: {
+    marginTop: spacing.xs,
+    fontSize: 11.5,
+    lineHeight: 18,
+    color: colors.text.muted,
+    fontFamily: fontFamilies.body,
+    textAlign: 'auto',
   },
   priceDivider: {
     height: 1,
