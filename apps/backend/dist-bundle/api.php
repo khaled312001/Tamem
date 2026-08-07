@@ -1382,17 +1382,45 @@ function orderDetailBlocks(array $o): array {
     }
     $b['items'] = $items;
 
-    // Store the order belongs to, for the {{merchantName}} template variable.
-    // Empty for free-text orders that aren't tied to a merchant — the templates
-    // drop empty lines, so nothing renders in that case.
+    /*
+     * Store(s) the order belongs to, for the {{merchantName}} variable.
+     *
+     * Order.merchantId is only set when the whole order came from ONE store.
+     * A basket spanning stores deliberately stays a single order with the
+     * breakdown on OrderItem.merchantId (see the note in /orders/cart) — so
+     * reading only the order-level column left merchantName empty and the
+     * templates, which drop label-only lines, silently deleted "🏪 المتجر"
+     * from every such message. That was 49 of 105 live orders: the group and
+     * the driver were told what to deliver and never from where.
+     *
+     * So: fall back to the DISTINCT stores across the items, in the order they
+     * appear on the order, and list them all.
+     */
     $b['merchantName'] = '';
-    if (!empty($o['merchantId'])) {
-        try {
+    try {
+        if (!empty($o['merchantId'])) {
             $ms = db()->prepare('SELECT storeNameAr FROM `MerchantProfile` WHERE id = ? LIMIT 1');
             $ms->execute([$o['merchantId']]);
             $b['merchantName'] = trim((string) ($ms->fetchColumn() ?: ''));
-        } catch (Throwable $e) { /* leave blank */ }
-    }
+        }
+        if ($b['merchantName'] === '' && !empty($o['id'])) {
+            $ms = db()->prepare(
+                'SELECT DISTINCT mp.storeNameAr
+                 FROM `OrderItem` oi
+                 JOIN `MerchantProfile` mp ON mp.id = oi.merchantId
+                 WHERE oi.orderId = ? AND oi.merchantId IS NOT NULL
+                 ORDER BY mp.storeNameAr ASC'
+            );
+            $ms->execute([$o['id']]);
+            $names = array_values(array_filter(array_map(
+                fn($r) => trim((string) $r['storeNameAr']),
+                $ms->fetchAll()
+            )));
+            // More than one store is normal here, and the recipient needs to
+            // know it is a multi-stop trip.
+            $b['merchantName'] = implode(' + ', $names);
+        }
+    } catch (Throwable $e) { /* leave blank */ }
 
     // Locations — attach a Google-Maps pin from lat/lng where we have one.
     $pin = static fn ($lat, $lng) => ($lat !== null && $lng !== null && $lat !== '' && $lng !== '')
@@ -1428,6 +1456,106 @@ function orderDetailBlocks(array $o): array {
     $b['pay'] = trim(waPayMethodAr($o['paymentMethod'] ?? null) . (!empty($o['paymentStatus']) ? ' — ' . waPayStatusAr($o['paymentStatus']) : ''));
     return $b;
 }
+/**
+ * The order, as an email.
+ *
+ * Until now the only emails this system sent were welcome / password-reset /
+ * new-login: a customer had a WhatsApp message and an in-app push, and nothing
+ * they could keep, forward or print. This is the record — who the order is
+ * from, what is in it, what each line cost, the delivery fee, and the total.
+ *
+ * Everything comes out of the context notifyOrderParties already built, so the
+ * email can never disagree with the WhatsApp message about the same order.
+ */
+function orderEmailHtml(array $o, array $ctx, string $status): string {
+    $esc = fn($v) => htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8');
+    $no = $esc($o['orderNumber'] ?? '');
+
+    $row = function (string $label, ?string $value, bool $strong = false) use ($esc): string {
+        $v = trim((string) $value);
+        if ($v === '') return '';
+        $w = $strong ? '800' : '400';
+        $c = $strong ? '#111' : '#444';
+        return '<tr>'
+            . '<td style="padding:7px 0;color:#777;font-size:13px;white-space:nowrap">' . $esc($label) . '</td>'
+            . '<td style="padding:7px 0;color:' . $c . ';font-size:13px;font-weight:' . $w . ';text-align:left" dir="auto">'
+            . nl2br($esc($v)) . '</td></tr>';
+    };
+
+    // Item lines are already formatted for WhatsApp (name ×qty — price, with
+    // size/extras underneath). Keeping that shape means one formatter, not two
+    // that drift apart.
+    $itemsHtml = '';
+    $items = trim((string) ($ctx['items'] ?? ''));
+    if ($items !== '') {
+        $itemsHtml = '<div style="margin:18px 0 6px;font-weight:800;font-size:14px">🛒 تفاصيل الطلب</div>'
+            . '<div style="background:#faf7f5;border:1px solid #eee;border-radius:10px;padding:12px;font-size:13px;line-height:1.9;color:#333" dir="auto">'
+            . nl2br($esc($items)) . '</div>';
+    }
+
+    $money = '<table style="width:100%;border-collapse:collapse;margin-top:6px">'
+        . $row('قيمة الطلب', isset($o['merchantSubtotal']) ? waMoney($o['merchantSubtotal']) : null)
+        . $row('رسوم التوصيل', isset($o['deliveryFee']) ? waMoney($o['deliveryFee']) : null)
+        . (!empty($o['discountAmount']) && (float) $o['discountAmount'] > 0
+            ? $row('الخصم', '-' . waMoney($o['discountAmount']) . (!empty($o['couponCode']) ? ' (كوبون ' . $o['couponCode'] . ')' : ''))
+            : '')
+        . (!empty($o['walletUsed']) && (float) $o['walletUsed'] > 0
+            ? $row('من المحفظة', '-' . waMoney($o['walletUsed'])) : '')
+        . $row('الإجمالي', (string) ($ctx['price'] ?? ''), true)
+        . $row('الدفع', (string) ($ctx['payment'] ?? ''))
+        . '</table>';
+
+    $head = '<table style="width:100%;border-collapse:collapse">'
+        . $row('رقم الطلب', '#' . ($o['orderNumber'] ?? ''), true)
+        . $row('الخدمة', (string) ($ctx['serviceName'] ?? ''))
+        . $row('المتجر', (string) ($ctx['merchantName'] ?? ''), true)
+        . $row('العميل', (string) ($ctx['customerName'] ?? ''))
+        . $row('الهاتف', (string) ($ctx['customerPhone'] ?? ''))
+        . $row('عنوان التوصيل', trim((string) ($o['deliveryAddress'] ?? '')))
+        . $row('المندوب', (string) ($ctx['driverName'] ?? ''))
+        . $row('تفاصيل الشحن', (string) ($ctx['shipping'] ?? ''))
+        . '</table>';
+
+    $note = [
+        'PRICED' => 'تم تسعير طلبك — راجع التفاصيل ووافق من التطبيق.',
+        'ACCEPTED' => 'تم قبول طلبك وجارٍ تجهيزه.',
+        'DELIVERED' => 'تم توصيل طلبك بنجاح — شكراً لاختيارك تميم 🌟',
+        'COMPLETED' => 'تم توصيل طلبك بنجاح — شكراً لاختيارك تميم 🌟',
+        'CANCELLED' => 'نأسف، تم إلغاء هذا الطلب.',
+    ][$status] ?? 'استلمنا طلبك وجارٍ مراجعته.';
+
+    return emailShell(
+        'طلبك #' . $no,
+        '<p style="font-size:14px;color:#333;margin:0 0 14px">' . $esc($note) . '</p>'
+        . $head
+        . $itemsHtml
+        . '<div style="margin:18px 0 6px;font-weight:800;font-size:14px">💰 الحساب</div>'
+        . $money
+        . '<p style="color:#888;font-size:12px;margin-top:18px">لو عندك أي استفسار، رد على الرسالة دي أو كلّمنا من التطبيق.</p>'
+    );
+}
+
+/** Same order, as plain text — for clients that refuse HTML. */
+function orderEmailText(array $o, array $ctx): string {
+    $ln = [];
+    $ln[] = 'طلب رقم #' . ($o['orderNumber'] ?? '');
+    foreach ([
+        'الخدمة' => $ctx['serviceName'] ?? '',
+        'المتجر' => $ctx['merchantName'] ?? '',
+        'العميل' => $ctx['customerName'] ?? '',
+        'الهاتف' => $ctx['customerPhone'] ?? '',
+        'عنوان التوصيل' => trim((string) ($o['deliveryAddress'] ?? '')),
+        'المندوب' => $ctx['driverName'] ?? '',
+    ] as $k => $v) {
+        if (trim((string) $v) !== '') $ln[] = "$k: $v";
+    }
+    if (trim((string) ($ctx['items'] ?? '')) !== '') { $ln[] = ''; $ln[] = 'المطلوب:'; $ln[] = (string) $ctx['items']; }
+    if (trim((string) ($ctx['priceBlock'] ?? '')) !== '') { $ln[] = ''; $ln[] = str_replace('*', '', (string) $ctx['priceBlock']); }
+    if (trim((string) ($ctx['payment'] ?? '')) !== '') $ln[] = 'الدفع: ' . $ctx['payment'];
+    return implode("
+", $ln);
+}
+
 function notifyOrderParties(string $orderId, string $status, ?string $reason = null): void {
     // The order is being handled now → clear its "new order" alert from the centre.
     resolveOrderAlerts($orderId);
@@ -1480,6 +1608,11 @@ function notifyOrderParties(string $orderId, string $status, ?string $reason = n
         // samples, so the live preview renders in full. Multi-line composites
         // (items / locations / price breakdown / customer recap) are single
         // variables too, each empty when absent so its labelled line drops.
+        // The store. This was computed into $d but never copied here, so
+        // {{merchantName}} resolved to nothing on EVERY message and
+        // notifRender — which drops label-only lines — deleted "🏪 المتجر"
+        // from the group, supervisor and driver templates alike.
+        $ctx['merchantName'] = (string) ($d['merchantName'] ?? '');
         $ctx['items']       = (string) $d['items'];       // bullet list / delivery notes
         $ctx['shipping']    = (string) $d['shipping'];    // شحن specifics
         $ctx['locations']   = (string) $d['locations'];   // 📍 استلام + 🏁 توصيل + خرائط
@@ -1514,6 +1647,29 @@ function notifyOrderParties(string $orderId, string $status, ?string $reason = n
         // ── CUSTOMER ──
         $custMsg = $render('CUSTOMER');
         if ($custMsg && !empty($o['cust_phone'])) { waEnqueue($o['cust_phone'], $custMsg); $sent = true; }
+
+        /*
+         * The order as an email, at the stages worth keeping a record of.
+         * Deliberately NOT every status: a mail per transition would be six
+         * emails a delivery and would train people to ignore all of them.
+         * Skipped silently when the customer never gave an address.
+         */
+        if (in_array($status, ['PRICED', 'ACCEPTED', 'DELIVERED', 'COMPLETED', 'CANCELLED'], true)
+            && !empty($o['customerId'])) {
+            $subj = [
+                'PRICED' => 'تم تسعير طلبك',
+                'ACCEPTED' => 'تم قبول طلبك',
+                'DELIVERED' => 'تم توصيل طلبك',
+                'COMPLETED' => 'تم توصيل طلبك',
+                'CANCELLED' => 'تم إلغاء طلبك',
+            ][$status] ?? 'تحديث على طلبك';
+            mailToUser(
+                (string) $o['customerId'],
+                $subj . " — تميم #{$no}",
+                orderEmailText($o, $ctx),
+                orderEmailHtml($o, $ctx, $status)
+            );
+        }
         // In-app notification + FCM push to the customer for every stage, so it
         // lands in the app's notifications page AND arrives while the app is
         // closed — carrying orderId so the tap opens this order's tracking.
@@ -1721,6 +1877,9 @@ function notifVariables(): array {
         'orderNumber' => 'رقم الطلب', 'customerName' => 'اسم العميل', 'customerPhone' => 'هاتف العميل',
         'driverName' => 'اسم المندوب', 'driverPhone' => 'هاتف المندوب', 'price' => 'الإجمالي',
         'serviceName' => 'الخدمة', 'pickupAddress' => 'عنوان الاستلام', 'deliveryAddress' => 'عنوان التسليم',
+        // Listed so the editor offers it and the live preview fills it in; it
+        // was already used by the default templates but missing from here.
+        'merchantName' => 'اسم المتجر / المطعم',
         'paymentMethod' => 'طريقة الدفع', 'payment' => 'الدفع (الطريقة + الحالة)', 'reason' => 'سبب الإلغاء',
         // Multi-line values (each empty when not applicable, so its line drops):
         'items' => 'المطلوب / المنتجات', 'locations' => 'عناوين الاستلام والتسليم + الخرائط',
@@ -5808,6 +5967,89 @@ if ($method === 'POST' && $path === '/admin/push/test') {
     jsonOk(['sent' => true, 'devices' => $has]);
 }
 
+// ═══ Admin: inter-city delivery rates ══════════════════════════════════
+// Must live ABOVE the generic /admin/* mutation fallback, which would
+// otherwise swallow these and echo the body back as if it had saved.
+
+if ($method === 'GET' && $path === '/admin/intercity-rates') {
+    $st = db()->query(
+        'SELECT r.*, c.nameAr AS cityName, v.nameAr AS villageName, a.nameAr AS areaName
+         FROM `IntercityRate` r
+         LEFT JOIN `City` c    ON c.id = r.toCityId
+         LEFT JOIN `Village` v ON v.id = r.toVillageId
+         LEFT JOIN `Area` a    ON a.id = r.toAreaId
+         ORDER BY r.fromCity ASC, (r.toAreaId IS NOT NULL), (r.toVillageId IS NOT NULL), r.price ASC'
+    );
+    jsonOk(array_map(function ($r) {
+        return [
+            'id' => $r['id'],
+            'fromCity' => $r['fromCity'],
+            'toCityId' => $r['toCityId'],
+            'toVillageId' => $r['toVillageId'],
+            'toAreaId' => $r['toAreaId'],
+            'toLabel' => $r['areaName'] ?: ($r['villageName'] ?: ($r['cityName'] ?: 'كل المناطق')),
+            'price' => (float) $r['price'],
+            'minMinutes' => $r['minMinutes'] !== null ? (int) $r['minMinutes'] : null,
+            'maxMinutes' => $r['maxMinutes'] !== null ? (int) $r['maxMinutes'] : null,
+            'note' => $r['note'] ?: null,
+            'isActive' => (bool) (int) $r['isActive'],
+        ];
+    }, $st->fetchAll()));
+}
+
+if (($method === 'POST' || $method === 'PATCH') && preg_match('#^/admin/intercity-rates(?:/([^/]+))?$#', $path, $m)) {
+    $b = readJsonBody();
+    $id = $m[1] ?? null;
+
+    $from = trim((string) ($b['fromCity'] ?? ''));
+    // A rule keyed on nothing would price every trip; a price is the point.
+    if ($id === null && $from === '') jsonErr('اكتب المدينة اللي بيطلع منها الطلب', 422, 'MISSING_FROM');
+    if ($id === null && !isset($b['price'])) jsonErr('اكتب سعر التوصيل', 422, 'MISSING_PRICE');
+
+    // Only the most specific destination is stored, so the ORDER BY that picks
+    // a winner can rely on NULL meaning "not scoped to this level".
+    $areaId = trim((string) ($b['toAreaId'] ?? '')) ?: null;
+    $villageId = trim((string) ($b['toVillageId'] ?? '')) ?: null;
+    $cityId = trim((string) ($b['toCityId'] ?? '')) ?: null;
+
+    $cols = [
+        'fromCity' => $from ?: null,
+        'toCityId' => $cityId,
+        'toVillageId' => $villageId,
+        'toAreaId' => $areaId,
+        'price' => isset($b['price']) ? round((float) $b['price'], 2) : null,
+        'minMinutes' => isset($b['minMinutes']) && $b['minMinutes'] !== '' ? (int) $b['minMinutes'] : null,
+        'maxMinutes' => isset($b['maxMinutes']) && $b['maxMinutes'] !== '' ? (int) $b['maxMinutes'] : null,
+        'note' => trim((string) ($b['note'] ?? '')) ?: null,
+        'isActive' => array_key_exists('isActive', $b) ? ((int) !!$b['isActive']) : 1,
+    ];
+
+    if ($id === null) {
+        $id = newId();
+        db()->prepare('INSERT INTO `IntercityRate` (id, fromCity, toCityId, toVillageId, toAreaId, price, minMinutes, maxMinutes, note, isActive, createdAt, updatedAt) VALUES (?,?,?,?,?,?,?,?,?,?,NOW(3),NOW(3))')
+            ->execute([$id, $cols['fromCity'], $cols['toCityId'], $cols['toVillageId'], $cols['toAreaId'], $cols['price'], $cols['minMinutes'], $cols['maxMinutes'], $cols['note'], $cols['isActive']]);
+        jsonOk(['id' => $id], 201);
+    }
+
+    // PATCH only touches what was sent, so toggling isActive cannot blank a price.
+    $sets = []; $args = [];
+    foreach ($cols as $k => $v) {
+        if (!array_key_exists($k === 'fromCity' ? 'fromCity' : $k, $b)) continue;
+        $sets[] = "`$k` = ?"; $args[] = $v;
+    }
+    if ($sets) {
+        $sets[] = '`updatedAt` = NOW(3)';
+        $args[] = $id;
+        db()->prepare('UPDATE `IntercityRate` SET ' . implode(',', $sets) . ' WHERE id = ?')->execute($args);
+    }
+    jsonOk(['id' => $id]);
+}
+
+if ($method === 'DELETE' && preg_match('#^/admin/intercity-rates/([^/]+)$#', $path, $m)) {
+    db()->prepare('DELETE FROM `IntercityRate` WHERE id = ?')->execute([$m[1]]);
+    jsonOk(['deleted' => true]);
+}
+
 // ═══ Admin: merchant change requests (review queue + audit log) ═════════
 // The /admin/ guard above already enforces ADMIN/SUPER_ADMIN for everything here.
 
@@ -7235,6 +7477,45 @@ if (preg_match('#^/zones/villages/([^/]+)/areas$#', $path, $mm) && $method === '
     jsonOk($st->fetchAll());
 }
 /** Area price → Village base price → refuse. Returns [price, source] or null. */
+/**
+ * What a delivery FROM another city costs, and how long it takes.
+ *
+ * The zone tariff prices the customer's address on its own, which is right
+ * while every store is in the same town. It cannot say that قنا → قفط costs
+ * more than قفط → قفط, nor that قنا → a village inside قفط costs more again:
+ * the fee depends on BOTH ends of the trip.
+ *
+ * Resolution is most-specific-first — area, then village, then the whole city —
+ * so one city-wide row covers everything and a single far village can be
+ * overridden without touching it. Returns null when the store is local or no
+ * rule matches, and the caller falls back to the ordinary zone tariff.
+ */
+function intercityRate(?string $fromCity, ?string $cityId, ?string $villageId, ?string $areaId): ?array {
+    $from = trim((string) $fromCity);
+    if ($from === '' || !$cityId) return null;
+
+    $st = db()->prepare(
+        'SELECT * FROM `IntercityRate`
+         WHERE isActive = 1 AND fromCity = ?
+           AND (toAreaId    = ? OR toAreaId    IS NULL)
+           AND (toVillageId = ? OR toVillageId IS NULL)
+           AND (toCityId    = ? OR toCityId    IS NULL)
+         ORDER BY (toAreaId IS NOT NULL) DESC, (toVillageId IS NOT NULL) DESC, (toCityId IS NOT NULL) DESC
+         LIMIT 1'
+    );
+    $st->execute([$from, $areaId, $villageId, $cityId]);
+    $r = $st->fetch();
+    if (!$r) return null;
+
+    return [
+        'price' => (float) $r['price'],
+        'minMinutes' => $r['minMinutes'] !== null ? (int) $r['minMinutes'] : null,
+        'maxMinutes' => $r['maxMinutes'] !== null ? (int) $r['maxMinutes'] : null,
+        'note' => $r['note'] ?: null,
+        'fromCity' => $from,
+    ];
+}
+
 function zoneQuote(?string $cityId, ?string $villageId, ?string $areaId): ?array {
     if (!$cityId || !$villageId || !$areaId) return null;
     $st = db()->prepare('SELECT a.deliveryPrice AS aPrice, a.nameAr AS aName, a.isActive AS aActive,
@@ -7258,8 +7539,62 @@ if ($method === 'POST' && $path === '/zones/quote-delivery') {
     $q = zoneQuote($b['cityId'] ?? null, $b['villageId'] ?? null, $b['areaId'] ?? null);
     if (!$q) jsonErr('اختيارات العنوان غير صحيحة', 400, 'INVALID_ZONE');
     if ($q[0] === 'INACTIVE') jsonErr('هذه المنطقة غير مفعّلة حالياً. اختر منطقة أخرى.', 400, 'INACTIVE_ZONE');
+
+    // Ordering from a store in another city is a different trip with a
+    // different price, so an inter-city rule overrides the zone tariff. The
+    // caller may name the store (normal case) or the city outright.
+    $fromCity = trim((string) ($b['fromCity'] ?? ''));
+    if ($fromCity === '' && !empty($b['merchantId'])) {
+        $ms = db()->prepare('SELECT city FROM `MerchantProfile` WHERE id = ? LIMIT 1');
+        $ms->execute([(string) $b['merchantId']]);
+        $fromCity = trim((string) ($ms->fetchColumn() ?: ''));
+    }
+    $ic = intercityRate($fromCity, $b['cityId'] ?? null, $b['villageId'] ?? null, $b['areaId'] ?? null);
+    if ($ic) {
+        jsonOk(array_merge($q[2] ?? [], [
+            'price' => $ic['price'],
+            'source' => 'INTERCITY',
+            'fromCity' => $ic['fromCity'],
+            'minMinutes' => $ic['minMinutes'],
+            'maxMinutes' => $ic['maxMinutes'],
+            'note' => $ic['note'],
+        ]));
+    }
+
     if ($q[0] === 'NO_PRICE') jsonErr('لا يوجد سعر توصيل لهذه المنطقة، تواصل مع الدعم', 400, 'NO_DELIVERY_PRICE');
     jsonOk(array_merge(['price' => $q[1]], $q[2]));
+}
+
+/**
+ * GET /intercity-rates?fromCity=قنا — every destination this city delivers to.
+ *
+ * Public: the app shows it on the store page so a customer knows the wait and
+ * the fee BEFORE building a basket, rather than discovering it at checkout.
+ */
+if ($method === 'GET' && $path === '/intercity-rates') {
+    $from = trim((string) ($_GET['fromCity'] ?? ''));
+    if ($from === '') jsonOk([]);
+    $st = db()->prepare(
+        'SELECT r.*, c.nameAr AS cityName, v.nameAr AS villageName, a.nameAr AS areaName
+         FROM `IntercityRate` r
+         LEFT JOIN `City` c    ON c.id = r.toCityId
+         LEFT JOIN `Village` v ON v.id = r.toVillageId
+         LEFT JOIN `Area` a    ON a.id = r.toAreaId
+         WHERE r.isActive = 1 AND r.fromCity = ?
+         ORDER BY (r.toAreaId IS NOT NULL), (r.toVillageId IS NOT NULL), r.price ASC'
+    );
+    $st->execute([$from]);
+    jsonOk(array_map(function ($r) {
+        return [
+            'id' => $r['id'],
+            'fromCity' => $r['fromCity'],
+            'toLabel' => $r['areaName'] ?: ($r['villageName'] ?: ($r['cityName'] ?: 'كل المناطق')),
+            'price' => (float) $r['price'],
+            'minMinutes' => $r['minMinutes'] !== null ? (int) $r['minMinutes'] : null,
+            'maxMinutes' => $r['maxMinutes'] !== null ? (int) $r['maxMinutes'] : null,
+            'note' => $r['note'] ?: null,
+        ];
+    }, $st->fetchAll()));
 }
 
 // ═══ COUPONS ═══════════════════════════════════════════════════════════
