@@ -238,7 +238,10 @@ export function DynamicServiceFlowScreen() {
         {service.category === 'DELIVERY' ? (
           <>
             <Text style={styles.sectionTitle}>عنوان التوصيل</Text>
-            <AddressPicker value={address} onChange={setAddress} />
+            {/* The store has to reach the quote too. Without it the picker
+                priced this as a local delivery while the server charged the
+                inter-city fee at creation — quoted 20, charged 90. */}
+            <AddressPicker merchantId={merchantId} value={address} onChange={setAddress} />
           </>
         ) : null}
 
