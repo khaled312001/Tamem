@@ -173,6 +173,37 @@ TABLES = {
             REFERENCES `User` (`id`) ON DELETE CASCADE
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     """,
+    # What a delivery FROM another city costs and how long it takes.
+    #
+    # The existing zone tariff prices the CUSTOMER's address alone, which is
+    # correct while every store is in the same town. It cannot express "قنا →
+    # قفط costs more than قفط → قفط", and it cannot express that قنا → a village
+    # in قفط costs more again — the fee depends on BOTH ends of the trip.
+    #
+    # `fromCity` is matched against MerchantProfile.city (a free-typed string,
+    # so no FK). The destination is the customer's zone at whatever precision
+    # the admin wants: area, then village, then the whole city. Most specific
+    # match wins, so one city-wide row can cover everything and a single
+    # far village can be overridden without touching it.
+    "IntercityRate": """
+        CREATE TABLE `IntercityRate` (
+          `id` varchar(191) NOT NULL,
+          `fromCity` varchar(120) NOT NULL,
+          `toCityId` varchar(191) NULL,
+          `toVillageId` varchar(191) NULL,
+          `toAreaId` varchar(191) NULL,
+          `price` decimal(10,2) NOT NULL,
+          `minMinutes` int NULL,
+          `maxMinutes` int NULL,
+          `note` varchar(200) NULL,
+          `isActive` tinyint(1) NOT NULL DEFAULT 1,
+          `createdAt` datetime(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+          `updatedAt` datetime(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+          PRIMARY KEY (`id`),
+          KEY `IntercityRate_from_idx` (`fromCity`),
+          KEY `IntercityRate_to_idx` (`toCityId`,`toVillageId`,`toAreaId`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
 }
 
 # One-time data seeds, run after the tables exist. Each is (table, sql) and runs

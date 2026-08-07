@@ -1,7 +1,7 @@
 import { useNavigation, useRoute, type RouteProp } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useQuery } from '@tanstack/react-query';
-import { ArrowDownUp, Package, Search, Star, Store } from 'lucide-react-native';
+import { ArrowDownUp, MapPin, Package, Search, Star, Store } from 'lucide-react-native';
 import { useMemo, useState } from 'react';
 import { FlatList, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 
@@ -29,6 +29,9 @@ interface Merchant {
   isOpen: boolean;
   logoUrl?: string | null;
   category?: { id: string; nameAr: string };
+  /** Where the STORE is. Ordering from another city is a different proposition
+   *  — different wait, different fee — so it is worth filtering on. */
+  city?: string | null;
 }
 
 interface Category {
@@ -74,6 +77,7 @@ export function StoresListScreen() {
   );
   const [search, setSearch] = useState(route.params?.search ?? '');
   const [sortKey, setSortKey] = useState<SortKey>('recommended');
+  const [activeCity, setActiveCity] = useState<string | null>(null);
   // Shared product section (e.g. مشويات) filtered ACROSS merchants. When set,
   // the list switches from "stores" to matching products from every merchant.
   // Preset from the home "أقسام المنتجات" grid — opens straight into the
@@ -150,15 +154,30 @@ export function StoresListScreen() {
 
   const activeCategoryName = categories?.find((c) => c.id === activeCategory)?.nameAr ?? null;
 
+  // Cities present in the CURRENT result set — derived from what was already
+  // fetched, so the row costs nothing and can never offer a city that comes
+  // back empty. Hidden when everything is in one city: a filter with a single
+  // option is clutter.
+  const cityOptions = useMemo(
+    () =>
+      Array.from(new Set((merchants ?? []).map((m) => (m.city ?? '').trim()).filter(Boolean))).sort(
+        (a, b) => a.localeCompare(b, 'ar'),
+      ),
+    [merchants],
+  );
+
   const sorted = useMemo(() => {
-    const list = (merchants ?? []).slice();
+    const base = activeCity
+      ? (merchants ?? []).filter((m) => (m.city ?? '').trim() === activeCity)
+      : (merchants ?? []);
+    const list = base.slice();
     if (sortKey === 'rating') {
       list.sort((a, b) => Number(b.rating ?? 0) - Number(a.rating ?? 0));
     } else if (sortKey === 'open') {
       list.sort((a, b) => Number(b.isOpen) - Number(a.isOpen));
     }
     return list;
-  }, [merchants, sortKey]);
+  }, [merchants, sortKey, activeCity]);
 
   const cycleSort = () => {
     setSortKey((k) => (k === 'recommended' ? 'rating' : k === 'rating' ? 'open' : 'recommended'));
@@ -309,6 +328,41 @@ export function StoresListScreen() {
           <Text style={styles.sortText}>{sortLabel}</Text>
         </Pressable>
       </View>
+
+      {/* City row. Only drawn when the results actually span more than one. */}
+      {cityOptions.length > 1 && (
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={styles.cityRow}
+          style={styles.cityScroll}
+        >
+          <Pressable
+            onPress={() => setActiveCity(null)}
+            style={[styles.cityChip, !activeCity && styles.cityChipOn]}
+          >
+            <Text style={[styles.cityChipText, !activeCity && styles.cityChipTextOn]}>
+              كل المدن
+            </Text>
+          </Pressable>
+          {cityOptions.map((c) => {
+            const isOn = activeCity === c;
+            const n = (merchants ?? []).filter((m) => (m.city ?? '').trim() === c).length;
+            return (
+              <Pressable
+                key={c}
+                onPress={() => setActiveCity(isOn ? null : c)}
+                style={[styles.cityChip, isOn && styles.cityChipOn]}
+              >
+                <MapPin size={12} color={isOn ? colors.white : colors.brand.red} />
+                <Text style={[styles.cityChipText, isOn && styles.cityChipTextOn]}>
+                  {c} · {n}
+                </Text>
+              </Pressable>
+            );
+          })}
+        </ScrollView>
+      )}
 
       {/* Shared sections (مشويات، بيتزا…) filtered across every merchant. */}
       {(sections?.length ?? 0) > 0 && (
@@ -484,6 +538,32 @@ const styles = StyleSheet.create({
     fontFamily: fontFamilies.bodyBold,
   },
   chipTextOn: { color: colors.white },
+  cityScroll: { flexGrow: 0 },
+  cityRow: {
+    gap: spacing.xs,
+    paddingHorizontal: spacing.md,
+    paddingBottom: spacing.xs,
+    alignItems: 'center',
+  },
+  cityChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: spacing.md,
+    paddingVertical: 6,
+    borderRadius: radii.pill,
+    borderWidth: 1,
+    borderColor: colors.brand.red,
+    backgroundColor: colors.white,
+  },
+  cityChipOn: { backgroundColor: colors.brand.red },
+  cityChipText: {
+    fontSize: 12,
+    fontFamily: fontFamilies.bodyBold,
+    color: colors.brand.red,
+    includeFontPadding: false,
+  },
+  cityChipTextOn: { color: colors.white },
   sectionScroll: { flexGrow: 0 },
   sectionRow: {
     paddingHorizontal: spacing.lg,
