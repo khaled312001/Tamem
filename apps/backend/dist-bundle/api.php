@@ -1447,7 +1447,31 @@ function orderDetailBlocks(array $o): array {
     $total = $o['finalPrice'] ?? $o['quotedPrice'];
     $pr = [];
     if ($o['merchantSubtotal'] !== null && $o['merchantSubtotal'] !== '') $pr[] = 'قيمة الطلب: ' . waMoney($o['merchantSubtotal']);
-    if ($o['deliveryFee'] !== null && $o['deliveryFee'] !== '')       $pr[] = 'التوصيل: ' . waMoney($o['deliveryFee']);
+    if ($o['deliveryFee'] !== null && $o['deliveryFee'] !== '') {
+        $pr[] = 'التوصيل: ' . waMoney($o['deliveryFee']);
+        /*
+         * When the basket spans cities the fee is two legs, and they do not
+         * arrive together — the out-of-town convoy runs at fixed times. A bare
+         * total told the driver and the group neither, so the split and the
+         * schedule are spelled out under it.
+         */
+        $__cd = json_decode((string) ($o['customData'] ?? ''), true);
+        $__legs = is_array($__cd['intercity'] ?? null) ? $__cd['intercity'] : [];
+        if ($__legs) {
+            $pr[] = '   • داخل المدينة: ' . waMoney($__cd['local'] ?? 0);
+            foreach ($__legs as $__lg) {
+                $line = '   • نقل من ' . (string) ($__lg['city'] ?? '') . ': ' . waMoney($__lg['fee'] ?? 0);
+                $wins = is_array($__lg['windows'] ?? null) ? $__lg['windows'] : [];
+                foreach ($wins as $w) {
+                    $line .= "
+      ⏰ " . (string) ($w['label'] ?? '')
+                        . ' — آخر طلب ' . (string) ($w['cutoff'] ?? '')
+                        . '، تسليم ' . (string) ($w['delivery'] ?? '');
+                }
+                $pr[] = $line;
+            }
+        }
+    }
     if (!empty($o['discountAmount']) && (float) $o['discountAmount'] > 0) $pr[] = 'الخصم: -' . waMoney($o['discountAmount']) . (!empty($o['couponCode']) ? ' (كوبون ' . $o['couponCode'] . ')' : '');
     if (!empty($o['walletUsed']) && (float) $o['walletUsed'] > 0)     $pr[] = 'من المحفظة: -' . waMoney($o['walletUsed']);
     $pr[] = '*الإجمالي: ' . (waMoney($total) ?? 'غير محدد') . '*';
@@ -3016,6 +3040,13 @@ if ($method === 'POST' && $path === '/admin/orders') {
     $opt = ['deliveryAddress' => $b['deliveryAddress'] ?? null, 'notes' => $b['notes'] ?? null,
         'deliveryLat' => isset($b['deliveryLat']) && $b['deliveryLat'] !== '' ? (float)$b['deliveryLat'] : null,
         'deliveryLng' => isset($b['deliveryLng']) && $b['deliveryLng'] !== '' ? (float)$b['deliveryLng'] : null,
+        // A point-to-point courier job has a real pickup and often a driver
+        // already agreed on the phone — without these the agent had to create
+        // the order and then go and edit it to say where it starts.
+        'pickupAddress' => !empty($b['pickupAddress']) ? (string) $b['pickupAddress'] : null,
+        'pickupLat' => isset($b['pickupLat']) && $b['pickupLat'] !== '' ? (float)$b['pickupLat'] : null,
+        'pickupLng' => isset($b['pickupLng']) && $b['pickupLng'] !== '' ? (float)$b['pickupLng'] : null,
+        'assignedDriverId' => !empty($b['assignedDriverId']) ? (string) $b['assignedDriverId'] : null,
         'cityId' => !empty($b['cityId']) ? (string) $b['cityId'] : null,
         'villageId' => !empty($b['villageId']) ? (string) $b['villageId'] : null,
         'areaId' => !empty($b['areaId']) ? (string) $b['areaId'] : null,
@@ -7971,6 +8002,8 @@ if ($method === 'POST' && $path === '/orders/cart') {
     }
     // Delivery fee is ALWAYS recomputed server-side (anti-tamper).
     $fee = null;
+    /** Per-origin-city legs of this delivery — see where they are filled. */
+    $legs = [];
     if (!empty($b['cityId']) || !empty($b['villageId']) || !empty($b['areaId'])) {
         $q = zoneQuote($b['cityId'] ?? null, $b['villageId'] ?? null, $b['areaId'] ?? null);
         if (!$q) jsonErr('اختيارات العنوان غير صحيحة', 400, 'INVALID_ZONE');
@@ -7981,24 +8014,50 @@ if ($method === 'POST' && $path === '/orders/cart') {
         // A store in another city is a different trip. Quoting the inter-city
         // rate to the customer and then charging the local one at checkout
         // would be the worst of both, so the same rule applies here. Uses the
-        // first store in the basket — a basket spanning cities is priced by
-        // where it starts.
-        $firstMid = '';
+        // EVERY store in the basket, not just the first.
+        //
+        // Taking the first store meant a basket that opened with a local shop
+        // and happened to include one item from قنا was priced as a purely
+        // local trip: a real order with ten stores and a قنا item was charged
+        // 20 EGP when the قنا leg alone is 70. The van still has to make that
+        // run, so the surcharge is owed if ANY store needs it.
+        //
+        // Distinct origin cities, so two stores in قنا are one trip, not two.
+        $__mids = [];
         foreach ($merchants as $__m) {
-            if (!empty($__m['merchantId'])) { $firstMid = (string) $__m['merchantId']; break; }
+            if (!empty($__m['merchantId'])) $__mids[] = (string) $__m['merchantId'];
         }
-        if ($firstMid !== '') {
-            $__cs = db()->prepare('SELECT city FROM `MerchantProfile` WHERE id = ? LIMIT 1');
-            $__cs->execute([$firstMid]);
-            $__fromCity = (string) ($__cs->fetchColumn() ?: '');
-            $__ic = intercityRate($__fromCity, $b['cityId'] ?? null, $b['villageId'] ?? null, $b['areaId'] ?? null);
-            // A store in another city with no route configured cannot be
-            // delivered from — better a clear refusal than an order nobody can
-            // fulfil at a price nobody agreed.
-            if (!$__ic && $__fromCity !== '' && intercityOriginExists($__fromCity)) {
-                conflictErr('NO_INTERCITY_ROUTE', 'المتجر ده في ' . $__fromCity . ' ولسه مفيش توصيل لمنطقتك. اختار متجر من مدينتك.');
+        if ($__mids) {
+            $__in = implode(',', array_fill(0, count($__mids), '?'));
+            $__cs = db()->prepare("SELECT DISTINCT city FROM `MerchantProfile` WHERE id IN ($__in)");
+            $__cs->execute($__mids);
+            foreach ($__cs->fetchAll() as $__row) {
+                $__fromCity = trim((string) ($__row['city'] ?? ''));
+                if ($__fromCity === '') continue;
+                $__ic = intercityRate($__fromCity, $b['cityId'] ?? null, $b['villageId'] ?? null, $b['areaId'] ?? null);
+                // A store in another city with no route configured cannot be
+                // delivered from — better a clear refusal than an order nobody
+                // can fulfil at a price nobody agreed.
+                if (!$__ic && intercityOriginExists($__fromCity)) {
+                    conflictErr('NO_INTERCITY_ROUTE', 'في متجر من ' . $__fromCity . ' ولسه مفيش توصيل لمنطقتك. شيله من السلة أو اختار عنوان تاني.');
+                }
+                if ($__ic) {
+                    $fee = round((float) $fee + $__ic['price'], 2);
+                    // Remember the leg. A total on its own cannot say WHY the
+                    // fee is what it is, and the two halves of the order do not
+                    // arrive together — the قنا convoy runs at fixed times — so
+                    // the order has to carry both the split and the schedule for
+                    // the dashboard, the message and the customer to show them.
+                    $legs[] = [
+                        'city' => $__fromCity,
+                        'fee' => $__ic['price'],
+                        'minMinutes' => $__ic['minMinutes'],
+                        'maxMinutes' => $__ic['maxMinutes'],
+                        'note' => $__ic['note'],
+                        'windows' => $__ic['windows'],
+                    ];
+                }
             }
-            if ($__ic) $fee = round((float) $fee + $__ic['price'], 2);
         }
     }
     $pm = (string) ($b['paymentMethod'] ?? 'CASH');
@@ -8111,14 +8170,21 @@ if ($method === 'POST' && $path === '/orders/cart') {
      * change keep their children, and the read paths still handle them.
      */
     $splitPerMerchant = false;
-    db()->prepare('INSERT INTO `Order` (id, orderNumber, serviceId, customerId, category, status, merchantId, deliveryAddress, deliveryLat, deliveryLng, cityId, villageId, areaId, paymentMethod, paymentStatus, currency, couponCode, discountAmount, merchantSubtotal, deliveryFee, quotedPrice, finalPrice, scheduledFor, createdAt, updatedAt)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NOW(3),NOW(3))')
+    // The local leg is whatever the zone tariff charged before any transfer was
+    // added, so the two halves always sum back to the fee actually charged.
+    $localFee = round((float) ($fee ?? 0) - array_sum(array_column($legs, 'fee')), 2);
+    $deliveryLegs = $legs
+        ? json_encode(['local' => $localFee, 'intercity' => $legs], JSON_UNESCAPED_UNICODE)
+        : null;
+
+    db()->prepare('INSERT INTO `Order` (id, orderNumber, serviceId, customerId, category, status, merchantId, deliveryAddress, deliveryLat, deliveryLng, cityId, villageId, areaId, paymentMethod, paymentStatus, currency, couponCode, discountAmount, merchantSubtotal, deliveryFee, quotedPrice, finalPrice, scheduledFor, customData, createdAt, updatedAt)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NOW(3),NOW(3))')
         ->execute([$parentId, $parentNo, $svc['id'], $uid, 'MERCHANT', 'NEW',
             $multi ? null : ($merchants[0]['merchantId'] ?? null),
             $addr, $cartLat, $cartLng,
             ($b['cityId'] ?? null) ?: null, ($b['villageId'] ?? null) ?: null, ($b['areaId'] ?? null) ?: null,
             $pm, 'PENDING', 'EGP', $coupon ? $coupon['code'] : null, $discount ?: null,
-            $grandSub, $fee, $final, null, ($b['scheduledFor'] ?? null) ?: null]);
+            $grandSub, $fee, $final, null, ($b['scheduledFor'] ?? null) ?: null, $deliveryLegs]);
     orderHistory($parentId, null, 'NEW', $uid, 'CUSTOMER', 'Order placed from cart');
 
     foreach ($merchants as $mi => $m) {

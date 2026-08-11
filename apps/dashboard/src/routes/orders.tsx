@@ -21,6 +21,7 @@ import {
   X,
   XCircle,
   Zap,
+  ArrowLeftRight,
 } from 'lucide-react';
 import { Fragment, useEffect, useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
@@ -32,6 +33,7 @@ import type { OrderStatus } from '@tamem/types';
 import { Badge, StatusBadge } from '../components/ui/Badge.js';
 import { formatDate, formatDateTime, formatMoney } from '../lib/format.js';
 import { Button } from '../components/ui/Button.js';
+import { CustomOrderDialog } from './custom-order.js';
 import { ManualOrderDialog as NewManualOrderDialog } from './manual-order.js';
 import { Dialog, Drawer } from '../components/ui/Dialog.js';
 import { Field, Input, Textarea } from '../components/ui/Input.js';
@@ -152,6 +154,7 @@ export function OrdersPage() {
     searchParams.get('view') === 'map' ? 'map' : 'table',
   );
   const [manualOpen, setManualOpen] = useState(false);
+  const [customOpen, setCustomOpen] = useState(false);
 
   // Sort state. Synced to the URL so reload keeps the chosen order.
   type SortBy = 'createdAt' | 'orderNumber' | 'status' | 'finalPrice' | 'quotedPrice';
@@ -398,10 +401,15 @@ export function OrdersPage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
-          {/* Manual phone-in order */}
+          {/* Two shapes of phone-in order: one that starts from a store and its
+              catalogue, one that is just "take this from here to there". */}
           <Button size="md" onClick={() => setManualOpen(true)}>
             <Plus className="w-4 h-4" />
             طلب يدوي
+          </Button>
+          <Button size="md" variant="outline" onClick={() => setCustomOpen(true)}>
+            <ArrowLeftRight className="w-4 h-4" />
+            طلب يدوي مخصص
           </Button>
           {/* View toggle: table vs map */}
           <div className="inline-flex border border-border rounded-lg overflow-hidden bg-white">
@@ -430,6 +438,13 @@ export function OrdersPage() {
       {manualOpen && (
         <NewManualOrderDialog
           onClose={() => setManualOpen(false)}
+          onCreated={() => qc.invalidateQueries({ queryKey: ['admin', 'orders'] })}
+        />
+      )}
+
+      {customOpen && (
+        <CustomOrderDialog
+          onClose={() => setCustomOpen(false)}
           onCreated={() => qc.invalidateQueries({ queryKey: ['admin', 'orders'] })}
         />
       )}
