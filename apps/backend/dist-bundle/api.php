@@ -1341,7 +1341,7 @@ function orderDetailBlocks(array $o): array {
             // the items, and a cart order can span several merchants — a flat
             // list of product names left them guessing.
             $st = db()->prepare(
-                'SELECT oi.quantity, oi.productNameSnapshot, oi.unitPriceSnapshot,'
+                'SELECT oi.quantity, oi.productNameSnapshot, oi.unitPriceSnapshot, oi.notes,'
                 . ' oi.variantNameSnapshot, oi.addonsSnapshot,'
                 . ' oi.merchantId, mp.storeNameAr'
                 . ' FROM `OrderItem` oi'
@@ -1366,6 +1366,12 @@ function orderDetailBlocks(array $o): array {
                     $names = array_map(fn($a) => (string) ($a['nameAr'] ?? ''), $ex);
                     $line .= "\n     + " . implode('، ', array_filter($names));
                 }
+                // What the customer asked for on this line. It was stored and
+                // never sent, so "من غير بصل" reached the database and the
+                // person making the food never saw it.
+                $ln = trim((string) ($it['notes'] ?? ''));
+                if ($ln !== '') $line .= "
+     📝 " . $ln;
                 $groups[$key]['lines'][] = $line;
             }
 
@@ -3040,13 +3046,13 @@ if ($method === 'POST' && $path === '/admin/orders') {
     $opt = ['deliveryAddress' => $b['deliveryAddress'] ?? null, 'notes' => $b['notes'] ?? null,
         'deliveryLat' => isset($b['deliveryLat']) && $b['deliveryLat'] !== '' ? (float)$b['deliveryLat'] : null,
         'deliveryLng' => isset($b['deliveryLng']) && $b['deliveryLng'] !== '' ? (float)$b['deliveryLng'] : null,
-        // A point-to-point courier job has a real pickup and often a driver
-        // already agreed on the phone — without these the agent had to create
-        // the order and then go and edit it to say where it starts.
+        // A point-to-point courier job has a real pickup — without this the
+        // agent had to create the order and then go and edit it to say where it
+        // starts. (The driver is handled AFTER the insert: see below.)
         'pickupAddress' => !empty($b['pickupAddress']) ? (string) $b['pickupAddress'] : null,
         'pickupLat' => isset($b['pickupLat']) && $b['pickupLat'] !== '' ? (float)$b['pickupLat'] : null,
         'pickupLng' => isset($b['pickupLng']) && $b['pickupLng'] !== '' ? (float)$b['pickupLng'] : null,
-        'assignedDriverId' => !empty($b['assignedDriverId']) ? (string) $b['assignedDriverId'] : null,
+
         'cityId' => !empty($b['cityId']) ? (string) $b['cityId'] : null,
         'villageId' => !empty($b['villageId']) ? (string) $b['villageId'] : null,
         'areaId' => !empty($b['areaId']) ? (string) $b['areaId'] : null,
@@ -3073,6 +3079,39 @@ if ($method === 'POST' && $path === '/admin/orders') {
         }
     }
 
+    /*
+     * Optional driver, assigned properly.
+     *
+     * Assigning is not just writing a column: the driver has to be available,
+     * gets marked BUSY so they don't collect a second order, has their fee
+     * share frozen onto the order, and is told about it. Setting the column
+     * alone left a driver who looked assigned in the dashboard, stayed
+     * "available" to the dispatcher, and never heard about the job.
+     *
+     * A driver who turns out to be unavailable does NOT fail the order — the
+     * order is the point, and the agent can assign somebody else. The reason
+     * comes back in the response so the screen can say so.
+     */
+    $driverNote = null;
+    $wantDriver = trim((string) ($b['assignedDriverId'] ?? ''));
+    if ($wantDriver !== '') {
+        $dq = db()->prepare('SELECT dp.status, u.isActive FROM `DriverProfile` dp JOIN `User` u ON u.id = dp.userId WHERE dp.userId = ? LIMIT 1');
+        $dq->execute([$wantDriver]);
+        $dRow = $dq->fetch();
+        if (!$dRow)                            $driverNote = 'السائق غير موجود — الطلب اتعمل من غير سائق';
+        elseif (!(int) $dRow['isActive'])      $driverNote = 'حساب السائق موقوف — الطلب اتعمل من غير سائق';
+        elseif (($dRow['status'] ?? '') !== 'AVAILABLE')
+            $driverNote = 'السائق مش متاح دلوقتي — الطلب اتعمل من غير سائق';
+        else {
+            db()->prepare("UPDATE `Order` SET `assignedDriverId` = ?, `status` = 'DRIVER_ASSIGNED', `updatedAt` = NOW(3) WHERE id = ?")
+                ->execute([$wantDriver, $id]);
+            db()->prepare("UPDATE `DriverProfile` SET `status` = 'BUSY', `updatedAt` = NOW(3) WHERE userId = ?")
+                ->execute([$wantDriver]);
+            snapshotDriverShare($id);
+            orderHistory($id, 'NEW', 'DRIVER_ASSIGNED', $u['sub'] ?? null, 'ADMIN', 'Assigned on creation');
+        }
+    }
+
     // Same money model as the app + reorder paths, so a manual order reports
     // its goods / delivery / commission / payout identically.
     computeOrderFinancials($id);
@@ -3094,8 +3133,16 @@ if ($method === 'POST' && $path === '/admin/orders') {
             }
         }
     } catch (Throwable $e) { /* best-effort */ }
+
+    // Tell the driver, after the NEW round so the two messages arrive in the
+    // order the events happened.
+    if ($driverNote === null && $wantDriver !== '') notifyOrderParties($id, 'DRIVER_ASSIGNED');
+
     $sel = db()->prepare("SELECT " . ORDER_COLS . " " . ORDER_JOIN . " WHERE o.id = ?"); $sel->execute([$id]);
-    jsonOk(orderNest($sel->fetch()), 201);
+    $out = orderNest($sel->fetch());
+    // Surfaced so the screen can say the order went in but the driver did not.
+    if ($driverNote !== null) $out['driverNote'] = $driverNote;
+    jsonOk($out, 201);
 }
 
 // ─── Supervisors — nested shifts + on-shift computation + shift CRUD ────
@@ -6023,6 +6070,7 @@ if ($method === 'GET' && $path === '/admin/intercity-rates') {
             'minMinutes' => $r['minMinutes'] !== null ? (int) $r['minMinutes'] : null,
             'maxMinutes' => $r['maxMinutes'] !== null ? (int) $r['maxMinutes'] : null,
             'note' => $r['note'] ?: null,
+            'mode' => (($r['mode'] ?? 'ADD') === 'REPLACE') ? 'REPLACE' : 'ADD',
             'windows' => (function () use ($r) {
                 $w = json_decode((string) ($r['windows'] ?? ''), true);
                 return is_array($w) ? array_values($w) : [];
@@ -6056,6 +6104,7 @@ if (($method === 'POST' || $method === 'PATCH') && preg_match('#^/admin/intercit
         'minMinutes' => isset($b['minMinutes']) && $b['minMinutes'] !== '' ? (int) $b['minMinutes'] : null,
         'maxMinutes' => isset($b['maxMinutes']) && $b['maxMinutes'] !== '' ? (int) $b['maxMinutes'] : null,
         'note' => trim((string) ($b['note'] ?? '')) ?: null,
+        'mode' => (($b['mode'] ?? 'ADD') === 'REPLACE') ? 'REPLACE' : 'ADD',
         // [{label, cutoff, delivery}] — when the convoy is collected and when it
         // arrives. Stored as sent; the app only ever reads it back.
         'windows' => is_array($b['windows'] ?? null) && $b['windows']
@@ -6066,8 +6115,8 @@ if (($method === 'POST' || $method === 'PATCH') && preg_match('#^/admin/intercit
 
     if ($id === null) {
         $id = newId();
-        db()->prepare('INSERT INTO `IntercityRate` (id, fromCity, toCityId, toVillageId, toAreaId, price, minMinutes, maxMinutes, note, windows, isActive, createdAt, updatedAt) VALUES (?,?,?,?,?,?,?,?,?,?,?,NOW(3),NOW(3))')
-            ->execute([$id, $cols['fromCity'], $cols['toCityId'], $cols['toVillageId'], $cols['toAreaId'], $cols['price'], $cols['minMinutes'], $cols['maxMinutes'], $cols['note'], $cols['windows'], $cols['isActive']]);
+        db()->prepare('INSERT INTO `IntercityRate` (id, fromCity, toCityId, toVillageId, toAreaId, price, minMinutes, maxMinutes, note, windows, mode, isActive, createdAt, updatedAt) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,NOW(3),NOW(3))')
+            ->execute([$id, $cols['fromCity'], $cols['toCityId'], $cols['toVillageId'], $cols['toAreaId'], $cols['price'], $cols['minMinutes'], $cols['maxMinutes'], $cols['note'], $cols['windows'], $cols['mode'], $cols['isActive']]);
         jsonOk(['id' => $id], 201);
     }
 
@@ -7573,6 +7622,10 @@ function intercityRate(?string $fromCity, ?string $cityId, ?string $villageId, ?
 
     return [
         'price' => (float) $r['price'],
+        // REPLACE = this price IS the whole delivery fee (the hub town, where
+        // the transfer already ends at the door). ADD = charged on top of the
+        // destination's own tariff (a village the van drives out to after).
+        'mode' => (($r['mode'] ?? 'ADD') === 'REPLACE') ? 'REPLACE' : 'ADD',
         'minMinutes' => $r['minMinutes'] !== null ? (int) $r['minMinutes'] : null,
         'maxMinutes' => $r['maxMinutes'] !== null ? (int) $r['maxMinutes'] : null,
         'note' => $r['note'] ?: null,
@@ -7620,6 +7673,7 @@ if ($method === 'POST' && $path === '/zones/quote-delivery') {
         // for this exact area, PLUS the transfer in from the other city. A
         // village with no local tariff still gets the transfer quoted.
         $local = $q[0] === 'OK' ? (float) $q[1] : 0.0;
+        if ($ic['mode'] === 'REPLACE') $local = 0.0;
         jsonOk(array_merge($q[2] ?? [], [
             'price' => round($local + $ic['price'], 2),
             'source' => 'INTERCITY',
@@ -8042,6 +8096,8 @@ if ($method === 'POST' && $path === '/orders/cart') {
                     conflictErr('NO_INTERCITY_ROUTE', 'في متجر من ' . $__fromCity . ' ولسه مفيش توصيل لمنطقتك. شيله من السلة أو اختار عنوان تاني.');
                 }
                 if ($__ic) {
+                    // REPLACE drops the local leg entirely — see intercityRate().
+                    if ($__ic['mode'] === 'REPLACE') { $fee = 0.0; $legs = []; }
                     $fee = round((float) $fee + $__ic['price'], 2);
                     // Remember the leg. A total on its own cannot say WHY the
                     // fee is what it is, and the two halves of the order do not
@@ -8341,7 +8397,10 @@ if ($method === 'POST' && $path === '/orders') {
             if (!$__ic && $__fromCity !== '' && intercityOriginExists($__fromCity)) {
                 conflictErr('NO_INTERCITY_ROUTE', 'المتجر ده في ' . $__fromCity . ' ولسه مفيش توصيل لمنطقتك. اختار متجر من مدينتك.');
             }
-            if ($__ic) $fee = round((float) $fee + $__ic['price'], 2);
+            if ($__ic) {
+                if ($__ic['mode'] === 'REPLACE') $fee = 0.0;
+                $fee = round((float) $fee + $__ic['price'], 2);
+            }
         }
     }
     // Shipping between named regions is priced from the admin route table.

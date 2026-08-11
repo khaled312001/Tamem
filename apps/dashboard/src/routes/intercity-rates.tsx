@@ -44,6 +44,7 @@ interface Rate {
   minMinutes: number | null;
   maxMinutes: number | null;
   note: string | null;
+  mode: 'ADD' | 'REPLACE';
   windows: Window[];
   isActive: boolean;
 }
@@ -63,6 +64,7 @@ const EMPTY = {
   minMinutes: '',
   maxMinutes: '',
   note: '',
+  mode: 'ADD' as 'ADD' | 'REPLACE',
   windows: [] as Window[],
 };
 type Draft = typeof EMPTY;
@@ -104,6 +106,7 @@ export function IntercityRatesPage() {
         minMinutes: d.minMinutes === '' ? null : Number(d.minMinutes),
         maxMinutes: d.maxMinutes === '' ? null : Number(d.maxMinutes),
         note: d.note.trim() || null,
+        mode: d.mode,
         windows: d.windows.filter((w) => w.label.trim() && w.cutoff && w.delivery),
       };
       return d.id
@@ -200,7 +203,11 @@ export function IntercityRatesPage() {
               </div>
 
               <div className="text-sm font-black text-brand-red whitespace-nowrap">
-                + {r.price} ج.م
+                {r.mode === 'REPLACE' ? '' : '+ '}
+                {r.price} ج.م
+                <span className="block text-[10px] font-bold text-muted-foreground">
+                  {r.mode === 'REPLACE' ? 'شامل التوصيل' : 'فوق سعر المنطقة'}
+                </span>
               </div>
 
               <div className="text-xs text-muted-foreground flex items-center gap-1 whitespace-nowrap">
@@ -229,6 +236,7 @@ export function IntercityRatesPage() {
                       minMinutes: r.minMinutes != null ? String(r.minMinutes) : '',
                       maxMinutes: r.maxMinutes != null ? String(r.maxMinutes) : '',
                       note: r.note ?? '',
+                      mode: r.mode ?? 'ADD',
                       windows: r.windows ?? [],
                     })
                   }
@@ -397,13 +405,13 @@ function RateDialog({
         </div>
 
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-          <Field label="رسوم النقل" required hint="بتتضاف فوق سعر المنطقة">
+          <Field label="رسوم النقل" required>
             <Input
               type="number"
               inputMode="decimal"
               value={draft.price}
               onChange={(e) => patch({ price: e.target.value })}
-              placeholder="مثال: 35"
+              placeholder="مثال: 70"
             />
           </Field>
           <Field label="أقل مدة" hint="بالدقايق">
@@ -430,6 +438,40 @@ function RateDialog({
             dispatched one by one, so the customer has to be told WHEN. Set on
             the city-wide rule; the narrower rules inherit it. */}
         <WindowsEditor value={draft.windows} onChange={(windows) => patch({ windows })} />
+
+        {/* Two genuinely different trips. Into the hub town the transfer ends
+            at the customer's door, so charging a second local fee would bill
+            the same leg twice; out to a village the van still has to drive
+            there afterwards, so it does not. */}
+        <div className="rounded-lg bg-muted/40 p-3 space-y-2">
+          <div className="text-xs font-bold text-foreground">الرسوم دي تتحسب إزاي؟</div>
+          {[
+            {
+              key: 'REPLACE' as const,
+              t: 'شاملة التوصيل',
+              d: 'السعر ده هو رسوم التوصيل كلها. للمدينة نفسها — العربية بتوصل لباب العميل.',
+            },
+            {
+              key: 'ADD' as const,
+              t: 'تتضاف فوق سعر المنطقة',
+              d: 'رسوم المنطقة العادية + الرقم ده. للقرى والمناطق اللي برة المدينة.',
+            },
+          ].map((o) => (
+            <button
+              key={o.key}
+              type="button"
+              onClick={() => patch({ mode: o.key })}
+              className={`w-full rounded-lg border p-2.5 text-start transition ${
+                draft.mode === o.key
+                  ? 'border-brand-red bg-brand-red/5'
+                  : 'border-border hover:bg-muted/40'
+              }`}
+            >
+              <div className="text-sm font-bold">{o.t}</div>
+              <div className="text-[11px] text-muted-foreground leading-relaxed">{o.d}</div>
+            </button>
+          ))}
+        </div>
 
         <Field label="ملاحظة للعميل (اختياري)" hint="بتظهر جنب المدة في التطبيق">
           <Input

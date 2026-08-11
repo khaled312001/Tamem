@@ -314,6 +314,13 @@ export function OrderDetailPage() {
   void onPhaseClick;
 
   const customData = order.customData as Record<string, unknown> | undefined;
+  const manualAudit = (customData?.manualOrder ?? null) as {
+    feeSource?: string;
+    feeReason?: string;
+    computedTotal?: number;
+    agreedTotal?: number;
+    totalReason?: string;
+  } | null;
 
   // ── Media extraction (unchanged from prior version) ──────────────────────
   const BASE64_RE = /^[A-Za-z0-9+/]{500,}={0,2}$/;
@@ -357,6 +364,10 @@ export function OrderDetailPage() {
   const imageUrls = Array.from(new Set(collectedImages));
   const audioUri = collectedAudio[0];
   const renderedKeys = new Set<string>();
+  // Internal bookkeeping written by the manual-order screen (who created it,
+  // where the fee came from, any override + reason). It has its own card below;
+  // leaving it in the generic block printed a wall of raw JSON on the page.
+  renderedKeys.add('manualOrder');
   if (customData) {
     for (const [k, v] of Object.entries(customData)) {
       if (
@@ -738,6 +749,40 @@ export function OrderDetailPage() {
           )}
 
           {order.review && <ReviewCard review={order.review} />}
+
+          {/* How this order came to exist and how its fee was decided. It used
+              to be dumped as raw JSON in the generic block below — technically
+              "shown", but unreadable, which is the same as hidden. */}
+          {!!manualAudit && (
+            <Card title="سجل الطلب اليدوي" icon={<Package className="w-4 h-4" />}>
+              <dl className="space-y-1.5 text-sm">
+                {manualAudit.feeSource && (
+                  <AuditRow
+                    k="مصدر رسوم التوصيل"
+                    v={
+                      manualAudit.feeSource === 'ZONE'
+                        ? 'تسعيرة المنطقة'
+                        : manualAudit.feeSource === 'MANUAL'
+                          ? 'حدّدها الأدمن يدوياً'
+                          : 'لسه محددة — المنطقة مالهاش تسعيرة'
+                    }
+                  />
+                )}
+                {!!manualAudit.feeReason && (
+                  <AuditRow k="سبب تعديل الرسوم" v={manualAudit.feeReason} />
+                )}
+                {manualAudit.computedTotal != null && (
+                  <AuditRow k="الإجمالي المحسوب" v={`${manualAudit.computedTotal} ج.م`} />
+                )}
+                {manualAudit.agreedTotal != null && (
+                  <AuditRow k="الإجمالي المتفق عليه" v={`${manualAudit.agreedTotal} ج.م`} />
+                )}
+                {!!manualAudit.totalReason && (
+                  <AuditRow k="سبب اختلاف الإجمالي" v={manualAudit.totalReason} />
+                )}
+              </dl>
+            </Card>
+          )}
 
           {customData &&
             Object.entries(customData).filter(([k]) => !renderedKeys.has(k)).length > 0 && (
@@ -1429,6 +1474,14 @@ function ItemsByMerchantCard({ items }: { items: any[] }) {
                       {extras && (
                         <span className="block text-xs text-muted-foreground">+ {extras}</span>
                       )}
+                      {/* What the customer actually asked for on this line. It
+                          was saved but never drawn, so "من غير بصل" reached the
+                          database and nobody who packs the order ever saw it. */}
+                      {!!it.notes && (
+                        <span className="mt-0.5 block text-xs font-bold text-amber-700">
+                          📝 {it.notes}
+                        </span>
+                      )}
                     </span>
                     {it.unitPriceSnapshot && (
                       <span className="text-muted-foreground whitespace-nowrap">
@@ -2101,3 +2154,13 @@ function NoteDialog({ orderId, onClose }: { orderId: string; onClose: () => void
 void PhaseCard;
 void PHASES;
 void currentPhaseFor;
+
+/** One label/value line inside the manual-order audit card. */
+function AuditRow({ k, v }: { k: string; v: string }) {
+  return (
+    <div className="flex items-start justify-between gap-3">
+      <dt className="text-muted-foreground shrink-0">{k}</dt>
+      <dd className="font-bold text-end">{v}</dd>
+    </div>
+  );
+}

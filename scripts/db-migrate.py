@@ -60,6 +60,15 @@ MIGRATIONS = [
     # WHEN — a fee on its own is only half the answer. Lives on the city-wide
     # row; the area rows inherit it.
     ("IntercityRate", "windows", "longtext NULL"),
+    # How this rule combines with the local zone tariff.
+    #   ADD     — the transfer is charged ON TOP of the destination's own fee.
+    #             Right for a village outside the hub: the van still has to
+    #             drive out there after it arrives.
+    #   REPLACE — the price here IS the whole delivery fee. Right for the hub
+    #             town itself, where the transfer already ends at the door and
+    #             adding a second local fee would charge the same leg twice.
+    # Defaults to ADD so every rule written before this keeps its behaviour.
+    ("IntercityRate", "mode", "varchar(10) NOT NULL DEFAULT 'ADD'"),
 ]
 
 # Tables created if absent.
