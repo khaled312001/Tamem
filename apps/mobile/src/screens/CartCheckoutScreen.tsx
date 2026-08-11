@@ -313,10 +313,12 @@ export function CartCheckoutScreen() {
 
         {/* ─────── Shared address ─────── */}
         <Text style={styles.sectionTitle}>عنوان التوصيل</Text>
-        {/* The first store in the basket decides the route: a basket spanning
-            cities is priced from where it starts, same rule the server uses. */}
+        {/* EVERY store, not the first: a basket spanning cities is several
+            journeys with several fees, and quoting it from whichever store the
+            customer opened first made the same basket cost 20 or 70. The server
+            groups the stores and returns the split. */}
         <AddressPicker
-          merchantId={groups[0]?.merchantId ?? null}
+          merchantIds={groups.map((g) => g.merchantId)}
           value={address}
           onChange={setAddress}
         />

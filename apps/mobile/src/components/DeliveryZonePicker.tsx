@@ -41,6 +41,25 @@ interface DeliveryWindow {
   delivery: string;
 }
 
+/**
+ * One «مجموعة توصيل» — the goods leaving from one place.
+ *
+ * A basket with a قفط shop and a قنا shop arrives in two runs, from two places,
+ * with two riders. The customer is charged for both, so they are told about
+ * both — a single number for two journeys reads as an overcharge.
+ */
+interface QuoteGroup {
+  key: string;
+  kind: 'LOCAL' | 'INTERCITY';
+  label: string;
+  city: string | null;
+  fee: number;
+  localFee: number;
+  intercityFee: number;
+  merchantNames: string[];
+  windows?: DeliveryWindow[];
+}
+
 interface QuoteResponse {
   price: string | number;
   cityName: string;
@@ -55,6 +74,8 @@ interface QuoteResponse {
   fromCity?: string;
   windows?: DeliveryWindow[];
   note?: string | null;
+  /** Every journey the basket needs — present once the caller sends the stores. */
+  groups?: QuoteGroup[];
 }
 
 interface DeliveryZonePickerProps {
@@ -63,6 +84,11 @@ interface DeliveryZonePickerProps {
   /** The store being ordered from. Without it the quote cannot know the order
    *  crosses cities, and would price it as a local one. */
   merchantId?: string | null;
+  /** EVERY store in the basket. A basket that spans cities is several journeys
+   *  with several fees; passing only the first store priced the whole thing as
+   *  that store's trip, so the same basket cost 20 or 70 depending on which
+   *  shop the customer happened to open first. Wins over `merchantId`. */
+  merchantIds?: string[] | null;
   /** Override the heading shown above the three selects. */
   heading?: string;
   /** Hide the price banner — e.g. when caller already shows it in the totals card. */
@@ -84,9 +110,17 @@ export function DeliveryZonePicker({
   value,
   onChange,
   merchantId,
+  merchantIds,
   heading,
   hidePriceBanner,
 }: DeliveryZonePickerProps) {
+  // Normalised once: the quote body and the re-quote key must agree, or the
+  // price would go stale the moment a store is added to the basket.
+  const storeIds = useMemo(
+    () => (merchantIds?.length ? merchantIds : merchantId ? [merchantId] : []),
+    [merchantIds, merchantId],
+  );
+  const storeKey = useMemo(() => [...storeIds].sort().join(','), [storeIds]);
   // ─── Cities ────────────────────────────────────────────────────────────
   const citiesQuery = useQuery<ZoneOption[]>({
     queryKey: ['zones', 'cities'],
@@ -142,7 +176,7 @@ export function DeliveryZonePicker({
   const quoteMut = useMutation({
     mutationFn: (ids: { cityId: string; villageId: string; areaId: string }) =>
       api.raw
-        .post('/zones/quote-delivery', merchantId ? { ...ids, merchantId } : ids)
+        .post('/zones/quote-delivery', storeIds.length ? { ...ids, merchantIds: storeIds } : ids)
         .then((r) => r.data.data as QuoteResponse),
     onSuccess: (q) => {
       setQuoteError(null);
@@ -171,8 +205,10 @@ export function DeliveryZonePicker({
 
   const quoteKey = useMemo(() => {
     if (!value?.cityId || !value?.villageId || !value?.areaId) return null;
-    return `${value.cityId}|${value.villageId}|${value.areaId}`;
-  }, [value?.cityId, value?.villageId, value?.areaId]);
+    // The stores are part of the key: adding a قنا shop to a قفط basket changes
+    // the price, and without this the screen kept showing the old one.
+    return `${value.cityId}|${value.villageId}|${value.areaId}|${storeKey}`;
+  }, [value?.cityId, value?.villageId, value?.areaId, storeKey]);
 
   const lastQuoted = useRef<string | null>(null);
   useEffect(() => {
@@ -298,10 +334,37 @@ export function DeliveryZonePicker({
               <MoneyText amount={value.deliveryFee} size="md" tone="brand" />
             </View>
 
+            {/* More than one journey: name each one, its stores, its fee and
+                its departure times. The customer is paying for two runs and
+                will receive two knocks — being surprised by either at the door
+                is worse than reading about both here. */}
+            {(quote?.groups?.length ?? 0) > 1 && (
+              <View style={styles.interWrap}>
+                <Text style={styles.interTitle}>طلبك هيوصلك على {quote!.groups!.length} رحلات</Text>
+                {quote!.groups!.map((g) => (
+                  <View key={g.key}>
+                    <Text style={styles.interSplit}>
+                      • {g.label}
+                      {g.merchantNames.length ? ` (${g.merchantNames.join('، ')})` : ''}: {g.fee}{' '}
+                      ج.م
+                      {g.intercityFee > 0 && g.localFee > 0
+                        ? ` — نقل ${g.intercityFee} + توصيل ${g.localFee}`
+                        : ''}
+                    </Text>
+                    {(g.windows ?? []).map((w, i) => (
+                      <Text key={i} style={styles.interWindow}>
+                        ⏰ {w.label}: اطلب قبل {w.cutoff} — يوصلك حوالي {w.delivery}
+                      </Text>
+                    ))}
+                  </View>
+                ))}
+              </View>
+            )}
+
             {/* An order coming in from another city is two legs and a fixed
                 departure time. Showing only the total would leave the customer
                 to discover both at checkout. */}
-            {quote?.source === 'INTERCITY' && (
+            {quote?.source === 'INTERCITY' && (quote?.groups?.length ?? 0) < 2 && (
               <View style={styles.interWrap}>
                 {/* Spell out both legs. "90 ج.م" alone reads as an arbitrary
                     number; "70 to bring it from قنا + 20 to reach your village"
