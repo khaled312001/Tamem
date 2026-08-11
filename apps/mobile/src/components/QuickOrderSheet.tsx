@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import * as ImagePicker from 'expo-image-picker';
 import { LinearGradient } from 'expo-linear-gradient';
 import {
+  Banknote,
   Camera,
   ChevronLeft,
   Image as ImageIcon,
@@ -1049,6 +1050,12 @@ function CouponBlock({
 }
 
 // ============ Shared Send Button ============
+/**
+ * Every quick-order mode submits through here, and every one of them posts
+ * `paymentMethod: 'CASH'` — so this is the one place the customer can be told
+ * that once, for all four. The sheet has no payment step and should not grow
+ * one: quick order is meant to be two taps.
+ */
 function SendButton({
   disabled,
   loading,
@@ -1059,25 +1066,31 @@ function SendButton({
   onPress: () => void;
 }) {
   return (
-    <Pressable
-      onPress={onPress}
-      disabled={disabled}
-      style={({ pressed }) => [
-        styles.sendBtn,
-        pressed && { opacity: 0.85 },
-        disabled && { opacity: 0.4 },
-      ]}
-    >
-      <LinearGradient
-        colors={gradients.brand}
-        start={{ x: 0, y: 0 }}
-        end={{ x: 1, y: 1 }}
-        style={styles.sendInner}
+    <>
+      <View style={styles.cashLine}>
+        <Banknote size={14} color={colors.brand.red} />
+        <Text style={styles.cashLineText}>الدفع كاش عند الاستلام</Text>
+      </View>
+      <Pressable
+        onPress={onPress}
+        disabled={disabled}
+        style={({ pressed }) => [
+          styles.sendBtn,
+          pressed && { opacity: 0.85 },
+          disabled && { opacity: 0.4 },
+        ]}
       >
-        <Send size={18} color={colors.white} />
-        <Text style={styles.sendText}>{loading ? 'جاري الإرسال…' : 'إرسال الطلب'}</Text>
-      </LinearGradient>
-    </Pressable>
+        <LinearGradient
+          colors={gradients.brand}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 1 }}
+          style={styles.sendInner}
+        >
+          <Send size={18} color={colors.white} />
+          <Text style={styles.sendText}>{loading ? 'جاري الإرسال…' : 'إرسال الطلب'}</Text>
+        </LinearGradient>
+      </Pressable>
+    </>
   );
 }
 
@@ -1282,6 +1295,18 @@ const styles = StyleSheet.create({
     fontSize: fontSizes.xs,
     color: colors.text.muted,
     fontFamily: fontFamilies.body,
+  },
+  cashLine: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    marginBottom: spacing.sm,
+  },
+  cashLineText: {
+    color: colors.brand.red,
+    fontFamily: fontFamilies.bodyBold,
+    fontSize: fontSizes.xs,
   },
   sendBtn: { borderRadius: radii.lg, overflow: 'hidden' },
   sendInner: {
