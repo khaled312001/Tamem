@@ -2049,6 +2049,13 @@ function notifDefaultCatalog(): array {
         $ev('ORDER_PRICED', 'GROUP', 'جروب الإدارة', $oversight('💲 تم تسعير طلب')),
         // ═══ ORDER_ACCEPTED ═══
         $ev('ORDER_ACCEPTED', 'CUSTOMER', 'العميل', "تميم للتوصيل ✅\nتم قبول طلبك وجارٍ تجهيزه:\n\n{{summary}}"),
+        // Oversight copies for ACCEPTED and IN_ROUTE existed for every other
+        // event but not these two. That was survivable while every order
+        // arrived from the app as NEW; it stopped being survivable when a phone
+        // order started being created ACCEPTED — the group would never have
+        // heard about it at all.
+        $ev('ORDER_ACCEPTED', 'SUPERVISOR', 'المشرف', $oversight('✅ طلب مؤكد')),
+        $ev('ORDER_ACCEPTED', 'GROUP', 'جروب الإدارة', $oversight('✅ طلب مؤكد')),
         // ═══ DRIVER_ASSIGNED ═══
         $ev('DRIVER_ASSIGNED', 'CUSTOMER', 'العميل', "تميم للتوصيل 🚚\nالكابتن *{{driverName}}* في الطريق لطلبك — للتواصل: {{driverPhone}}\n\n{{summary}}"),
         $ev('DRIVER_ASSIGNED', 'DRIVER', 'السائق', "🚚 *طلب جديد مُسند إليك* #{{orderNumber}}\nالخدمة: {{serviceName}}\n👤 العميل: {{customerName}}\n📞 الهاتف: {{customerPhone}}\n🏪 المتجر: {{merchantName}}\n🛒 المطلوب: {{items}}\n{{locations}}\n💰 التحصيل: {{collect}}"),
@@ -2058,6 +2065,8 @@ function notifDefaultCatalog(): array {
         $ev('PICKED_UP', 'CUSTOMER', 'العميل', "تميم للتوصيل 🚚\nتم استلام طلبك *#{{orderNumber}}* وهو في الطريق إليك.\nالمطلوب دفعه: *{{price}}* ({{payment}})"),
         // ═══ IN_ROUTE ═══
         $ev('IN_ROUTE', 'CUSTOMER', 'العميل', "تميم للتوصيل 🚚\nمندوبك على وشك الوصول بطلب *#{{orderNumber}}*. جهّز استلامك 😊\nالمطلوب: *{{price}}*"),
+        $ev('IN_ROUTE', 'SUPERVISOR', 'المشرف', $oversight('🛵 طلب في الطريق')),
+        $ev('IN_ROUTE', 'GROUP', 'جروب الإدارة', $oversight('🛵 طلب في الطريق')),
         // ═══ DELIVERED ═══
         $ev('DELIVERED', 'CUSTOMER', 'العميل', "تميم للتوصيل ✅\nتم توصيل طلبك *#{{orderNumber}}* بنجاح — شكراً لاختيارك تميم 🌟\nقيّم تجربتك من التطبيق."),
         $ev('DELIVERED', 'SUPERVISOR', 'المشرف', $oversight('✅ اكتمل طلب')),
@@ -3338,10 +3347,15 @@ if ($method === 'POST' && $path === '/admin/orders') {
     if (!in_array($advanceTo, $ADVANCE, true)) $advanceTo = '';
     $closing = in_array($advanceTo, ['DELIVERED', 'COMPLETED'], true);
 
-    // An order being filed as already delivered should not tell the customer
-    // "استلمنا طلبك" and then "تم توصيل طلبك" two seconds apart. One message,
-    // the true one.
-    $notified = $closing ? [] : notifyOrderParties($id, 'NEW');
+    /*
+     * ONE message per order, describing where it actually is.
+     *
+     * Announcing "استلمنا طلبك" and then "تم قبول طلبك" two seconds apart is
+     * two notifications for one event, and the first of them is already stale
+     * by the time it arrives. When the agent says where the order stands, that
+     * is the message the customer gets.
+     */
+    $notified = $advanceTo !== '' ? [] : notifyOrderParties($id, 'NEW');
     // Additionally dispatch to the on-shift supervisor(s) (+ record dispatch) —
     // the Supervisor-table shift feature, distinct from the business number.
     try {
@@ -3386,7 +3400,10 @@ if ($method === 'POST' && $path === '/admin/orders') {
             $want = $legDrivers[$lg['groupKey']] ?? ($wantDriver !== '' ? $wantDriver : '');
             if ($want === '') continue;
             $err = assignLegDriver($id, $lg, $want, $u['sub'] ?? null);
-            if ($err) $driverNotes[] = $lg['label'] . ': ' . $err;
+            // Self-contained: these are shown to the agent one per line, and a
+            // shared trailing clause stopped making sense once the stage block
+            // below started adding notes of its own.
+            if ($err) $driverNotes[] = $lg['label'] . ': ' . $err . ' — عيّن مندوب تاني';
             else $notified[] = 'واتساب المندوب';
         }
     } elseif ($wantDriver !== '') {
@@ -3395,9 +3412,9 @@ if ($method === 'POST' && $path === '/admin/orders') {
         $dq = db()->prepare('SELECT dp.status, u.isActive FROM `DriverProfile` dp JOIN `User` u ON u.id = dp.userId WHERE dp.userId = ? LIMIT 1');
         $dq->execute([$wantDriver]);
         $dRow = $dq->fetch();
-        if (!$dRow)                            $driverNotes[] = 'السائق غير موجود';
-        elseif (!(int) $dRow['isActive'])      $driverNotes[] = 'حساب السائق موقوف';
-        elseif (($dRow['status'] ?? '') !== 'AVAILABLE') $driverNotes[] = 'السائق مش متاح دلوقتي';
+        if (!$dRow)                            $driverNotes[] = 'السائق غير موجود — الطلب اتعمل من غير مندوب';
+        elseif (!(int) $dRow['isActive'])      $driverNotes[] = 'حساب السائق موقوف — الطلب اتعمل من غير مندوب';
+        elseif (($dRow['status'] ?? '') !== 'AVAILABLE') $driverNotes[] = 'السائق مش متاح دلوقتي — الطلب اتعمل من غير مندوب';
         else {
             db()->prepare("UPDATE `Order` SET `assignedDriverId` = ?, `status` = 'DRIVER_ASSIGNED', `updatedAt` = NOW(3) WHERE id = ?")
                 ->execute([$wantDriver, $id]);
@@ -3408,7 +3425,6 @@ if ($method === 'POST' && $path === '/admin/orders') {
             $notified = array_merge($notified, notifyOrderParties($id, 'DRIVER_ASSIGNED'));
         }
     }
-    $driverNote = $driverNotes ? implode(' · ', $driverNotes) . ' — الطلب اتعمل، عيّن مندوب تاني' : null;
 
     // ── Finish it here, if the agent said it is already done ──
     // Skipped when the order is already there: assigning a driver above moved it
@@ -3416,9 +3432,21 @@ if ($method === 'POST' && $path === '/admin/orders') {
     // the same notification twice for one event.
     $curStatus = '';
     if ($advanceTo !== '') {
-        $cur = db()->prepare('SELECT status FROM `Order` WHERE id = ? LIMIT 1');
+        $cur = db()->prepare('SELECT status, assignedDriverId FROM `Order` WHERE id = ? LIMIT 1');
         $cur->execute([$id]);
-        $curStatus = (string) ($cur->fetchColumn() ?: 'NEW');
+        $row = $cur->fetch() ?: [];
+        $curStatus = (string) ($row['status'] ?? 'NEW');
+        /*
+         * "مع المندوب" without a driver is a lie the dashboard would then show
+         * for ever. The driver is best-effort by design — they may have gone
+         * offline between opening the form and submitting it — so the order
+         * lands on ACCEPTED instead and the response says why.
+         */
+        if (in_array($advanceTo, ['DRIVER_ASSIGNED', 'IN_ROUTE', 'PICKED_UP'], true)
+            && empty($row['assignedDriverId'])) {
+            $advanceTo = 'ACCEPTED';
+            $driverNotes[] = 'الطلب اتسجّل «مؤكد» بدل «مع المندوب» لأن مفيش مندوب اتعيّن';
+        }
     }
     if ($advanceTo !== '' && $curStatus !== $advanceTo) {
         $from = $curStatus;
@@ -3470,6 +3498,9 @@ if ($method === 'POST' && $path === '/admin/orders') {
         computeOrderFinancials($id);
         $notified = array_merge($notified, notifyOrderParties($id, $advanceTo));
     }
+    // Built after the advance, which can add its own note (a stage that had to
+    // be downgraded because no driver could take it).
+    $driverNote = $driverNotes ? implode(' · ', $driverNotes) : null;
 
     /*
      * The customer's copy by email, from the same click.
