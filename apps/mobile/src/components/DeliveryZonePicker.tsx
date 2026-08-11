@@ -303,9 +303,15 @@ export function DeliveryZonePicker({
                 to discover both at checkout. */}
             {quote?.source === 'INTERCITY' && (
               <View style={styles.interWrap}>
+                {/* Spell out both legs. "90 ج.م" alone reads as an arbitrary
+                    number; "70 to bring it from قنا + 20 to reach your village"
+                    is a price somebody can agree with. Inside the hub town the
+                    transfer already ends at the door, so there is no second
+                    leg to name. */}
                 <Text style={styles.interSplit}>
-                  توصيل داخل {quote.cityName}: {quote.localFee ?? 0} ج.م + نقل من {quote.fromCity}:{' '}
-                  {quote.intercityFee ?? 0} ج.م
+                  {(quote.localFee ?? 0) > 0
+                    ? `نقل من ${quote.fromCity}: ${quote.intercityFee ?? 0} ج.م + توصيل لعنوانك: ${quote.localFee} ج.م`
+                    : `شامل النقل من ${quote.fromCity} والتوصيل لعنوانك: ${quote.intercityFee ?? 0} ج.م`}
                 </Text>
                 {(quote.windows?.length ?? 0) > 0 && (
                   <>
