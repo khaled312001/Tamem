@@ -1653,7 +1653,14 @@ function notifyOrderParties(string $orderId, string $status, ?string $reason = n
         $ctx['locations']   = (string) $d['locations'];   // 📍 استلام + 🏁 توصيل + خرائط
         $ctx['priceBlock']  = (string) $d['price'];       // breakdown ending with الإجمالي
         $ctx['payment']     = (string) $d['pay'];         // طريقة الدفع — حالة الدفع
+        // The store belongs in the customer's recap too. Fixing
+        // {{merchantName}} only fixed templates that name it directly —
+        // every customer template goes through {{summary}}, which never
+        // carried it, so the customer was told what was coming and never
+        // from where.
         $ctx['summary']     = "🧾 الطلب رقم *#{$no}*\nالخدمة: {$svc}"
+            . ($d['merchantName'] ? "
+🏪 المتجر: {$d['merchantName']}" : '')
             . ($d['items'] ? "\n\n🛒 التفاصيل:\n{$d['items']}" : '')
             . ($d['shipping'] ? "\n\n📦 {$d['shipping']}" : '')
             . ($d['locations'] ? "\n\n{$d['locations']}" : '')
