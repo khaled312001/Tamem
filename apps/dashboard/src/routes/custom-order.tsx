@@ -129,25 +129,31 @@ export function CustomOrderDialog({
     onError: (e: Error) => toast.error(e.message || 'تعذّر إنشاء الطلب'),
   });
 
-  const valid =
-    !!serviceId &&
-    (customerId || phone.trim().length >= 8) &&
-    pickup.trim() !== '' &&
-    dropoff.trim() !== '';
+  /*
+   * Everything on this form is optional except the phone, and that is not a
+   * style choice: an order has to belong to somebody. The server refuses one
+   * with no customer, so blocking here is kinder than letting the agent fill
+   * the whole form and collect an error on submit.
+   *
+   * The addresses and the fee are deliberately NOT required — an agent taking
+   * a call often has the phone and half the story, and can fill the rest in
+   * once the order exists rather than keeping the customer waiting.
+   */
+  const valid = !!serviceId && (!!customerId || phone.trim().length >= 8);
 
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()} title="طلب يدوي مخصص">
       <div className="space-y-4">
         <p className="rounded-lg bg-muted/50 p-3 text-xs leading-relaxed text-muted-foreground">
           توصيلة من مكان لمكان من غير ما تختار تاجر ولا منتجات — اكتب المطلوب بنفسك وحدد السعر
-          والمندوب.
+          والمندوب. كل الخانات اختيارية وتقدر تكمّلها بعدين، غير رقم الهاتف عشان الطلب يبقى لحد.
         </p>
 
         {/* 1 — customer */}
         <section className="space-y-2">
           <SectionTitle icon={User} title="العميل" />
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <Field label="رقم الهاتف" required>
+            <Field label="رقم الهاتف" hint="لازم رقم عشان الطلب يبقى لحد">
               <Input
                 value={phone}
                 onChange={(e) => {
@@ -158,7 +164,10 @@ export function CustomOrderDialog({
                 dir="ltr"
               />
             </Field>
-            <Field label="الاسم" hint={customerId ? 'عميل مسجّل' : 'هيتعمل له حساب تلقائي'}>
+            <Field
+              label="الاسم (اختياري)"
+              hint={customerId ? 'عميل مسجّل' : 'هيتعمل له حساب تلقائي'}
+            >
               <Input value={name} onChange={(e) => setName(e.target.value)} />
             </Field>
           </div>
@@ -189,14 +198,14 @@ export function CustomOrderDialog({
         {/* 2 — the trip */}
         <section className="space-y-2">
           <SectionTitle icon={ArrowLeftRight} title="الرحلة" />
-          <Field label="من (مكان الاستلام)" required>
+          <Field label="من (مكان الاستلام)">
             <Input
               value={pickup}
               onChange={(e) => setPickup(e.target.value)}
               placeholder="مثال: قفط — شارع المحطة، أمام الصيدلية"
             />
           </Field>
-          <Field label="إلى (مكان التسليم)" required>
+          <Field label="إلى (مكان التسليم)">
             <Input
               value={dropoff}
               onChange={(e) => setDropoff(e.target.value)}
@@ -217,7 +226,7 @@ export function CustomOrderDialog({
         <section className="space-y-2">
           <SectionTitle icon={Truck} title="الحساب" />
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <Field label="رسوم التوصيل" required>
+            <Field label="رسوم التوصيل">
               <Input
                 type="number"
                 inputMode="decimal"
