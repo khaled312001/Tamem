@@ -1836,7 +1836,22 @@ const MERCHANT_PORTAL_URL = 'https://deliverytamem.com/merchant/';
  *
  * The password is only ever visible here, in the moment it is set: it is stored
  * as a bcrypt hash and can never be read back, which is also why the copy
- * button is disabled until there is a new one to copy.
+ * button only appears once there is a new one to copy.
+ *
+ * ── The autofill problem ──
+ * Chrome saw a password box on deliverytamem.com and filled it with the saved
+ * login for deliverytamem.com — the ADMIN'S OWN password. The admin then read
+ * their own password off the screen, sent it to a shopkeeper, and would have
+ * saved it as that shop's password. Three defences, because one is not enough
+ * for a failure that hands your own credentials to somebody else:
+ *
+ *   1. `readOnly` until the box is deliberately focused — a field the browser
+ *      cannot write to is a field it cannot autofill on load.
+ *   2. `autocomplete="new-password"` and a name that is not "password", plus
+ *      the opt-out attributes 1Password and LastPass respect.
+ *   3. `null` until the admin sets it. Whatever ends up in the DOM, nothing is
+ *      submitted unless this component reports a value, and it only reports one
+ *      after a real click on «توليد» or a real keystroke.
  */
 function MerchantPasswordField({
   storeName,
@@ -1846,21 +1861,25 @@ function MerchantPasswordField({
 }: {
   storeName: string;
   phone: string;
-  value: string;
-  onChange: (v: string) => void;
+  /** null = the admin has not set one; the password stays untouched on save. */
+  value: string | null;
+  onChange: (v: string | null) => void;
 }) {
   const [show, setShow] = useState(false);
+  /** Flipped only by deliberate action — see defence 3 above. */
+  const [armed, setArmed] = useState(false);
+  const text = value ?? '';
 
   const message = [
     `بيانات دخول لوحة التاجر — ${storeName}`,
     '',
     `الرابط: ${MERCHANT_PORTAL_URL}`,
     `رقم الهاتف: ${phone.trim()}`,
-    `كلمة المرور: ${value}`,
+    `كلمة المرور: ${text}`,
   ].join('\n');
 
-  const copy = async (text: string, label: string) => {
-    if (await copyText(text)) toast.success(`${label} اتنسخ`);
+  const copy = async (text2: string, label: string) => {
+    if (await copyText(text2)) toast.success(`${label} اتنسخ`);
     else toast.error('المتصفح مسمحش بالنسخ — علّم على النص وانسخه يدوي');
   };
 
@@ -1876,8 +1895,20 @@ function MerchantPasswordField({
             // loud, and it is never retrievable after this dialog closes.
             type={show ? 'text' : 'password'}
             dir="ltr"
-            value={value}
-            onChange={(e) => onChange(e.target.value)}
+            // Not "password": a field called that is the first thing every
+            // password manager reaches for.
+            name="merchant-new-secret"
+            autoComplete="new-password"
+            data-lpignore="true"
+            data-1p-ignore
+            data-form-type="other"
+            readOnly={!armed}
+            onFocus={() => setArmed(true)}
+            value={text}
+            onChange={(e) => {
+              setArmed(true);
+              onChange(e.target.value === '' ? null : e.target.value);
+            }}
             placeholder="••••••••"
             className="flex-1 font-mono"
           />
@@ -1895,6 +1926,7 @@ function MerchantPasswordField({
             variant="outline"
             size="md"
             onClick={() => {
+              setArmed(true);
               onChange(generatePassword(12));
               setShow(true);
             }}
@@ -1905,7 +1937,7 @@ function MerchantPasswordField({
         </div>
       </Field>
 
-      {value.trim() !== '' && (
+      {armed && text.trim() !== '' && (
         <div className="rounded-xl border border-border bg-muted/30 p-3 space-y-2">
           <p className="text-xs text-muted-foreground leading-relaxed">
             ابعت البيانات دي للتاجر بعد ما تحفظ. الرابط والرقم وكلمة المرور في رسالة واحدة جاهزة
@@ -1926,7 +1958,7 @@ function MerchantPasswordField({
               type="button"
               variant="outline"
               size="sm"
-              onClick={() => void copy(value, 'كلمة المرور')}
+              onClick={() => void copy(text, 'كلمة المرور')}
             >
               <Copy className="w-4 h-4" />
               نسخ كلمة المرور فقط
@@ -1947,7 +1979,10 @@ function EditMerchantDialog({ merchant, onClose }: { merchant: Row; onClose: () 
   const [store, setStore] = useState<StoreFields>(() => toStoreFields(merchant));
   const [ownerName, setOwnerName] = useState<string>(merchant.user?.name ?? '');
   const [ownerPhone, setOwnerPhone] = useState<string>(merchant.user?.phone ?? '');
-  const [ownerPassword, setOwnerPassword] = useState<string>('');
+  // null, not '': "the admin did not set one" and "the admin typed an empty
+  // string" have to be distinguishable, or a browser autofill that arrives and
+  // is then cleared still looks like a deliberate change.
+  const [ownerPassword, setOwnerPassword] = useState<string | null>(null);
   const [secondaryPhones, setSecondaryPhones] = useState<string[]>(
     Array.isArray(merchant.user?.secondaryPhones) ? merchant.user.secondaryPhones : [],
   );
@@ -2045,7 +2080,9 @@ function EditMerchantDialog({ merchant, onClose }: { merchant: Row; onClose: () 
               ...storePayload(store),
               ownerName: ownerName.trim() || undefined,
               ownerPhone: ownerPhone.trim() || undefined,
-              ownerPassword: ownerPassword.trim() || undefined,
+              // Only when the admin actually set one in this dialog. Anything a
+              // password manager dropped into the DOM never reaches here.
+              ownerPassword: ownerPassword?.trim() || undefined,
               ownerSecondaryPhones: secondaryPhones.map((p) => p.trim()).filter(Boolean),
             })
           }
