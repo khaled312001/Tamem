@@ -105,6 +105,9 @@ export function ManualOrderDialog({
   // ── customer ──
   const [phone, setPhone] = useState('');
   const [name, setName] = useState('');
+  // Typed on the call so the customer's emailed copy can go out from the same
+  // click. Saved to the account only when it has none.
+  const [email, setEmail] = useState('');
   const [customerId, setCustomerId] = useState<string | null>(null);
   const [debPhone, setDebPhone] = useState('');
   useEffect(() => {
@@ -275,6 +278,7 @@ export function ManualOrderDialog({
         customerId: customerId ?? undefined,
         customerPhone: customerId ? undefined : phone.trim(),
         customerName: name.trim() || undefined,
+        customerEmail: email.trim() || undefined,
         deliveryAddress: address.trim(),
         cityId: cityId || undefined,
         villageId: villageId || undefined,
@@ -313,7 +317,15 @@ export function ManualOrderDialog({
       return res.data.data as Row;
     },
     onSuccess: (o) => {
-      toast.success(`تم إنشاء الطلب #${o?.orderNumber ?? ''}`);
+      // What actually left, not what was hoped for — a customer with no address
+      // on file gets no email, and the agent needs to know that while they are
+      // still on the call.
+      const sent: string[] = o?.notified ?? [];
+      toast.success(
+        sent.length
+          ? `تم إنشاء الطلب #${o?.orderNumber ?? ''} — اتبعت: ${sent.join('، ')}`
+          : `تم إنشاء الطلب #${o?.orderNumber ?? ''}`,
+      );
       // The order always goes in; the driver is best-effort. Saying so beats a
       // silent unassigned order the agent thinks is on its way.
       if (o?.driverNote) toast.warning(String(o.driverNote));
@@ -371,6 +383,18 @@ export function ManualOrderDialog({
                   placeholder="اسم العميل"
                 />
               </Field>
+              <Field
+                label="الإيميل (اختياري)"
+                hint="عشان يوصله الطلب بالتفصيل — لو مالوش إيميل محفوظ هيتحفظ له"
+              >
+                <Input
+                  dir="ltr"
+                  type="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  placeholder="name@example.com"
+                />
+              </Field>
             </div>
 
             {searching && <p className="text-xs text-muted-foreground">جاري البحث…</p>}
@@ -390,6 +414,7 @@ export function ManualOrderDialog({
                       setCustomerId(c.id);
                       setName(c.name ?? '');
                       setPhone(c.phone ?? phone);
+                      setEmail(c.email ?? '');
                     }}
                     className="w-full text-start px-3 py-2 hover:bg-muted/50 transition text-sm"
                   >
@@ -784,10 +809,32 @@ export function ManualOrderDialog({
             <Line2 k="طريقة الدفع" v={PAYMENTS.find((p) => p.key === payment)?.label ?? ''} />
             <Line2 k="الإجمالي" v={formatMoney(agreedNum ?? computed)} />
 
+            {/* What the confirm button is about to send, before it is pressed —
+                so the agent can promise it to the customer who is still on the
+                line, instead of finding out from a toast afterwards. */}
+            <div className="rounded-lg bg-muted/40 border border-border p-2.5 text-xs leading-relaxed">
+              <p className="font-bold text-foreground mb-1">التأكيد هيبعت:</p>
+              <p className="text-muted-foreground">
+                • واتساب للعميل{driverId || multiGroup ? ' وللمندوب' : ''} ولجروب الإدارة
+              </p>
+              <p className="text-muted-foreground">
+                •{' '}
+                {email.trim() ? (
+                  <>
+                    الطلب بالتفصيل على <span dir="ltr">{email.trim()}</span>
+                  </>
+                ) : (
+                  <span className="text-amber-700">
+                    الإيميل مش هيتبعت — اكتب إيميل العميل فوق لو عايزه يوصله
+                  </span>
+                )}
+              </p>
+            </div>
+
             <div className="flex items-center gap-2 pt-2">
               <Button onClick={() => create.mutate()} disabled={create.isPending}>
                 {create.isPending && <Loader2 className="w-4 h-4 animate-spin" />}
-                تأكيد وإنشاء
+                تأكيد وإنشاء وإرسال
               </Button>
               <Button variant="ghost" onClick={() => setReview(false)} className="ms-auto">
                 رجوع

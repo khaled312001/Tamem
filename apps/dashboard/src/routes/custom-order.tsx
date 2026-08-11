@@ -13,9 +13,14 @@
  *
  * It posts to the same POST /admin/orders as the other screen, so the resulting
  * order is an ordinary order: same statuses, same tracking, same messages.
+ *
+ * ONE step, deliberately. The agent picks the driver here, and the single
+ * button creates the order, assigns them, and sends the WhatsApp round and the
+ * customer's email. The old shape — create, close, find the order, open it,
+ * assign, wait — was four screens of clicking with a customer on the line.
  */
 import { useMutation, useQuery } from '@tanstack/react-query';
-import { ArrowLeftRight, Loader2, MapPin, Search, Truck, User } from 'lucide-react';
+import { ArrowLeftRight, CheckCircle2, Loader2, MapPin, Search, Truck, User } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
 
@@ -34,6 +39,20 @@ const PAYMENTS = [
   { key: 'INSTAPAY', label: 'إنستا باي' },
 ] as const;
 
+/**
+ * How far this one click takes the order.
+ *
+ * Not the full twelve-state FSM — an agent on the phone needs the four answers
+ * they actually give ("لسه", "مع المندوب", "في الطريق", "خلص"), and the order
+ * page still has the granular walk for anything else.
+ */
+const STAGES = [
+  { key: 'NEW', label: 'جديد', needsDriver: false },
+  { key: 'DRIVER_ASSIGNED', label: 'مع المندوب', needsDriver: true },
+  { key: 'IN_ROUTE', label: 'في الطريق', needsDriver: true },
+  { key: 'COMPLETED', label: 'خلص وتسلّم', needsDriver: false },
+] as const;
+
 export function CustomOrderDialog({
   onClose,
   onCreated,
@@ -44,6 +63,10 @@ export function CustomOrderDialog({
   // ── customer ──
   const [phone, setPhone] = useState('');
   const [name, setName] = useState('');
+  // Typed on the call. Saved to the account only when it has none — a
+  // customer's own address is theirs — but always used for this order's copy,
+  // which is what «ابعتله الإيميل» means when they just said it out loud.
+  const [email, setEmail] = useState('');
   const [customerId, setCustomerId] = useState<string | null>(null);
   const [debPhone, setDebPhone] = useState('');
   useEffect(() => {
@@ -75,6 +98,22 @@ export function CustomOrderDialog({
     queryKey: ['custom-order', 'drivers'],
     queryFn: () => api.adminListDrivers({ pageSize: 100 }) as Promise<{ items: Row[] }>,
   });
+
+  /*
+   * Where the order should END UP, decided here.
+   *
+   * A courier job is usually written down after it happened: the agent knows
+   * who took it and that it arrived. Forcing them to create it, close the
+   * dialog, find it in the list, open it and walk six statuses is five screens
+   * of clicking to record something already finished.
+   */
+  const [stage, setStage] = useState<'NEW' | 'DRIVER_ASSIGNED' | 'IN_ROUTE' | 'COMPLETED'>('NEW');
+  const [markPaid, setMarkPaid] = useState(true);
+  // Clearing the driver after picking "مع المندوب" would otherwise submit a
+  // stage that contradicts the form.
+  useEffect(() => {
+    if (!driverId && (stage === 'DRIVER_ASSIGNED' || stage === 'IN_ROUTE')) setStage('NEW');
+  }, [driverId, stage]);
 
   // ── optional store ──
   const [merchantId, setMerchantId] = useState('');
@@ -109,6 +148,7 @@ export function CustomOrderDialog({
         customerId: customerId ?? undefined,
         customerPhone: customerId ? undefined : phone.trim(),
         customerName: name.trim() || undefined,
+        customerEmail: email.trim() || undefined,
         pickupAddress: pickup.trim(),
         deliveryAddress: dropoff.trim(),
         // What is being moved has no catalogue behind it, so it rides in the
@@ -120,12 +160,26 @@ export function CustomOrderDialog({
         paymentMethod: payment,
         assignedDriverId: driverId || undefined,
         merchantId: merchantId || undefined,
+        advanceTo: stage === 'NEW' ? undefined : stage,
+        markPaid: stage === 'COMPLETED' ? markPaid : undefined,
       }),
     onSuccess: (res) => {
-      toast.success('تم إنشاء الطلب');
-      const note = (res as { data?: { data?: { driverNote?: string } } })?.data?.data?.driverNote;
+      const d = (
+        res as {
+          data?: { data?: { driverNote?: string; notified?: string[]; orderNumber?: string } };
+        }
+      )?.data?.data;
+      // Report what actually left, not what was hoped for: a customer with no
+      // address on file gets no email, and the agent has to know that now —
+      // not when the customer phones back asking where it is.
+      const sent = d?.notified ?? [];
+      const head =
+        stage === 'COMPLETED'
+          ? `الطلب #${d?.orderNumber ?? ''} اتسجّل مكتمل`
+          : `تم إنشاء الطلب #${d?.orderNumber ?? ''}`;
+      toast.success(sent.length ? `${head} — اتبعت: ${sent.join('، ')}` : head);
       // The order always goes in; the driver is best-effort.
-      if (note) toast.warning(String(note));
+      if (d?.driverNote) toast.warning(String(d.driverNote));
       onCreated();
       onClose();
     },
@@ -148,8 +202,9 @@ export function CustomOrderDialog({
     <Dialog open onOpenChange={(o) => !o && onClose()} title="طلب يدوي مخصص">
       <div className="space-y-4">
         <p className="rounded-lg bg-muted/50 p-3 text-xs leading-relaxed text-muted-foreground">
-          توصيلة من مكان لمكان من غير ما تختار تاجر ولا منتجات — اكتب المطلوب بنفسك وحدد السعر
-          والمندوب. كل الخانات اختيارية وتقدر تكمّلها بعدين، غير رقم الهاتف عشان الطلب يبقى لحد.
+          توصيلة من مكان لمكان من غير ما تختار تاجر ولا منتجات — اكتب المطلوب بنفسك، حدد السعر
+          والمندوب، واقفل الطلب كله من هنا لو خلص. ضغطة واحدة تنشئ الطلب وتحدّث حالته وتبعت الواتساب
+          والإيميل. كل الخانات اختيارية غير رقم الهاتف عشان الطلب يبقى لحد.
         </p>
 
         {/* 1 — customer */}
@@ -174,6 +229,18 @@ export function CustomOrderDialog({
               <Input value={name} onChange={(e) => setName(e.target.value)} />
             </Field>
           </div>
+          <Field
+            label="الإيميل (اختياري)"
+            hint="عشان يوصله الطلب بالتفصيل على الإيميل — لو العميل مالوش إيميل محفوظ هيتحفظ له"
+          >
+            <Input
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="name@example.com"
+              dir="ltr"
+              type="email"
+            />
+          </Field>
           {searching && <p className="text-xs text-muted-foreground">جاري البحث…</p>}
           {!customerId && matches.length > 0 && (
             <div className="rounded-lg border border-border divide-y divide-border">
@@ -185,6 +252,9 @@ export function CustomOrderDialog({
                     setCustomerId(String(c.id));
                     setName(String(c.name ?? ''));
                     setPhone(String(c.phone ?? ''));
+                    // Their address on file, so the agent can see there is one
+                    // (or that there isn't) instead of guessing.
+                    setEmail(String(c.email ?? ''));
                   }}
                   className="w-full px-3 py-2 text-start text-sm hover:bg-muted/50"
                 >
@@ -311,12 +381,93 @@ export function CustomOrderDialog({
           </Field>
         </section>
 
+        {/* 5 — where it ends up */}
+        <section className="space-y-2">
+          <SectionTitle icon={CheckCircle2} title="حالة الطلب" />
+          <p className="text-xs text-muted-foreground leading-relaxed">
+            لو التوصيلة اتعملت خلاص، اقفلها من هنا على طول — مش لازم تفتح الطلب بعدين وتمشّي الحالات
+            واحدة واحدة.
+          </p>
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+            {STAGES.map((s) => {
+              const blocked = s.needsDriver && !driverId;
+              return (
+                <button
+                  key={s.key}
+                  type="button"
+                  disabled={blocked}
+                  onClick={() => setStage(s.key)}
+                  title={blocked ? 'اختر المندوب الأول' : undefined}
+                  className={`rounded-lg border px-3 py-2 text-xs font-bold transition ${
+                    stage === s.key
+                      ? 'border-brand-red bg-brand-red/5 text-brand-red'
+                      : blocked
+                        ? 'border-border text-muted-foreground/50 cursor-not-allowed'
+                        : 'border-border hover:bg-muted/40'
+                  }`}
+                >
+                  {s.label}
+                </button>
+              );
+            })}
+          </div>
+          {stage === 'COMPLETED' && (
+            <label className="flex items-center gap-2 cursor-pointer text-sm">
+              <input
+                type="checkbox"
+                checked={markPaid}
+                onChange={(e) => setMarkPaid(e.target.checked)}
+                className="h-4 w-4 accent-brand-red"
+              />
+              <span>
+                الفلوس اتحصّلت <span className="text-muted-foreground">({formatMoney(total)})</span>
+              </span>
+            </label>
+          )}
+        </section>
+
+        {/* 6 — what the one button is about to do.
+            Spelled out BEFORE the click, not reported after it: the agent is on
+            the phone and has to be able to say "تمام، هيوصلك رسالة دلوقتي"
+            while the customer is still listening. */}
+        <section className="rounded-xl border border-border bg-muted/30 p-3 text-xs leading-relaxed">
+          <p className="font-bold text-sm text-foreground mb-1">الضغطة الواحدة دي هتعمل:</p>
+          <ul className="space-y-0.5 text-muted-foreground">
+            <li>• تنشئ الطلب{driverId ? ' وتسنده للمندوب المختار' : ''}</li>
+            {stage !== 'NEW' && (
+              <li>
+                • تحطه على «{STAGES.find((s) => s.key === stage)?.label}»
+                {stage === 'COMPLETED' && markPaid ? ' وتسجّل إنه اتدفع' : ''}
+              </li>
+            )}
+            <li>• تبعت واتساب للعميل{driverId ? ' وللمندوب' : ''} ولجروب الإدارة</li>
+            <li>
+              •{' '}
+              {email.trim() ? (
+                <>
+                  تبعت الطلب بالتفصيل على <span dir="ltr">{email.trim()}</span>
+                </>
+              ) : (
+                <span className="text-amber-700">
+                  الإيميل مش هيتبعت — اكتب إيميل العميل فوق لو عايزه يوصله
+                </span>
+              )}
+            </li>
+          </ul>
+        </section>
+
         <div className="flex justify-end gap-2 border-t border-border pt-3">
           <Button variant="outline" onClick={onClose}>
             إلغاء
           </Button>
           <Button onClick={() => create.mutate()} disabled={!valid || create.isPending}>
-            {create.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : 'إنشاء الطلب'}
+            {create.isPending ? (
+              <Loader2 className="w-4 h-4 animate-spin" />
+            ) : stage === 'COMPLETED' ? (
+              'سجّل الطلب مكتمل وابعت'
+            ) : (
+              'أنشئ الطلب وابعته'
+            )}
           </Button>
         </div>
 
