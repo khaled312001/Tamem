@@ -6209,12 +6209,35 @@ if ($method === 'POST' && $path === '/admin/broadcast') {
 if ($method === 'PATCH' && preg_match('#^/admin/orders/([^/]+)/status$#', $path, $m)) {
     $u = authUser(); if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
     $b = readJsonBody(); $status = (string)($b['status'] ?? '');
+    /*
+     * Read the outgoing status BEFORE the write — this is the only endpoint the
+     * dashboard drives a stage change through, and it recorded nothing. Every
+     * completed order in production carries zero or one OrderStatusHistory
+     * rows, so «سجل الطلب» on the customer's tracking screen was blank for the
+     * entire journey: they saw the current pill and no story behind it. The
+     * customer-cancel and order-create paths have always written their rows;
+     * this one just never did.
+     */
+    $prevSt = db()->prepare('SELECT `status` FROM `Order` WHERE id = ? LIMIT 1');
+    $prevSt->execute([$m[1]]);
+    $prevStatus = $prevSt->fetchColumn();
+    $prevStatus = $prevStatus === false ? null : (string) $prevStatus;
+
     $sets = ['`status` = ?', '`updatedAt` = NOW(3)']; $args = [$status];
     if (in_array($status, ['DELIVERED', 'COMPLETED'], true)) { $sets[] = '`completedAt` = NOW(3)'; $sets[] = '`deliveredAt` = NOW(3)'; }
     if ($status === 'CANCELLED') { $sets[] = '`cancelledAt` = NOW(3)'; if (!empty($b['reason'])) { $sets[] = '`cancellationReason` = ?'; $args[] = (string)$b['reason']; } }
     $args[] = $m[1];
     try { db()->prepare('UPDATE `Order` SET ' . implode(',', $sets) . ' WHERE id = ?')->execute($args); }
     catch (PDOException $e) { error_log('[api.php] order status: ' . $e->getMessage()); jsonErr('تعذّر تحديث الحالة', 422, 'FAILED'); }
+    // Log it, but never let logging break the transition the admin just made:
+    // the order has already moved, and a failed INSERT here would report that
+    // as an error and have them press the button a second time.
+    if ($prevStatus !== $status) {
+        try {
+            orderHistory($m[1], $prevStatus, $status, $u['sub'] ?? null, (string) ($u['role'] ?? 'ADMIN'),
+                !empty($b['reason']) ? (string) $b['reason'] : null);
+        } catch (Throwable $e) { error_log('[api.php] order history: ' . $e->getMessage()); }
+    }
     // Lock the driver's delivery-fee share at delivery (final fee, final %).
     if (in_array($status, ['DELIVERED', 'COMPLETED'], true)) snapshotDriverShare($m[1]);
     // The order is over — hand the driver back to the available pool, unless
