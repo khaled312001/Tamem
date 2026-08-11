@@ -138,6 +138,10 @@ export function AppTabs() {
         initialRouteName="HomeTab"
         screenOptions={{
           headerShown: false,
+          // A blurred tab keeps its state but stops rendering — the Orders tab
+          // polls every 60s and the Home tab holds a socket, and both used to
+          // keep working while the customer was reading a product page.
+          freezeOnBlur: true,
           tabBarActiveTintColor: colors.brand.red,
           tabBarInactiveTintColor: colors.text.muted,
           tabBarHideOnKeyboard: true,

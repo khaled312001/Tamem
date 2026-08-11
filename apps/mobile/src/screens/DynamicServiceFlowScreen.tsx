@@ -19,6 +19,7 @@ import { SchedulePicker } from '../components/SchedulePicker';
 import { CardListSkeleton, EmptyState, MoneyText, PrimaryButton } from '../components/ui';
 import { palette, typography } from '../theme/tokens';
 import { api } from '../lib/api';
+import { goToNewOrder } from '../lib/goToNewOrder';
 import { showToast } from '../lib/toast';
 import type { HomeStackParamList } from '../navigation/HomeStack';
 import { colors, fontFamilies, fontSizes, radii, shadows, spacing } from '../theme/tokens';
@@ -71,19 +72,7 @@ export function DynamicServiceFlowScreen() {
       // Land the customer on the live tracking screen for the order they
       // just created — was OrdersList before, which felt like the action
       // disappeared into a haystack.
-      try {
-        const parent = navigation.getParent();
-        if (parent) {
-          parent.navigate('Orders', {
-            screen: 'OrderTracking',
-            params: { orderId: order.id, justCreated: true },
-          } as never);
-        } else {
-          navigation.popToTop();
-        }
-      } catch {
-        navigation.popToTop();
-      }
+      goToNewOrder(navigation, order.id);
       showToast({
         title: 'تم استلام طلبك',
         message: `رقم الطلب: #${order.orderNumber ?? '—'}`,

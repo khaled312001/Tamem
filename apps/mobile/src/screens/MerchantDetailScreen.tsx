@@ -1,9 +1,10 @@
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useNavigation, useRoute, type RouteProp } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
 import { LinearGradient } from 'expo-linear-gradient';
-import { useCallback, useMemo, useState } from 'react';
-import { Phone, Search, Store, X } from 'lucide-react-native';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Phone, Search, Store, Truck, X } from 'lucide-react-native';
 import {
   ActivityIndicator,
   Alert,
@@ -43,6 +44,8 @@ interface MerchantDetail {
   logoUrl?: string;
   coverUrl?: string;
   addressLine: string;
+  /** Where the STORE is. Free text set by the admin, e.g. «قنا» / «قفط». */
+  city?: string | null;
   rating?: number | null;
   isOpen: boolean;
   phone?: string | null;
@@ -112,6 +115,37 @@ export function MerchantDetailScreen() {
         .then((r) => r.data.data),
     staleTime: 60_000,
   });
+
+  // The city the customer last delivered to, read straight from the same
+  // AsyncStorage record the address picker writes. No request, no new endpoint
+  // — and no banner at all for someone who has never set an address, which is
+  // the right answer: we would only be guessing.
+  const [myCity, setMyCity] = useState<string | null>(null);
+  useEffect(() => {
+    let alive = true;
+    void AsyncStorage.getItem('@tamem/last-delivery-address').then((raw) => {
+      if (!alive || !raw) return;
+      try {
+        const parsed = JSON.parse(raw) as { zone?: { cityName?: string } | null };
+        const name = parsed?.zone?.cityName?.trim();
+        if (name) setMyCity(name);
+      } catch {
+        /* a corrupt record just means no banner */
+      }
+    });
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  const otherCity = useMemo(() => {
+    const store = data?.city?.trim();
+    if (!store || !myCity) return null;
+    // Compare loosely: shop rows carry free-text cities («قفط شارع المحطة»),
+    // so an exact !== would warn about a store on the customer's own street.
+    if (store === myCity || store.includes(myCity) || myCity.includes(store)) return null;
+    return { store, mine: myCity };
+  }, [data?.city, myCity]);
 
   /**
    * Products, one page at a time.
@@ -416,6 +450,22 @@ export function MerchantDetailScreen() {
               onPressShare={shareStore}
             />
 
+            {/* Cross-city warning. A قنا store delivering to a قفط address is a
+                separate run with its own rider and its own fee — 70 instead of
+                20 — and the customer used to discover that only on the payment
+                screen, after building a whole basket. Say it while they can
+                still change their mind. */}
+            {otherCity ? (
+              <View style={styles.cityBanner}>
+                <Truck size={16} color="#9A6B16" />
+                <Text style={styles.cityBannerText}>
+                  المتجر ده في <Text style={styles.cityBannerStrong}>{otherCity.store}</Text>{' '}
+                  وعنوانك في <Text style={styles.cityBannerStrong}>{otherCity.mine}</Text> — التوصيل
+                  منه بيتحسب رحلة منفصلة بسعرها. هتشوف السعر بالظبط قبل ما تأكد الطلب.
+                </Text>
+              </View>
+            ) : null}
+
             {!!data.description && <Text style={styles.description}>{data.description}</Text>}
 
             {!!data.menuImages && data.menuImages.length > 0 && (
@@ -705,6 +755,27 @@ const styles = StyleSheet.create({
     lineHeight: 22,
     fontFamily: fontFamilies.body,
   },
+  cityBanner: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: spacing.sm,
+    marginHorizontal: spacing.lg,
+    marginTop: spacing.md,
+    padding: spacing.md,
+    borderRadius: radii.md,
+    backgroundColor: '#FFF7ED',
+    borderWidth: 1,
+    borderColor: '#F5D8B4',
+  },
+  cityBannerText: {
+    flex: 1,
+    fontSize: 12,
+    lineHeight: 20,
+    color: '#7A5410',
+    fontFamily: fontFamilies.body,
+    textAlign: 'auto',
+  },
+  cityBannerStrong: { fontFamily: fontFamilies.bodyExtraBold, color: '#5C3E08' },
   section: { paddingHorizontal: spacing.lg, paddingTop: spacing.xl },
   sectionTitle: {
     fontSize: fontSizes.lg,

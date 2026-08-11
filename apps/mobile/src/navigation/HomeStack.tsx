@@ -35,7 +35,11 @@ const Stack = createNativeStackNavigator<HomeStackParamList>();
 
 export function HomeStack() {
   return (
-    <Stack.Navigator screenOptions={{ headerShown: false }}>
+    // `freezeOnBlur` suspends screens that are not on top. Home holds several
+    // live queries and a socket-fed order card; without this it kept
+    // re-rendering underneath the product page, and the push animation of the
+    // NEXT tap had to compete with it — which is what "الضغطة بطيئة" is.
+    <Stack.Navigator screenOptions={{ headerShown: false, freezeOnBlur: true }}>
       <Stack.Screen name="Home" component={HomeV2Screen} />
       <Stack.Screen name="HomeLegacy" component={HomeScreen} />
       <Stack.Screen name="StoresList" component={StoresListScreen} />
