@@ -110,10 +110,22 @@ def main() -> None:
         cli.close()
         sys.exit(f"Upload incomplete ({n_new}/{len(files)}) — live dashboard untouched.")
 
+    # Backup lands outside the web root. `super_admin.bak.<stamp>/` sat inside
+    # it and Apache served every one of them, so each deploy published another
+    # browsable copy of the admin dashboard at a guessable path. Same fault the
+    # api.php deploy had. `~/dashboard-backups/` is not under any docroot.
     stamp = time.strftime("%Y%m%d-%H%M%S")
-    backup = f"{REMOTE_DIR}.bak.{stamp}"
+    backup_root = "/home/u748721963/dashboard-backups"
+    backup = f"{backup_root}/super_admin.{stamp}"
+    run(f"mkdir -p '{backup_root}' && chmod 700 '{backup_root}'")
     print(run(f"mv '{REMOTE_DIR}' '{backup}' && echo 'backup -> {backup}'"))
     print(run(f"mv '{staged}' '{REMOTE_DIR}' && echo 'swapped in new build'"))
+    # Sweep copies earlier runs left in the web root — each is a live, public
+    # mirror of an older admin build.
+    stale = run(f"find '{posixpath.dirname(REMOTE_DIR)}' -maxdepth 1 -type d "
+                f"-name '{posixpath.basename(REMOTE_DIR)}.bak.*' -print -exec rm -rf {{}} + 2>/dev/null | wc -l")
+    if stale.strip() not in ("", "0"):
+        print(f"removed {stale.strip()} publicly-browsable dashboard backup(s) from the web root")
     print(run("ln -sfn super_admin /home/u748721963/domains/deliverytamem.com/public_html/merchant && echo 'Created/updated symlink /merchant -> super_admin'"))
 
     time.sleep(2)
