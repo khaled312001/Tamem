@@ -1464,7 +1464,11 @@ function orderDetailBlocks(array $o): array {
         $__cd = json_decode((string) ($o['customData'] ?? ''), true);
         $__legs = is_array($__cd['intercity'] ?? null) ? $__cd['intercity'] : [];
         if ($__legs) {
-            $pr[] = '   • داخل المدينة: ' . waMoney($__cd['local'] ?? 0);
+            // Name the transfer first — it is the part that needs explaining —
+            // and only mention the local leg when there IS one. Inside the hub
+            // town the transfer ends at the door, so "داخل المدينة: 0" would
+            // be a line that says nothing.
+            $__local = (float) ($__cd['local'] ?? 0);
             foreach ($__legs as $__lg) {
                 $line = '   • نقل من ' . (string) ($__lg['city'] ?? '') . ': ' . waMoney($__lg['fee'] ?? 0);
                 $wins = is_array($__lg['windows'] ?? null) ? $__lg['windows'] : [];
@@ -1476,6 +1480,7 @@ function orderDetailBlocks(array $o): array {
                 }
                 $pr[] = $line;
             }
+            if ($__local > 0) $pr[] = '   • توصيل لعنوان العميل: ' . waMoney($__local);
         }
     }
     if (!empty($o['discountAmount']) && (float) $o['discountAmount'] > 0) $pr[] = 'الخصم: -' . waMoney($o['discountAmount']) . (!empty($o['couponCode']) ? ' (كوبون ' . $o['couponCode'] . ')' : '');
