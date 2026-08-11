@@ -38,6 +38,7 @@ import { Dialog } from '../components/ui/Dialog.js';
 import { Field, Input, Textarea } from '../components/ui/Input.js';
 import { api } from '../lib/api.js';
 import { formatMoney } from '../lib/format.js';
+import { DEFAULT_ORDER_STAGE, ORDER_STAGES, type OrderStageKey } from '../lib/orderStages.js';
 import { cn } from '../lib/utils.js';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -258,6 +259,24 @@ export function ManualOrderDialog({
     queryKey: ['manual-order', 'drivers'],
     queryFn: () => api.adminListDrivers({ pageSize: 100 }) as Promise<{ items: Row[] }>,
   });
+  /*
+   * Where the order should END UP.
+   *
+   * Creating it as NEW and then walking «قبول → تعيين → متجه → تم» from the
+   * order page is four more screens for a call the agent has already finished
+   * having. The stages are the four answers they actually give; the order page
+   * still has the granular walk for anything unusual.
+   */
+  const [stage, setStage] = useState<OrderStageKey>(DEFAULT_ORDER_STAGE);
+  const [markPaid, setMarkPaid] = useState(true);
+  // With groups the rider is per group, so "assigned" means at least one of
+  // them has somebody on it.
+  const anyDriver = !!driverId || Object.values(legDrivers).some(Boolean);
+  useEffect(() => {
+    if (!anyDriver && (stage === 'DRIVER_ASSIGNED' || stage === 'IN_ROUTE')) {
+      setStage(DEFAULT_ORDER_STAGE);
+    }
+  }, [anyDriver, stage]);
   const [review, setReview] = useState(false);
 
   const { data: services } = useQuery({
@@ -289,6 +308,8 @@ export function ManualOrderDialog({
         legDrivers: multiGroup
           ? Object.fromEntries(Object.entries(legDrivers).filter(([, v]) => v))
           : undefined,
+        advanceTo: stage === 'NEW' ? undefined : stage,
+        markPaid: stage === 'COMPLETED' ? markPaid : undefined,
         notes: notes.trim() || undefined,
         merchants: baskets.map((b) => ({
           merchantId: b.merchantId,
@@ -321,11 +342,11 @@ export function ManualOrderDialog({
       // on file gets no email, and the agent needs to know that while they are
       // still on the call.
       const sent: string[] = o?.notified ?? [];
-      toast.success(
-        sent.length
-          ? `تم إنشاء الطلب #${o?.orderNumber ?? ''} — اتبعت: ${sent.join('، ')}`
-          : `تم إنشاء الطلب #${o?.orderNumber ?? ''}`,
-      );
+      const head =
+        stage === 'COMPLETED'
+          ? `الطلب #${o?.orderNumber ?? ''} اتسجّل مكتمل`
+          : `تم إنشاء الطلب #${o?.orderNumber ?? ''}`;
+      toast.success(sent.length ? `${head} — اتبعت: ${sent.join('، ')}` : head);
       // The order always goes in; the driver is best-effort. Saying so beats a
       // silent unassigned order the agent thinks is on its way.
       if (o?.driverNote) toast.warning(String(o.driverNote));
@@ -627,6 +648,60 @@ export function ManualOrderDialog({
               <Textarea rows={2} value={notes} onChange={(e) => setNotes(e.target.value)} />
             </Field>
           </Section>
+
+          {/* 5 — where the order ends up.
+              Without this the agent created the order and then had to open it
+              and click through «قبول → تعيين → متجه → تم» — four more screens
+              for a call that was already over. */}
+          <Section icon={Check} title="حالة الطلب">
+            <p className="text-xs text-muted-foreground leading-relaxed">
+              الطلب بيتعمل «مؤكد» على طول — انت اللي عملته يعني انت قبلته، فمش هتحتاج تفتحه وتضغط
+              «قبول الطلب». ولو الطلب خلص خلاص، اقفله من هنا كمان.
+            </p>
+            <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
+              {ORDER_STAGES.map((s) => {
+                const blocked = s.needsDriver && !anyDriver;
+                return (
+                  <button
+                    key={s.key}
+                    type="button"
+                    disabled={blocked}
+                    onClick={() => setStage(s.key)}
+                    title={blocked ? 'اختر المندوب الأول' : s.hint}
+                    className={cn(
+                      'rounded-xl border px-3 py-2 text-xs font-bold transition text-center',
+                      stage === s.key
+                        ? 'border-brand-red bg-brand-red/5 text-brand-red'
+                        : blocked
+                          ? 'border-border text-muted-foreground/50 cursor-not-allowed'
+                          : 'border-border hover:bg-muted/40',
+                    )}
+                  >
+                    {s.label}
+                    <span className="block font-normal text-[10px] text-muted-foreground mt-0.5">
+                      {s.hint}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+            {stage === 'COMPLETED' && (
+              <label className="flex items-center gap-2 cursor-pointer text-sm">
+                <input
+                  type="checkbox"
+                  checked={markPaid}
+                  onChange={(e) => setMarkPaid(e.target.checked)}
+                  className="h-4 w-4 accent-brand-red"
+                />
+                <span>
+                  الفلوس اتحصّلت{' '}
+                  <span className="text-muted-foreground">
+                    ({formatMoney(agreedNum ?? computed)})
+                  </span>
+                </span>
+              </label>
+            )}
+          </Section>
         </div>
 
         {/* ── sticky summary ── */}
@@ -813,9 +888,15 @@ export function ManualOrderDialog({
                 so the agent can promise it to the customer who is still on the
                 line, instead of finding out from a toast afterwards. */}
             <div className="rounded-lg bg-muted/40 border border-border p-2.5 text-xs leading-relaxed">
-              <p className="font-bold text-foreground mb-1">التأكيد هيبعت:</p>
+              <p className="font-bold text-foreground mb-1">التأكيد هيعمل:</p>
+              {stage !== 'NEW' && (
+                <p className="text-muted-foreground">
+                  • يحط الطلب على «{ORDER_STAGES.find((s) => s.key === stage)?.label}»
+                  {stage === 'COMPLETED' && markPaid ? ' ويسجّل إنه اتدفع' : ''}
+                </p>
+              )}
               <p className="text-muted-foreground">
-                • واتساب للعميل{driverId || multiGroup ? ' وللمندوب' : ''} ولجروب الإدارة
+                • واتساب للعميل{anyDriver ? ' وللمندوب' : ''} ولجروب الإدارة
               </p>
               <p className="text-muted-foreground">
                 •{' '}
@@ -834,7 +915,7 @@ export function ManualOrderDialog({
             <div className="flex items-center gap-2 pt-2">
               <Button onClick={() => create.mutate()} disabled={create.isPending}>
                 {create.isPending && <Loader2 className="w-4 h-4 animate-spin" />}
-                تأكيد وإنشاء وإرسال
+                {stage === 'COMPLETED' ? 'سجّل الطلب مكتمل وابعت' : 'تأكيد وإنشاء وإرسال'}
               </Button>
               <Button variant="ghost" onClick={() => setReview(false)} className="ms-auto">
                 رجوع

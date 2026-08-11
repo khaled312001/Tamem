@@ -29,6 +29,7 @@ import { Dialog } from '../components/ui/Dialog.js';
 import { Field, Input, Textarea } from '../components/ui/Input.js';
 import { api } from '../lib/api.js';
 import { formatMoney } from '../lib/format.js';
+import { DEFAULT_ORDER_STAGE, ORDER_STAGES, type OrderStageKey } from '../lib/orderStages.js';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Row = any;
@@ -39,19 +40,7 @@ const PAYMENTS = [
   { key: 'INSTAPAY', label: 'إنستا باي' },
 ] as const;
 
-/**
- * How far this one click takes the order.
- *
- * Not the full twelve-state FSM — an agent on the phone needs the four answers
- * they actually give ("لسه", "مع المندوب", "في الطريق", "خلص"), and the order
- * page still has the granular walk for anything else.
- */
-const STAGES = [
-  { key: 'NEW', label: 'جديد', needsDriver: false },
-  { key: 'DRIVER_ASSIGNED', label: 'مع المندوب', needsDriver: true },
-  { key: 'IN_ROUTE', label: 'في الطريق', needsDriver: true },
-  { key: 'COMPLETED', label: 'خلص وتسلّم', needsDriver: false },
-] as const;
+const STAGES = ORDER_STAGES;
 
 export function CustomOrderDialog({
   onClose,
@@ -107,12 +96,14 @@ export function CustomOrderDialog({
    * dialog, find it in the list, open it and walk six statuses is five screens
    * of clicking to record something already finished.
    */
-  const [stage, setStage] = useState<'NEW' | 'DRIVER_ASSIGNED' | 'IN_ROUTE' | 'COMPLETED'>('NEW');
+  const [stage, setStage] = useState<OrderStageKey>(DEFAULT_ORDER_STAGE);
   const [markPaid, setMarkPaid] = useState(true);
   // Clearing the driver after picking "مع المندوب" would otherwise submit a
   // stage that contradicts the form.
   useEffect(() => {
-    if (!driverId && (stage === 'DRIVER_ASSIGNED' || stage === 'IN_ROUTE')) setStage('NEW');
+    if (!driverId && (stage === 'DRIVER_ASSIGNED' || stage === 'IN_ROUTE')) {
+      setStage(DEFAULT_ORDER_STAGE);
+    }
   }, [driverId, stage]);
 
   // ── optional store ──
@@ -385,10 +376,10 @@ export function CustomOrderDialog({
         <section className="space-y-2">
           <SectionTitle icon={CheckCircle2} title="حالة الطلب" />
           <p className="text-xs text-muted-foreground leading-relaxed">
-            لو التوصيلة اتعملت خلاص، اقفلها من هنا على طول — مش لازم تفتح الطلب بعدين وتمشّي الحالات
-            واحدة واحدة.
+            الطلب بيتعمل «مؤكد» على طول — انت اللي عملته يعني انت قبلته، فمش هتحتاج تفتحه وتضغط
+            «قبول الطلب». ولو التوصيلة اتعملت خلاص، اقفلها من هنا كمان.
           </p>
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+          <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
             {STAGES.map((s) => {
               const blocked = s.needsDriver && !driverId;
               return (
@@ -397,8 +388,8 @@ export function CustomOrderDialog({
                   type="button"
                   disabled={blocked}
                   onClick={() => setStage(s.key)}
-                  title={blocked ? 'اختر المندوب الأول' : undefined}
-                  className={`rounded-lg border px-3 py-2 text-xs font-bold transition ${
+                  title={blocked ? 'اختر المندوب الأول' : s.hint}
+                  className={`rounded-lg border px-3 py-2 text-xs font-bold transition text-center ${
                     stage === s.key
                       ? 'border-brand-red bg-brand-red/5 text-brand-red'
                       : blocked
@@ -407,6 +398,9 @@ export function CustomOrderDialog({
                   }`}
                 >
                   {s.label}
+                  <span className="block font-normal text-[10px] text-muted-foreground mt-0.5">
+                    {s.hint}
+                  </span>
                 </button>
               );
             })}
