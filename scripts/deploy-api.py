@@ -124,10 +124,26 @@ def main() -> None:
         sys.exit("Syntax check FAILED on the server — live file untouched.")
 
     # 3) backup, 4) swap
+    #
+    # The backup goes OUTSIDE the web root. It used to be written next to the
+    # live file as `api.php.bak.<stamp>`, and Apache served it: the whole 620 KB
+    # backend — every route, every auth check, every query — was downloadable by
+    # anyone who guessed the name, and one was left behind by every deploy we
+    # have ever run. The server's .htaccess blocks dotfiles (`.env` and
+    # `.htaccess` both answer 403) but has no rule for `*.bak*`.
+    #
+    # `~/api-backups/` is not under any docroot, so there is nothing to guess.
     stamp = time.strftime("%Y%m%d-%H%M%S")
-    backup = f"{remote}.bak.{stamp}"
-    print(run(f"cp -p '{remote}' '{backup}' && echo 'backup -> {backup}'"))
+    backup_dir = "$HOME/api-backups"
+    backup = f"{backup_dir}/api.php.{stamp}"
+    print(run(f"mkdir -p '{backup_dir}' && chmod 700 '{backup_dir}' && "
+              f"cp -p '{remote}' '{backup}' && echo 'backup -> {backup}'"))
     print(run(f"mv '{staged}' '{remote}' && echo 'swapped in new api.php'"))
+    # Sweep any backup a previous run left in the web root. Deleting them is the
+    # point — while one exists the source is a public download.
+    stale = run(f"find '{remote_dir}' -maxdepth 1 -name 'api.php.bak.*' -print -delete 2>/dev/null | wc -l")
+    if stale.strip() not in ("", "0"):
+        print(f"removed {stale.strip()} publicly-readable backup(s) from the web root")
 
     # 5) prove it actually serves traffic; roll back if not
     time.sleep(2)
