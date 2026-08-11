@@ -32,6 +32,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import type { Service } from '@tamem/types';
 
 import { GradientButton } from '../components/GradientButton';
+import { PaymentMethodPicker, type PaymentMethod } from '../components/PaymentMethodPicker';
 import { GradientHeader } from '../components/GradientHeader';
 import { api } from '../lib/api';
 import { goToNewOrder } from '../lib/goToNewOrder';
@@ -71,6 +72,9 @@ export function ShippingFlowScreen() {
   const [fragile, setFragile] = useState(false);
   const [speed, setSpeed] = useState<SpeedKey>('STANDARD');
   const [estimate, setEstimate] = useState<number | null>(null);
+  // Cash while the gateway is off; the picker forces it back to CASH itself,
+  // so this cannot drift out of step with what the customer was shown.
+  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('CASH');
   // Optional shipment photo — lets the team verify the size/contents before pickup.
   const [photoUri, setPhotoUri] = useState<string | null>(null);
   const [photoUrl, setPhotoUrl] = useState<string | null>(null);
@@ -170,7 +174,7 @@ export function ShippingFlowScreen() {
         sizeCategory: size,
         isFragile: fragile,
         speedTier: speed,
-        paymentMethod: 'CASH',
+        paymentMethod,
         imageUrls: photoUrl ? [photoUrl] : undefined,
       });
       return res.data.data;
@@ -369,6 +373,11 @@ export function ShippingFlowScreen() {
             );
           })}
         </View>
+
+        {/* Payment. This flow always sent CASH and never said so — the customer
+            reached the driver without ever being told how they were paying. */}
+        <Text style={styles.section}>طريقة الدفع</Text>
+        <PaymentMethodPicker value={paymentMethod} onChange={setPaymentMethod} />
 
         <View style={{ height: 80 }} />
       </ScrollView>

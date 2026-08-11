@@ -1,7 +1,17 @@
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
-import { Box, MapPin, Package, Phone, Plus, Store, Trash2, User } from 'lucide-react-native';
+import {
+  Banknote,
+  Box,
+  MapPin,
+  Package,
+  Phone,
+  Plus,
+  Store,
+  Trash2,
+  User,
+} from 'lucide-react-native';
 import { useMemo, useState } from 'react';
 import {
   ActivityIndicator,
@@ -20,6 +30,7 @@ import type { Service } from '@tamem/types';
 
 import { GradientButton } from '../components/GradientButton';
 import { GradientHeader } from '../components/GradientHeader';
+import { PaymentMethodPicker, type PaymentMethod } from '../components/PaymentMethodPicker';
 import { api } from '../lib/api';
 import { goToNewOrder } from '../lib/goToNewOrder';
 import type { HomeStackParamList } from '../navigation/HomeStack';
@@ -55,6 +66,8 @@ export function MerchantFlowScreen() {
   const [orders, setOrders] = useState<OrderDraft[]>([
     { id: newId(), customerName: '', customerPhone: '', customerAddress: '', size: 'BAG' },
   ]);
+  // The picker forces this back to CASH while the gateway is off.
+  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('CASH');
 
   const { data: services } = useQuery<Service[]>({
     queryKey: ['services'],
@@ -105,7 +118,7 @@ export function MerchantFlowScreen() {
         // to the account's default address.
         pickupAddress: merchantAddress.trim() || merchantName.trim(),
         deliveryAddress: merchantAddress.trim() || merchantName.trim(),
-        paymentMethod: 'CASH',
+        paymentMethod,
         notes,
         customData: {
           merchantOrder: true,
@@ -239,6 +252,10 @@ export function MerchantFlowScreen() {
             سعر التوصيل يُحدَّد من الإدارة حسب المسافة بين عنوان التاجر وكل عميل.
           </Text>
         </View>
+
+        {/* This flow always sent CASH and never showed it. */}
+        <SectionHeader Icon={Banknote} title="طريقة الدفع" />
+        <PaymentMethodPicker value={paymentMethod} onChange={setPaymentMethod} />
 
         <View style={{ height: 90 }} />
       </ScrollView>
