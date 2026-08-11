@@ -1449,6 +1449,15 @@ function orderDetailBlocks(array $o): array {
     if (($o['speedTier'] ?? '') === 'EXPRESS') $ship[] = '⚡ شحن سريع';
     $b['shipping'] = implode(' · ', $ship);
 
+    /*
+     * The delivery groups — one per place the goods leave from. Read once here
+     * and used twice: to explain the fee, and to say who carries which half.
+     */
+    $legRows = [];
+    try {
+        if (!empty($o['id'])) $legRows = orderLegsFor((string) $o['id']);
+    } catch (Throwable $e) { /* order has none */ }
+
     // Money — full breakdown when the parts exist, else just the total.
     $total = $o['finalPrice'] ?? $o['quotedPrice'];
     $pr = [];
@@ -1456,18 +1465,53 @@ function orderDetailBlocks(array $o): array {
     if ($o['deliveryFee'] !== null && $o['deliveryFee'] !== '') {
         $pr[] = 'التوصيل: ' . waMoney($o['deliveryFee']);
         /*
-         * When the basket spans cities the fee is two legs, and they do not
+         * When the basket spans cities the fee is two journeys, and they do not
          * arrive together — the out-of-town convoy runs at fixed times. A bare
-         * total told the driver and the group neither, so the split and the
-         * schedule are spelled out under it.
+         * total told the driver and the group neither, so the split, the
+         * schedule and the rider are spelled out under it.
          */
         $__cd = json_decode((string) ($o['customData'] ?? ''), true);
+        $__grp = is_array($__cd['groups'] ?? null) ? $__cd['groups'] : [];
         $__legs = is_array($__cd['intercity'] ?? null) ? $__cd['intercity'] : [];
-        if ($__legs) {
-            // Name the transfer first — it is the part that needs explaining —
-            // and only mention the local leg when there IS one. Inside the hub
-            // town the transfer ends at the door, so "داخل المدينة: 0" would
-            // be a line that says nothing.
+        // Live rows win over the snapshot: they carry the drivers. But only
+        // while they still add up to what the order actually charges — a
+        // breakdown that contradicts the total it sits under is worse than no
+        // breakdown at all, and that is exactly what an old order re-costed
+        // under new rules would produce.
+        $legSum = round(array_sum(array_column($legRows, 'deliveryFee')), 2);
+        if ($legRows && abs($legSum - round((float) $o['deliveryFee'], 2)) < 0.01) {
+            $__grp = array_map(fn($l) => [
+                'label' => $l['label'], 'city' => $l['originCity'], 'fee' => $l['deliveryFee'],
+                'localFee' => $l['localFee'], 'intercityFee' => $l['intercityFee'],
+                'windows' => $l['windows'], 'driverName' => $l['driverName'],
+            ], $legRows);
+        }
+        if ($__grp) {
+            // One line per delivery group, each showing what it is made of.
+            // «90» on its own starts an argument; «نقل من قنا 70 + توصيل
+            // للعنوان 20» ends one.
+            foreach ($__grp as $g) {
+                $parts = [];
+                if ((float) ($g['intercityFee'] ?? 0) > 0) $parts[] = 'نقل من ' . (string) ($g['city'] ?? '') . ' ' . waMoney($g['intercityFee']);
+                if ((float) ($g['localFee'] ?? 0) > 0)     $parts[] = 'توصيل للعنوان ' . waMoney($g['localFee']);
+                $line = '   • ' . (string) ($g['label'] ?? '') . ': ' . waMoney($g['fee'] ?? 0)
+                    . (count($parts) > 1 ? ' (' . implode(' + ', $parts) . ')' : '');
+                // Naming the rider here means every template — including the
+                // ones an admin already rewrote — shows who is on each half,
+                // without anybody having to edit their text.
+                if (!empty($g['driverName']) && count($__grp) > 1) $line .= ' — 🧑‍✈️ ' . $g['driverName'];
+                foreach ((array) ($g['windows'] ?? []) as $w) {
+                    $line .= "\n      ⏰ " . (string) ($w['label'] ?? '')
+                        . ' — آخر طلب ' . (string) ($w['cutoff'] ?? '')
+                        . '، تسليم ' . (string) ($w['delivery'] ?? '');
+                }
+                $pr[] = $line;
+            }
+        } elseif ($__legs) {
+            // Orders placed before groups existed. Name the transfer first — it
+            // is the part that needs explaining — and only mention the local leg
+            // when there IS one. Inside the hub town the transfer ends at the
+            // door, so "داخل المدينة: 0" would be a line that says nothing.
             $__local = (float) ($__cd['local'] ?? 0);
             foreach ($__legs as $__lg) {
                 $line = '   • نقل من ' . (string) ($__lg['city'] ?? '') . ': ' . waMoney($__lg['fee'] ?? 0);
@@ -1488,6 +1532,14 @@ function orderDetailBlocks(array $o): array {
     $pr[] = '*الإجمالي: ' . (waMoney($total) ?? 'غير محدد') . '*';
     $b['price'] = implode("\n", $pr);
     $b['total'] = waMoney($total) ?? 'غير محدد';
+    /*
+     * The delivery groups — who carries which half, what each collects, and
+     * when the out-of-town run leaves. Empty string for an ordinary one-trip
+     * order, so notifRender drops the line rather than printing a heading over
+     * nothing.
+     */
+    $b['groups'] = '';
+    try { $b['groups'] = orderLegsBlock($o, $legRows); } catch (Throwable $e) { /* leave blank */ }
     $b['pay'] = trim(waPayMethodAr($o['paymentMethod'] ?? null) . (!empty($o['paymentStatus']) ? ' — ' . waPayStatusAr($o['paymentStatus']) : ''));
     return $b;
 }
@@ -1528,6 +1580,21 @@ function orderEmailHtml(array $o, array $ctx, string $status): string {
             . nl2br($esc($items)) . '</div>';
     }
 
+    /*
+     * The delivery groups. An order that arrives in two runs, from two places,
+     * with two riders is the single thing a customer is most likely to phone
+     * about — so it goes in the record they keep, not just the WhatsApp message
+     * they will scroll past. WhatsApp's *bold* / _italic_ markers are stripped:
+     * unrendered asterisks in an email read as a mistake.
+     */
+    $groupsHtml = '';
+    $groupsTxt = trim((string) ($ctx['groups'] ?? ''));
+    if ($groupsTxt !== '') {
+        $groupsHtml = '<div style="margin:18px 0 6px;font-weight:800;font-size:14px">🚚 مجموعات التوصيل</div>'
+            . '<div style="background:#fff8f6;border:1px solid #f3ded8;border-radius:10px;padding:12px;font-size:13px;line-height:1.9;color:#333" dir="auto">'
+            . nl2br($esc(preg_replace('/[*_]/u', '', $groupsTxt))) . '</div>';
+    }
+
     $money = '<table style="width:100%;border-collapse:collapse;margin-top:6px">'
         . $row('قيمة الطلب', isset($o['merchantSubtotal']) ? waMoney($o['merchantSubtotal']) : null)
         . $row('رسوم التوصيل', isset($o['deliveryFee']) ? waMoney($o['deliveryFee']) : null)
@@ -1564,6 +1631,7 @@ function orderEmailHtml(array $o, array $ctx, string $status): string {
         '<p style="font-size:14px;color:#333;margin:0 0 14px">' . $esc($note) . '</p>'
         . $head
         . $itemsHtml
+        . $groupsHtml
         . '<div style="margin:18px 0 6px;font-weight:800;font-size:14px">💰 الحساب</div>'
         . $money
         . '<p style="color:#888;font-size:12px;margin-top:18px">لو عندك أي استفسار، رد على الرسالة دي أو كلّمنا من التطبيق.</p>'
@@ -1585,13 +1653,23 @@ function orderEmailText(array $o, array $ctx): string {
         if (trim((string) $v) !== '') $ln[] = "$k: $v";
     }
     if (trim((string) ($ctx['items'] ?? '')) !== '') { $ln[] = ''; $ln[] = 'المطلوب:'; $ln[] = (string) $ctx['items']; }
+    if (trim((string) ($ctx['groups'] ?? '')) !== '') { $ln[] = ''; $ln[] = str_replace(['*', '_'], '', (string) $ctx['groups']); }
     if (trim((string) ($ctx['priceBlock'] ?? '')) !== '') { $ln[] = ''; $ln[] = str_replace('*', '', (string) $ctx['priceBlock']); }
     if (trim((string) ($ctx['payment'] ?? '')) !== '') $ln[] = 'الدفع: ' . $ctx['payment'];
     return implode("
 ", $ln);
 }
 
-function notifyOrderParties(string $orderId, string $status, ?string $reason = null): void {
+/**
+ * @param bool $skipDriver Suppress the order-wide DRIVER copy. Set when the
+ *   order is split into delivery groups: that template describes the WHOLE
+ *   order — every store, every item, the full amount to collect — and sending
+ *   it to the rider of one group has them hunting for goods on somebody else's
+ *   bike and collecting somebody else's money. They get a leg-scoped message
+ *   from notifyLegDriver() instead. The customer / group / supervisor copies
+ *   still go out normally.
+ */
+function notifyOrderParties(string $orderId, string $status, ?string $reason = null, bool $skipDriver = false): void {
     // The order is being handled now → clear its "new order" alert from the centre.
     resolveOrderAlerts($orderId);
     try {
@@ -1653,6 +1731,8 @@ function notifyOrderParties(string $orderId, string $status, ?string $reason = n
         $ctx['locations']   = (string) $d['locations'];   // 📍 استلام + 🏁 توصيل + خرائط
         $ctx['priceBlock']  = (string) $d['price'];       // breakdown ending with الإجمالي
         $ctx['payment']     = (string) $d['pay'];         // طريقة الدفع — حالة الدفع
+        // Delivery groups (empty unless the order really is more than one trip).
+        $ctx['groups']      = (string) ($d['groups'] ?? '');
         // The store belongs in the customer's recap too. Fixing
         // {{merchantName}} only fixed templates that name it directly —
         // every customer template goes through {{summary}}, which never
@@ -1664,6 +1744,10 @@ function notifyOrderParties(string $orderId, string $status, ?string $reason = n
             . ($d['items'] ? "\n\n🛒 التفاصيل:\n{$d['items']}" : '')
             . ($d['shipping'] ? "\n\n📦 {$d['shipping']}" : '')
             . ($d['locations'] ? "\n\n{$d['locations']}" : '')
+            // An order that arrives in two runs must SAY so, and say which
+            // stores are in each — otherwise the customer waits for one knock
+            // and thinks half the order is missing.
+            . (!empty($d['groups']) ? "\n\n{$d['groups']}" : '')
             . "\n\n💳 الدفع: {$d['pay']}\n{$d['price']}";
         $ctx['collect']     = ($o['paymentStatus'] ?? '') === 'PAID'
             ? 'مدفوع — لا تُحصّل شيئاً'
@@ -1731,7 +1815,7 @@ function notifyOrderParties(string $orderId, string $status, ?string $reason = n
         }
 
         // ── DRIVER ──
-        $drvMsg = $render('DRIVER');
+        $drvMsg = $skipDriver ? null : $render('DRIVER');
         if ($drvMsg && !empty($o['drv_phone'])) { waEnqueue($o['drv_phone'], $drvMsg); $sent = true; }
         // The driver used to get WhatsApp only — nothing reached their phone's
         // notification tray. Same push path the customer gets, carrying orderId
@@ -1740,9 +1824,26 @@ function notifyOrderParties(string $orderId, string $status, ?string $reason = n
             'DRIVER_ASSIGNED' => ['طلب جديد مُسند إليك', "طلب #{$no} — " . ($custName ?: 'عميل') . ($o['deliveryAddress'] ? " · {$o['deliveryAddress']}" : '')],
             'CANCELLED' => ['أُلغي الطلب', "الطلب #{$no} اتلغى — مش محتاج توصيله" . ($reason ? " ({$reason})" : '')],
         ][$status] ?? null;
-        if ($drvPushAr && !empty($o['assignedDriverId'])) {
+        if ($drvPushAr && !$skipDriver && !empty($o['assignedDriverId'])) {
             notifyUser((string) $o['assignedDriverId'], 'ORDER_STATUS', $drvPushAr[0], $drvPushAr[0], $drvPushAr[1], $drvPushAr[1],
                 ['orderId' => $orderId, 'orderNumber' => $no, 'screen' => 'OrderTracking', 'status' => $status]);
+        }
+
+        /*
+         * ── OTHER GROUPS' DRIVERS ──
+         * A two-city order has a rider per group, and only one of them is the
+         * order's `assignedDriverId`. The rest would otherwise never hear that
+         * the order was cancelled or completed and would keep driving.
+         */
+        if (in_array($status, ['CANCELLED', 'DELIVERED', 'COMPLETED'], true)) {
+            $done = ['CANCELLED' => "⛔ *أُلغي الطلب #{$no}* — لا حاجة للتوصيل." . ($reason ? "\nالسبب: {$reason}" : '')];
+            $txt = $done[$status] ?? "✅ اكتمل الطلب #{$no} — شكراً لمجهودك.";
+            foreach (orderLegsFor($orderId) as $lg) {
+                if (empty($lg['driverId']) || $lg['driverId'] === ($o['assignedDriverId'] ?? null)) continue;
+                if (!empty($lg['driverPhone'])) { waEnqueue((string) $lg['driverPhone'], $txt . "\nالمجموعة: " . $lg['label']); $sent = true; }
+                notifyUser((string) $lg['driverId'], 'ORDER_STATUS', 'تحديث على الطلب', 'تحديث على الطلب', $txt, $txt,
+                    ['orderId' => $orderId, 'orderNumber' => $no, 'screen' => 'OrderTracking', 'status' => $status]);
+            }
         }
 
         // ── SUPERVISOR ── the business / admin oversight number
@@ -1881,6 +1982,9 @@ function notifDefaultCatalog(): array {
         . "🏪 المتجر: {{merchantName}}\n"
         . "🛒 المطلوب: {{items}}\n"
         . "{{locations}}\n"
+        // Empty for an ordinary single-trip order, so nothing changes for the
+        // 95% case; for a basket that spans cities it is the whole point.
+        . "{{groups}}\n"
         . "💳 الدفع: {{payment}}\n"
         . "{{priceBlock}}";
     return [
@@ -1927,6 +2031,9 @@ function notifVariables(): array {
         'items' => 'المطلوب / المنتجات', 'locations' => 'عناوين الاستلام والتسليم + الخرائط',
         'priceBlock' => 'تفاصيل السعر والإجمالي', 'summary' => 'ملخص الطلب الكامل للعميل',
         'collect' => 'تعليمات التحصيل للسائق', 'shipping' => 'تفاصيل الشحن',
+        // Only fills in when the order really is more than one trip (a basket
+        // مثلاً من قنا ومن قفط) — otherwise it is empty and its line drops.
+        'groups' => 'مجموعات التوصيل (كل مجموعة ومندوبها وسعرها)',
     ];
 }
 /** Render a template string against a context: replace {{var}}, drop dangling
@@ -2924,6 +3031,16 @@ if ($method === 'GET' && preg_match('#^/admin/orders/([^/]+)$#', $path, $m)) {
                 : null,
         ], $subRows);
     } catch (Throwable $e) { /* leave empty */ }
+    /*
+     * Delivery groups — one per place the goods leave from, each with its own
+     * driver and its own share of the fee. Always present (possibly empty) so
+     * the screen can render it unconditionally.
+     */
+    $o['legs'] = orderLegsFor((string) $m[1]);
+    if ($o['legs']) {
+        $collect = orderLegCollect($r, $o['legs']);
+        foreach ($o['legs'] as $i => $lg) $o['legs'][$i]['collect'] = $collect[$lg['id']] ?? 0.0;
+    }
     $o['statusHistory'] = [];
     try { $sh = db()->prepare('SELECT * FROM `OrderStatusHistory` WHERE orderId = ? ORDER BY createdAt ASC'); $sh->execute([$m[1]]); $o['statusHistory'] = array_map('jsonizeRow', $sh->fetchAll()); } catch (Throwable $e) {}
     jsonOk($o);
@@ -3026,13 +3143,31 @@ if ($method === 'POST' && $path === '/admin/orders') {
      * way the order is created.
      */
     $feeSource = null; $fee = null;
+    /*
+     * The basket's delivery groups. Built whenever there is an address, even
+     * when the agent overrides the fee, so the order still records WHO carries
+     * what — a manual price is a decision about money, not about routing.
+     */
+    $plan = null;
+    if (!empty($b['cityId']) && !empty($b['villageId']) && !empty($b['areaId'])) {
+        $plan = orderLegPlan((string) $b['cityId'], (string) $b['villageId'], (string) $b['areaId'],
+            array_column($perMerchant, 'merchantId'));
+    }
     if (isset($b['deliveryFee']) && $b['deliveryFee'] !== '' && $b['deliveryFee'] !== null) {
         $fee = round((float) $b['deliveryFee'], 2);
         $feeSource = 'MANUAL';
-    } elseif (!empty($b['cityId']) && !empty($b['villageId']) && !empty($b['areaId'])) {
-        $zq = zoneQuote((string) $b['cityId'], (string) $b['villageId'], (string) $b['areaId']);
-        if (is_array($zq) && ($zq[0] ?? '') === 'OK') { $fee = round((float) $zq[1], 2); $feeSource = 'ZONE'; }
-        else { $feeSource = 'PENDING'; } // no tariff for the area — decided later
+        // The groups follow the agreed number, or the screen would show a
+        // per-group breakdown that contradicts its own total.
+        if ($plan) $plan = applyManualFeeToPlan($plan, $fee);
+    } elseif ($plan) {
+        // Sum of the groups, not the destination tariff alone: a basket with a
+        // قنا store owes the transfer too, and quoting it as an ordinary local
+        // delivery is how a 90 EGP trip went out priced at 20.
+        if ($plan['hasZone'] || array_filter($plan['groups'], fn($g) => $g['kind'] === 'INTERCITY')) {
+            $fee = $plan['fee']; $feeSource = 'ZONE';
+        } else {
+            $feeSource = 'PENDING'; // no tariff for the area — decided later
+        }
     }
 
     $cols = ['id', 'orderNumber', 'serviceId', 'customerId', 'category', 'status', 'createdByAdminId'];
@@ -3055,6 +3190,26 @@ if ($method === 'POST' && $path === '/admin/orders') {
         'perMerchant' => $perMerchant ?: null,
     ], fn($v) => $v !== null);
 
+    // Frozen snapshot of the routing that produced this fee, in the same shape
+    // the app's cart writes, so one renderer covers manual and app orders alike.
+    $custom = $audit ? ['manualOrder' => $audit] : [];
+    if ($plan && count($plan['groups']) > 0) {
+        $__inter = array_values(array_filter($plan['groups'], fn($g) => $g['kind'] === 'INTERCITY'));
+        $custom['local'] = $plan['localFee'];
+        $custom['intercity'] = array_map(fn($g) => [
+            'city' => $g['city'], 'fee' => $g['intercityFee'],
+            'minMinutes' => $g['minMinutes'], 'maxMinutes' => $g['maxMinutes'],
+            'note' => $g['note'], 'windows' => $g['windows'],
+        ], $__inter);
+        $custom['groups'] = array_map(fn($g) => [
+            'key' => $g['key'], 'kind' => $g['kind'], 'label' => $g['label'], 'city' => $g['city'],
+            'fee' => $g['fee'], 'localFee' => $g['localFee'], 'intercityFee' => $g['intercityFee'],
+            'merchantIds' => array_column($g['merchants'], 'id'),
+            'merchantNames' => array_column($g['merchants'], 'name'),
+            'windows' => $g['windows'],
+        ], $plan['groups']);
+    }
+
     $opt = ['deliveryAddress' => $b['deliveryAddress'] ?? null, 'notes' => $b['notes'] ?? null,
         'deliveryLat' => isset($b['deliveryLat']) && $b['deliveryLat'] !== '' ? (float)$b['deliveryLat'] : null,
         'deliveryLng' => isset($b['deliveryLng']) && $b['deliveryLng'] !== '' ? (float)$b['deliveryLng'] : null,
@@ -3072,7 +3227,7 @@ if ($method === 'POST' && $path === '/admin/orders') {
         'merchantSubtotal' => $lines ? round($subtotal, 2) : null,
         'deliveryFee' => $fee,
         'finalPrice' => $quoted ?? $computed,
-        'customData' => $audit ? json_encode(['manualOrder' => $audit], JSON_UNESCAPED_UNICODE) : null,
+        'customData' => $custom ? json_encode($custom, JSON_UNESCAPED_UNICODE) : null,
         'quotedPrice' => $quoted,
         'paymentMethod' => !empty($b['paymentMethod']) ? (string)$b['paymentMethod'] : null];
     foreach ($opt as $k => $v) if ($v !== null) { $cols[] = $k; $ph[] = '?'; $args[] = $v; }
@@ -3091,38 +3246,9 @@ if ($method === 'POST' && $path === '/admin/orders') {
         }
     }
 
-    /*
-     * Optional driver, assigned properly.
-     *
-     * Assigning is not just writing a column: the driver has to be available,
-     * gets marked BUSY so they don't collect a second order, has their fee
-     * share frozen onto the order, and is told about it. Setting the column
-     * alone left a driver who looked assigned in the dashboard, stayed
-     * "available" to the dispatcher, and never heard about the job.
-     *
-     * A driver who turns out to be unavailable does NOT fail the order — the
-     * order is the point, and the agent can assign somebody else. The reason
-     * comes back in the response so the screen can say so.
-     */
-    $driverNote = null;
-    $wantDriver = trim((string) ($b['assignedDriverId'] ?? ''));
-    if ($wantDriver !== '') {
-        $dq = db()->prepare('SELECT dp.status, u.isActive FROM `DriverProfile` dp JOIN `User` u ON u.id = dp.userId WHERE dp.userId = ? LIMIT 1');
-        $dq->execute([$wantDriver]);
-        $dRow = $dq->fetch();
-        if (!$dRow)                            $driverNote = 'السائق غير موجود — الطلب اتعمل من غير سائق';
-        elseif (!(int) $dRow['isActive'])      $driverNote = 'حساب السائق موقوف — الطلب اتعمل من غير سائق';
-        elseif (($dRow['status'] ?? '') !== 'AVAILABLE')
-            $driverNote = 'السائق مش متاح دلوقتي — الطلب اتعمل من غير سائق';
-        else {
-            db()->prepare("UPDATE `Order` SET `assignedDriverId` = ?, `status` = 'DRIVER_ASSIGNED', `updatedAt` = NOW(3) WHERE id = ?")
-                ->execute([$wantDriver, $id]);
-            db()->prepare("UPDATE `DriverProfile` SET `status` = 'BUSY', `updatedAt` = NOW(3) WHERE userId = ?")
-                ->execute([$wantDriver]);
-            snapshotDriverShare($id);
-            orderHistory($id, 'NEW', 'DRIVER_ASSIGNED', $u['sub'] ?? null, 'ADMIN', 'Assigned on creation');
-        }
-    }
+    // Split into delivery groups now the lines exist — each group's collect
+    // amount is the goods its own driver carries.
+    if ($plan) saveOrderLegs($id, $plan);
 
     // Same money model as the app + reorder paths, so a manual order reports
     // its goods / delivery / commission / payout identically.
@@ -3146,9 +3272,56 @@ if ($method === 'POST' && $path === '/admin/orders') {
         }
     } catch (Throwable $e) { /* best-effort */ }
 
-    // Tell the driver, after the NEW round so the two messages arrive in the
-    // order the events happened.
-    if ($driverNote === null && $wantDriver !== '') notifyOrderParties($id, 'DRIVER_ASSIGNED');
+    /*
+     * Optional driver(s) — assigned AFTER the "new order" round, so the two
+     * messages arrive in the order the events happened.
+     *
+     * `legDrivers` names a driver per delivery group ({groupKey: driverId}); a
+     * bare `assignedDriverId` means "this driver takes the whole order" and goes
+     * on every group not named individually, which is what a single-origin order
+     * has always meant.
+     *
+     * A driver who turns out to be unavailable does NOT fail the order — the
+     * order is the point, and the agent can assign somebody else. The reasons
+     * come back in the response so the screen can say so.
+     */
+    $driverNotes = [];
+    $wantDriver = trim((string) ($b['assignedDriverId'] ?? ''));
+    $legDrivers = [];
+    foreach ((array) ($b['legDrivers'] ?? []) as $k => $v) {
+        // Accepts {groupKey: driverId} and [{groupKey, driverId}] alike.
+        if (is_array($v)) { $key = (string) ($v['groupKey'] ?? ''); $val = trim((string) ($v['driverId'] ?? '')); }
+        else              { $key = (string) $k;                     $val = trim((string) $v); }
+        if ($key !== '' && $val !== '') $legDrivers[$key] = $val;
+    }
+    $createdLegs = orderLegsFor($id);
+    if ($createdLegs && ($legDrivers || $wantDriver !== '')) {
+        foreach ($createdLegs as $lg) {
+            $want = $legDrivers[$lg['groupKey']] ?? ($wantDriver !== '' ? $wantDriver : '');
+            if ($want === '') continue;
+            $err = assignLegDriver($id, $lg, $want, $u['sub'] ?? null);
+            if ($err) $driverNotes[] = $lg['label'] . ': ' . $err;
+        }
+    } elseif ($wantDriver !== '') {
+        // No groups (an order with no address, or a server where the OrderLeg
+        // migration has not run) — the original single-driver path, unchanged.
+        $dq = db()->prepare('SELECT dp.status, u.isActive FROM `DriverProfile` dp JOIN `User` u ON u.id = dp.userId WHERE dp.userId = ? LIMIT 1');
+        $dq->execute([$wantDriver]);
+        $dRow = $dq->fetch();
+        if (!$dRow)                            $driverNotes[] = 'السائق غير موجود';
+        elseif (!(int) $dRow['isActive'])      $driverNotes[] = 'حساب السائق موقوف';
+        elseif (($dRow['status'] ?? '') !== 'AVAILABLE') $driverNotes[] = 'السائق مش متاح دلوقتي';
+        else {
+            db()->prepare("UPDATE `Order` SET `assignedDriverId` = ?, `status` = 'DRIVER_ASSIGNED', `updatedAt` = NOW(3) WHERE id = ?")
+                ->execute([$wantDriver, $id]);
+            db()->prepare("UPDATE `DriverProfile` SET `status` = 'BUSY', `updatedAt` = NOW(3) WHERE userId = ?")
+                ->execute([$wantDriver]);
+            snapshotDriverShare($id);
+            orderHistory($id, 'NEW', 'DRIVER_ASSIGNED', $u['sub'] ?? null, 'ADMIN', 'Assigned on creation');
+            notifyOrderParties($id, 'DRIVER_ASSIGNED');
+        }
+    }
+    $driverNote = $driverNotes ? implode(' · ', $driverNotes) . ' — الطلب اتعمل، عيّن مندوب تاني' : null;
 
     $sel = db()->prepare("SELECT " . ORDER_COLS . " " . ORDER_JOIN . " WHERE o.id = ?"); $sel->execute([$id]);
     $out = orderNest($sel->fetch());
@@ -5847,6 +6020,29 @@ if ($method === 'PATCH' && preg_match('#^/admin/orders/([^/]+)/price$#', $path, 
     if (isset($b['merchantSubtotal']) && $b['merchantSubtotal'] !== '') { $sets[] = '`merchantSubtotal` = ?'; $args[] = (float) $b['merchantSubtotal']; }
     $args[] = $m[1];
     db()->prepare('UPDATE `Order` SET ' . implode(', ', $sets) . ' WHERE id = ?')->execute($args);
+    /*
+     * Re-cut the delivery groups to the new fee. Without this the groups keep
+     * the fee they were created with, and the order page shows a per-group
+     * breakdown that does not add up to the total printed above it — the kind
+     * of disagreement that makes an admin distrust the whole screen.
+     */
+    if (isset($b['deliveryFee']) && $b['deliveryFee'] !== '') {
+        try {
+            $newFee = round((float) $b['deliveryFee'], 2);
+            $rows = orderLegsFor((string) $m[1]);
+            $base = array_sum(array_column($rows, 'deliveryFee'));
+            if ($rows && abs($base - $newFee) >= 0.01) {
+                $left = $newFee;
+                $up = db()->prepare('UPDATE `OrderLeg` SET deliveryFee = ?, localFee = 0, intercityFee = 0, updatedAt = NOW(3) WHERE id = ?');
+                foreach ($rows as $i => $l) {
+                    $share = $base > 0 ? round($newFee * ($l['deliveryFee'] / $base), 2) : round($newFee / count($rows), 2);
+                    if ($i === count($rows) - 1) $share = round($left, 2);
+                    $left -= $share;
+                    $up->execute([$share, $l['id']]);
+                }
+            }
+        } catch (Throwable $e) { error_log('[api.php] re-cut legs: ' . $e->getMessage()); }
+    }
     // Re-derive commission/payout from the new price.
     computeOrderFinancials($m[1]);
     notifyOrderParties($m[1], 'PRICED');
@@ -5880,12 +6076,65 @@ if ($method === 'PATCH' && preg_match('#^/admin/orders/([^/]+)/assign-driver$#',
     // "available" and collect a second order.
     db()->prepare("UPDATE `DriverProfile` SET `status` = 'BUSY', `updatedAt` = NOW(3) WHERE userId = ?")
         ->execute([$driverId]);
+    /*
+     * Assigning "the order" means assigning every delivery group that has
+     * nobody yet — otherwise a two-city order would show a driver at the top
+     * and "لم يُعيَّن بعد" on both of its groups, and neither group's driver
+     * would ever have been told.
+     */
+    try {
+        db()->prepare("UPDATE `OrderLeg` SET driverId = ?, status = 'DRIVER_ASSIGNED', updatedAt = NOW(3)
+                       WHERE orderId = ? AND driverId IS NULL")
+            ->execute([$driverId, $m[1]]);
+    } catch (Throwable $e) { /* no groups on this order */ }
     // Freeze the driver's delivery-fee share onto the order at assignment.
     snapshotDriverShare($m[1]);
     // Notifies the driver (new assignment + pickup/delivery) AND the customer.
     notifyOrderParties($m[1], 'DRIVER_ASSIGNED');
     $r = db()->prepare('SELECT * FROM `Order` WHERE id = ?'); $r->execute([$m[1]]);
     jsonOk(jsonizeRow($r->fetch()) ?: []);
+}
+
+/*
+ * PATCH /admin/orders/{id}/legs/{legId}/driver — a driver for ONE group.
+ *
+ * The قنا half and the قفط half of an order are two journeys; this is how each
+ * gets its own rider. `driverId: null` takes them off it again (and frees them,
+ * unless they are still carrying another group of the same order).
+ */
+if ($method === 'PATCH' && preg_match('#^/admin/orders/([^/]+)/legs/([^/]+)/driver$#', $path, $m)) {
+    $u = authUser(); if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
+    $b = readJsonBody();
+    $legs = orderLegsFor((string) $m[1]);
+    $leg = null;
+    foreach ($legs as $l) if ($l['id'] === $m[2]) { $leg = $l; break; }
+    if (!$leg) jsonErr('المجموعة غير موجودة', 404, 'NOT_FOUND');
+
+    $driverId = trim((string) ($b['driverId'] ?? ''));
+    if ($driverId === '') {
+        $prev = $leg['driverId'];
+        db()->prepare("UPDATE `OrderLeg` SET driverId = NULL, status = 'NEW', updatedAt = NOW(3) WHERE id = ?")
+            ->execute([$leg['id']]);
+        // Free them only if they are not still on another group of this order,
+        // and not on a different order either.
+        if ($prev) {
+            $busy = db()->prepare("SELECT 1 FROM `OrderLeg` l JOIN `Order` o ON o.id = l.orderId
+                                   WHERE l.driverId = ? AND o.status NOT IN ('DELIVERED','COMPLETED','CANCELLED') LIMIT 1");
+            $busy->execute([$prev]);
+            $stillOnOrder = db()->prepare("SELECT 1 FROM `Order` WHERE assignedDriverId = ? AND status NOT IN ('DELIVERED','COMPLETED','CANCELLED') LIMIT 1");
+            $stillOnOrder->execute([$prev]);
+            if (!$busy->fetchColumn() && !$stillOnOrder->fetchColumn()) {
+                db()->prepare("UPDATE `DriverProfile` SET status = 'AVAILABLE', updatedAt = NOW(3) WHERE userId = ?")->execute([$prev]);
+            }
+        }
+        jsonOk(['legs' => orderLegsFor((string) $m[1])]);
+    }
+
+    $err = assignLegDriver((string) $m[1], $leg, $driverId, $u['sub'] ?? null);
+    // Here the admin asked for THIS driver on purpose, so an unavailable driver
+    // is an error to show — unlike order creation, where the order still wins.
+    if ($err) jsonErr($err . ' — اختر مندوب متاح', 409, 'DRIVER_UNAVAILABLE');
+    jsonOk(['legs' => orderLegsFor((string) $m[1])]);
 }
 if ($method === 'POST' && preg_match('#^/admin/orders/([^/]+)/cancel$#', $path, $m)) {
     $u = authUser(); if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
@@ -7646,6 +7895,495 @@ function intercityRate(?string $fromCity, ?string $cityId, ?string $villageId, ?
     ];
 }
 
+/**
+ * Split a basket into DELIVERY GROUPS — one per place the goods leave from.
+ *
+ * A basket that mixes a قفط shop with a قنا shop is not one journey. The قفط
+ * goods go straight from the shop to the door. The قنا goods ride the inter-city
+ * van, which runs at fixed times, and somebody else takes them the last mile.
+ * Two vehicles, two schedules, two people — but the order carried ONE driver and
+ * ONE fee, so one of the two journeys had nobody assigned to it and was driven
+ * for free.
+ *
+ * Grouping rule: every store with no route out of its city falls into a single
+ * LOCAL group, so "قفط" and "قفط شارع المحطة" are one trip charged one local
+ * tariff. Each city that DOES have a route becomes its own group.
+ *
+ * Money per group:
+ *   LOCAL             → the zone tariff for the customer's area
+ *   INTERCITY REPLACE → the transfer price alone; it already ends at the door
+ *                       (inside قفط المدينة, where 70 is the whole fee)
+ *   INTERCITY ADD     → the transfer PLUS the zone tariff, because the van
+ *                       reaches the hub and someone still drives out to the
+ *                       village afterwards
+ *
+ * The order's delivery fee is the SUM of the groups. That is a change from the
+ * old single-fee model, and a deliberate one: it was charging one fare for two
+ * journeys, and which journey it picked depended on which store the customer
+ * happened to add to the basket first.
+ *
+ * @param array $merchantIds ids of every store in the basket (dupes fine)
+ * @return array{groups: list<array>, fee: float, localFee: float, zone: ?array, hasZone: bool, missingRoutes: list<string>}
+ */
+function orderLegPlan(?string $cityId, ?string $villageId, ?string $areaId, array $merchantIds): array {
+    $zq = zoneQuote($cityId, $villageId, $areaId);
+    $hasZone = is_array($zq) && ($zq[0] ?? '') === 'OK';
+    $localFee = $hasZone ? (float) $zq[1] : 0.0;
+
+    // Origin city per store, one query — never one per store in a loop.
+    $ids = array_values(array_unique(array_filter(array_map('strval', $merchantIds), fn($v) => $v !== '')));
+    $byCity = [];
+    if ($ids) {
+        $in = implode(',', array_fill(0, count($ids), '?'));
+        $ms = db()->prepare("SELECT id, city, storeNameAr FROM `MerchantProfile` WHERE id IN ($in)");
+        $ms->execute($ids);
+        foreach ($ms->fetchAll() as $r) {
+            $byCity[trim((string) ($r['city'] ?? ''))][] = [
+                'id' => (string) $r['id'],
+                'name' => trim((string) ($r['storeNameAr'] ?? '')),
+            ];
+        }
+    }
+
+    $localStores = [];
+    $groups = [];
+    $missing = [];
+    foreach ($byCity as $city => $stores) {
+        $ic = $city !== '' ? intercityRate($city, $cityId, $villageId, $areaId) : null;
+        if (!$ic) {
+            // A city that ships out but has no rule for THIS address cannot be
+            // delivered at a price anyone agreed to. Say so instead of quietly
+            // charging the local tariff for a trip nobody priced.
+            if ($city !== '' && intercityOriginExists($city)) $missing[] = $city;
+            $localStores = array_merge($localStores, $stores);
+            continue;
+        }
+        $add = $ic['mode'] === 'ADD';
+        $groups[] = [
+            'key' => (string) $city, 'kind' => 'INTERCITY', 'city' => (string) $city,
+            'label' => 'من ' . $city,
+            'merchants' => $stores,
+            'intercityFee' => round($ic['price'], 2),
+            'localFee' => $add ? $localFee : 0.0,
+            'fee' => round($ic['price'] + ($add ? $localFee : 0.0), 2),
+            'mode' => $ic['mode'],
+            'windows' => $ic['windows'],
+            'minMinutes' => $ic['minMinutes'], 'maxMinutes' => $ic['maxMinutes'], 'note' => $ic['note'],
+        ];
+    }
+    // Sort so the plan is stable whatever order the stores were added in — the
+    // whole bug this replaces was "whichever store came first decides".
+    usort($groups, fn($a, $b) => strcmp($a['key'], $b['key']));
+
+    // The local group leads. It also exists on its own for an order with no
+    // stores at all (a free-text delivery job still has a fee and a driver).
+    if ($localStores || !$groups) {
+        $destCity = trim((string) ($zq[2]['cityName'] ?? ''));
+        array_unshift($groups, [
+            'key' => 'LOCAL', 'kind' => 'LOCAL', 'city' => $destCity ?: null,
+            'label' => $destCity !== '' ? 'داخل ' . $destCity : 'توصيل محلي',
+            'merchants' => $localStores,
+            'intercityFee' => 0.0, 'localFee' => $localFee, 'fee' => $localFee,
+            'mode' => null, 'windows' => [], 'minMinutes' => null, 'maxMinutes' => null, 'note' => null,
+        ]);
+    }
+    foreach ($groups as $i => $_) $groups[$i]['seq'] = $i;
+
+    return [
+        'groups' => $groups,
+        'fee' => round(array_sum(array_column($groups, 'fee')), 2),
+        'localFee' => $localFee,
+        'zone' => $zq,
+        'hasZone' => $hasZone,
+        'missingRoutes' => array_values(array_unique($missing)),
+    ];
+}
+
+/**
+ * Re-cut a plan so its groups add up to a fee the admin typed by hand.
+ *
+ * Without this, an order whose fee was overridden showed groups summing to the
+ * computed number and a total showing the typed one — two different answers to
+ * "how much is delivery" on the same screen. The share of each group is kept
+ * (a group that was 3/4 of the computed fee stays 3/4 of the agreed one), and
+ * the local/transfer split is dropped: once a human has picked a round number,
+ * «نقل 70 + توصيل 20» is no longer where it came from, and printing it would be
+ * arithmetic that does not check out.
+ */
+function applyManualFeeToPlan(array $plan, float $fee): array {
+    $groups = $plan['groups'];
+    if (!$groups) return $plan;
+    $base = array_sum(array_column($groups, 'fee'));
+    $left = $fee;
+    foreach ($groups as $i => $g) {
+        $share = $base > 0
+            ? round($fee * ($g['fee'] / $base), 2)
+            : round($fee / count($groups), 2);
+        // Last group absorbs the rounding, so the parts always sum to the whole.
+        if ($i === count($groups) - 1) $share = round($left, 2);
+        $left -= $share;
+        $groups[$i]['fee'] = $share;
+        $groups[$i]['localFee'] = 0.0;
+        $groups[$i]['intercityFee'] = 0.0;
+    }
+    $plan['groups'] = $groups;
+    $plan['fee'] = round($fee, 2);
+    $plan['localFee'] = 0.0;
+    return $plan;
+}
+
+/**
+ * Persist a plan as `OrderLeg` rows, keeping any driver already assigned.
+ *
+ * Idempotent on (orderId, groupKey), so re-pricing an order re-costs its groups
+ * without orphaning the drivers already sent out. Groups that no longer exist
+ * (a store was removed from the order) are deleted.
+ *
+ * Never fatal: an order that cannot be split is still an order, and on a server
+ * where the OrderLeg migration has not run yet everything else must keep
+ * working exactly as before.
+ */
+function saveOrderLegs(string $orderId, array $plan): void {
+    try {
+        // Goods per store, so each group carries what its own driver collects.
+        $sub = [];
+        $ss = db()->prepare('SELECT merchantId, SUM(unitPriceSnapshot * quantity) AS s FROM `OrderItem` WHERE orderId = ? GROUP BY merchantId');
+        $ss->execute([$orderId]);
+        foreach ($ss->fetchAll() as $r) $sub[(string) ($r['merchantId'] ?? '')] = (float) $r['s'];
+
+        $keys = [];
+        $ins = db()->prepare(
+            'INSERT INTO `OrderLeg`
+               (id, orderId, groupKey, originCity, kind, seq, merchantIds, subtotal, deliveryFee, localFee, intercityFee, windows, minMinutes, maxMinutes, status, createdAt, updatedAt)
+             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NOW(3),NOW(3))
+             ON DUPLICATE KEY UPDATE
+               originCity = VALUES(originCity), kind = VALUES(kind), seq = VALUES(seq),
+               merchantIds = VALUES(merchantIds), subtotal = VALUES(subtotal),
+               deliveryFee = VALUES(deliveryFee), localFee = VALUES(localFee),
+               intercityFee = VALUES(intercityFee), windows = VALUES(windows),
+               minMinutes = VALUES(minMinutes), maxMinutes = VALUES(maxMinutes),
+               updatedAt = NOW(3)'
+        );
+        foreach ($plan['groups'] as $g) {
+            $keys[] = (string) $g['key'];
+            $mids = array_column($g['merchants'], 'id');
+            $s = 0.0;
+            foreach ($mids as $mid) $s += $sub[$mid] ?? 0.0;
+            // Lines with no store at all (a free-text job) belong to the local run.
+            if ($g['key'] === 'LOCAL') $s += $sub[''] ?? 0.0;
+            $ins->execute([
+                newId(), $orderId, (string) $g['key'], $g['city'], $g['kind'], (int) $g['seq'],
+                $mids ? json_encode($mids, JSON_UNESCAPED_UNICODE) : null,
+                round($s, 2), $g['fee'], $g['localFee'], $g['intercityFee'],
+                !empty($g['windows']) ? json_encode($g['windows'], JSON_UNESCAPED_UNICODE) : null,
+                $g['minMinutes'], $g['maxMinutes'], 'NEW',
+            ]);
+        }
+        if ($keys) {
+            $in = implode(',', array_fill(0, count($keys), '?'));
+            db()->prepare("DELETE FROM `OrderLeg` WHERE orderId = ? AND groupKey NOT IN ($in)")
+                ->execute(array_merge([$orderId], $keys));
+        }
+    } catch (Throwable $e) {
+        error_log('[api.php] saveOrderLegs ' . $orderId . ': ' . $e->getMessage());
+    }
+}
+
+/**
+ * The order's delivery groups, ready to render — stores and driver resolved.
+ *
+ * Returns [] both when an order has no groups and when the table is missing, so
+ * every caller can treat "no groups" as "the ordinary single-trip order".
+ */
+function orderLegsFor(string $orderId): array {
+    try {
+        $st = db()->prepare(
+            'SELECT l.*, u.name AS driverName, u.phone AS driverPhone
+             FROM `OrderLeg` l LEFT JOIN `User` u ON u.id = l.driverId
+             WHERE l.orderId = ? ORDER BY l.seq ASC, l.id ASC'
+        );
+        $st->execute([$orderId]);
+        $rows = $st->fetchAll();
+        if (!$rows) return [];
+
+        // Store names in one query for the whole order.
+        $all = [];
+        foreach ($rows as $r) {
+            foreach ((array) json_decode((string) ($r['merchantIds'] ?? ''), true) as $mid) $all[] = (string) $mid;
+        }
+        $names = [];
+        $all = array_values(array_unique(array_filter($all)));
+        if ($all) {
+            $in = implode(',', array_fill(0, count($all), '?'));
+            $ms = db()->prepare("SELECT id, storeNameAr FROM `MerchantProfile` WHERE id IN ($in)");
+            $ms->execute($all);
+            foreach ($ms->fetchAll() as $r) $names[(string) $r['id']] = trim((string) $r['storeNameAr']);
+        }
+
+        return array_map(function ($r) use ($names) {
+            $mids = array_values(array_filter(array_map('strval', (array) json_decode((string) ($r['merchantIds'] ?? ''), true))));
+            $wins = json_decode((string) ($r['windows'] ?? ''), true);
+            $city = trim((string) ($r['originCity'] ?? ''));
+            return [
+                'id' => (string) $r['id'],
+                'groupKey' => (string) $r['groupKey'],
+                'kind' => (string) $r['kind'],
+                'seq' => (int) $r['seq'],
+                'originCity' => $city ?: null,
+                'label' => $r['kind'] === 'INTERCITY'
+                    ? 'من ' . ($city ?: 'مدينة أخرى')
+                    : ($city !== '' ? 'داخل ' . $city : 'توصيل محلي'),
+                'merchantIds' => $mids,
+                'merchantNames' => array_values(array_filter(array_map(fn($id) => $names[$id] ?? '', $mids))),
+                'subtotal' => (float) $r['subtotal'],
+                'deliveryFee' => (float) $r['deliveryFee'],
+                'localFee' => (float) $r['localFee'],
+                'intercityFee' => (float) $r['intercityFee'],
+                'windows' => is_array($wins) ? array_values($wins) : [],
+                'minMinutes' => $r['minMinutes'] !== null ? (int) $r['minMinutes'] : null,
+                'maxMinutes' => $r['maxMinutes'] !== null ? (int) $r['maxMinutes'] : null,
+                'status' => (string) $r['status'],
+                'driverId' => $r['driverId'] ?: null,
+                'driverName' => $r['driverName'] ?: null,
+                'driverPhone' => $r['driverPhone'] ?: null,
+            ];
+        }, $rows);
+    } catch (Throwable $e) {
+        return [];
+    }
+}
+
+/**
+ * What each group's driver hands over and collects.
+ *
+ * Goods + that group's own fee. Order-level money the customer already settled
+ * (a coupon, wallet credit) comes off the FIRST group only — splitting a single
+ * discount across drivers would leave every one of them holding a rounded
+ * fraction and none of them able to reconcile.
+ */
+function orderLegCollect(array $o, array $legs): array {
+    $off = round((float) ($o['discountAmount'] ?? 0) + (float) ($o['walletUsed'] ?? 0), 2);
+    $out = [];
+    foreach ($legs as $i => $l) {
+        $amt = round($l['subtotal'] + $l['deliveryFee'] - ($i === 0 ? $off : 0.0), 2);
+        $out[$l['id']] = max(0.0, $amt);
+    }
+    return $out;
+}
+
+/** The item lines belonging to one delivery group, as WhatsApp bullets. */
+function orderLegItemsText(string $orderId, array $leg): string {
+    try {
+        $mids = $leg['merchantIds'] ?? [];
+        if ($mids) {
+            $in = implode(',', array_fill(0, count($mids), '?'));
+            $sql = "SELECT oi.*, mp.storeNameAr FROM `OrderItem` oi
+                    LEFT JOIN `MerchantProfile` mp ON mp.id = oi.merchantId
+                    WHERE oi.orderId = ? AND oi.merchantId IN ($in) ORDER BY oi.merchantId, oi.id";
+            $args = array_merge([$orderId], $mids);
+        } elseif (($leg['kind'] ?? '') === 'LOCAL') {
+            // A free-text delivery job has lines with no store at all.
+            $sql = 'SELECT oi.*, NULL AS storeNameAr FROM `OrderItem` oi WHERE oi.orderId = ? AND oi.merchantId IS NULL ORDER BY oi.id';
+            $args = [$orderId];
+        } else {
+            return '';
+        }
+        $st = db()->prepare($sql);
+        $st->execute($args);
+        // Grouped by store: one local group can hold nine shops, and a flat
+        // list of fourteen sandwiches tells the rider what to collect but not
+        // where from.
+        $byStore = [];
+        foreach ($st->fetchAll() as $it) {
+            $key = (string) ($it['merchantId'] ?? '');
+            $byStore[$key]['name'] = trim((string) ($it['storeNameAr'] ?? ''));
+            $nm = trim((string) $it['productNameSnapshot']);
+            if (!empty($it['variantNameSnapshot'])) $nm .= ' — ' . $it['variantNameSnapshot'];
+            $pl = waMoney($it['unitPriceSnapshot']);
+            $line = '• ' . (int) $it['quantity'] . '× ' . $nm . ($pl ? " ({$pl})" : '');
+            $ex = json_decode((string) ($it['addonsSnapshot'] ?? ''), true);
+            if (is_array($ex) && $ex) {
+                $line .= "\n     + " . implode('، ', array_filter(array_map(fn($a) => (string) ($a['nameAr'] ?? ''), $ex)));
+            }
+            $ln = trim((string) ($it['notes'] ?? ''));
+            if ($ln !== '') $line .= "\n     📝 " . $ln;
+            $byStore[$key]['lines'][] = $line;
+        }
+        $out = [];
+        foreach ($byStore as $g) {
+            $head = ($g['name'] !== '' && count($byStore) > 1) ? '🏪 ' . $g['name'] . "\n" : '';
+            $out[] = $head . implode("\n", $g['lines'] ?? []);
+        }
+        return implode("\n", $out);
+    } catch (Throwable $e) { return ''; }
+}
+
+/**
+ * The delivery groups, spelled out — for WhatsApp, the email and the summary.
+ *
+ * One group is the ordinary case and needs no heading, so this returns '' for
+ * it: a single-store order should not grow a "مجموعات التوصيل (1)" banner that
+ * says nothing. Everything it would have shown is already on the order.
+ */
+function orderLegsBlock(array $o, array $legs): string {
+    if (count($legs) < 2) return '';
+    $collect = orderLegCollect($o, $legs);
+    $out = ['🚚 *مجموعات التوصيل* (' . count($legs) . ') — كل مجموعة لها مندوبها'];
+    foreach ($legs as $i => $l) {
+        $n = $i + 1;
+        $head = "\n*{$n}) " . $l['label'] . '*' . ($l['kind'] === 'INTERCITY' ? ' — نقل بين المدن' : '');
+        $body = [];
+        // With several stores the item list labels each one, so repeating the
+        // whole roster above it is noise.
+        if (count($l['merchantNames']) === 1) $body[] = '🏪 ' . $l['merchantNames'][0];
+        $items = orderLegItemsText((string) $o['id'], $l);
+        if ($items !== '') $body[] = $items;
+        foreach ($l['windows'] as $w) {
+            $body[] = '⏰ ' . (string) ($w['label'] ?? '')
+                . ' — آخر طلب ' . (string) ($w['cutoff'] ?? '')
+                . '، تسليم ' . (string) ($w['delivery'] ?? '');
+        }
+        // Why this group costs what it costs — a bare number invites an argument.
+        // Only when the fee really is made of parts — «20 (توصيل للعنوان: 20)»
+        // repeats itself and reads like a formatting bug.
+        $fee = [];
+        if ($l['intercityFee'] > 0) $fee[] = 'نقل من ' . ($l['originCity'] ?: 'مدينة أخرى') . ': ' . waMoney($l['intercityFee']);
+        if ($l['localFee'] > 0)     $fee[] = 'توصيل للعنوان: ' . waMoney($l['localFee']);
+        $body[] = '💵 توصيل المجموعة: ' . waMoney($l['deliveryFee'])
+            . (count($fee) > 1 ? ' (' . implode(' + ', $fee) . ')' : '');
+        if ($l['subtotal'] > 0) $body[] = '🧺 قيمة البضاعة: ' . waMoney($l['subtotal']);
+        $body[] = '🧾 يحصّل: *' . waMoney($collect[$l['id']] ?? 0) . '*';
+        $body[] = '🧑‍✈️ المندوب: ' . ($l['driverName']
+            ? $l['driverName'] . ($l['driverPhone'] ? ' — ' . $l['driverPhone'] : '')
+            : '_لم يُعيَّن بعد_');
+        $out[] = $head . "\n" . implode("\n", $body);
+    }
+    return implode("\n", $out);
+}
+
+/**
+ * Tell one group's driver about their half of the order.
+ *
+ * Deliberately NOT the shared DRIVER template: that template describes the
+ * whole order — every store, every item, the full amount — and sending it to
+ * the driver of one group would have them collecting the other group's money
+ * and looking for goods that are on somebody else's bike.
+ */
+function notifyLegDriver(string $orderId, array $leg): void {
+    try {
+        if (empty($leg['driverId'])) return;
+        $q = db()->prepare(
+            "SELECT o.*, cu.name AS cust_name, cu.phone AS cust_phone, dr.phone AS drv_phone
+             FROM `Order` o
+             LEFT JOIN `User` cu ON cu.id = o.customerId
+             LEFT JOIN `User` dr ON dr.id = ?
+             WHERE o.id = ? LIMIT 1"
+        );
+        $q->execute([$leg['driverId'], $orderId]);
+        $o = $q->fetch();
+        if (!$o) return;
+        $no = (string) $o['orderNumber'];
+        $legs = orderLegsFor($orderId);
+        $collect = orderLegCollect($o, $legs);
+        $amount = $collect[$leg['id']] ?? ($leg['subtotal'] + $leg['deliveryFee']);
+
+        $msg = ["🚚 *مجموعة توصيل مُسندة إليك* — طلب #{$no}"];
+        $msg[] = 'المجموعة: ' . $leg['label'] . ($leg['kind'] === 'INTERCITY' ? ' (نقل بين المدن)' : '');
+        if (count($leg['merchantNames']) === 1) $msg[] = '🏪 المتجر: ' . $leg['merchantNames'][0];
+        elseif ($leg['merchantNames']) $msg[] = '🏪 المتاجر (' . count($leg['merchantNames']) . '): ' . implode('، ', $leg['merchantNames']);
+        $items = orderLegItemsText($orderId, $leg);
+        if ($items !== '') $msg[] = "🛒 المطلوب:\n" . $items;
+        foreach ($leg['windows'] as $w) {
+            $msg[] = '⏰ ' . (string) ($w['label'] ?? '')
+                . ' — آخر طلب ' . (string) ($w['cutoff'] ?? '')
+                . '، تسليم ' . (string) ($w['delivery'] ?? '');
+        }
+        $msg[] = '👤 العميل: ' . (trim((string) ($o['cust_name'] ?? '')) ?: 'العميل')
+            . (!empty($o['cust_phone']) ? "\n📞 الهاتف: " . $o['cust_phone'] : '');
+        if (!empty($o['deliveryAddress'])) $msg[] = '🏁 التوصيل: ' . $o['deliveryAddress'];
+        if (!empty($o['deliveryLat']) && !empty($o['deliveryLng'])) {
+            $msg[] = '📍 خريطة: https://maps.google.com/?q=' . $o['deliveryLat'] . ',' . $o['deliveryLng'];
+        }
+        $msg[] = ($o['paymentStatus'] ?? '') === 'PAID'
+            ? '💰 مدفوع — لا تُحصّل شيئاً'
+            : '💰 التحصيل: *' . waMoney($amount) . '* (' . waPayMethodAr($o['paymentMethod'] ?? null) . ')';
+
+        if (!empty($o['drv_phone'])) waEnqueue((string) $o['drv_phone'], implode("\n", $msg));
+        notifyUser((string) $leg['driverId'], 'ORDER_STATUS', 'مجموعة توصيل جديدة', 'مجموعة توصيل جديدة',
+            "طلب #{$no} — " . $leg['label'], "طلب #{$no} — " . $leg['label'],
+            ['orderId' => $orderId, 'orderNumber' => $no, 'screen' => 'OrderTracking', 'status' => 'DRIVER_ASSIGNED']);
+    } catch (Throwable $e) {
+        error_log('[api.php] notifyLegDriver: ' . $e->getMessage());
+    }
+}
+
+/**
+ * Put a driver on one delivery group.
+ *
+ * Assigning is never just writing a column: the driver has to be available,
+ * gets marked BUSY so dispatch stops offering them, and has to actually be told.
+ * The FIRST group assigned also becomes the order's driver, so everything that
+ * reads `Order.assignedDriverId` (the settlement report, the driver's share
+ * snapshot, the customer's "مندوبك في الطريق") keeps working unchanged.
+ *
+ * @return string|null a human reason when the driver could not take it — the
+ *                     caller decides whether that is fatal. Creating an order
+ *                     must never fail because a driver went offline.
+ */
+function assignLegDriver(string $orderId, array $leg, string $driverId, ?string $byAdminId = null): ?string {
+    $dq = db()->prepare("SELECT u.isActive, dp.status FROM `User` u
+                         LEFT JOIN `DriverProfile` dp ON dp.userId = u.id
+                         WHERE u.id = ? AND u.role = 'DRIVER' LIMIT 1");
+    $dq->execute([$driverId]);
+    $d = $dq->fetch();
+    if (!$d) return 'السائق غير موجود';
+    if (!(int) $d['isActive']) return 'حساب السائق موقوف';
+    // Already on this same order? Then they are "busy" with work we are adding
+    // to, and refusing would stop one driver taking both groups of one order.
+    $onThis = db()->prepare('SELECT 1 FROM `OrderLeg` WHERE orderId = ? AND driverId = ? LIMIT 1');
+    $onThis->execute([$orderId, $driverId]);
+    $already = (bool) $onThis->fetchColumn();
+    $ord = db()->prepare('SELECT assignedDriverId, status FROM `Order` WHERE id = ? LIMIT 1');
+    $ord->execute([$orderId]);
+    $o = $ord->fetch() ?: [];
+    if (($o['assignedDriverId'] ?? null) === $driverId) $already = true;
+    if (!$already && ($d['status'] ?? '') !== 'AVAILABLE') {
+        return ($d['status'] ?? '') === 'BUSY' ? 'السائق مشغول بطلب حالياً' : 'السائق غير متصل';
+    }
+
+    db()->prepare("UPDATE `OrderLeg` SET driverId = ?, status = 'DRIVER_ASSIGNED', updatedAt = NOW(3) WHERE id = ?")
+        ->execute([$driverId, $leg['id']]);
+    db()->prepare("UPDATE `DriverProfile` SET `status` = 'BUSY', `updatedAt` = NOW(3) WHERE userId = ?")
+        ->execute([$driverId]);
+
+    // Re-read so any message carries the driver just written.
+    $fresh = null;
+    $all = orderLegsFor($orderId);
+    foreach ($all as $f) if ($f['id'] === $leg['id']) { $fresh = $f; break; }
+    $split = count($all) > 1;
+
+    if (empty($o['assignedDriverId'])) {
+        $from = (string) ($o['status'] ?? 'NEW');
+        db()->prepare("UPDATE `Order` SET `assignedDriverId` = ?, `status` = 'DRIVER_ASSIGNED', `updatedAt` = NOW(3) WHERE id = ?")
+            ->execute([$driverId, $orderId]);
+        snapshotDriverShare($orderId);
+        orderHistory($orderId, $from, 'DRIVER_ASSIGNED', $byAdminId, 'ADMIN', 'مندوب مجموعة ' . $leg['label']);
+        // The order-wide fan-out (customer + group + supervisor) runs once, on
+        // the first driver. Later groups message only their own driver, or the
+        // customer would get "مندوبك في الطريق" once per group.
+        //
+        // On a split order even THIS driver gets the leg-scoped message, not
+        // the order-wide one: they are carrying one group, not the order.
+        notifyOrderParties($orderId, 'DRIVER_ASSIGNED', null, $split);
+        if ($split && $fresh) notifyLegDriver($orderId, $fresh);
+    } else {
+        orderHistory($orderId, (string) ($o['status'] ?? ''), (string) ($o['status'] ?? ''), $byAdminId, 'ADMIN',
+            'مندوب مجموعة ' . $leg['label']);
+        if ($fresh) notifyLegDriver($orderId, $fresh);
+    }
+    return null;
+}
+
 function zoneQuote(?string $cityId, ?string $villageId, ?string $areaId): ?array {
     if (!$cityId || !$villageId || !$areaId) return null;
     $st = db()->prepare('SELECT a.deliveryPrice AS aPrice, a.nameAr AS aName, a.isActive AS aActive,
@@ -7670,32 +8408,62 @@ if ($method === 'POST' && $path === '/zones/quote-delivery') {
     if (!$q) jsonErr('اختيارات العنوان غير صحيحة', 400, 'INVALID_ZONE');
     if ($q[0] === 'INACTIVE') jsonErr('هذه المنطقة غير مفعّلة حالياً. اختر منطقة أخرى.', 400, 'INACTIVE_ZONE');
 
-    // Ordering from a store in another city is a different trip with a
-    // different price, so an inter-city rule overrides the zone tariff. The
-    // caller may name the store (normal case) or the city outright.
+    /*
+     * Which stores the basket holds decides the price, so the caller sends ALL
+     * of them — `merchantIds`. `merchantId` (one) and `fromCity` still work for
+     * older clients, but a single id can only ever describe a single-store
+     * basket: passing the FIRST store of a mixed basket quoted the whole order
+     * as that store's trip, so the same two stores quoted 20 or 70 depending on
+     * which one the agent happened to add first.
+     */
+    $mids = array_values(array_filter(array_map('strval', (array) ($b['merchantIds'] ?? []))));
+    if (!$mids && !empty($b['merchantId'])) $mids = [(string) $b['merchantId']];
+
     $fromCity = trim((string) ($b['fromCity'] ?? ''));
-    if ($fromCity === '' && !empty($b['merchantId'])) {
-        $ms = db()->prepare('SELECT city FROM `MerchantProfile` WHERE id = ? LIMIT 1');
-        $ms->execute([(string) $b['merchantId']]);
-        $fromCity = trim((string) ($ms->fetchColumn() ?: ''));
+    if ($fromCity !== '' && !$mids) {
+        // City named outright (the store page, before there is a basket).
+        $ic = intercityRate($fromCity, $b['cityId'] ?? null, $b['villageId'] ?? null, $b['areaId'] ?? null);
+        if ($ic) {
+            $local = ($q[0] === 'OK' && $ic['mode'] === 'ADD') ? (float) $q[1] : 0.0;
+            jsonOk(array_merge($q[2] ?? [], [
+                'price' => round($local + $ic['price'], 2), 'source' => 'INTERCITY',
+                'localFee' => $local, 'intercityFee' => $ic['price'], 'fromCity' => $ic['fromCity'],
+                'minMinutes' => $ic['minMinutes'], 'maxMinutes' => $ic['maxMinutes'],
+                'note' => $ic['note'], 'windows' => $ic['windows'],
+            ]));
+        }
     }
-    $ic = intercityRate($fromCity, $b['cityId'] ?? null, $b['villageId'] ?? null, $b['areaId'] ?? null);
-    if ($ic) {
-        // Two legs, two fees: the local delivery the zone tariff already prices
-        // for this exact area, PLUS the transfer in from the other city. A
-        // village with no local tariff still gets the transfer quoted.
-        $local = $q[0] === 'OK' ? (float) $q[1] : 0.0;
-        if ($ic['mode'] === 'REPLACE') $local = 0.0;
+
+    if ($mids) {
+        $plan = orderLegPlan($b['cityId'] ?? null, $b['villageId'] ?? null, $b['areaId'] ?? null, $mids);
+        if ($plan['missingRoutes']) {
+            jsonErr('في متجر من ' . implode(' و', $plan['missingRoutes']) . ' ولسه مفيش توصيل لمنطقتك. شيله من السلة أو اختار عنوان تاني.', 409, 'NO_INTERCITY_ROUTE');
+        }
+        $inter = array_values(array_filter($plan['groups'], fn($g) => $g['kind'] === 'INTERCITY'));
+        if ($q[0] === 'NO_PRICE' && !$inter) jsonErr('لا يوجد سعر توصيل لهذه المنطقة، تواصل مع الدعم', 400, 'NO_DELIVERY_PRICE');
         jsonOk(array_merge($q[2] ?? [], [
-            'price' => round($local + $ic['price'], 2),
-            'source' => 'INTERCITY',
-            'localFee' => $local,
-            'intercityFee' => $ic['price'],
-            'fromCity' => $ic['fromCity'],
-            'minMinutes' => $ic['minMinutes'],
-            'maxMinutes' => $ic['maxMinutes'],
-            'note' => $ic['note'],
-            'windows' => $ic['windows'],
+            'price' => $plan['fee'],
+            'source' => $inter ? 'INTERCITY' : ($q[2]['source'] ?? null),
+            // Summed across the groups, NOT the bare zone tariff: localFee +
+            // intercityFee must add up to `price`, or the app's "70 + 20"
+            // explanation contradicts the 70 it is explaining.
+            'localFee' => round(array_sum(array_column($plan['groups'], 'localFee')), 2),
+            // Every group, so the caller can show WHY the fee is what it is
+            // instead of a total nobody can check.
+            'groups' => array_map(fn($g) => [
+                'key' => $g['key'], 'kind' => $g['kind'], 'label' => $g['label'], 'city' => $g['city'],
+                'fee' => $g['fee'], 'localFee' => $g['localFee'], 'intercityFee' => $g['intercityFee'],
+                'merchantIds' => array_column($g['merchants'], 'id'),
+                'merchantNames' => array_column($g['merchants'], 'name'),
+                'windows' => $g['windows'], 'minMinutes' => $g['minMinutes'],
+                'maxMinutes' => $g['maxMinutes'], 'note' => $g['note'],
+            ], $plan['groups']),
+            'intercityFee' => round(array_sum(array_column($inter, 'intercityFee')), 2),
+            'fromCity' => $inter ? $inter[0]['city'] : null,
+            'minMinutes' => $inter ? $inter[0]['minMinutes'] : null,
+            'maxMinutes' => $inter ? $inter[0]['maxMinutes'] : null,
+            'windows' => $inter ? $inter[0]['windows'] : [],
+            'note' => $inter ? $inter[0]['note'] : null,
         ]));
     }
 
@@ -8068,65 +8836,26 @@ if ($method === 'POST' && $path === '/orders/cart') {
     }
     // Delivery fee is ALWAYS recomputed server-side (anti-tamper).
     $fee = null;
-    /** Per-origin-city legs of this delivery — see where they are filled. */
-    $legs = [];
+    /** The basket's delivery groups — one per origin. See orderLegPlan(). */
+    $plan = null;
     if (!empty($b['cityId']) || !empty($b['villageId']) || !empty($b['areaId'])) {
         $q = zoneQuote($b['cityId'] ?? null, $b['villageId'] ?? null, $b['areaId'] ?? null);
         if (!$q) jsonErr('اختيارات العنوان غير صحيحة', 400, 'INVALID_ZONE');
         if ($q[0] === 'INACTIVE') jsonErr('هذه المنطقة غير مفعّلة حالياً. اختر منطقة أخرى.', 400, 'INACTIVE_ZONE');
         if ($q[0] === 'NO_PRICE') jsonErr('لا يوجد سعر توصيل لهذه المنطقة، تواصل مع الدعم', 400, 'NO_DELIVERY_PRICE');
-        $fee = (float) $q[1];
 
-        // A store in another city is a different trip. Quoting the inter-city
-        // rate to the customer and then charging the local one at checkout
-        // would be the worst of both, so the same rule applies here. Uses the
-        // EVERY store in the basket, not just the first.
-        //
-        // Taking the first store meant a basket that opened with a local shop
-        // and happened to include one item from قنا was priced as a purely
-        // local trip: a real order with ten stores and a قنا item was charged
-        // 20 EGP when the قنا leg alone is 70. The van still has to make that
-        // run, so the surcharge is owed if ANY store needs it.
-        //
-        // Distinct origin cities, so two stores in قنا are one trip, not two.
+        // Every store in the basket, grouped by where its goods leave from —
+        // never just the first one. See orderLegPlan() for the money rule.
         $__mids = [];
         foreach ($merchants as $__m) {
             if (!empty($__m['merchantId'])) $__mids[] = (string) $__m['merchantId'];
         }
-        if ($__mids) {
-            $__in = implode(',', array_fill(0, count($__mids), '?'));
-            $__cs = db()->prepare("SELECT DISTINCT city FROM `MerchantProfile` WHERE id IN ($__in)");
-            $__cs->execute($__mids);
-            foreach ($__cs->fetchAll() as $__row) {
-                $__fromCity = trim((string) ($__row['city'] ?? ''));
-                if ($__fromCity === '') continue;
-                $__ic = intercityRate($__fromCity, $b['cityId'] ?? null, $b['villageId'] ?? null, $b['areaId'] ?? null);
-                // A store in another city with no route configured cannot be
-                // delivered from — better a clear refusal than an order nobody
-                // can fulfil at a price nobody agreed.
-                if (!$__ic && intercityOriginExists($__fromCity)) {
-                    conflictErr('NO_INTERCITY_ROUTE', 'في متجر من ' . $__fromCity . ' ولسه مفيش توصيل لمنطقتك. شيله من السلة أو اختار عنوان تاني.');
-                }
-                if ($__ic) {
-                    // REPLACE drops the local leg entirely — see intercityRate().
-                    if ($__ic['mode'] === 'REPLACE') { $fee = 0.0; $legs = []; }
-                    $fee = round((float) $fee + $__ic['price'], 2);
-                    // Remember the leg. A total on its own cannot say WHY the
-                    // fee is what it is, and the two halves of the order do not
-                    // arrive together — the قنا convoy runs at fixed times — so
-                    // the order has to carry both the split and the schedule for
-                    // the dashboard, the message and the customer to show them.
-                    $legs[] = [
-                        'city' => $__fromCity,
-                        'fee' => $__ic['price'],
-                        'minMinutes' => $__ic['minMinutes'],
-                        'maxMinutes' => $__ic['maxMinutes'],
-                        'note' => $__ic['note'],
-                        'windows' => $__ic['windows'],
-                    ];
-                }
-            }
+        $plan = orderLegPlan($b['cityId'] ?? null, $b['villageId'] ?? null, $b['areaId'] ?? null, $__mids);
+        if ($plan['missingRoutes']) {
+            conflictErr('NO_INTERCITY_ROUTE', 'في متجر من ' . implode(' و', $plan['missingRoutes'])
+                . ' ولسه مفيش توصيل لمنطقتك. شيله من السلة أو اختار عنوان تاني.');
         }
+        $fee = $plan['fee'];
     }
     $pm = (string) ($b['paymentMethod'] ?? 'CASH');
     if (!in_array($pm, ['CASH', 'VODAFONE_CASH', 'INSTAPAY'], true)) $pm = 'CASH';
@@ -8238,12 +8967,30 @@ if ($method === 'POST' && $path === '/orders/cart') {
      * change keep their children, and the read paths still handle them.
      */
     $splitPerMerchant = false;
-    // The local leg is whatever the zone tariff charged before any transfer was
-    // added, so the two halves always sum back to the fee actually charged.
-    $localFee = round((float) ($fee ?? 0) - array_sum(array_column($legs, 'fee')), 2);
-    $deliveryLegs = $legs
-        ? json_encode(['local' => $localFee, 'intercity' => $legs], JSON_UNESCAPED_UNICODE)
-        : null;
+    // The split is written onto the order as well as into OrderLeg: the rows are
+    // the live record (drivers, statuses), this is the frozen snapshot of what
+    // was quoted, so a later tariff edit can never rewrite a past order's story.
+    // `local` + `intercity` are kept in the shape older orders use so one
+    // renderer covers both.
+    $deliveryLegs = null;
+    if ($plan && count($plan['groups']) > 0) {
+        $__inter = array_values(array_filter($plan['groups'], fn($g) => $g['kind'] === 'INTERCITY'));
+        $deliveryLegs = json_encode([
+            'local' => $plan['localFee'],
+            'intercity' => array_map(fn($g) => [
+                'city' => $g['city'], 'fee' => $g['intercityFee'],
+                'minMinutes' => $g['minMinutes'], 'maxMinutes' => $g['maxMinutes'],
+                'note' => $g['note'], 'windows' => $g['windows'],
+            ], $__inter),
+            'groups' => array_map(fn($g) => [
+                'key' => $g['key'], 'kind' => $g['kind'], 'label' => $g['label'], 'city' => $g['city'],
+                'fee' => $g['fee'], 'localFee' => $g['localFee'], 'intercityFee' => $g['intercityFee'],
+                'merchantIds' => array_column($g['merchants'], 'id'),
+                'merchantNames' => array_column($g['merchants'], 'name'),
+                'windows' => $g['windows'],
+            ], $plan['groups']),
+        ], JSON_UNESCAPED_UNICODE);
+    }
 
     db()->prepare('INSERT INTO `Order` (id, orderNumber, serviceId, customerId, category, status, merchantId, deliveryAddress, deliveryLat, deliveryLng, cityId, villageId, areaId, paymentMethod, paymentStatus, currency, couponCode, discountAmount, merchantSubtotal, deliveryFee, quotedPrice, finalPrice, scheduledFor, customData, createdAt, updatedAt)
         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NOW(3),NOW(3))')
@@ -8297,6 +9044,9 @@ if ($method === 'POST' && $path === '/orders/cart') {
                 ]);
         }
     }
+    // Groups go in AFTER the items, because each group's collect amount is the
+    // goods its own driver carries.
+    if ($plan) saveOrderLegs($parentId, $plan);
     if ($coupon) {
         try {
             db()->prepare('INSERT INTO `CouponRedemption` (id, couponId, userId, orderId, discount, createdAt) VALUES (?,?,?,?,?,NOW(3))')

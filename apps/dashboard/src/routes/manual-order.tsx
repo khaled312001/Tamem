@@ -68,6 +68,31 @@ interface Basket {
   lines: Line[];
 }
 
+/**
+ * One «مجموعة توصيل» — the goods leaving from one place.
+ *
+ * A basket that mixes a قفط shop with a قنا shop is two journeys: two riders,
+ * two schedules, two fees. The server returns one of these per journey so the
+ * screen can show the agent exactly what the customer is being charged for.
+ */
+interface QuoteGroup {
+  key: string;
+  kind: 'LOCAL' | 'INTERCITY';
+  label: string;
+  city: string | null;
+  fee: number;
+  localFee: number;
+  intercityFee: number;
+  merchantIds: string[];
+  merchantNames: string[];
+  windows: { label?: string; cutoff?: string; delivery?: string }[];
+}
+
+interface Quote {
+  price?: number | string;
+  groups?: QuoteGroup[];
+}
+
 const uid = () => Math.random().toString(36).slice(2, 10);
 
 export function ManualOrderDialog({
@@ -132,24 +157,32 @@ export function ManualOrderDialog({
 
   // The tariff for the chosen area. `NO_PRICE` is a normal outcome, not an
   // error — the agent is offered a manual fee instead.
-  // The first store decides the route, same rule the server uses. Without it
-  // the screen quoted a قنا restaurant as an ordinary local delivery.
-  const routeMerchantId = baskets[0]?.merchantId ?? null;
+  //
+  // EVERY store is sent, not the first one. A basket with a قفط shop and a قنا
+  // shop is two journeys with two fees, and quoting it from whichever store the
+  // agent happened to add first made the same order cost 20 or 70 depending on
+  // the order of two clicks. The server groups them and returns the split.
+  const merchantIds = baskets.map((b) => b.merchantId);
+  const merchantKey = [...merchantIds].sort().join(',');
 
   const { data: quote, isFetching: quoting } = useQuery({
-    queryKey: ['manual-order', 'fee', cityId, villageId, areaId, routeMerchantId],
+    queryKey: ['manual-order', 'fee', cityId, villageId, areaId, merchantKey],
     queryFn: () =>
       api.raw
         .post('/zones/quote-delivery', {
           cityId,
           villageId,
           areaId,
-          ...(routeMerchantId ? { merchantId: routeMerchantId } : {}),
+          ...(merchantIds.length ? { merchantIds } : {}),
         })
-        .then((r) => r.data.data as { price?: number | string })
-        .catch(() => ({ price: undefined })),
+        .then((r) => r.data.data as Quote)
+        .catch(() => ({ price: undefined }) as Quote),
     enabled: !!(cityId && villageId && areaId),
   });
+  // Groups only matter when there is more than one — a single-origin order is
+  // the ordinary case and gets the ordinary single driver picker.
+  const groups: QuoteGroup[] = quote?.groups ?? [];
+  const multiGroup = groups.length > 1;
   // Tolerate a stringified decimal: MySQL DECIMAL comes back as a string
   // through PDO, and an older API build is still allowed to say "20.00".
   const zoneFee = (() => {
@@ -215,6 +248,9 @@ export function ManualOrderDialog({
   // The server does the real assignment (availability, BUSY, fee share,
   // notification) and tells us if the driver could not take it.
   const [driverId, setDriverId] = useState('');
+  // …and one per delivery group when the basket spans cities, because the قنا
+  // half and the قفط half are carried by different people.
+  const [legDrivers, setLegDrivers] = useState<Record<string, string>>({});
   const { data: drivers } = useQuery({
     queryKey: ['manual-order', 'drivers'],
     queryFn: () => api.adminListDrivers({ pageSize: 100 }) as Promise<{ items: Row[] }>,
@@ -244,7 +280,11 @@ export function ManualOrderDialog({
         villageId: villageId || undefined,
         areaId: areaId || undefined,
         paymentMethod: payment,
-        assignedDriverId: driverId || undefined,
+        // One driver for a one-journey order; a driver per group otherwise.
+        assignedDriverId: multiGroup ? undefined : driverId || undefined,
+        legDrivers: multiGroup
+          ? Object.fromEntries(Object.entries(legDrivers).filter(([, v]) => v))
+          : undefined,
         notes: notes.trim() || undefined,
         merchants: baskets.map((b) => ({
           merchantId: b.merchantId,
@@ -513,23 +553,51 @@ export function ManualOrderDialog({
                 </button>
               ))}
             </div>
-            <Field
-              label="المندوب"
-              hint="سيبه فاضي عشان توزّعه بعدين — لو اخترته دلوقتي هيتبعتله الطلب على طول"
-            >
-              <select
-                value={driverId}
-                onChange={(e) => setDriverId(e.target.value)}
-                className="w-full px-3 py-2 rounded-xl border border-input bg-background text-sm outline-none focus:border-brand-red"
-              >
-                <option value="">— يتحدد لاحقاً —</option>
-                {(drivers?.items ?? []).map((d: Row) => (
-                  <option key={d.id} value={String(d.userId ?? d.id)}>
-                    {d.user?.name ?? d.name ?? 'مندوب'} — {d.user?.phone ?? d.phone ?? ''}
-                  </option>
+            {multiGroup ? (
+              <div className="space-y-2">
+                <p className="text-xs font-bold text-brand-dark">
+                  الطلب ده {groups.length} مجموعات توصيل — لكل مجموعة مندوبها
+                </p>
+                {groups.map((g) => (
+                  <Field
+                    key={g.key}
+                    label={`مندوب: ${g.label}`}
+                    hint={g.merchantNames.join('، ') || 'بدون متاجر'}
+                  >
+                    <select
+                      value={legDrivers[g.key] ?? ''}
+                      onChange={(e) => setLegDrivers((p) => ({ ...p, [g.key]: e.target.value }))}
+                      className="w-full px-3 py-2 rounded-xl border border-input bg-background text-sm outline-none focus:border-brand-red"
+                    >
+                      <option value="">— يتحدد لاحقاً —</option>
+                      {(drivers?.items ?? []).map((d: Row) => (
+                        <option key={d.id} value={String(d.userId ?? d.id)}>
+                          {d.user?.name ?? d.name ?? 'مندوب'} — {d.user?.phone ?? d.phone ?? ''}
+                        </option>
+                      ))}
+                    </select>
+                  </Field>
                 ))}
-              </select>
-            </Field>
+              </div>
+            ) : (
+              <Field
+                label="المندوب"
+                hint="سيبه فاضي عشان توزّعه بعدين — لو اخترته دلوقتي هيتبعتله الطلب على طول"
+              >
+                <select
+                  value={driverId}
+                  onChange={(e) => setDriverId(e.target.value)}
+                  className="w-full px-3 py-2 rounded-xl border border-input bg-background text-sm outline-none focus:border-brand-red"
+                >
+                  <option value="">— يتحدد لاحقاً —</option>
+                  {(drivers?.items ?? []).map((d: Row) => (
+                    <option key={d.id} value={String(d.userId ?? d.id)}>
+                      {d.user?.name ?? d.name ?? 'مندوب'} — {d.user?.phone ?? d.phone ?? ''}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+            )}
             <Field label="ملاحظات على الطلب">
               <Textarea rows={2} value={notes} onChange={(e) => setNotes(e.target.value)} />
             </Field>
@@ -566,6 +634,43 @@ export function ManualOrderDialog({
                   )}
                 </span>
               </div>
+              {/* Why the fee is what it is. A single number over a basket that
+                  spans cities looks like a mistake to the agent on the phone —
+                  and they are the one who has to justify it to the customer. */}
+              {!feeLater && groups.length > 0 && (
+                <div className="rounded-lg bg-card border border-border p-2 space-y-1.5">
+                  {groups.map((g) => (
+                    <div key={g.key} className="text-xs">
+                      <div className="flex justify-between gap-2">
+                        <span className="font-bold text-brand-dark truncate">{g.label}</span>
+                        <span className="font-bold shrink-0">{formatMoney(g.fee)}</span>
+                      </div>
+                      {g.merchantNames.length > 0 && (
+                        <p className="text-muted-foreground truncate">
+                          {g.merchantNames.join('، ')}
+                        </p>
+                      )}
+                      {g.intercityFee > 0 && g.localFee > 0 && (
+                        <p className="text-muted-foreground">
+                          نقل من {g.city}: {formatMoney(g.intercityFee)} + توصيل للعنوان:{' '}
+                          {formatMoney(g.localFee)}
+                        </p>
+                      )}
+                      {g.windows.map((w, i) => (
+                        <p key={i} className="text-muted-foreground">
+                          ⏰ {w.label} — آخر طلب {w.cutoff}، تسليم {w.delivery}
+                        </p>
+                      ))}
+                    </div>
+                  ))}
+                  {multiGroup && (
+                    <p className="text-[11px] leading-relaxed text-amber-800 border-t border-border pt-1.5">
+                      الطلب هيتقسم {groups.length} مجموعات، كل واحدة برحلة ومندوب لوحدها — وعشان كده
+                      الرسوم مجموعة على بعضها.
+                    </p>
+                  )}
+                </div>
+              )}
               <div className="flex justify-between border-t border-border pt-1.5 text-base">
                 <span className="font-black">الإجمالي</span>
                 <span className="font-black text-brand-red">{formatMoney(computed)}</span>
@@ -663,6 +768,19 @@ export function ManualOrderDialog({
                     : formatMoney(effectiveFee)
               }
             />
+            {multiGroup &&
+              groups.map((g) => {
+                const drv = (drivers?.items ?? []).find(
+                  (d: Row) => String(d.userId ?? d.id) === legDrivers[g.key],
+                );
+                return (
+                  <Line2
+                    key={g.key}
+                    k={g.label}
+                    v={`${formatMoney(g.fee)} — ${drv ? (drv.user?.name ?? drv.name ?? 'مندوب') : 'بدون مندوب'}`}
+                  />
+                );
+              })}
             <Line2 k="طريقة الدفع" v={PAYMENTS.find((p) => p.key === payment)?.label ?? ''} />
             <Line2 k="الإجمالي" v={formatMoney(agreedNum ?? computed)} />
 

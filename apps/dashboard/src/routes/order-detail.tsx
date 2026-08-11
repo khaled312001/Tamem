@@ -748,6 +748,13 @@ export function OrderDetailPage() {
             <ItemsByMerchantCard items={order.items} />
           )}
 
+          {/* Who carries which half, what each half costs, and what each rider
+              collects. Hidden for the ordinary single-journey order — a card
+              titled "مجموعة واحدة" would be noise on every screen. */}
+          {Array.isArray(order.legs) && order.legs.length > 1 && (
+            <DeliveryGroupsCard orderId={id!} legs={order.legs} onChanged={invalidate} />
+          )}
+
           {order.review && <ReviewCard review={order.review} />}
 
           {/* How this order came to exist and how its fee was decided. It used
@@ -2010,6 +2017,131 @@ function PriceDialog({
         </Button>
       </div>
     </Dialog>
+  );
+}
+
+/**
+ * «مجموعات التوصيل» — the order broken into the journeys it actually is.
+ *
+ * An order whose stores span cities does not arrive in one go: the قفط goods
+ * come straight from the shop, the قنا goods ride the inter-city van at its
+ * fixed times, and each half needs its own rider. This is where the admin sees
+ * the split and assigns those riders — one dropdown per group, saved on change,
+ * because an agent on the phone should not have to find a "حفظ" button.
+ */
+function DeliveryGroupsCard({
+  orderId,
+  legs,
+  onChanged,
+}: {
+  orderId: string;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  legs: any[];
+  onChanged: () => void;
+}) {
+  const { data: drivers } = useQuery({
+    queryKey: ['admin', 'drivers', 'for-legs'],
+    queryFn: () => api.adminListDrivers({ pageSize: 100 }),
+  });
+  const [busy, setBusy] = useState<string | null>(null);
+  const mut = useMutation({
+    mutationFn: ({ legId, driverId }: { legId: string; driverId: string }) =>
+      api.raw
+        .patch(`/admin/orders/${orderId}/legs/${legId}/driver`, { driverId })
+        .then((r) => r.data.data),
+    onSuccess: (_d, v) => {
+      toast.success(v.driverId ? 'تم تعيين مندوب المجموعة' : 'تم إلغاء تعيين المندوب');
+      onChanged();
+    },
+    onError: (err: Error) => toast.error(err.message),
+    onSettled: () => setBusy(null),
+  });
+
+  const money = (v: number) => `${Number(v || 0).toLocaleString('ar-EG')} ج.م`;
+  const totalFee = legs.reduce((s, l) => s + Number(l.deliveryFee || 0), 0);
+
+  return (
+    <Card title={`مجموعات التوصيل (${legs.length})`} icon={<Truck className="w-4 h-4" />}>
+      <p className="text-xs text-muted-foreground mb-3 leading-relaxed">
+        الطلب ده بيتوصّل على {legs.length} رحلات من أماكن مختلفة — كل مجموعة ليها مندوبها، رسومها،
+        والمبلغ اللي يحصّله.
+      </p>
+      <div className="space-y-3">
+        {legs.map((l, i) => (
+          <div key={l.id} className="rounded-lg border border-border p-3 space-y-2">
+            <div className="flex items-center justify-between gap-2">
+              <div className="min-w-0">
+                <p className="font-bold text-sm truncate">
+                  {i + 1}) {l.label}
+                  {l.kind === 'INTERCITY' && (
+                    <>
+                      {' '}
+                      <Badge variant="warning">نقل بين المدن</Badge>
+                    </>
+                  )}
+                </p>
+                {Array.isArray(l.merchantNames) && l.merchantNames.length > 0 && (
+                  <p className="text-xs text-muted-foreground truncate">
+                    {l.merchantNames.join('، ')}
+                  </p>
+                )}
+              </div>
+              <span className="font-bold text-sm shrink-0">{money(l.deliveryFee)}</span>
+            </div>
+
+            {/* The arithmetic, not just the answer. */}
+            {Number(l.intercityFee) > 0 && Number(l.localFee) > 0 && (
+              <p className="text-xs text-muted-foreground">
+                نقل من {l.originCity}: {money(l.intercityFee)} + توصيل للعنوان: {money(l.localFee)}
+              </p>
+            )}
+            {Array.isArray(l.windows) &&
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              l.windows.map((w: any, wi: number) => (
+                <p key={wi} className="text-xs text-muted-foreground">
+                  ⏰ {w.label} — آخر طلب {w.cutoff}، تسليم {w.delivery}
+                </p>
+              ))}
+            <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs">
+              {Number(l.subtotal) > 0 && <span>قيمة البضاعة: {money(l.subtotal)}</span>}
+              <span className="font-bold">يحصّل: {money(l.collect ?? 0)}</span>
+            </div>
+
+            <Field label="مندوب المجموعة">
+              <select
+                value={l.driverId ?? ''}
+                disabled={busy === l.id || mut.isPending}
+                onChange={(e) => {
+                  setBusy(l.id);
+                  mut.mutate({ legId: l.id, driverId: e.target.value });
+                }}
+                className="w-full px-3 py-2 rounded-lg border border-input bg-white text-sm"
+              >
+                <option value="">— لم يُعيَّن بعد —</option>
+                {/* The currently-assigned driver is BUSY and therefore missing
+                    from the available list, so it is added explicitly —
+                    otherwise the dropdown would render blank for an order that
+                    already has a rider. */}
+                {l.driverId && (
+                  <option value={l.driverId}>{l.driverName ?? 'المندوب الحالي'}</option>
+                )}
+                {((drivers?.items as Order[] | undefined) ?? [])
+                  .filter((d) => String(d.userId ?? d.id) !== l.driverId)
+                  .map((d) => (
+                    <option key={d.id} value={String(d.userId ?? d.id)}>
+                      {d.user?.name ?? d.name ?? 'مندوب'} — {d.user?.phone ?? d.phone ?? ''}
+                    </option>
+                  ))}
+              </select>
+            </Field>
+          </div>
+        ))}
+      </div>
+      <div className="flex justify-between border-t border-border mt-3 pt-2 text-sm">
+        <span className="font-bold">إجمالي رسوم التوصيل</span>
+        <span className="font-black text-brand-red">{money(totalFee)}</span>
+      </div>
+    </Card>
   );
 }
 

@@ -44,6 +44,8 @@ interface AddressPickerProps {
   /** The store being ordered from — forwarded to the zone quote so an order
    *  that crosses cities is priced as one instead of as a local delivery. */
   merchantId?: string | null;
+  /** Every store in the basket, for a cart that spans more than one. */
+  merchantIds?: string[] | null;
   value: PickedAddress | null;
   onChange: (a: PickedAddress | null) => void;
 }
@@ -58,7 +60,7 @@ const LAST_ADDRESS_KEY = '@tamem/last-delivery-address';
  *
  * Replaces every order screen's silent fallback to قفط center coords.
  */
-export function AddressPicker({ value, onChange, merchantId }: AddressPickerProps) {
+export function AddressPicker({ value, onChange, merchantId, merchantIds }: AddressPickerProps) {
   const [freeText, setFreeText] = useState<string>(value?.isFreeText ? value.address : '');
   const [busy, setBusy] = useState(false);
 
@@ -261,6 +263,7 @@ export function AddressPicker({ value, onChange, merchantId }: AddressPickerProp
           </Text>
           <DeliveryZonePicker
             merchantId={merchantId}
+            merchantIds={merchantIds}
             value={value.zone ?? null}
             onChange={(zone) => {
               const next: PickedAddress = { ...value, zone };

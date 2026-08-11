@@ -126,3 +126,7 @@ apps/mobile/android/.kotlin/
 # release; the source that made them is what belongs in git.
 release/*.aab
 release/*.apk
+
+# Python bytecode from the scripts/ helpers
+__pycache__/
+*.pyc

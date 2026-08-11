@@ -219,6 +219,52 @@ TABLES = {
           KEY `IntercityRate_to_idx` (`toCityId`,`toVillageId`,`toAreaId`)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     """,
+    # One row per place an order's goods leave from — a «مجموعة توصيل».
+    #
+    # A basket that mixes a قفط shop with a قنا shop is not one journey. The قفط
+    # goods go from the shop to the door; the قنا goods ride the inter-city van,
+    # which runs at fixed times, and are handed over at the other end. Different
+    # people carry them, at different times, for different money — but the order
+    # had exactly one `assignedDriverId` and one `deliveryFee`, so one of the two
+    # journeys had no driver and was given away for free.
+    #
+    # `groupKey` is 'LOCAL' for everything with no route out of its city (so
+    # "قفط" and "قفط شارع المحطة" stay ONE local trip charged one local tariff),
+    # and the origin city name for each city that does have one. It is unique per
+    # order, which is what makes rebuilding the plan idempotent.
+    #
+    # driverId is ON DELETE SET NULL, not CASCADE: deleting a driver account must
+    # never delete the delivery it belonged to.
+    "OrderLeg": """
+        CREATE TABLE `OrderLeg` (
+          `id` varchar(191) NOT NULL,
+          `orderId` varchar(191) NOT NULL,
+          `groupKey` varchar(120) NOT NULL,
+          `originCity` varchar(120) NULL,
+          `kind` varchar(20) NOT NULL DEFAULT 'LOCAL',
+          `seq` int NOT NULL DEFAULT 0,
+          `driverId` varchar(191) NULL,
+          `merchantIds` longtext NULL,
+          `subtotal` decimal(10,2) NOT NULL DEFAULT 0,
+          `deliveryFee` decimal(10,2) NOT NULL DEFAULT 0,
+          `localFee` decimal(10,2) NOT NULL DEFAULT 0,
+          `intercityFee` decimal(10,2) NOT NULL DEFAULT 0,
+          `windows` longtext NULL,
+          `minMinutes` int NULL,
+          `maxMinutes` int NULL,
+          `status` varchar(30) NOT NULL DEFAULT 'NEW',
+          `createdAt` datetime(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+          `updatedAt` datetime(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+          PRIMARY KEY (`id`),
+          UNIQUE KEY `OrderLeg_order_group_key` (`orderId`,`groupKey`),
+          KEY `OrderLeg_orderId_idx` (`orderId`),
+          KEY `OrderLeg_driverId_idx` (`driverId`),
+          CONSTRAINT `OrderLeg_orderId_fk` FOREIGN KEY (`orderId`)
+            REFERENCES `Order` (`id`) ON DELETE CASCADE,
+          CONSTRAINT `OrderLeg_driverId_fk` FOREIGN KEY (`driverId`)
+            REFERENCES `User` (`id`) ON DELETE SET NULL
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
 }
 
 # One-time data seeds, run after the tables exist. Each is (table, sql) and runs
