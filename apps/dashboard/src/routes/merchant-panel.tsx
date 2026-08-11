@@ -10,8 +10,6 @@ import {
   LayoutGrid,
   List,
   Loader2,
-  Package,
-  PackageX,
   Plus,
   Search,
   Settings2,
@@ -631,8 +629,16 @@ export function MerchantPanelPage() {
 
   return (
     <div className="space-y-6" dir="rtl">
-      {/* Stat Cards */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+      {/*
+        Catalogue stats only.
+
+        «إيرادات اليوم» and «طلبات اليوم» used to sit here and were removed on
+        the owner's instruction: this panel is where a shopkeeper edits their
+        menu, and money belongs on the admin side. A revenue figure on the
+        screen a shop assistant uses all day is also the one number nobody
+        should be able to read over their shoulder.
+      */}
+      <div className="grid grid-cols-2 gap-4">
         <StatCard icon={Box} tone="red" value={stats.productsCount ?? 0} label="إجمالي المنتجات" />
         <StatCard
           icon={FolderTree}
@@ -641,13 +647,6 @@ export function MerchantPanelPage() {
           // actually sit in. The tab below lists every section available.
           value={usedCategoriesCount}
           label="الأقسام المستخدمة"
-        />
-        <StatCard icon={Package} tone="green" value={stats.todayOrders ?? 0} label="طلبات اليوم" />
-        <StatCard
-          icon={PackageX}
-          tone="amber"
-          value={formatMoney(stats.todayRevenue ?? 0)}
-          label="إيرادات اليوم"
         />
       </div>
 
