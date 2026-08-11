@@ -34,6 +34,7 @@ import type { Service } from '@tamem/types';
 import { GradientButton } from '../components/GradientButton';
 import { GradientHeader } from '../components/GradientHeader';
 import { api } from '../lib/api';
+import { goToNewOrder } from '../lib/goToNewOrder';
 import { uploadFile } from '../lib/uploadFile';
 import type { HomeStackParamList } from '../navigation/HomeStack';
 import { colors, fontFamilies, fontSizes, radii, spacing } from '../theme/tokens';
@@ -175,20 +176,8 @@ export function ShippingFlowScreen() {
       return res.data.data;
     },
     onSuccess: (order) => {
-      try {
-        const parent = navigation.getParent();
-        if (parent) {
-          parent.navigate('Orders', {
-            screen: 'OrderTracking',
-            params: { orderId: order.id, justCreated: true },
-          } as never);
-          Alert.alert('تم استلام طلبك', `رقم الطلب: ${order.orderNumber ?? '—'}`);
-        } else {
-          navigation.popToTop();
-        }
-      } catch {
-        navigation.popToTop();
-      }
+      goToNewOrder(navigation, order.id);
+      Alert.alert('تم استلام طلبك', `رقم الطلب: ${order.orderNumber ?? '—'}`);
     },
     onError: (err) => {
       Alert.alert('خطأ', err instanceof Error ? err.message : 'فشل إنشاء الطلب');

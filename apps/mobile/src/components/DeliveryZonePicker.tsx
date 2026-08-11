@@ -25,6 +25,19 @@ export interface DeliveryZoneSelection {
   deliveryFee: number | null;
   /** Which tier the price came from ('AREA' or 'VILLAGE') — surfaced for debugging only. */
   priceSource?: 'AREA' | 'VILLAGE' | 'INTERCITY';
+  /**
+   * Where the quote for this exact (zone × basket) stands.
+   *
+   * `deliveryFee === null` on its own is ambiguous — it means "still asking"
+   * AND "this basket cannot be delivered here". The checkout screen has to tell
+   * those apart: one is a spinner, the other must block «تأكيد الطلب». Without
+   * it a basket holding a قنا shop that has no route to the customer's village
+   * showed «—» for delivery, let the customer tap confirm, and failed on the
+   * server with the same error they were never shown.
+   */
+  quoteStatus?: 'pending' | 'ok' | 'error';
+  /** The Arabic reason the quote failed, when `quoteStatus === 'error'`. */
+  quoteError?: string | null;
 }
 
 interface ZoneOption {
@@ -185,11 +198,17 @@ export function DeliveryZonePicker({
       const price = typeof q.price === 'string' ? Number(q.price) : q.price;
       // Avoid an infinite render loop — only push back if anything actually
       // changed.
-      if (value.deliveryFee !== price || value.priceSource !== q.source) {
+      if (
+        value.deliveryFee !== price ||
+        value.priceSource !== q.source ||
+        value.quoteStatus !== 'ok'
+      ) {
         onChange({
           ...value,
           deliveryFee: Number.isFinite(price) ? price : null,
           priceSource: q.source,
+          quoteStatus: 'ok',
+          quoteError: null,
         });
       }
     },
@@ -199,7 +218,10 @@ export function DeliveryZonePicker({
       const msg: string =
         e?.messageAr ?? e?.message ?? 'هذه المنطقة غير مغطاة حالياً. تواصل مع الإدارة';
       setQuoteError(msg);
-      if (value && value.deliveryFee !== null) onChange({ ...value, deliveryFee: null });
+      if (!value) return;
+      if (value.deliveryFee !== null || value.quoteStatus !== 'error' || value.quoteError !== msg) {
+        onChange({ ...value, deliveryFee: null, quoteStatus: 'error', quoteError: msg });
+      }
     },
   });
 
@@ -215,10 +237,21 @@ export function DeliveryZonePicker({
     if (!quoteKey) {
       lastQuoted.current = null;
       setQuoteError(null);
+      // Half-picked zone (city chosen, area not yet): there is nothing to
+      // quote, so drop any verdict left over from the previous selection.
+      if (value && value.quoteStatus !== undefined) {
+        onChange({ ...value, quoteStatus: undefined, quoteError: null });
+      }
       return;
     }
     if (lastQuoted.current === quoteKey) return;
     lastQuoted.current = quoteKey;
+    // Mark the selection as "asking" BEFORE the request leaves, so a caller
+    // reading `quoteStatus` never sees a stale `ok` from the previous basket
+    // while the new price is still in the air.
+    if (value && value.quoteStatus !== 'pending') {
+      onChange({ ...value, quoteStatus: 'pending', quoteError: null });
+    }
     quoteMut.mutate({
       cityId: value!.cityId,
       villageId: value!.villageId,

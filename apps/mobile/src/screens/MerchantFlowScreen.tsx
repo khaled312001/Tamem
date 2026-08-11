@@ -12,6 +12,7 @@ import {
   Text,
   TextInput,
   View,
+  type TextInputProps,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
@@ -20,6 +21,7 @@ import type { Service } from '@tamem/types';
 import { GradientButton } from '../components/GradientButton';
 import { GradientHeader } from '../components/GradientHeader';
 import { api } from '../lib/api';
+import { goToNewOrder } from '../lib/goToNewOrder';
 import type { HomeStackParamList } from '../navigation/HomeStack';
 import { colors, fontFamilies, fontSizes, radii, spacing } from '../theme/tokens';
 
@@ -118,20 +120,8 @@ export function MerchantFlowScreen() {
       return res.data.data;
     },
     onSuccess: (order) => {
-      try {
-        const parent = navigation.getParent();
-        if (parent) {
-          parent.navigate('Orders', {
-            screen: 'OrderTracking',
-            params: { orderId: order.id, justCreated: true },
-          } as never);
-          Alert.alert('تم استلام طلبك', `رقم الطلب: ${order.orderNumber ?? '—'}`);
-        } else {
-          navigation.popToTop();
-        }
-      } catch {
-        navigation.popToTop();
-      }
+      goToNewOrder(navigation, order.id);
+      Alert.alert('تم استلام طلبك', `رقم الطلب: ${order.orderNumber ?? '—'}`);
     },
     onError: (err) => Alert.alert('خطأ', err instanceof Error ? err.message : 'فشل الإرسال'),
   });
@@ -289,11 +279,12 @@ function SectionHeader({
   );
 }
 
-function Field({
-  Icon,
-  last,
-  ...props
-}: React.ComponentProps<typeof TextInput> & { Icon: typeof User; last?: boolean }) {
+// `TextInputProps`, not `React.ComponentProps<typeof TextInput>`: the repo
+// resolves two copies of @types/react, which makes `typeof TextInput` fail the
+// JSXElementConstructor constraint. The whole prop type then collapsed to
+// `{ Icon, last }` and every `value` / `onChangeText` passed to a Field became
+// a type error — silently, because the Android build never runs tsc.
+function Field({ Icon, last, ...props }: TextInputProps & { Icon: typeof User; last?: boolean }) {
   return (
     <View style={[styles.fieldWrap, last && { marginBottom: 0 }]}>
       <Icon size={18} color={colors.brand.red} />

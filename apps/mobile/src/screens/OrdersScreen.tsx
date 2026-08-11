@@ -2,7 +2,7 @@ import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import * as Haptics from 'expo-haptics';
-import { Package, RotateCcw } from 'lucide-react-native';
+import { Package, RotateCcw, WifiOff } from 'lucide-react-native';
 import { memo, useEffect, useState } from 'react';
 import {
   FlatList,
@@ -164,7 +164,7 @@ export function OrdersScreen() {
     counts: Record<TabKey, number>;
   }
 
-  const { data, isLoading, refetch, isFetching } = useQuery<OrdersPage>({
+  const { data, isLoading, isError, refetch, isFetching } = useQuery<OrdersPage>({
     queryKey: ['orders-mine', tab, page],
     queryFn: () =>
       api.raw
@@ -284,23 +284,40 @@ export function OrdersScreen() {
           windowSize={7}
           removeClippedSubviews
           ListEmptyComponent={
-            <EmptyState
-              icon={<Package size={36} color={colors.brand.red} />}
-              title={
-                tab === 'current'
-                  ? 'لا توجد طلبات نشطة الآن'
-                  : tab === 'completed'
-                    ? 'لا توجد طلبات مكتملة بعد'
-                    : 'لا توجد طلبات ملغاة'
-              }
-              subtitle={
-                tab === 'current'
-                  ? 'ابدأ طلب جديد من الصفحة الرئيسية وسيظهر هنا.'
-                  : tab === 'completed'
-                    ? 'الطلبات اللي وصلت بنجاح هتلاقيها هنا.'
-                    : undefined
-              }
-            />
+            /* A failed request and a genuinely empty list are NOT the same
+               screen. Falling back to «لا توجد طلبات نشطة» when /orders/mine
+               errors tells a customer with a live order that it does not
+               exist — and gives them nothing to press. */
+            isError ? (
+              <EmptyState
+                icon={<WifiOff size={36} color={colors.danger} />}
+                title="تعذّر تحميل طلباتك"
+                subtitle="تأكد من الاتصال بالإنترنت وحاول تاني."
+                actionLabel="إعادة المحاولة"
+                onAction={() => {
+                  tickHaptic();
+                  void refetch();
+                }}
+              />
+            ) : (
+              <EmptyState
+                icon={<Package size={36} color={colors.brand.red} />}
+                title={
+                  tab === 'current'
+                    ? 'لا توجد طلبات نشطة الآن'
+                    : tab === 'completed'
+                      ? 'لا توجد طلبات مكتملة بعد'
+                      : 'لا توجد طلبات ملغاة'
+                }
+                subtitle={
+                  tab === 'current'
+                    ? 'ابدأ طلب جديد من الصفحة الرئيسية وسيظهر هنا.'
+                    : tab === 'completed'
+                      ? 'الطلبات اللي وصلت بنجاح هتلاقيها هنا.'
+                      : undefined
+                }
+              />
+            )
           }
           renderItem={({ item, index }) => (
             <OrderCard

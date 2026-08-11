@@ -25,6 +25,7 @@ import { ScreenHeader } from '../components/ScreenHeader';
 import { SchedulePicker } from '../components/SchedulePicker';
 import { EmptyState, MoneyText, PrimaryButton } from '../components/ui';
 import { api } from '../lib/api';
+import { goToNewOrder } from '../lib/goToNewOrder';
 import { showToast } from '../lib/toast';
 import { uploadFile } from '../lib/uploadFile';
 import type { HomeStackParamList } from '../navigation/HomeStack';
@@ -70,31 +71,9 @@ export function CartCheckoutScreen() {
       api.raw.post('/orders/cart', payload).then((r) => r.data.data),
     onSuccess: (order) => {
       clearCart();
-      // Prefer landing the customer directly on OrderTracking via the Orders
-      // tab. If for any reason that's unreachable (parent missing, navigator
-      // not mounted yet), drop back to the Home tab — but never leave them
-      // stranded on the (now empty) checkout screen.
-      try {
-        const parent = navigation.getParent();
-        if (parent) {
-          parent.navigate('Orders', {
-            screen: 'OrderTracking',
-            params: { orderId: order.id, justCreated: true },
-          } as never);
-        } else {
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          (navigation as any).navigate('Home');
-          navigation.popToTop();
-        }
-      } catch {
-        try {
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          (navigation as any).navigate('Home');
-        } catch {
-          // ignore — last resort
-        }
-        navigation.popToTop();
-      }
+      // Lands on OrderTracking AND resets this stack, so returning to the
+      // الرئيسية tab shows Home rather than this now-empty checkout page.
+      goToNewOrder(navigation, order.id);
       showToast({ title: 'تم إنشاء طلبك بنجاح', tone: 'success' });
     },
     onError: (err: unknown) => {
@@ -121,6 +100,23 @@ export function CartCheckoutScreen() {
   const onSubmit = (): void => {
     if (!address || !address.address) {
       showToast({ title: 'أدخل عنوان التوصيل أولاً', tone: 'error' });
+      return;
+    }
+    // A basket whose delivery could not be priced must not reach the server.
+    // The commonest case is a store in another city with no route to this
+    // customer's village: the server answers NO_INTERCITY_ROUTE, and letting
+    // the tap through just moved that rejection from a banner the customer can
+    // act on to a toast after a spinner.
+    if (quoteStatus === 'pending') {
+      showToast({ title: 'لحظة — بنحسب رسوم التوصيل', tone: 'info' });
+      return;
+    }
+    if (quoteStatus === 'error') {
+      showToast({
+        title: 'التوصيل لهذا العنوان غير متاح',
+        message: address.zone?.quoteError ?? 'اختر عنوان تاني أو شيل متجر من السلة',
+        tone: 'error',
+      });
       return;
     }
     // A locatable address needs EITHER a zone (which prices + routes it) OR a
@@ -172,6 +168,8 @@ export function CartCheckoutScreen() {
   const deliveryFee = address?.zone?.deliveryFee ?? null;
   const grandTotal = cart.subtotal + (deliveryFee ?? 0);
   const zoneReady = !!(address?.zone?.cityId && address?.zone?.villageId && address?.zone?.areaId);
+  const quoteStatus = zoneReady ? address?.zone?.quoteStatus : undefined;
+  const blockedByQuote = quoteStatus === 'pending' || quoteStatus === 'error';
 
   if (cart.items.length === 0) {
     return (
@@ -390,7 +388,15 @@ export function CartCheckoutScreen() {
             {deliveryFee != null ? (
               <MoneyText amount={deliveryFee} size="sm" tone="brand" />
             ) : (
-              <Text style={styles.totalPlaceholder}>{zoneReady ? '—' : 'حدد المنطقة'}</Text>
+              <Text style={styles.totalPlaceholder}>
+                {!zoneReady
+                  ? 'حدد المنطقة'
+                  : quoteStatus === 'pending'
+                    ? 'جاري الحساب…'
+                    : quoteStatus === 'error'
+                      ? 'غير متاح'
+                      : '—'}
+              </Text>
             )}
           </View>
           <View style={styles.totalDivider} />
@@ -406,10 +412,22 @@ export function CartCheckoutScreen() {
 
       {/* Sticky bottom: confirm */}
       <View style={[styles.footer, shadows.lg]}>
+        {quoteStatus === 'error' ? (
+          <Text style={styles.footerBlocked} numberOfLines={2}>
+            {address?.zone?.quoteError ?? 'التوصيل لهذا العنوان غير متاح حالياً'}
+          </Text>
+        ) : null}
         <PrimaryButton
-          label={submitOrder.isPending ? 'جاري الإرسال…' : 'تأكيد الطلب'}
+          label={
+            submitOrder.isPending
+              ? 'جاري الإرسال…'
+              : quoteStatus === 'pending'
+                ? 'بنحسب التوصيل…'
+                : 'تأكيد الطلب'
+          }
           onPress={onSubmit}
           loading={submitOrder.isPending}
+          disabled={blockedByQuote}
         />
       </View>
 
@@ -616,6 +634,14 @@ const styles = StyleSheet.create({
     fontFamily: fontFamilies.headingBlack,
     color: colors.ink,
     fontSize: fontSizes.md,
+  },
+  footerBlocked: {
+    fontFamily: fontFamilies.bodyBold,
+    color: colors.danger,
+    fontSize: fontSizes.xs,
+    lineHeight: 18,
+    textAlign: 'center',
+    marginBottom: spacing.sm,
   },
   // Sticky footer
   footer: {

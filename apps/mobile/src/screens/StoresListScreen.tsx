@@ -1,7 +1,7 @@
 import { useNavigation, useRoute, type RouteProp } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useQuery } from '@tanstack/react-query';
-import { ArrowDownUp, MapPin, Package, Search, Star, Store } from 'lucide-react-native';
+import { ArrowDownUp, MapPin, Package, Search, Star, Store, WifiOff } from 'lucide-react-native';
 import { useMemo, useState } from 'react';
 import { FlatList, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 
@@ -97,7 +97,12 @@ export function StoresListScreen() {
   // straight into the key, so one word = one request per letter.
   const debouncedSearch = useDebouncedValue(search, 300);
 
-  const { data: merchants, isLoading } = useQuery<Merchant[]>({
+  const {
+    data: merchants,
+    isLoading,
+    isError: merchantsError,
+    refetch: refetchMerchants,
+  } = useQuery<Merchant[]>({
     queryKey: ['merchants', activeCategory, debouncedSearch],
     queryFn: () => {
       const params: Record<string, string> = {};
@@ -430,15 +435,28 @@ export function StoresListScreen() {
             sorted.length === 0 && { flexGrow: 1, justifyContent: 'center' },
           ]}
           ListEmptyComponent={
-            <EmptyState
-              icon={<Store size={36} color={colors.brand.red} />}
-              title={'لا توجد محلات' + (activeCategoryName ? ` في "${activeCategoryName}"` : '')}
-              subtitle={
-                activeCategory || search
-                  ? 'جرّب فلتر مختلف أو امسح البحث'
-                  : 'مفيش محلات متاحة حالياً'
-              }
-            />
+            /* «مفيش محلات متاحة حالياً» after a failed request reads as "Tamem
+               has no shops" — the customer closes the app instead of pulling to
+               refresh. Say what actually happened and give them the button. */
+            merchantsError ? (
+              <EmptyState
+                icon={<WifiOff size={36} color={colors.danger} />}
+                title="تعذّر تحميل المحلات"
+                subtitle="تأكد من الاتصال بالإنترنت وحاول تاني."
+                actionLabel="إعادة المحاولة"
+                onAction={() => void refetchMerchants()}
+              />
+            ) : (
+              <EmptyState
+                icon={<Store size={36} color={colors.brand.red} />}
+                title={'لا توجد محلات' + (activeCategoryName ? ` في "${activeCategoryName}"` : '')}
+                subtitle={
+                  activeCategory || search
+                    ? 'جرّب فلتر مختلف أو امسح البحث'
+                    : 'مفيش محلات متاحة حالياً'
+                }
+              />
+            )
           }
           renderItem={({ item }) => (
             <Pressable

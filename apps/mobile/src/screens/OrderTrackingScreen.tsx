@@ -1122,13 +1122,31 @@ function DriverLastSeen({ at }: { at: string }) {
 
 /**
  * "Pay online" entry point — rendered when the order is priced but not yet
- * paid. Navigates into PaymobCheckoutScreen so the user can pick Vodafone
+ * paid. Navigates into EasyKashCheckoutScreen so the user can pick Vodafone
  * Cash or InstaPay and complete the transaction in the system browser.
  * Cash-on-delivery customers can simply ignore the card.
+ *
+ * The card renders ONLY when the gateway is actually switched on. Online
+ * payment is off in production today (`online_payment_enabled` is unset), and
+ * an always-visible «ادفع أونلاين الآن» that opens a screen reading «الدفع
+ * الإلكتروني غير مفعّل حالياً» is a promise the app cannot keep. We ask the
+ * same endpoint the checkout screen asks, so the two can never disagree.
  */
 function PayOnlineCTA({ orderId, amount }: { orderId: string; amount: number }) {
   const navigation =
     useNavigation<NativeStackNavigationProp<OrdersStackParamList, 'OrderTracking'>>();
+  const gateway = useQuery({
+    queryKey: ['payments-config'],
+    queryFn: async () => {
+      const res = await api.raw.get('/payments/config');
+      return res.data.data as { online?: boolean };
+    },
+    staleTime: 10 * 60 * 1000,
+    retry: false,
+  });
+
+  if (!gateway.data?.online) return null;
+
   return (
     <Pressable
       onPress={() => navigation.navigate('EasyKashCheckout', { orderId })}
