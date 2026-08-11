@@ -1,10 +1,9 @@
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
-import { ClipboardList, Home, Package, User as UserIcon } from 'lucide-react-native';
+import { Home, Package, User as UserIcon } from 'lucide-react-native';
 import { Platform, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { MerchantDashboardScreen } from '../screens/merchant/MerchantDashboardScreen';
-import { MerchantOrdersListScreen } from '../screens/merchant/MerchantOrdersListScreen';
 import { MerchantProductsScreen } from '../screens/merchant/MerchantProductsScreen';
 import { MerchantProfileScreen } from '../screens/merchant/MerchantProfileScreen';
 import { colors, fontFamilies } from '../theme/tokens';
@@ -16,13 +15,15 @@ import { colors, fontFamilies } from '../theme/tokens';
  * visual right. So الرئيسية is registered first to land on the right —
  * matching customer AppTabs convention.
  *
- * `MerchantOrderDetail` is intentionally not a tab — it's a stack screen the
- * orders list pushes onto its own navigator (see MerchantStack), so the tab
- * bar stays four icons wide.
+ * There is deliberately NO customer-order inbox here. A merchant manages
+ * their menu; the orders themselves — and the money on them — belong to the
+ * admin side, which is the same call already made on the web merchant portal
+ * (see apps/dashboard/src/routes/merchant-panel.tsx). The tab that used to sit
+ * here read `/merchant/orders`, a route this backend has never implemented, so
+ * it could only ever show an error.
  */
 export type MerchantTabsParamList = {
   MerchantDashboard: undefined;
-  MerchantOrdersList: undefined;
   MerchantProducts: undefined;
   MerchantProfile: undefined;
 };
@@ -41,6 +42,7 @@ export function MerchantTabs() {
         initialRouteName="MerchantDashboard"
         screenOptions={{
           headerShown: false,
+          freezeOnBlur: true,
           tabBarActiveTintColor: colors.brand.red,
           tabBarInactiveTintColor: colors.text.muted,
           tabBarHideOnKeyboard: true,
@@ -66,21 +68,13 @@ export function MerchantTabs() {
         }}
       >
         {/* First-registered child lands on the visual RIGHT under RTL.
-            Order: الرئيسية → طلباتى → منتجاتى → حسابى. */}
+            Order: الرئيسية → منتجاتى → حسابى. */}
         <Tabs.Screen
           name="MerchantDashboard"
           component={MerchantDashboardScreen}
           options={{
             title: 'الرئيسية',
             tabBarIcon: ({ color }) => <Home size={TAB_ICON_SIZE} color={color} />,
-          }}
-        />
-        <Tabs.Screen
-          name="MerchantOrdersList"
-          component={MerchantOrdersListScreen}
-          options={{
-            title: 'طلباتى',
-            tabBarIcon: ({ color }) => <ClipboardList size={TAB_ICON_SIZE} color={color} />,
           }}
         />
         <Tabs.Screen

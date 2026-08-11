@@ -1,10 +1,17 @@
 /**
  * MerchantDashboardScreen
  *
- * Landing screen for the MERCHANT role. Shows a brand-gradient hero with
- * today's headline metrics and a 4-tile quick-action grid. Data is fetched
- * from `/merchant/me` and surfaced with a 5-minute TanStack Query cache,
+ * Landing screen for the MERCHANT role. Shows a brand-gradient hero with the
+ * store's own catalogue figures and a quick-action grid. Data is fetched from
+ * `/merchant/me` and surfaced with a 5-minute TanStack Query cache,
  * pull-to-refresh, and a soft skeleton while the request is in flight.
+ *
+ * NO order counts and NO revenue. Both were removed on the owner's
+ * instruction: this screen sits open on a shop counter all day and «إيرادات
+ * اليوم» is the one number that must not be readable over someone's shoulder.
+ * `/merchant/me` stopped sending `todayOrders` / `todayRevenue` /
+ * `pendingOrders` at the same time, so anything still rendering them here
+ * would only ever have shown a hard-coded zero.
  *
  * Intentionally kept self-contained — no imports from customer-facing
  * screens (Home/Orders/Profile). Brand tokens come from `theme/tokens` and
@@ -17,9 +24,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import type { MerchantTabsParamList } from '../../navigation/MerchantTabs';
 import {
   BarChart3,
-  ClipboardList,
-  Coins,
-  Hourglass,
+  LayoutGrid,
   Package,
   ShoppingBag,
   Star,
@@ -54,18 +59,26 @@ import {
   spacing,
 } from '../../theme/tokens';
 
+/**
+ * `/merchant/me` returns the profile row at the top level and the counters
+ * under `stats`. Reading `productsCount` off the root — which this screen used
+ * to do — is always `undefined`, which `formatNumber` then rendered as a
+ * confident «0».
+ */
 interface MerchantSummary {
   storeName?: string | null;
   storeNameAr?: string | null;
-  todayOrders?: number | null;
-  todayRevenue?: number | null;
-  pendingOrders?: number | null;
-  productsCount?: number | null;
   rating?: number | null;
+  stats?: {
+    productsCount?: number | null;
+    /** Product add/edit requests still waiting on an admin. */
+    pendingRequests?: number | null;
+    rating?: number | null;
+  } | null;
 }
 
 interface QuickTile {
-  key: 'orders' | 'products' | 'profile' | 'stats';
+  key: 'products' | 'profile' | 'stats';
   label: string;
   Icon: LucideIcon;
   tint: string;
@@ -73,24 +86,15 @@ interface QuickTile {
 }
 
 // Map each tile to the destination tab. Stats has no dedicated screen yet
-// so it routes back to the dashboard (a useful aggregate of today's KPIs
-// already lives in the hero + secondary stats above).
-type TabRoute = 'MerchantDashboard' | 'MerchantOrdersList' | 'MerchantProducts' | 'MerchantProfile';
+// so it opens a coming-soon sheet instead of navigating.
+type TabRoute = 'MerchantDashboard' | 'MerchantProducts' | 'MerchantProfile';
 const TILE_ROUTES: Record<QuickTile['key'], TabRoute> = {
-  orders: 'MerchantOrdersList',
   products: 'MerchantProducts',
   profile: 'MerchantProfile',
   stats: 'MerchantDashboard',
 };
 
 const QUICK_TILES: QuickTile[] = [
-  {
-    key: 'orders',
-    label: 'الطلبات',
-    Icon: ClipboardList,
-    tint: colors.brand.redLight,
-    color: colors.brand.red,
-  },
   {
     key: 'products',
     label: 'المنتجات',
@@ -114,13 +118,11 @@ const QUICK_TILES: QuickTile[] = [
   },
 ];
 
-function formatCurrency(value: number | null | undefined): string {
-  const n = Number(value ?? 0);
-  return `${n.toLocaleString('ar-EG')} ج.م`;
-}
-
 function formatNumber(value: number | null | undefined): string {
-  return Number(value ?? 0).toLocaleString('ar-EG');
+  // `—` rather than a confident «0» when the field simply is not there — a zero
+  // the server never sent is a lie the shopkeeper has no way to spot.
+  if (value == null) return '—';
+  return Number(value).toLocaleString('ar-EG');
 }
 
 function formatRating(value: number | null | undefined): string {
@@ -148,7 +150,11 @@ export function MerchantDashboardScreen() {
   });
 
   const data = query.data;
+  const stats = data?.stats ?? null;
   const storeName = data?.storeNameAr || data?.storeName || 'متجرك';
+  // `rating` lives on the profile row; `stats.rating` is the same value echoed
+  // back. Read both so the card survives either shape.
+  const rating = stats?.rating ?? data?.rating ?? null;
 
   const onRefresh = () => {
     query.refetch().catch((err) => {
@@ -189,47 +195,40 @@ export function MerchantDashboardScreen() {
           <Text style={styles.heroStoreName} numberOfLines={2}>
             {storeName}
           </Text>
-          <Text style={styles.heroSubtitle}>متابعة أداء متجرك اليوم</Text>
+          <Text style={styles.heroSubtitle}>إدارة منتجات متجرك</Text>
 
           {query.isLoading ? (
             <ActivityIndicator color={colors.white} style={{ marginTop: spacing.lg }} />
           ) : (
             <View style={styles.heroStatsRow}>
-              <HeroStat
-                Icon={ClipboardList}
-                label="طلبات اليوم"
-                value={formatNumber(data?.todayOrders)}
-              />
+              <HeroStat Icon={Package} label="منتجاتك" value={formatNumber(stats?.productsCount)} />
               <View style={styles.heroDivider} />
-              <HeroStat
-                Icon={Coins}
-                label="إيرادات اليوم"
-                value={formatCurrency(data?.todayRevenue)}
-              />
+              <HeroStat Icon={Star} label="تقييم متجرك" value={formatRating(rating)} />
             </View>
           )}
         </LinearGradient>
 
-        {/* Secondary stats — pending, products, rating */}
+        {/* Secondary stats. Deliberately catalogue-only — no order counts and no
+            revenue; see the file header. */}
         <View style={styles.statsGrid}>
           <StatTile
-            Icon={Hourglass}
-            label="قيد الانتظار"
-            value={formatNumber(data?.pendingOrders)}
+            Icon={LayoutGrid}
+            label="طلبات التعديل"
+            value={formatNumber(stats?.pendingRequests)}
             tint={colors.warningLight}
             color={colors.brand.gold}
           />
           <StatTile
             Icon={Package}
             label="المنتجات"
-            value={formatNumber(data?.productsCount)}
+            value={formatNumber(stats?.productsCount)}
             tint={colors.infoLight}
             color={colors.info}
           />
           <StatTile
             Icon={Star}
             label="التقييم"
-            value={formatRating(data?.rating)}
+            value={formatRating(rating)}
             tint={colors.brand.redLight}
             color={colors.brand.red}
           />
@@ -283,8 +282,8 @@ export function MerchantDashboardScreen() {
             </View>
             <Text style={styles.modalTitle}>إحصائيات تفصيلية قريباً</Text>
             <Text style={styles.modalBody}>
-              نشتغل على شاشة إحصائيات أعمق مع رسوم بيانية شهرية وتقارير المبيعات لكل منتج. حالياً
-              الأرقام الأساسية معروضة في الأعلى.
+              نشتغل على شاشة إحصائيات أعمق لمنتجات متجرك. لمتابعة الطلبات والمبيعات تواصل مع إدارة
+              تميم.
             </Text>
             <View style={styles.modalActions}>
               <Pressable
