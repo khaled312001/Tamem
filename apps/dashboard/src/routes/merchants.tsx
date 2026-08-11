@@ -5,8 +5,11 @@ import {
   ArrowUpDown,
   CheckCircle2,
   Clock,
+  Copy,
   ShieldCheck,
   Download,
+  Eye,
+  EyeOff,
   ImagePlus,
   LayoutGrid,
   List,
@@ -46,6 +49,7 @@ import { StatCard } from '../components/ui/StatCard.js';
 import { ErrorState } from '../components/ui/States.js';
 import { api } from '../lib/api.js';
 import { formatCount, formatDate, formatDateTime } from '../lib/format.js';
+import { copyText, generatePassword } from '../lib/generatePassword.js';
 import { TONE } from '../lib/statusRegistry.js';
 import { uploadFile } from '../lib/uploadFile.js';
 
@@ -1818,6 +1822,122 @@ function SecondaryPhonesEditor({
   );
 }
 
+/** Where a merchant signs in. Shown to them, so it has to be the real one. */
+const MERCHANT_PORTAL_URL = 'https://deliverytamem.com/merchant/';
+
+/**
+ * The merchant's login password — set it, read it, and hand it over.
+ *
+ * An admin doing this is mid-phone-call. They need a password that is strong
+ * without being dictatable-wrong, they need to SEE it (a masked field they just
+ * generated is useless — they have to read it out), and they need the whole
+ * credentials message in one paste rather than typing the portal URL from
+ * memory into WhatsApp.
+ *
+ * The password is only ever visible here, in the moment it is set: it is stored
+ * as a bcrypt hash and can never be read back, which is also why the copy
+ * button is disabled until there is a new one to copy.
+ */
+function MerchantPasswordField({
+  storeName,
+  phone,
+  value,
+  onChange,
+}: {
+  storeName: string;
+  phone: string;
+  value: string;
+  onChange: (v: string) => void;
+}) {
+  const [show, setShow] = useState(false);
+
+  const message = [
+    `بيانات دخول لوحة التاجر — ${storeName}`,
+    '',
+    `الرابط: ${MERCHANT_PORTAL_URL}`,
+    `رقم الهاتف: ${phone.trim()}`,
+    `كلمة المرور: ${value}`,
+  ].join('\n');
+
+  const copy = async (text: string, label: string) => {
+    if (await copyText(text)) toast.success(`${label} اتنسخ`);
+    else toast.error('المتصفح مسمحش بالنسخ — علّم على النص وانسخه يدوي');
+  };
+
+  return (
+    <div className="space-y-2">
+      <Field
+        label="كلمة المرور الجديدة للدخول"
+        hint="اتركها فارغة إذا لم ترد تعديل كلمة المرور — مش هتقدر تشوفها تاني بعد الحفظ"
+      >
+        <div className="flex gap-2">
+          <Input
+            // Revealed on purpose once generated: the admin has to read it out
+            // loud, and it is never retrievable after this dialog closes.
+            type={show ? 'text' : 'password'}
+            dir="ltr"
+            value={value}
+            onChange={(e) => onChange(e.target.value)}
+            placeholder="••••••••"
+            className="flex-1 font-mono"
+          />
+          <Button
+            type="button"
+            variant="outline"
+            size="md"
+            onClick={() => setShow((s) => !s)}
+            title={show ? 'إخفاء' : 'إظهار'}
+          >
+            {show ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            size="md"
+            onClick={() => {
+              onChange(generatePassword(12));
+              setShow(true);
+            }}
+          >
+            <RefreshCw className="w-4 h-4" />
+            توليد
+          </Button>
+        </div>
+      </Field>
+
+      {value.trim() !== '' && (
+        <div className="rounded-xl border border-border bg-muted/30 p-3 space-y-2">
+          <p className="text-xs text-muted-foreground leading-relaxed">
+            ابعت البيانات دي للتاجر بعد ما تحفظ. الرابط والرقم وكلمة المرور في رسالة واحدة جاهزة
+            للنسخ.
+          </p>
+          <pre
+            dir="rtl"
+            className="whitespace-pre-wrap break-words rounded-lg bg-card border border-border p-2.5 text-xs leading-relaxed"
+          >
+            {message}
+          </pre>
+          <div className="flex flex-wrap gap-2">
+            <Button type="button" size="sm" onClick={() => void copy(message, 'رسالة الدخول')}>
+              <Copy className="w-4 h-4" />
+              نسخ رسالة الدخول
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => void copy(value, 'كلمة المرور')}
+            >
+              <Copy className="w-4 h-4" />
+              نسخ كلمة المرور فقط
+            </Button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function EditMerchantDialog({ merchant, onClose }: { merchant: Row; onClose: () => void }) {
   const qc = useQueryClient();
   const { data: categories } = useQuery({
@@ -1844,8 +1964,13 @@ function EditMerchantDialog({ merchant, onClose }: { merchant: Row; onClose: () 
       });
       return res;
     },
-    onSuccess: () => {
-      toast.success('تم حفظ بيانات التاجر');
+    onSuccess: (res: Row) => {
+      // The server confirms whether the password actually changed. It used to
+      // be dropped on the floor while this said "تم الحفظ" — so now the
+      // confirmation reports what the server did, not what we asked for.
+      toast.success(
+        res?.passwordChanged ? 'تم حفظ البيانات وتغيير كلمة المرور' : 'تم حفظ بيانات التاجر',
+      );
       qc.invalidateQueries({ queryKey: ['admin', 'merchants'] });
       onClose();
     },
@@ -1880,14 +2005,14 @@ function EditMerchantDialog({ merchant, onClose }: { merchant: Row; onClose: () 
         <Field label="رقم الهاتف الرئيسي للدخول" hint="يستخدمه التاجر للدخول على لوحته">
           <Input value={ownerPhone} dir="ltr" onChange={(e) => setOwnerPhone(e.target.value)} />
         </Field>
-        <Field label="كلمة المرور الجديدة للدخول" hint="اتركها فارغة إذا لم ترد تعديل كلمة المرور">
-          <Input
-            type="password"
+        <div className="col-span-2">
+          <MerchantPasswordField
+            storeName={store.storeNameAr || merchant.storeNameAr || 'المتجر'}
+            phone={ownerPhone}
             value={ownerPassword}
-            onChange={(e) => setOwnerPassword(e.target.value)}
-            placeholder="••••••••"
+            onChange={setOwnerPassword}
           />
-        </Field>
+        </div>
         <Field label="رقم هاتف المتجر (اختياري)" hint="لو مختلف عن رقم المالك">
           <Input
             value={store.storePhone}

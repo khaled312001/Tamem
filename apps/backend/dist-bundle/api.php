@@ -5891,6 +5891,30 @@ if ($method === 'PATCH' && preg_match('#^/admin/merchants/([^/]+)$#', $path, $m)
     $sel = $pdo->prepare('SELECT userId FROM `MerchantProfile` WHERE id = ?'); $sel->execute([$id]);
     $mp = $sel->fetch();
     if (!$mp) jsonErr('التاجر غير موجود', 404, 'NOT_FOUND');
+
+    /*
+     * The login password.
+     *
+     * «كلمة المرور الجديدة للدخول» arrives as `ownerPassword`, and nothing read
+     * it: it is not a MerchantProfile column, so the generic loop below skipped
+     * it, and the User block only knew about name / phone / secondaryPhones /
+     * isActive. So the dialog saved, said «تم الحفظ», and changed nothing — the
+     * admin then read the new password down the phone to a merchant who could
+     * never sign in with it.
+     *
+     * Validated BEFORE the transaction opens: a jsonErr() from inside one exits
+     * mid-transaction and leaves the rollback to script shutdown.
+     */
+    $newHash = null;
+    foreach (['ownerPassword', 'newPassword', 'password'] as $__k) {
+        if (!array_key_exists($__k, $b)) continue;
+        $__pw = trim((string) $b[$__k]);
+        if ($__pw === '') continue;               // blank = "don't change it"
+        if (strlen($__pw) < 6) jsonErr('كلمة المرور قصيرة (6 أحرف على الأقل)', 422, 'WEAK_PASSWORD');
+        $newHash = password_hash($__pw, PASSWORD_BCRYPT);
+        break;
+    }
+
     try {
         $pdo->beginTransaction();
         $pcols = tableColumns('MerchantProfile'); $sets = []; $args = [];
@@ -5917,6 +5941,7 @@ if ($method === 'PATCH' && preg_match('#^/admin/merchants/([^/]+)$#', $path, $m)
         $secKey = array_key_exists('ownerSecondaryPhones', $b) ? 'ownerSecondaryPhones' : (array_key_exists('secondaryPhones', $b) ? 'secondaryPhones' : null);
         if ($secKey !== null) { $us[] = '`secondaryPhones` = ?'; $ua[] = json_encode(array_values((array)$b[$secKey]), JSON_UNESCAPED_UNICODE); }
         if (array_key_exists('isActive', $b)) { $us[] = '`isActive` = ?'; $ua[] = $b['isActive'] ? 1 : 0; }
+        if ($newHash !== null) { $us[] = '`passwordHash` = ?'; $ua[] = $newHash; }
         if ($us) { $us[] = '`updatedAt` = NOW(3)'; $ua[] = $mp['userId']; $pdo->prepare('UPDATE `User` SET ' . implode(',', $us) . ' WHERE id = ?')->execute($ua); }
         $pdo->commit();
     } catch (PDOException $e) {
@@ -5925,7 +5950,11 @@ if ($method === 'PATCH' && preg_match('#^/admin/merchants/([^/]+)$#', $path, $m)
         error_log('[api.php] merchant update: ' . $e->getMessage()); jsonErr('تعذّر التحديث', 422, 'UPDATE_FAILED');
     }
     $r = $pdo->prepare('SELECT * FROM `MerchantProfile` WHERE id = ?'); $r->execute([$id]);
-    jsonOk(jsonizeRow($r->fetch()) ?: []);
+    $out = jsonizeRow($r->fetch()) ?: [];
+    // Confirmed back to the screen, so «تم الحفظ» over an unchanged password
+    // can never happen silently again.
+    $out['passwordChanged'] = $newHash !== null;
+    jsonOk($out);
 }
 if ($method === 'DELETE' && preg_match('#^/admin/merchants/([^/]+)$#', $path, $m)) {
     $u = authUser(); if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
@@ -10207,14 +10236,9 @@ if ($method === 'GET' && $path === '/merchant/me') {
     $p = getMyMerchantProfile($u);
     $mid = $p['id'];
 
-    $startOfDay = date('Y-m-d 00:00:00');
     $pdo = db();
 
-    $todayOrders = (int) $pdo->query("SELECT COUNT(*) FROM `Order` WHERE merchantId = '$mid' AND createdAt >= '$startOfDay'")->fetchColumn();
-    $todayRevenue = (float) $pdo->query("SELECT SUM(finalPrice) FROM `Order` WHERE merchantId = '$mid' AND createdAt >= '$startOfDay' AND status IN ('DELIVERED','COMPLETED')")->fetchColumn();
-    $pendingOrders = (int) $pdo->query("SELECT COUNT(*) FROM `Order` WHERE merchantId = '$mid' AND status IN ('NEW','UNDER_REVIEW','PRICED')")->fetchColumn();
     $productsCount = (int) $pdo->query("SELECT COUNT(*) FROM `Product` WHERE merchantId = '$mid' AND (isHidden IS NULL OR isHidden = 0)")->fetchColumn();
-
     $pendingReq = (int) $pdo->query("SELECT COUNT(*) FROM `MerchantChangeRequest` WHERE merchantId = '$mid' AND status = 'PENDING'")->fetchColumn();
 
     $res = jsonizeRow($p);
@@ -10222,10 +10246,15 @@ if ($method === 'GET' && $path === '/merchant/me') {
     // The panel hides/disables the actions this store may not use, and warns
     // that saves go to review unless the store is auto-approved.
     $res['permissions'] = mcrPerms($p);
+    /*
+     * Catalogue counts only.
+     *
+     * `todayOrders` / `todayRevenue` / `pendingOrders` were dropped on the
+     * owner's instruction. Removing the two cards from the panel would have
+     * left the numbers in this response — one devtools tab away on a screen a
+     * shop assistant has open all day. Hidden means not sent.
+     */
     $res['stats'] = [
-        'todayOrders' => $todayOrders,
-        'todayRevenue' => round($todayRevenue, 2),
-        'pendingOrders' => $pendingOrders,
         'productsCount' => $productsCount,
         'pendingRequests' => $pendingReq,
         'rating' => $p['rating'] !== null ? (float)$p['rating'] : null,
