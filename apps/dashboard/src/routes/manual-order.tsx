@@ -126,13 +126,26 @@ export function ManualOrderDialog({
     enabled: !!villageId,
   });
 
+  // ── baskets ──
+  const [baskets, setBaskets] = useState<Basket[]>([]);
+  const [pickMerchant, setPickMerchant] = useState(false);
+
   // The tariff for the chosen area. `NO_PRICE` is a normal outcome, not an
   // error — the agent is offered a manual fee instead.
+  // The first store decides the route, same rule the server uses. Without it
+  // the screen quoted a قنا restaurant as an ordinary local delivery.
+  const routeMerchantId = baskets[0]?.merchantId ?? null;
+
   const { data: quote, isFetching: quoting } = useQuery({
-    queryKey: ['manual-order', 'fee', cityId, villageId, areaId],
+    queryKey: ['manual-order', 'fee', cityId, villageId, areaId, routeMerchantId],
     queryFn: () =>
       api.raw
-        .post('/zones/quote-delivery', { cityId, villageId, areaId })
+        .post('/zones/quote-delivery', {
+          cityId,
+          villageId,
+          areaId,
+          ...(routeMerchantId ? { merchantId: routeMerchantId } : {}),
+        })
         .then((r) => r.data.data as { price?: number | string })
         .catch(() => ({ price: undefined })),
     enabled: !!(cityId && villageId && areaId),
@@ -155,10 +168,6 @@ export function ManualOrderDialog({
     setVillageId(a.villageId ?? '');
     setAreaId(a.areaId ?? '');
   };
-
-  // ── baskets ──
-  const [baskets, setBaskets] = useState<Basket[]>([]);
-  const [pickMerchant, setPickMerchant] = useState(false);
 
   const { data: merchants } = useQuery({
     queryKey: ['manual-order', 'merchants'],
@@ -201,6 +210,15 @@ export function ManualOrderDialog({
 
   const [payment, setPayment] = useState<string>('CASH');
   const [notes, setNotes] = useState('');
+  // Assigning here saves the agent creating the order, reopening it, and
+  // assigning from a second screen while the customer is still on the line.
+  // The server does the real assignment (availability, BUSY, fee share,
+  // notification) and tells us if the driver could not take it.
+  const [driverId, setDriverId] = useState('');
+  const { data: drivers } = useQuery({
+    queryKey: ['manual-order', 'drivers'],
+    queryFn: () => api.adminListDrivers({ pageSize: 100 }) as Promise<{ items: Row[] }>,
+  });
   const [review, setReview] = useState(false);
 
   const { data: services } = useQuery({
@@ -226,6 +244,7 @@ export function ManualOrderDialog({
         villageId: villageId || undefined,
         areaId: areaId || undefined,
         paymentMethod: payment,
+        assignedDriverId: driverId || undefined,
         notes: notes.trim() || undefined,
         merchants: baskets.map((b) => ({
           merchantId: b.merchantId,
@@ -255,6 +274,9 @@ export function ManualOrderDialog({
     },
     onSuccess: (o) => {
       toast.success(`تم إنشاء الطلب #${o?.orderNumber ?? ''}`);
+      // The order always goes in; the driver is best-effort. Saying so beats a
+      // silent unassigned order the agent thinks is on its way.
+      if (o?.driverNote) toast.warning(String(o.driverNote));
       onCreated();
       onClose();
     },
@@ -262,11 +284,24 @@ export function ManualOrderDialog({
   });
 
   const hasItems = baskets.some((b) => b.lines.length > 0);
+  /*
+   * A free-text line starts empty and at zero, and nothing stopped either from
+   * being saved: a real order went out carrying "صنف يدوي — 0 ج.م" twice. A
+   * line with no name cannot be picked or packed, and one at zero silently
+   * undercharges, so neither may leave this screen.
+   */
+  const badLines = baskets.flatMap((b) =>
+    b.lines
+      .filter((l) => !l.nameAr.trim() || !(l.unitPrice > 0) || !(l.quantity > 0))
+      .map((l) => ({ merchant: b.merchantName, name: l.nameAr.trim() })),
+  );
+
   const canCreate =
     !!serviceId &&
     (customerId || phone.trim().length >= 8) &&
     address.trim().length >= 2 &&
     hasItems &&
+    badLines.length === 0 &&
     !create.isPending;
 
   return (
@@ -478,6 +513,23 @@ export function ManualOrderDialog({
                 </button>
               ))}
             </div>
+            <Field
+              label="المندوب"
+              hint="سيبه فاضي عشان توزّعه بعدين — لو اخترته دلوقتي هيتبعتله الطلب على طول"
+            >
+              <select
+                value={driverId}
+                onChange={(e) => setDriverId(e.target.value)}
+                className="w-full px-3 py-2 rounded-xl border border-input bg-background text-sm outline-none focus:border-brand-red"
+              >
+                <option value="">— يتحدد لاحقاً —</option>
+                {(drivers?.items ?? []).map((d: Row) => (
+                  <option key={d.id} value={String(d.userId ?? d.id)}>
+                    {d.user?.name ?? d.name ?? 'مندوب'} — {d.user?.phone ?? d.phone ?? ''}
+                  </option>
+                ))}
+              </select>
+            </Field>
             <Field label="ملاحظات على الطلب">
               <Textarea rows={2} value={notes} onChange={(e) => setNotes(e.target.value)} />
             </Field>
@@ -557,6 +609,11 @@ export function ManualOrderDialog({
             )}
           </div>
 
+          {badLines.length > 0 && (
+            <p className="rounded-lg bg-amber-50 border border-amber-200 p-2.5 text-xs font-bold leading-relaxed text-amber-900">
+              في {badLines.length} صنف ناقص اسم أو سعره صفر — اكتب الاسم والسعر قبل ما تكمّل.
+            </p>
+          )}
           <Button className="w-full" disabled={!canCreate} onClick={() => setReview(true)}>
             مراجعة وإنشاء الطلب
           </Button>
@@ -805,12 +862,25 @@ function MerchantBasket({
       {basket.lines.map((l) => (
         <div key={l.key} className="rounded-lg border border-border p-2 space-y-2">
           <div className="flex items-center gap-2">
-            <span className="flex-1 font-bold text-sm">
-              {l.nameAr}
-              {l.variantName ? (
-                <span className="text-muted-foreground"> — {l.variantName}</span>
-              ) : null}
-            </span>
+            {/* A line off the menu is fixed — its name and price come from the
+                catalogue and must not drift. A free-text line has neither yet,
+                and used to render as unchangeable text, so "صنف يدوي — 0 ج.م"
+                was the only thing it could ever be. */}
+            {l.productId ? (
+              <span className="flex-1 font-bold text-sm">
+                {l.nameAr}
+                {l.variantName ? (
+                  <span className="text-muted-foreground"> — {l.variantName}</span>
+                ) : null}
+              </span>
+            ) : (
+              <Input
+                value={l.nameAr}
+                onChange={(e) => patchLine(l.key, { nameAr: e.target.value })}
+                placeholder="اسم الصنف (مثال: طلب فول)"
+                className={cn('flex-1', !l.nameAr.trim() && 'border-amber-400')}
+              />
+            )}
             <Input
               type="number"
               min="1"
@@ -821,7 +891,22 @@ function MerchantBasket({
               }
               className="w-16"
             />
-            <span className="w-24 text-end font-bold">{formatMoney(l.unitPrice * l.quantity)}</span>
+            {l.productId ? (
+              <span className="w-24 text-end font-bold">
+                {formatMoney(l.unitPrice * l.quantity)}
+              </span>
+            ) : (
+              <Input
+                type="number"
+                min="0"
+                step="0.5"
+                dir="ltr"
+                value={l.unitPrice ? String(l.unitPrice) : ''}
+                onChange={(e) => patchLine(l.key, { unitPrice: Number(e.target.value) || 0 })}
+                placeholder="السعر"
+                className={cn('w-24', !(l.unitPrice > 0) && 'border-amber-400')}
+              />
+            )}
             <button
               type="button"
               onClick={() =>
@@ -850,7 +935,7 @@ function MerchantBasket({
             addLine({
               key: uid(),
               productId: null,
-              nameAr: 'صنف يدوي',
+              nameAr: '',
               unitPrice: 0,
               quantity: 1,
               notes: '',

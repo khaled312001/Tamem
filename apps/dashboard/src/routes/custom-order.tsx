@@ -121,8 +121,11 @@ export function CustomOrderDialog({
         assignedDriverId: driverId || undefined,
         merchantId: merchantId || undefined,
       }),
-    onSuccess: () => {
+    onSuccess: (res) => {
       toast.success('تم إنشاء الطلب');
+      const note = (res as { data?: { data?: { driverNote?: string } } })?.data?.data?.driverNote;
+      // The order always goes in; the driver is best-effort.
+      if (note) toast.warning(String(note));
       onCreated();
       onClose();
     },
