@@ -1661,6 +1661,129 @@ function orderEmailText(array $o, array $ctx): string {
 }
 
 /**
+ * Every variable a message about this order can use, built once.
+ *
+ * Extracted so the email can be sent on its own — the admin's «أنشئ وابعت»
+ * button needs the mail AFTER the driver is on the order, which is after the
+ * WhatsApp round has already gone out. Rebuilding these by hand at the second
+ * call site is how the email and the WhatsApp message start disagreeing about
+ * the same order.
+ */
+function orderMessageContext(array $o, ?string $reason = null): array {
+    $no = (string) $o['orderNumber'];
+    $d = orderDetailBlocks($o);
+    $custName = trim((string) ($o['cust_name'] ?? '')) ?: 'العميل';
+    $svc = trim((string) ($o['svc_name'] ?? '')) ?: waCategoryAr($o['category'] ?? null);
+
+    $ctx = [
+        'orderNumber' => $no, 'customerName' => $custName,
+        'customerPhone' => (string) ($o['cust_phone'] ?? ''),
+        'driverName' => trim((string) ($o['drv_name'] ?? '')),
+        'driverPhone' => (string) ($o['drv_phone'] ?? ''),
+        'price' => (string) ($d['total'] ?? ''), 'serviceName' => $svc,
+        'pickupAddress' => (string) ($o['pickupAddress'] ?? ''),
+        'deliveryAddress' => (string) ($o['deliveryAddress'] ?? ''),
+        'paymentMethod' => waPayMethodAr($o['paymentMethod'] ?? null),
+        'reason' => (string) ($reason ?? ''),
+    ];
+    // ─────────────────────────────────────────────────────────────────
+    // SINGLE SOURCE OF TRUTH: every message is the catalog template for
+    // (event, recipient) — the admin's saved override if present, else the
+    // rich default from notifDefaultCatalog(). No parallel hardcoded copies
+    // anymore: what the editor shows (and previews) is EXACTLY what is sent.
+    // These block variables let one template reproduce the full rich
+    // message; each is self-contained (carries its own icon/label) and is
+    // empty when not applicable, so an absent block leaves no dangling line.
+    // Readable, granular variables — the same names the dashboard editor
+    // samples, so the live preview renders in full. Multi-line composites
+    // (items / locations / price breakdown / customer recap) are single
+    // variables too, each empty when absent so its labelled line drops.
+    // The store. This was computed into $d but never copied here, so
+    // {{merchantName}} resolved to nothing on EVERY message and
+    // notifRender — which drops label-only lines — deleted "🏪 المتجر"
+    // from the group, supervisor and driver templates alike.
+    $ctx['merchantName'] = (string) ($d['merchantName'] ?? '');
+    $ctx['items']       = (string) $d['items'];       // bullet list / delivery notes
+    $ctx['shipping']    = (string) $d['shipping'];    // شحن specifics
+    $ctx['locations']   = (string) $d['locations'];   // 📍 استلام + 🏁 توصيل + خرائط
+    $ctx['priceBlock']  = (string) $d['price'];       // breakdown ending with الإجمالي
+    $ctx['payment']     = (string) $d['pay'];         // طريقة الدفع — حالة الدفع
+    // Delivery groups (empty unless the order really is more than one trip).
+    $ctx['groups']      = (string) ($d['groups'] ?? '');
+    // The store belongs in the customer's recap too. Fixing
+    // {{merchantName}} only fixed templates that name it directly —
+    // every customer template goes through {{summary}}, which never
+    // carried it, so the customer was told what was coming and never
+    // from where.
+    $ctx['summary']     = "🧾 الطلب رقم *#{$no}*\nالخدمة: {$svc}"
+        . ($d['merchantName'] ? "\n🏪 المتجر: {$d['merchantName']}" : '')
+        . ($d['items'] ? "\n\n🛒 التفاصيل:\n{$d['items']}" : '')
+        . ($d['shipping'] ? "\n\n📦 {$d['shipping']}" : '')
+        . ($d['locations'] ? "\n\n{$d['locations']}" : '')
+        // An order that arrives in two runs must SAY so, and say which
+        // stores are in each — otherwise the customer waits for one knock
+        // and thinks half the order is missing.
+        . (!empty($d['groups']) ? "\n\n{$d['groups']}" : '')
+        . "\n\n💳 الدفع: {$d['pay']}\n{$d['price']}";
+    $ctx['collect']     = ($o['paymentStatus'] ?? '') === 'PAID'
+        ? 'مدفوع — لا تُحصّل شيئاً'
+        : ('حصّل *' . ($d['total'] ?? '') . '* (' . waPayMethodAr($o['paymentMethod'] ?? null) . ')');
+    return $ctx;
+}
+
+/** The row every message builder expects — order + customer + driver + service. */
+function orderForMessages(string $orderId): ?array {
+    $q = db()->prepare(
+        "SELECT o.*,
+                cu.name AS cust_name, cu.phone AS cust_phone, cu.email AS cust_email,
+                dr.name AS drv_name, dr.phone AS drv_phone,
+                s.nameAr AS svc_name
+         FROM `Order` o
+         LEFT JOIN `User` cu ON cu.id = o.customerId
+         LEFT JOIN `User` dr ON dr.id = o.assignedDriverId
+         LEFT JOIN `Service` s ON s.id = o.serviceId
+         WHERE o.id = ? LIMIT 1"
+    );
+    $q->execute([$orderId]);
+    return $q->fetch() ?: null;
+}
+
+/**
+ * Mail the customer their order — and say which address it went to.
+ *
+ * Returns the address so the caller can TELL the agent. "تم الإرسال" over a
+ * customer with no email on file is a lie the agent only discovers when the
+ * customer phones back asking where their confirmation is.
+ */
+function sendOrderEmail(string $orderId, string $status, ?string $to = null): ?string {
+    try {
+        $o = orderForMessages($orderId);
+        if (!$o) return null;
+        $email = trim((string) ($to ?? ''));
+        if ($email === '') $email = trim((string) ($o['cust_email'] ?? ''));
+        if ($email === '' || !filter_var($email, FILTER_VALIDATE_EMAIL)) return null;
+
+        $subj = [
+            'NEW' => 'استلمنا طلبك',
+            'PRICED' => 'تم تسعير طلبك',
+            'ACCEPTED' => 'تم قبول طلبك',
+            'DRIVER_ASSIGNED' => 'مندوبك في الطريق',
+            'DELIVERED' => 'تم توصيل طلبك',
+            'COMPLETED' => 'تم توصيل طلبك',
+            'CANCELLED' => 'تم إلغاء طلبك',
+        ][$status] ?? 'تحديث على طلبك';
+
+        $ctx = orderMessageContext($o);
+        mailDefer($email, $subj . ' — تميم #' . $o['orderNumber'],
+            orderEmailText($o, $ctx), orderEmailHtml($o, $ctx, $status));
+        return $email;
+    } catch (Throwable $e) {
+        error_log('[api.php] sendOrderEmail: ' . $e->getMessage());
+        return null;
+    }
+}
+
+/**
  * @param bool $skipDriver Suppress the order-wide DRIVER copy. Set when the
  *   order is split into delivery groups: that template describes the WHOLE
  *   order — every store, every item, the full amount to collect — and sending
@@ -1669,28 +1792,15 @@ function orderEmailText(array $o, array $ctx): string {
  *   from notifyLegDriver() instead. The customer / group / supervisor copies
  *   still go out normally.
  */
-function notifyOrderParties(string $orderId, string $status, ?string $reason = null, bool $skipDriver = false): void {
+function notifyOrderParties(string $orderId, string $status, ?string $reason = null, bool $skipDriver = false): array {
     // The order is being handled now → clear its "new order" alert from the centre.
     resolveOrderAlerts($orderId);
+    /** Who actually received something — returned so a caller can say so. */
+    $log = [];
     try {
-        $q = db()->prepare(
-            "SELECT o.*,
-                    cu.name AS cust_name, cu.phone AS cust_phone,
-                    dr.name AS drv_name, dr.phone AS drv_phone,
-                    s.nameAr AS svc_name
-             FROM `Order` o
-             LEFT JOIN `User` cu ON cu.id = o.customerId
-             LEFT JOIN `User` dr ON dr.id = o.assignedDriverId
-             LEFT JOIN `Service` s ON s.id = o.serviceId
-             WHERE o.id = ? LIMIT 1"
-        );
-        $q->execute([$orderId]);
-        $o = $q->fetch();
-        if (!$o) return;
+        $o = orderForMessages($orderId);
+        if (!$o) return $log;
         $no = (string) $o['orderNumber'];
-        $d = orderDetailBlocks($o);
-        $custName = trim((string) ($o['cust_name'] ?? '')) ?: 'العميل';
-        $svc = trim((string) ($o['svc_name'] ?? '')) ?: waCategoryAr($o['category'] ?? null);
         $drvName = trim((string) ($o['drv_name'] ?? ''));
         $sent = false;
 
@@ -1699,59 +1809,8 @@ function notifyOrderParties(string $orderId, string $status, ?string $reason = n
         // pair, replace its text, add extra recipients, or route the oversight
         // copy to a WhatsApp group — the editor is the single source of truth.
         $event = notifStatusToEvent($status);
-        $ctx = [
-            'orderNumber' => $no, 'customerName' => $custName,
-            'customerPhone' => (string) ($o['cust_phone'] ?? ''),
-            'driverName' => $drvName, 'driverPhone' => (string) ($o['drv_phone'] ?? ''),
-            'price' => (string) ($d['total'] ?? ''), 'serviceName' => $svc,
-            'pickupAddress' => (string) ($o['pickupAddress'] ?? ''),
-            'deliveryAddress' => (string) ($o['deliveryAddress'] ?? ''),
-            'paymentMethod' => waPayMethodAr($o['paymentMethod'] ?? null),
-            'reason' => (string) ($reason ?? ''),
-        ];
-        // ─────────────────────────────────────────────────────────────────
-        // SINGLE SOURCE OF TRUTH: every message is the catalog template for
-        // (event, recipient) — the admin's saved override if present, else the
-        // rich default from notifDefaultCatalog(). No parallel hardcoded copies
-        // anymore: what the editor shows (and previews) is EXACTLY what is sent.
-        // These block variables let one template reproduce the full rich
-        // message; each is self-contained (carries its own icon/label) and is
-        // empty when not applicable, so an absent block leaves no dangling line.
-        // Readable, granular variables — the same names the dashboard editor
-        // samples, so the live preview renders in full. Multi-line composites
-        // (items / locations / price breakdown / customer recap) are single
-        // variables too, each empty when absent so its labelled line drops.
-        // The store. This was computed into $d but never copied here, so
-        // {{merchantName}} resolved to nothing on EVERY message and
-        // notifRender — which drops label-only lines — deleted "🏪 المتجر"
-        // from the group, supervisor and driver templates alike.
-        $ctx['merchantName'] = (string) ($d['merchantName'] ?? '');
-        $ctx['items']       = (string) $d['items'];       // bullet list / delivery notes
-        $ctx['shipping']    = (string) $d['shipping'];    // شحن specifics
-        $ctx['locations']   = (string) $d['locations'];   // 📍 استلام + 🏁 توصيل + خرائط
-        $ctx['priceBlock']  = (string) $d['price'];       // breakdown ending with الإجمالي
-        $ctx['payment']     = (string) $d['pay'];         // طريقة الدفع — حالة الدفع
-        // Delivery groups (empty unless the order really is more than one trip).
-        $ctx['groups']      = (string) ($d['groups'] ?? '');
-        // The store belongs in the customer's recap too. Fixing
-        // {{merchantName}} only fixed templates that name it directly —
-        // every customer template goes through {{summary}}, which never
-        // carried it, so the customer was told what was coming and never
-        // from where.
-        $ctx['summary']     = "🧾 الطلب رقم *#{$no}*\nالخدمة: {$svc}"
-            . ($d['merchantName'] ? "
-🏪 المتجر: {$d['merchantName']}" : '')
-            . ($d['items'] ? "\n\n🛒 التفاصيل:\n{$d['items']}" : '')
-            . ($d['shipping'] ? "\n\n📦 {$d['shipping']}" : '')
-            . ($d['locations'] ? "\n\n{$d['locations']}" : '')
-            // An order that arrives in two runs must SAY so, and say which
-            // stores are in each — otherwise the customer waits for one knock
-            // and thinks half the order is missing.
-            . (!empty($d['groups']) ? "\n\n{$d['groups']}" : '')
-            . "\n\n💳 الدفع: {$d['pay']}\n{$d['price']}";
-        $ctx['collect']     = ($o['paymentStatus'] ?? '') === 'PAID'
-            ? 'مدفوع — لا تُحصّل شيئاً'
-            : ('حصّل *' . ($d['total'] ?? '') . '* (' . waPayMethodAr($o['paymentMethod'] ?? null) . ')');
+        $ctx = orderMessageContext($o, $reason);
+        $custName = (string) $ctx['customerName'];
 
         // Resolve the template for a recipient → rendered text, or null to SKIP
         // (event unmapped, recipient absent from catalog, disabled, or empty).
@@ -1772,7 +1831,7 @@ function notifyOrderParties(string $orderId, string $status, ?string $reason = n
 
         // ── CUSTOMER ──
         $custMsg = $render('CUSTOMER');
-        if ($custMsg && !empty($o['cust_phone'])) { waEnqueue($o['cust_phone'], $custMsg); $sent = true; }
+        if ($custMsg && !empty($o['cust_phone'])) { waEnqueue($o['cust_phone'], $custMsg); $sent = true; $log[] = 'واتساب العميل'; }
 
         /*
          * The order as an email, at the stages worth keeping a record of.
@@ -1782,19 +1841,8 @@ function notifyOrderParties(string $orderId, string $status, ?string $reason = n
          */
         if (in_array($status, ['PRICED', 'ACCEPTED', 'DELIVERED', 'COMPLETED', 'CANCELLED'], true)
             && !empty($o['customerId'])) {
-            $subj = [
-                'PRICED' => 'تم تسعير طلبك',
-                'ACCEPTED' => 'تم قبول طلبك',
-                'DELIVERED' => 'تم توصيل طلبك',
-                'COMPLETED' => 'تم توصيل طلبك',
-                'CANCELLED' => 'تم إلغاء طلبك',
-            ][$status] ?? 'تحديث على طلبك';
-            mailToUser(
-                (string) $o['customerId'],
-                $subj . " — تميم #{$no}",
-                orderEmailText($o, $ctx),
-                orderEmailHtml($o, $ctx, $status)
-            );
+            $to = sendOrderEmail($orderId, $status);
+            if ($to) $log[] = 'إيميل ' . $to;
         }
         // In-app notification + FCM push to the customer for every stage, so it
         // lands in the app's notifications page AND arrives while the app is
@@ -1816,7 +1864,7 @@ function notifyOrderParties(string $orderId, string $status, ?string $reason = n
 
         // ── DRIVER ──
         $drvMsg = $skipDriver ? null : $render('DRIVER');
-        if ($drvMsg && !empty($o['drv_phone'])) { waEnqueue($o['drv_phone'], $drvMsg); $sent = true; }
+        if ($drvMsg && !empty($o['drv_phone'])) { waEnqueue($o['drv_phone'], $drvMsg); $sent = true; $log[] = 'واتساب المندوب'; }
         // The driver used to get WhatsApp only — nothing reached their phone's
         // notification tray. Same push path the customer gets, carrying orderId
         // so the tap opens the order.
@@ -1849,26 +1897,28 @@ function notifyOrderParties(string $orderId, string $status, ?string $reason = n
         // ── SUPERVISOR ── the business / admin oversight number
         $supMsg = $render('SUPERVISOR');
         $adminNo = waAdminNumber();
-        if ($supMsg && $adminNo) { waEnqueue($adminNo, $supMsg); $sent = true; }
+        if ($supMsg && $adminNo) { waEnqueue($adminNo, $supMsg); $sent = true; $log[] = 'واتساب المشرف'; }
 
         // ── GROUP ── the linked WhatsApp group (when one is picked + enabled)
         $grpMsg = $render('GROUP');
         if ($grpMsg) {
             $grp = notifReadSetting('whatsapp_order_group');
-            if (!empty($grp['enabled']) && !empty($grp['groupId'])) { waEnqueue((string) $grp['groupId'], $grpMsg); $sent = true; }
+            if (!empty($grp['enabled']) && !empty($grp['groupId'])) { waEnqueue((string) $grp['groupId'], $grpMsg); $sent = true; $log[] = 'جروب الإدارة'; }
         }
 
         // ── EXTRA per-event recipients ── each enabled row gets its own text,
         // or — when left blank — the supervisor / group / customer copy.
         if ($event) {
             $extra = notifReadSetting('notification_recipients');
+            $n = 0;
             foreach ((array) ($extra[$event] ?? []) as $r) {
                 $phone = trim((string) ($r['phone'] ?? ''));
                 if ($phone === '' || (array_key_exists('enabled', $r) && !$r['enabled'])) continue;
                 $txt = trim((string) ($r['text'] ?? ''));
                 $msg = $txt !== '' ? notifRender($txt, $ctx) : ($supMsg ?: ($grpMsg ?: $custMsg));
-                if ($msg) { waEnqueue($phone, $msg); $sent = true; }
+                if ($msg) { waEnqueue($phone, $msg); $sent = true; $n++; }
             }
+            if ($n) $log[] = "أرقام إضافية ({$n})";
         }
         if ($sent) {
             try { db()->prepare("UPDATE `Order` SET `whatsappSentAt` = NOW(3) WHERE id = ?")->execute([$orderId]); } catch (Throwable $e) {}
@@ -1876,6 +1926,7 @@ function notifyOrderParties(string $orderId, string $status, ?string $reason = n
     } catch (Throwable $e) {
         error_log('[api.php] notifyOrderParties: ' . $e->getMessage());
     }
+    return $log;
 }
 function waStatus(): array {
     $f = waDir() . '/status.json';
@@ -3067,6 +3118,21 @@ if ($method === 'POST' && $path === '/admin/orders') {
                 ->execute([$customerId, (string)($b['customerName'] ?? 'عميل'), $phone, 'CUSTOMER']);
         }
     }
+    /*
+     * An address the agent typed on the call. Kept on the account only when it
+     * has none — a customer's own email is theirs to change, not something a
+     * phone order quietly overwrites — but used for THIS order's copy either
+     * way, which is what "ابعت له الإيميل" means when the agent just asked for
+     * it out loud.
+     */
+    $typedEmail = trim((string) ($b['customerEmail'] ?? ''));
+    if ($typedEmail !== '' && !filter_var($typedEmail, FILTER_VALIDATE_EMAIL)) $typedEmail = '';
+    if ($typedEmail !== '' && $customerId !== '') {
+        try {
+            db()->prepare("UPDATE `User` SET email = ?, updatedAt = NOW(3) WHERE id = ? AND (email IS NULL OR email = '')")
+                ->execute([$typedEmail, $customerId]);
+        } catch (Throwable $e) { /* taken by another account — the order still mails */ }
+    }
     $id = newId();
     $orderNumber = 'TMM' . strtoupper(substr($id, 1, 9));
 
@@ -3254,8 +3320,28 @@ if ($method === 'POST' && $path === '/admin/orders') {
     // its goods / delivery / commission / payout identically.
     computeOrderFinancials($id);
     alertNewOrder($id, (string) $orderNumber);
-    // Customer + group + extra recipients via the editable templates.
-    notifyOrderParties($id, 'NEW');
+
+    /*
+     * `advanceTo` — finish the order from the screen that created it.
+     *
+     * A courier job is often already done by the time it is written down: the
+     * agent knows who took it and that it arrived. Making them create it, close
+     * the dialog, find it in the list, open it, and walk six statuses is five
+     * screens of clicking to record something that already happened.
+     *
+     * A jump is recorded as a jump — one history row from where it was to where
+     * it ended, with the reason — rather than six invented timestamps that would
+     * claim the order sat in each state.
+     */
+    $ADVANCE = ['ACCEPTED', 'DRIVER_ASSIGNED', 'PICKED_UP', 'IN_ROUTE', 'DELIVERED', 'COMPLETED'];
+    $advanceTo = strtoupper(trim((string) ($b['advanceTo'] ?? '')));
+    if (!in_array($advanceTo, $ADVANCE, true)) $advanceTo = '';
+    $closing = in_array($advanceTo, ['DELIVERED', 'COMPLETED'], true);
+
+    // An order being filed as already delivered should not tell the customer
+    // "استلمنا طلبك" and then "تم توصيل طلبك" two seconds apart. One message,
+    // the true one.
+    $notified = $closing ? [] : notifyOrderParties($id, 'NEW');
     // Additionally dispatch to the on-shift supervisor(s) (+ record dispatch) —
     // the Supervisor-table shift feature, distinct from the business number.
     try {
@@ -3301,6 +3387,7 @@ if ($method === 'POST' && $path === '/admin/orders') {
             if ($want === '') continue;
             $err = assignLegDriver($id, $lg, $want, $u['sub'] ?? null);
             if ($err) $driverNotes[] = $lg['label'] . ': ' . $err;
+            else $notified[] = 'واتساب المندوب';
         }
     } elseif ($wantDriver !== '') {
         // No groups (an order with no address, or a server where the OrderLeg
@@ -3318,15 +3405,101 @@ if ($method === 'POST' && $path === '/admin/orders') {
                 ->execute([$wantDriver]);
             snapshotDriverShare($id);
             orderHistory($id, 'NEW', 'DRIVER_ASSIGNED', $u['sub'] ?? null, 'ADMIN', 'Assigned on creation');
-            notifyOrderParties($id, 'DRIVER_ASSIGNED');
+            $notified = array_merge($notified, notifyOrderParties($id, 'DRIVER_ASSIGNED'));
         }
     }
     $driverNote = $driverNotes ? implode(' · ', $driverNotes) . ' — الطلب اتعمل، عيّن مندوب تاني' : null;
+
+    // ── Finish it here, if the agent said it is already done ──
+    // Skipped when the order is already there: assigning a driver above moved it
+    // to DRIVER_ASSIGNED and messaged everyone, and repeating that would send
+    // the same notification twice for one event.
+    $curStatus = '';
+    if ($advanceTo !== '') {
+        $cur = db()->prepare('SELECT status FROM `Order` WHERE id = ? LIMIT 1');
+        $cur->execute([$id]);
+        $curStatus = (string) ($cur->fetchColumn() ?: 'NEW');
+    }
+    if ($advanceTo !== '' && $curStatus !== $advanceTo) {
+        $from = $curStatus;
+        $sets = ['`status` = ?', '`updatedAt` = NOW(3)'];
+        $args = [$advanceTo];
+        if ($closing) { $sets[] = '`deliveredAt` = NOW(3)'; $sets[] = '`completedAt` = NOW(3)'; }
+        // Cash handed over on the doorstep is the normal end of a courier job,
+        // but it is the agent's call, not an assumption: `markPaid` says so.
+        if ($closing && ($b['markPaid'] ?? false) === true) $sets[] = "`paymentStatus` = 'PAID'";
+        $args[] = $id;
+        try {
+            db()->prepare('UPDATE `Order` SET ' . implode(', ', $sets) . ' WHERE id = ?')->execute($args);
+            orderHistory($id, $from, $advanceTo, $u['sub'] ?? null, 'ADMIN', 'أُكمل من شاشة إنشاء الطلب');
+            db()->prepare("UPDATE `OrderLeg` SET status = ?, updatedAt = NOW(3) WHERE orderId = ?")
+                ->execute([$advanceTo, $id]);
+        } catch (Throwable $e) { error_log('[api.php] advanceTo: ' . $e->getMessage()); }
+
+        if ($closing) {
+            // Final fee, final percentage — frozen onto the order.
+            snapshotDriverShare($id);
+            /*
+             * Hand every driver on this order back to the pool, unless they are
+             * still carrying another one. Skipping this is how assigning once
+             * marks a driver BUSY for good and quietly drains the list the
+             * dispatcher picks from.
+             */
+            try {
+                $dids = [];
+                $dv = db()->prepare('SELECT assignedDriverId FROM `Order` WHERE id = ?');
+                $dv->execute([$id]);
+                if ($x = $dv->fetchColumn()) $dids[] = (string) $x;
+                foreach (orderLegsFor($id) as $lg) if (!empty($lg['driverId'])) $dids[] = (string) $lg['driverId'];
+                foreach (array_unique($dids) as $did) {
+                    $bz = db()->prepare("SELECT COUNT(*) FROM `Order`
+                                         WHERE assignedDriverId = ? AND status IN ('DRIVER_ASSIGNED','PICKED_UP','IN_ROUTE')");
+                    $bz->execute([$did]);
+                    $bl = db()->prepare("SELECT COUNT(*) FROM `OrderLeg` l JOIN `Order` o ON o.id = l.orderId
+                                         WHERE l.driverId = ? AND o.status IN ('DRIVER_ASSIGNED','PICKED_UP','IN_ROUTE')");
+                    $bl->execute([$did]);
+                    if ((int) $bz->fetchColumn() === 0 && (int) $bl->fetchColumn() === 0) {
+                        db()->prepare("UPDATE `DriverProfile` SET `status` = 'AVAILABLE', `updatedAt` = NOW(3)
+                                       WHERE userId = ? AND `status` = 'BUSY'")->execute([$did]);
+                    }
+                }
+            } catch (Throwable $e) { error_log('[api.php] advanceTo release: ' . $e->getMessage()); }
+        }
+        // Recompute after the status settles, then one message for the state the
+        // order actually ended in.
+        computeOrderFinancials($id);
+        $notified = array_merge($notified, notifyOrderParties($id, $advanceTo));
+    }
+
+    /*
+     * The customer's copy by email, from the same click.
+     *
+     * Sent LAST, after the driver is on the order, so the mail names the rider
+     * and lists the delivery groups instead of describing an order nobody has
+     * been assigned to yet. An agent on the phone should not have to create the
+     * order, reopen it, assign, and then hunt for a "send" button — «أنشئ
+     * وابعت» has to mean it.
+     *
+     * `sendEmail: false` opts out. No address on file is not an error: the
+     * response says what actually went, so the agent can see it rather than
+     * assume.
+     */
+    $emailedTo = null;
+    if (($b['sendEmail'] ?? true) !== false) {
+        // Titled with the state the order ended in, so an order filed as
+        // already delivered does not mail the customer "استلمنا طلبك".
+        $emailedTo = sendOrderEmail($id, $advanceTo ?: 'NEW', $typedEmail ?: null);
+        if ($emailedTo) $notified[] = 'إيميل ' . $emailedTo;
+    }
 
     $sel = db()->prepare("SELECT " . ORDER_COLS . " " . ORDER_JOIN . " WHERE o.id = ?"); $sel->execute([$id]);
     $out = orderNest($sel->fetch());
     // Surfaced so the screen can say the order went in but the driver did not.
     if ($driverNote !== null) $out['driverNote'] = $driverNote;
+    // What actually left the building, so the confirmation is a report and not
+    // a hope. Duplicates collapse (two groups, one message each, one label).
+    $out['notified'] = array_values(array_unique($notified));
+    $out['emailedTo'] = $emailedTo;
     jsonOk($out, 201);
 }
 
@@ -8606,7 +8779,10 @@ function conflictErr(string $code, string $messageAr): void {
     echo json_encode(['error' => ['code' => 'CONFLICT', 'message' => $code, 'messageAr' => $messageAr]], JSON_UNESCAPED_UNICODE);
     exit;
 }
-function orderHistory(string $orderId, ?string $from, string $to, string $by, string $role, ?string $reason = null): void {
+// `$by` is nullable on purpose: several callers already pass `$u['sub'] ?? null`
+// and a system-driven transition has no human actor. Typing it `string` made
+// those a TypeError waiting for the first token without a `sub` claim.
+function orderHistory(string $orderId, ?string $from, string $to, ?string $by, string $role, ?string $reason = null): void {
     db()->prepare('INSERT INTO `OrderStatusHistory` (id, orderId, fromStatus, toStatus, changedById, changedByRole, reason, createdAt) VALUES (?,?,?,?,?,?,?,NOW(3))')
         ->execute([newId(), $orderId, $from, $to, $by, $role, $reason]);
 }
