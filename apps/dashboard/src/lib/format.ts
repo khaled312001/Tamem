@@ -82,3 +82,16 @@ export function formatDate(iso: string | null | undefined): string {
     return '—';
   }
 }
+
+/** Time only in Cairo, Latin digits: `4:02 م`. */
+export function formatTime(iso: string | null | undefined): string {
+  if (!iso) return '—';
+  try {
+    return parseInstant(iso).toLocaleTimeString('ar-EG-u-nu-latn', {
+      timeZone: 'Africa/Cairo',
+      timeStyle: 'short',
+    });
+  } catch {
+    return '—';
+  }
+}
