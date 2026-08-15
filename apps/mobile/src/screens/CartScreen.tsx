@@ -24,6 +24,7 @@ import {
   clearCart,
   clearMerchant,
   getMerchantGroups,
+  groupAddonLabel,
   removeFromCart,
   setItemQuantity,
   useCart,
@@ -189,7 +190,7 @@ export function CartScreen() {
                   </Text>
                   {!!item.addons?.length && (
                     <Text style={styles.itemExtras} numberOfLines={2}>
-                      + {item.addons.map((a) => a.nameAr).join('، ')}
+                      + {groupAddonLabel(item.addons)}
                     </Text>
                   )}
                   <View style={styles.itemMeta}>

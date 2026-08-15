@@ -126,8 +126,13 @@ export function ProductDetailScreen() {
     () => variants.find((v) => v.id === variantId) ?? null,
     [variants, variantId],
   );
+  // Expanded from the (possibly repeated) addonIds, so 2× رز counts twice in the
+  // price and the cart. filter() drops any id whose add-on is no longer offered.
   const selectedAddons = useMemo(
-    () => addons.filter((a) => addonIds.includes(a.id)),
+    () =>
+      addonIds
+        .map((id) => addons.find((a) => a.id === id))
+        .filter((a): a is (typeof addons)[number] => !!a),
     [addons, addonIds],
   );
 
@@ -436,8 +441,15 @@ export function ProductDetailScreen() {
             variantId={variantId}
             addonIds={addonIds}
             onSelectVariant={setVariantId}
-            onToggleAddon={(id) =>
-              setAddonIds((cur) => (cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id]))
+            onAddAddon={(id) => setAddonIds((cur) => [...cur, id])}
+            onRemoveAddon={(id) =>
+              setAddonIds((cur) => {
+                const i = cur.lastIndexOf(id);
+                if (i < 0) return cur;
+                const next = cur.slice();
+                next.splice(i, 1);
+                return next;
+              })
             }
             disabled={!canAdd}
           />
