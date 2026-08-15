@@ -22,6 +22,7 @@ import { QuickOrderSheet } from '../../components/QuickOrderSheet';
 import { haptic } from '../../lib/haptics';
 import { useUnreadCount } from '../../lib/useUnreadCount';
 import type { HomeStackParamList } from '../../navigation/HomeStack';
+import { SHOW_WALLET } from '../../config/features';
 import { colors, fontFamilies, radii, spacing } from '../../theme/tokens';
 
 import { ActiveOrderCard } from './components/ActiveOrderCard';
@@ -269,13 +270,20 @@ export function HomeV2Screen() {
           navigation.getParent()?.navigate('Orders' as never);
         },
       },
-      {
-        key: 'wallet',
-        label: 'المحفظة',
-        Icon: Wallet,
-        tint: '#2E9E62',
-        onPress: goProfileScreen('Wallet'),
-      },
+      // Wallet is paused (see config/features). The profile screen already hid
+      // its row and balance; this shortcut kept opening the screen anyway, and
+      // it is the one people actually tap.
+      ...(SHOW_WALLET
+        ? [
+            {
+              key: 'wallet',
+              label: 'المحفظة',
+              Icon: Wallet,
+              tint: '#2E9E62',
+              onPress: goProfileScreen('Wallet'),
+            },
+          ]
+        : []),
       {
         key: 'favorites',
         label: 'المفضلة',
