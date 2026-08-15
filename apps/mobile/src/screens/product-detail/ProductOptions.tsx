@@ -8,14 +8,15 @@
  *    chip shows the size's own price rather than a "+" delta, because that's
  *    what the customer will actually pay — a "+20" on a large pizza would read
  *    as an extra charge on top of the small one.
- *  - **الإضافات** are checkboxes and DO add up, so those show "+" prices.
+ *  - **الإضافات** each take a quantity (a stepper) and DO add up, so those show
+ *    "+" prices; the id is submitted once per unit (2× رز = the id twice).
  *
  * Prices here are for display only. The order endpoint re-derives every one of
  * them from the database by id, so what's shown and what's charged can only
  * disagree if the menu changed between opening the page and checking out — in
  * which case the server rejects the line rather than silently repricing it.
  */
-import { Check } from 'lucide-react-native';
+import { Minus, Plus } from 'lucide-react-native';
 import { memo } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
@@ -40,9 +41,11 @@ interface Props {
   /** Live % discount on the product — applied to each SIZE price (0 = none). */
   discountPct?: number;
   variantId: string | null;
+  /** Chosen add-ons, an id repeated once per unit (so 2× رز appears twice). */
   addonIds: string[];
   onSelectVariant: (id: string) => void;
-  onToggleAddon: (id: string) => void;
+  onAddAddon: (id: string) => void;
+  onRemoveAddon: (id: string) => void;
   disabled?: boolean;
 }
 
@@ -57,7 +60,8 @@ function ProductOptionsBase({
   variantId,
   addonIds,
   onSelectVariant,
-  onToggleAddon,
+  onAddAddon,
+  onRemoveAddon,
   disabled,
 }: Props) {
   if (variants.length === 0 && addons.length === 0) return null;
@@ -119,31 +123,53 @@ function ProductOptionsBase({
           </View>
           <View style={styles.addonList}>
             {addons.map((a) => {
-              const on = addonIds.includes(a.id);
+              const qty = addonIds.filter((x) => x === a.id).length;
+              const on = qty > 0;
               return (
-                <Pressable
+                <View
                   key={a.id}
-                  onPress={() => !disabled && onToggleAddon(a.id)}
-                  style={({ pressed }) => [
-                    styles.addon,
-                    { flexDirection: ROW },
-                    on && styles.addonOn,
-                    pressed && { opacity: 0.85 },
-                  ]}
-                  accessibilityRole="checkbox"
-                  accessibilityState={{ checked: on, disabled }}
-                  accessibilityLabel={`${a.nameAr} — زيادة ${money(a.price)}`}
+                  style={[styles.addon, { flexDirection: ROW }, on && styles.addonOn]}
                 >
-                  <View style={[styles.box, on && styles.boxOn]}>
-                    {on && <Check size={13} color={colors.white} strokeWidth={3} />}
-                  </View>
                   <Text style={styles.addonName} numberOfLines={1}>
                     {a.nameAr}
                   </Text>
                   <Text style={[styles.addonPrice, on && styles.addonPriceOn]}>
                     + {money(a.price)}
                   </Text>
-                </Pressable>
+                  {qty === 0 ? (
+                    <Pressable
+                      onPress={() => !disabled && onAddAddon(a.id)}
+                      style={({ pressed }) => [styles.addBtn, pressed && { opacity: 0.85 }]}
+                      accessibilityRole="button"
+                      accessibilityLabel={`أضف ${a.nameAr}`}
+                      hitSlop={6}
+                    >
+                      <Plus size={16} color={colors.brand.red} strokeWidth={3} />
+                    </Pressable>
+                  ) : (
+                    <View style={[styles.stepper, { flexDirection: ROW }]}>
+                      <Pressable
+                        onPress={() => !disabled && onRemoveAddon(a.id)}
+                        hitSlop={6}
+                        style={styles.stepBtn}
+                        accessibilityRole="button"
+                        accessibilityLabel={`أنقص ${a.nameAr}`}
+                      >
+                        <Minus size={15} color={colors.brand.red} strokeWidth={3} />
+                      </Pressable>
+                      <Text style={styles.stepQty}>{qty}</Text>
+                      <Pressable
+                        onPress={() => !disabled && onAddAddon(a.id)}
+                        hitSlop={6}
+                        style={styles.stepBtn}
+                        accessibilityRole="button"
+                        accessibilityLabel={`زوّد ${a.nameAr}`}
+                      >
+                        <Plus size={15} color={colors.brand.red} strokeWidth={3} />
+                      </Pressable>
+                    </View>
+                  )}
+                </View>
               );
             })}
           </View>
@@ -272,4 +298,31 @@ const styles = StyleSheet.create({
     includeFontPadding: false,
   },
   addonPriceOn: { color: colors.brand.red },
+  addBtn: {
+    width: 30,
+    height: 30,
+    borderRadius: 8,
+    borderWidth: 1.5,
+    borderColor: colors.brand.red,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  stepper: {
+    alignItems: 'center',
+    gap: spacing.sm,
+    borderWidth: 1.5,
+    borderColor: colors.brand.red,
+    borderRadius: radii.pill,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+  },
+  stepBtn: { padding: 2 },
+  stepQty: {
+    minWidth: 16,
+    textAlign: 'center',
+    fontSize: 14,
+    color: colors.brand.dark,
+    fontFamily: fontFamilies.bodyExtraBold,
+    includeFontPadding: false,
+  },
 });

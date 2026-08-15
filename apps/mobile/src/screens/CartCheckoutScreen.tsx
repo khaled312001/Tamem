@@ -29,7 +29,7 @@ import { goToNewOrder } from '../lib/goToNewOrder';
 import { showToast } from '../lib/toast';
 import { uploadFile } from '../lib/uploadFile';
 import type { HomeStackParamList } from '../navigation/HomeStack';
-import { clearCart, getMerchantGroups, useCart } from '../stores/cart';
+import { clearCart, getMerchantGroups, groupAddonLabel, useCart } from '../stores/cart';
 import { palette, typography } from '../theme/tokens';
 import { colors, fontFamilies, fontSizes, radii, shadows, spacing } from '../theme/tokens';
 
@@ -230,7 +230,7 @@ export function CartCheckoutScreen() {
                     </Text>
                     {!!item.addons?.length && (
                       <Text style={styles.itemExtras} numberOfLines={2}>
-                        + {item.addons.map((a) => a.nameAr).join('، ')}
+                        + {groupAddonLabel(item.addons)}
                       </Text>
                     )}
                     <View style={styles.itemMeta}>

@@ -22,6 +22,16 @@ export interface CartAddon {
   price: number;
 }
 
+/** "رز ×2، جبنة" from a possibly-repeated add-on list. */
+export function groupAddonLabel(addons: { nameAr: string }[]): string {
+  const counts = new Map<string, number>();
+  for (const a of addons) {
+    const n = (a?.nameAr ?? '').trim();
+    if (n) counts.set(n, (counts.get(n) ?? 0) + 1);
+  }
+  return [...counts].map(([n, c]) => (c > 1 ? `${n} ×${c}` : n)).join('، ');
+}
+
 export interface CartItem {
   /** Stable identity of this line — see the file header. */
   lineId: string;

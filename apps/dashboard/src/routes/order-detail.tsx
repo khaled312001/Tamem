@@ -1399,7 +1399,11 @@ function extrasLabel(raw: unknown): string | null {
   const names = list
     .map((a) => String((a as { nameAr?: unknown })?.nameAr ?? '').trim())
     .filter(Boolean);
-  return names.length > 0 ? names.join('، ') : null;
+  if (names.length === 0) return null;
+  // Collapse repeats into "رز ×2" rather than "رز، رز".
+  const counts = new Map<string, number>();
+  for (const n of names) counts.set(n, (counts.get(n) ?? 0) + 1);
+  return [...counts].map(([n, c]) => (c > 1 ? `${n} ×${c}` : n)).join('، ');
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any

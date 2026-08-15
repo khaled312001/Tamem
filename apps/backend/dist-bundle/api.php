@@ -1368,8 +1368,12 @@ function orderDetailBlocks(array $o): array {
 
                 $ex = json_decode((string) ($it['addonsSnapshot'] ?? ''), true);
                 if (is_array($ex) && $ex) {
-                    $names = array_map(fn($a) => (string) ($a['nameAr'] ?? ''), $ex);
-                    $line .= "\n     + " . implode('، ', array_filter($names));
+                    // Collapse repeats into "رز ×2" rather than "رز، رز".
+                    $counts = [];
+                    foreach ($ex as $a) { $n = trim((string) ($a['nameAr'] ?? '')); if ($n !== '') $counts[$n] = ($counts[$n] ?? 0) + 1; }
+                    $parts = [];
+                    foreach ($counts as $n => $c) $parts[] = $c > 1 ? "$n ×$c" : $n;
+                    if ($parts) $line .= "\n     + " . implode('، ', $parts);
                 }
                 // What the customer asked for on this line. It was stored and
                 // never sent, so "من غير بصل" reached the database and the
@@ -8464,7 +8468,11 @@ function orderLegItemsText(string $orderId, array $leg): string {
             $line = '• ' . (int) $it['quantity'] . '× ' . $nm . ($pl ? " ({$pl})" : '');
             $ex = json_decode((string) ($it['addonsSnapshot'] ?? ''), true);
             if (is_array($ex) && $ex) {
-                $line .= "\n     + " . implode('، ', array_filter(array_map(fn($a) => (string) ($a['nameAr'] ?? ''), $ex)));
+                $counts = [];
+                foreach ($ex as $a) { $n = trim((string) ($a['nameAr'] ?? '')); if ($n !== '') $counts[$n] = ($counts[$n] ?? 0) + 1; }
+                $parts = [];
+                foreach ($counts as $n => $c) $parts[] = $c > 1 ? "$n ×$c" : $n;
+                if ($parts) $line .= "\n     + " . implode('، ', $parts);
             }
             $ln = trim((string) ($it['notes'] ?? ''));
             if ($ln !== '') $line .= "\n     📝 " . $ln;
@@ -9174,16 +9182,22 @@ if ($method === 'POST' && $path === '/orders/cart') {
 
             $aids = array_values(array_filter(array_map('strval', (array) ($it['addonIds'] ?? []))));
             if ($aids) {
-                $in = implode(',', array_fill(0, count($aids), '?'));
-                // Joined through the link table so an addon from ANOTHER
-                // merchant can't be attached by id.
+                // Validate against the link table (an addon from ANOTHER merchant
+                // can't be attached by id), then price the RAW list so a repeated
+                // id counts as a quantity — 2× رز is charged and snapshotted twice.
+                $uniq = array_values(array_unique($aids));
+                $in = implode(',', array_fill(0, count($uniq), '?'));
                 $aq = db()->prepare(
-                    'SELECT ma.nameAr, ma.price FROM `ProductAddonLink` pal'
+                    'SELECT ma.id, ma.nameAr, ma.price FROM `ProductAddonLink` pal'
                     . ' JOIN `MerchantAddon` ma ON ma.id = pal.addonId'
                     . " WHERE pal.productId = ? AND ma.isActive = 1 AND ma.id IN ($in)"
                 );
-                $aq->execute(array_merge([$p['id']], $aids));
-                foreach ($aq->fetchAll() as $a) {
+                $aq->execute(array_merge([$p['id']], $uniq));
+                $byId = [];
+                foreach ($aq->fetchAll() as $a) $byId[(string) $a['id']] = $a;
+                foreach ($aids as $aid) {
+                    if (!isset($byId[$aid])) continue;
+                    $a = $byId[$aid];
                     $addonSnap[] = ['nameAr' => $a['nameAr'], 'price' => (float) $a['price']];
                     $unit += (float) $a['price'];
                 }
