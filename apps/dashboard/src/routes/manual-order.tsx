@@ -1231,7 +1231,9 @@ function ProductOptionsDialog({
   const addons: Row[] = (data?.merchantAddons ?? []).filter((a: Row) => linked.includes(a.id));
 
   const [variantId, setVariantId] = useState<string>('');
-  const [addonIds, setAddonIds] = useState<string[]>([]);
+  // addonId → how many of that add-on (0 = not chosen). Lets one line carry
+  // e.g. 2× رز; the server prices each unit, so we submit the id repeated.
+  const [addonQty, setAddonQty] = useState<Record<string, number>>({});
   const [qty, setQty] = useState('1');
 
   useEffect(() => {
@@ -1242,7 +1244,7 @@ function ProductOptionsDialog({
   const chosen = variants.find((v) => String(v.id) === variantId);
   const unit =
     (chosen ? Number(chosen.price) || 0 : base) +
-    addons.filter((a) => addonIds.includes(a.id)).reduce((s, a) => s + (Number(a.price) || 0), 0);
+    addons.reduce((s, a) => s + (Number(a.price) || 0) * (addonQty[a.id] ?? 0), 0);
 
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()} title={product.nameAr} size="sm">
@@ -1274,23 +1276,55 @@ function ProductOptionsDialog({
 
           {addons.length > 0 && (
             <Field label="الإضافات">
-              <div className="flex flex-wrap gap-2">
+              <div className="space-y-1.5">
                 {addons.map((a) => {
-                  const on = addonIds.includes(a.id);
+                  const q = addonQty[a.id] ?? 0;
+                  const setQ = (n: number) =>
+                    setAddonQty((p) => ({ ...p, [a.id]: Math.max(0, n) }));
                   return (
-                    <button
+                    <div
                       key={a.id}
-                      type="button"
-                      onClick={() =>
-                        setAddonIds((p) => (on ? p.filter((x) => x !== a.id) : [...p, a.id]))
-                      }
                       className={cn(
-                        'px-3 py-1.5 rounded-full text-sm font-bold border transition',
-                        on ? 'bg-brand-red text-white border-brand-red' : 'bg-card border-border',
+                        'flex items-center justify-between gap-2 rounded-lg border px-3 py-1.5 transition',
+                        q > 0 ? 'border-brand-red/40 bg-brand-red/5' : 'border-border',
                       )}
                     >
-                      {a.nameAr} +{formatMoney(Number(a.price))}
-                    </button>
+                      <span className="text-sm font-bold">
+                        {a.nameAr}{' '}
+                        <span className="font-normal text-muted-foreground">
+                          +{formatMoney(Number(a.price))}
+                        </span>
+                      </span>
+                      {q === 0 ? (
+                        <button
+                          type="button"
+                          onClick={() => setQ(1)}
+                          className="rounded-md bg-muted px-2.5 py-1 text-xs font-bold hover:bg-muted/70"
+                        >
+                          + إضافة
+                        </button>
+                      ) : (
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => setQ(q - 1)}
+                            className="grid h-7 w-7 place-items-center rounded-md bg-muted font-black hover:bg-muted/70"
+                          >
+                            −
+                          </button>
+                          <span className="w-5 text-center text-sm font-black tabular-nums">
+                            {q}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => setQ(q + 1)}
+                            className="grid h-7 w-7 place-items-center rounded-md bg-brand-red font-black text-white hover:bg-brand-red/90"
+                          >
+                            +
+                          </button>
+                        </div>
+                      )}
+                    </div>
                   );
                 })}
               </div>
@@ -1325,10 +1359,15 @@ function ProductOptionsDialog({
                 notes: '',
                 variantId: chosen ? String(chosen.id) : null,
                 variantName: chosen ? String(chosen.nameAr) : null,
-                addonIds,
+                // The id repeated once per unit — the server sums each entry.
+                addonIds: addons.flatMap((a) => Array(addonQty[a.id] ?? 0).fill(a.id)),
+                // Grouped for the line preview: "رز ×2".
                 addonNames: addons
-                  .filter((a) => addonIds.includes(a.id))
-                  .map((a) => String(a.nameAr)),
+                  .filter((a) => (addonQty[a.id] ?? 0) > 0)
+                  .map((a) => {
+                    const q = addonQty[a.id] ?? 0;
+                    return q > 1 ? `${a.nameAr} ×${q}` : String(a.nameAr);
+                  }),
               })
             }
           >
