@@ -28,6 +28,11 @@ declare(strict_types=1);
 // changing the DB's stored timezone would reinterpret every existing row by 2-3h.
 date_default_timezone_set('Africa/Cairo');
 
+// TEMPORARY (per request): keep every driver "AVAILABLE" even after they take an
+// order, so one driver can be handed several orders and none auto-flips to BUSY.
+// Flip this back to `true` to restore the normal "assigned → BUSY" behaviour.
+const DRIVER_AUTO_BUSY = false;
+
 // ─── 0. Request timing ──────────────────────────────────────────────────
 // Every response appends one line to a daily NDJSON file: method, path, status,
 // duration and byte size. Registered before routing because most handlers end in
@@ -3418,7 +3423,7 @@ if ($method === 'POST' && $path === '/admin/orders') {
         else {
             db()->prepare("UPDATE `Order` SET `assignedDriverId` = ?, `status` = 'DRIVER_ASSIGNED', `updatedAt` = NOW(3) WHERE id = ?")
                 ->execute([$wantDriver, $id]);
-            db()->prepare("UPDATE `DriverProfile` SET `status` = 'BUSY', `updatedAt` = NOW(3) WHERE userId = ?")
+            if (DRIVER_AUTO_BUSY) db()->prepare("UPDATE `DriverProfile` SET `status` = 'BUSY', `updatedAt` = NOW(3) WHERE userId = ?")
                 ->execute([$wantDriver]);
             snapshotDriverShare($id);
             orderHistory($id, 'NEW', 'DRIVER_ASSIGNED', $u['sub'] ?? null, 'ADMIN', 'Assigned on creation');
@@ -6329,8 +6334,8 @@ if ($method === 'PATCH' && preg_match('#^/admin/orders/([^/]+)/assign-driver$#',
     db()->prepare("UPDATE `Order` SET `assignedDriverId` = ?, `status` = 'DRIVER_ASSIGNED', `updatedAt` = NOW(3) WHERE id = ?")
         ->execute([$driverId, $m[1]]);
     // Taking an order is what makes a driver busy — otherwise they'd stay
-    // "available" and collect a second order.
-    db()->prepare("UPDATE `DriverProfile` SET `status` = 'BUSY', `updatedAt` = NOW(3) WHERE userId = ?")
+    // "available" and collect a second order. (Paused via DRIVER_AUTO_BUSY.)
+    if (DRIVER_AUTO_BUSY) db()->prepare("UPDATE `DriverProfile` SET `status` = 'BUSY', `updatedAt` = NOW(3) WHERE userId = ?")
         ->execute([$driverId]);
     /*
      * Assigning "the order" means assigning every delivery group that has
@@ -8609,7 +8614,7 @@ function assignLegDriver(string $orderId, array $leg, string $driverId, ?string 
 
     db()->prepare("UPDATE `OrderLeg` SET driverId = ?, status = 'DRIVER_ASSIGNED', updatedAt = NOW(3) WHERE id = ?")
         ->execute([$driverId, $leg['id']]);
-    db()->prepare("UPDATE `DriverProfile` SET `status` = 'BUSY', `updatedAt` = NOW(3) WHERE userId = ?")
+    if (DRIVER_AUTO_BUSY) db()->prepare("UPDATE `DriverProfile` SET `status` = 'BUSY', `updatedAt` = NOW(3) WHERE userId = ?")
         ->execute([$driverId]);
 
     // Re-read so any message carries the driver just written.
