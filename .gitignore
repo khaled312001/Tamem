@@ -130,3 +130,7 @@ release/*.apk
 # Python bytecode from the scripts/ helpers
 __pycache__/
 *.pyc
+
+# Production DB dumps taken before a destructive reset. Real customer names,
+# phone numbers and addresses — never commit these.
+backups/
