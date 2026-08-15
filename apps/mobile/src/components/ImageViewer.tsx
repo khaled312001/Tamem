@@ -1,15 +1,23 @@
 /**
  * Fullscreen image viewer, shared by the store menu and product galleries.
  *
- * Real pinch-to-zoom + double-tap + pan, built on gesture-handler + reanimated
- * so it works on Android too (the old version rode on ScrollView's built-in
- * zoom, which is iOS-only — Android users could enlarge nothing). One image at a
- * time with arrows/counter for navigation, so the pan gesture never fights a
- * horizontal pager.
+ * Navigation is SWIPE-first — a horizontal pager the customer flicks through —
+ * with big left/right arrows and a counter as backup. Each page pinch-zooms and
+ * double-taps to zoom (works on Android, unlike the old ScrollView zoom); while
+ * a page is zoomed the pager is locked so the zoom gesture doesn't fight it.
  */
 import { ChevronLeft, ChevronRight, X } from 'lucide-react-native';
-import { memo, useEffect, useState } from 'react';
-import { Dimensions, Modal, Pressable, StatusBar, StyleSheet, Text, View } from 'react-native';
+import { memo, useEffect, useRef, useState } from 'react';
+import {
+  Dimensions,
+  FlatList,
+  Modal,
+  Pressable,
+  StatusBar,
+  StyleSheet,
+  Text,
+  View,
+} from 'react-native';
 import { Gesture, GestureDetector, GestureHandlerRootView } from 'react-native-gesture-handler';
 import Animated, {
   runOnJS,
@@ -32,7 +40,9 @@ interface Props {
   onClose: () => void;
 }
 
-function ZoomableImage({
+/** One pager page: pinch + double-tap zoom (no pan, so it never fights the
+ *  horizontal swipe). Reports zoom state so the parent can lock the pager. */
+function ZoomablePage({
   uri,
   width,
   height,
@@ -44,43 +54,22 @@ function ZoomableImage({
   onZoomChange: (zoomed: boolean) => void;
 }) {
   const scale = useSharedValue(1);
-  const savedScale = useSharedValue(1);
-  const tx = useSharedValue(0);
-  const ty = useSharedValue(0);
-  const savedTx = useSharedValue(0);
-  const savedTy = useSharedValue(0);
-
+  const saved = useSharedValue(1);
   const report = (z: boolean) => onZoomChange(z);
 
   const pinch = Gesture.Pinch()
     .onUpdate((e) => {
-      scale.value = Math.min(Math.max(savedScale.value * e.scale, 0.85), MAX_SCALE);
+      scale.value = Math.min(Math.max(saved.value * e.scale, 0.9), MAX_SCALE);
     })
     .onEnd(() => {
       if (scale.value <= 1) {
         scale.value = withTiming(1);
-        savedScale.value = 1;
-        tx.value = withTiming(0);
-        ty.value = withTiming(0);
-        savedTx.value = 0;
-        savedTy.value = 0;
+        saved.value = 1;
         runOnJS(report)(false);
       } else {
-        savedScale.value = scale.value;
+        saved.value = scale.value;
         runOnJS(report)(true);
       }
-    });
-
-  const pan = Gesture.Pan()
-    .onUpdate((e) => {
-      // Only meaningful once zoomed in; at 1x the image stays put.
-      if (scale.value <= 1) return;
-      tx.value = savedTx.value + e.translationX;
-      ty.value = savedTy.value + e.translationY;
-    })
-    .onEnd(() => {
-      savedTx.value = tx.value;
-      savedTy.value = ty.value;
     });
 
   const doubleTap = Gesture.Tap()
@@ -89,24 +78,17 @@ function ZoomableImage({
     .onEnd(() => {
       if (scale.value > 1) {
         scale.value = withTiming(1);
-        savedScale.value = 1;
-        tx.value = withTiming(0);
-        ty.value = withTiming(0);
-        savedTx.value = 0;
-        savedTy.value = 0;
+        saved.value = 1;
         runOnJS(report)(false);
       } else {
         scale.value = withTiming(DOUBLE_TAP_SCALE);
-        savedScale.value = DOUBLE_TAP_SCALE;
+        saved.value = DOUBLE_TAP_SCALE;
         runOnJS(report)(true);
       }
     });
 
-  const gesture = Gesture.Simultaneous(pinch, pan, doubleTap);
-
-  const animStyle = useAnimatedStyle(() => ({
-    transform: [{ translateX: tx.value }, { translateY: ty.value }, { scale: scale.value }],
-  }));
+  const gesture = Gesture.Simultaneous(pinch, doubleTap);
+  const animStyle = useAnimatedStyle(() => ({ transform: [{ scale: scale.value }] }));
 
   return (
     <GestureDetector gesture={gesture}>
@@ -125,6 +107,8 @@ function ImageViewerBase({ images, startIndex, onClose }: Props) {
   const { width, height } = Dimensions.get('window');
   const [index, setIndex] = useState(0);
   const [zoomed, setZoomed] = useState(false);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const listRef = useRef<FlatList<any>>(null);
 
   useEffect(() => {
     if (startIndex !== null) {
@@ -133,12 +117,20 @@ function ImageViewerBase({ images, startIndex, onClose }: Props) {
     }
   }, [startIndex]);
 
-  const go = (delta: number) => {
+  const goTo = (i: number) => {
+    const n = Math.min(Math.max(i, 0), images.length - 1);
+    if (n === index) return;
     setZoomed(false);
-    setIndex((i) => Math.min(Math.max(i + delta, 0), images.length - 1));
+    setIndex(n);
+    try {
+      listRef.current?.scrollToIndex({ index: n, animated: true });
+    } catch {
+      /* index momentarily out of range during layout — ignore */
+    }
   };
 
-  const uri = images[index];
+  const atStart = index <= 0;
+  const atEnd = index >= images.length - 1;
 
   return (
     <Modal
@@ -151,16 +143,22 @@ function ImageViewerBase({ images, startIndex, onClose }: Props) {
       <StatusBar barStyle="light-content" />
       <GestureHandlerRootView style={styles.root}>
         <View style={styles.backdrop}>
-          {/* Remount on index change so each image opens back at 1×. */}
-          {uri != null && (
-            <ZoomableImage
-              key={index}
-              uri={uri}
-              width={width}
-              height={height}
-              onZoomChange={setZoomed}
-            />
-          )}
+          <FlatList
+            ref={listRef}
+            data={images}
+            keyExtractor={(uri, i) => `${uri}-${i}`}
+            horizontal
+            pagingEnabled
+            // Locked while a page is zoomed, so the zoom gesture owns the touch.
+            scrollEnabled={!zoomed}
+            showsHorizontalScrollIndicator={false}
+            initialScrollIndex={startIndex ?? 0}
+            getItemLayout={(_, i) => ({ length: width, offset: width * i, index: i })}
+            onMomentumScrollEnd={(e) => setIndex(Math.round(e.nativeEvent.contentOffset.x / width))}
+            renderItem={({ item }) => (
+              <ZoomablePage uri={item} width={width} height={height} onZoomChange={setZoomed} />
+            )}
+          />
 
           <SafeAreaView edges={['top']} style={styles.bar} pointerEvents="box-none">
             <Pressable
@@ -182,31 +180,31 @@ function ImageViewerBase({ images, startIndex, onClose }: Props) {
             )}
           </SafeAreaView>
 
-          {/* Arrows hide while zoomed so they don't sit over a panned image. */}
+          {/* Both arrows, physically placed (not RTL-logical) so neither hides.
+              In Arabic reading order the right arrow steps back, the left steps
+              forward. Hidden while zoomed so they don't sit over the image. */}
           {images.length > 1 && !zoomed && (
             <>
-              {index > 0 && (
-                <Pressable
-                  onPress={() => go(-1)}
-                  style={[styles.nav, styles.navStart]}
-                  hitSlop={8}
-                  accessibilityRole="button"
-                  accessibilityLabel="السابق"
-                >
-                  <ChevronRight size={26} color={colors.white} />
-                </Pressable>
-              )}
-              {index < images.length - 1 && (
-                <Pressable
-                  onPress={() => go(1)}
-                  style={[styles.nav, styles.navEnd]}
-                  hitSlop={8}
-                  accessibilityRole="button"
-                  accessibilityLabel="التالي"
-                >
-                  <ChevronLeft size={26} color={colors.white} />
-                </Pressable>
-              )}
+              <Pressable
+                onPress={() => goTo(index - 1)}
+                style={[styles.nav, styles.navRight, atStart && styles.navOff]}
+                disabled={atStart}
+                hitSlop={8}
+                accessibilityRole="button"
+                accessibilityLabel="السابق"
+              >
+                <ChevronRight size={28} color={colors.white} />
+              </Pressable>
+              <Pressable
+                onPress={() => goTo(index + 1)}
+                style={[styles.nav, styles.navLeft, atEnd && styles.navOff]}
+                disabled={atEnd}
+                hitSlop={8}
+                accessibilityRole="button"
+                accessibilityLabel="التالي"
+              >
+                <ChevronLeft size={28} color={colors.white} />
+              </Pressable>
             </>
           )}
         </View>
@@ -250,14 +248,15 @@ const styles = StyleSheet.create({
   nav: {
     position: 'absolute',
     top: '50%',
-    marginTop: -24,
-    width: 48,
-    height: 48,
-    borderRadius: 24,
-    backgroundColor: 'rgba(255,255,255,0.16)',
+    marginTop: -26,
+    width: 52,
+    height: 52,
+    borderRadius: 26,
+    backgroundColor: 'rgba(255,255,255,0.2)',
     alignItems: 'center',
     justifyContent: 'center',
   },
-  navStart: { insetInlineStart: spacing.lg },
-  navEnd: { insetInlineEnd: spacing.lg },
+  navRight: { right: spacing.md },
+  navLeft: { left: spacing.md },
+  navOff: { opacity: 0 },
 });
