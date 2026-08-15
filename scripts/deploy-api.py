@@ -39,6 +39,10 @@ if not os.path.exists(HANDOFF):
     HANDOFF = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "Tamem", "HANDOFF.md")
 if not os.path.exists(HANDOFF):
     HANDOFF = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "HANDOFF.md"))
+if not os.path.exists(HANDOFF):
+    # Some checkouts nest the repo one level deeper (…/Tamem/Tamem), so HANDOFF
+    # sits two levels above scripts/, not one.
+    HANDOFF = os.path.join(os.path.dirname(os.path.dirname(_REPO)), "HANDOFF.md")
 LOCAL = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "apps", "backend", "dist-bundle", "api.php"))
 HOST, PORT, USER = "77.37.37.207", 65002, "u748721963"
 HEALTH_URL = "https://backendtamem.deliverytamem.com/api/v1/health"

@@ -255,9 +255,9 @@ export type ServiceRoute = 'DeliveryServices' | 'ShippingFlow' | 'MerchantFlow';
 
 /** Short, card-friendly copy for the three headline service cards. */
 export const SERVICE_CARD_COPY: Record<ServiceKey, { title: string; subtitle: string }> = {
-  delivery: { title: 'دليفري', subtitle: 'داخل المدينة' },
-  shipping: { title: 'شحن', subtitle: 'بين المناطق' },
-  merchant: { title: 'تاجر', subtitle: 'طلبات جملة' },
+  delivery: { title: 'خدمة الدليفري', subtitle: 'داخل المدينة' },
+  shipping: { title: 'خدمة شحن المراكز والمحافظات', subtitle: 'بين المناطق' },
+  merchant: { title: 'خدمة التجار والموزعين', subtitle: 'طلبات جملة' },
 };
 
 /**

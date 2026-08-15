@@ -34,6 +34,10 @@ if not os.path.exists(HANDOFF):
     HANDOFF = os.path.join(_REPO, "..", "HANDOFF.md")
 if not os.path.exists(HANDOFF):
     HANDOFF = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "HANDOFF.md"))
+if not os.path.exists(HANDOFF):
+    # Some checkouts nest the repo one level deeper (…/Tamem/Tamem), so HANDOFF
+    # sits two levels above scripts/, not one.
+    HANDOFF = os.path.join(os.path.dirname(os.path.dirname(_REPO)), "HANDOFF.md")
 LOCAL_DIST = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "apps", "dashboard", "dist"))
 REMOTE_BASE = "/home/u748721963/domains/deliverytamem.com/public_html"
 REMOTE_DIR = posixpath.join(REMOTE_BASE, "super_admin")

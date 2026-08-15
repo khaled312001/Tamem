@@ -42,6 +42,10 @@ import { colors, fontFamilies, fontSizes, radii, shadows, spacing } from '../the
 
 type Nav = NativeStackNavigationProp<ProfileStackParamList, 'Profile'>;
 
+// Wallet is paused for now — flip to true to bring back the balance stat and the
+// "محفظتي" row in one go (the wallet screen itself is untouched).
+const SHOW_WALLET = false;
+
 /** Module-level so the array identity never changes across renders. */
 const SOCKET_EVENTS = ['order:new', 'order:status'];
 
@@ -281,14 +285,18 @@ export function ProfileScreen() {
               <Text style={styles.statValue}>{orderCount}</Text>
               <Text style={styles.statLabel}>طلباتي</Text>
             </View>
-            <View style={styles.statDivider} />
-            <View style={styles.statItem}>
-              <View style={[styles.statIconWrap, { backgroundColor: colors.successLight }]}>
-                <Wallet size={16} color={colors.success} />
-              </View>
-              <Text style={styles.statValue}>{walletBalance.toLocaleString('ar-EG')}</Text>
-              <Text style={styles.statLabel}>رصيد ج.م</Text>
-            </View>
+            {SHOW_WALLET && (
+              <>
+                <View style={styles.statDivider} />
+                <View style={styles.statItem}>
+                  <View style={[styles.statIconWrap, { backgroundColor: colors.successLight }]}>
+                    <Wallet size={16} color={colors.success} />
+                  </View>
+                  <Text style={styles.statValue}>{walletBalance.toLocaleString('ar-EG')}</Text>
+                  <Text style={styles.statLabel}>رصيد ج.م</Text>
+                </View>
+              </>
+            )}
             <View style={styles.statDivider} />
             <View style={styles.statItem}>
               <View style={[styles.statIconWrap, { backgroundColor: colors.infoLight }]}>
@@ -318,13 +326,17 @@ export function ProfileScreen() {
             Icon={MapPin}
             onPress={() => navigation.navigate('SavedAddresses')}
           />
-          <Divider inset />
-          <ListItem
-            label="محفظتي"
-            sublabel={`الرصيد ${walletBalance.toLocaleString('ar-EG')} ج.م`}
-            Icon={Wallet}
-            onPress={() => navigation.navigate('Wallet')}
-          />
+          {SHOW_WALLET && (
+            <>
+              <Divider inset />
+              <ListItem
+                label="محفظتي"
+                sublabel={`الرصيد ${walletBalance.toLocaleString('ar-EG')} ج.م`}
+                Icon={Wallet}
+                onPress={() => navigation.navigate('Wallet')}
+              />
+            </>
+          )}
           <Divider inset />
           <ListItem
             label="طرق الدفع"

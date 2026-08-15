@@ -4,6 +4,7 @@
  * Equal width is enforced by the parent's `flex: 1` row, so the three cards
  * always match regardless of copy length or screen size.
  */
+import { LinearGradient } from 'expo-linear-gradient';
 import type { LucideIcon } from 'lucide-react-native';
 import { memo } from 'react';
 import { I18nManager, Pressable, StyleSheet, Text, View } from 'react-native';
@@ -28,13 +29,11 @@ interface Props {
 }
 
 function ServiceCardBase({ title, subtitle, Icon, image, imageUrl, bg, fg, onPress }: Props) {
-  // The artwork IS the whole card — the title + subtitle are baked into the
-  // image — so it fills the tile and no separate text is drawn. The old tinted
-  // layout stays as a fallback for when there is no artwork at all.
-  //
-  // The tile keeps its own aspect ratio and crops to it. That is deliberate:
-  // the three cards must stay the same size as each other whatever the admin
-  // uploads, so a wrongly-proportioned upload can never make the row ragged.
+  // The artwork is the illustration; the service NAME is drawn OVER it on a soft
+  // bottom gradient so it's always readable and stays editable from the
+  // dashboard (upload plain artwork with no baked-in text). Every tile crops to
+  // the same aspect ratio, so a wrongly-proportioned upload can't make the row
+  // ragged. The old tinted layout stays as a fallback when there's no artwork.
   const art = imageUrl ? { uri: imageUrl } : image ? image : null;
   if (art) {
     return (
@@ -45,6 +44,16 @@ function ServiceCardBase({ title, subtitle, Icon, image, imageUrl, bg, fg, onPre
         accessibilityLabel={`${title} — ${subtitle}`}
       >
         <Image source={art} style={styles.fullImg} resizeMode="cover" instant={!imageUrl} />
+        <LinearGradient
+          colors={['transparent', 'rgba(20,10,8,0.15)', 'rgba(20,10,8,0.82)']}
+          locations={[0, 0.45, 1]}
+          style={styles.scrim}
+        />
+        <View style={styles.labelWrap}>
+          <Text style={styles.label} numberOfLines={2} adjustsFontSizeToFit minimumFontScale={0.75}>
+            {title}
+          </Text>
+        </View>
       </Pressable>
     );
   }
@@ -60,7 +69,7 @@ function ServiceCardBase({ title, subtitle, Icon, image, imageUrl, bg, fg, onPre
         <Icon size={38} color={fg} strokeWidth={1.7} />
       </View>
 
-      <Text style={[styles.title, { color: fg }]} numberOfLines={1}>
+      <Text style={[styles.title, { color: fg }]} numberOfLines={2} adjustsFontSizeToFit>
         {title}
       </Text>
       <Text style={styles.subtitle} numberOfLines={1}>
@@ -73,17 +82,38 @@ function ServiceCardBase({ title, subtitle, Icon, image, imageUrl, bg, fg, onPre
 export const ServiceCard = memo(ServiceCardBase);
 
 const styles = StyleSheet.create({
-  // Full-image tile — slightly wider than tall so the boxes read smaller;
-  // the square artwork keeps a small safe margin so this crop is invisible.
+  // Square tile — leaves room for the name band at the bottom without eating the
+  // illustration. All three share it, so the row stays even.
   imageCard: {
     flex: 1,
-    aspectRatio: 1.12,
+    aspectRatio: 1,
     borderRadius: 16,
     overflow: 'hidden',
     backgroundColor: colors.white,
     ...shadows.sm,
   },
   fullImg: { width: '100%', height: '100%' },
+  scrim: { position: 'absolute', left: 0, right: 0, bottom: 0, height: '60%' },
+  labelWrap: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 0,
+    paddingHorizontal: 6,
+    paddingBottom: 8,
+    paddingTop: 4,
+  },
+  label: {
+    color: colors.white,
+    fontSize: 12.5,
+    lineHeight: 16,
+    fontFamily: fontFamilies.bodyExtraBold,
+    textAlign: 'center',
+    writingDirection: 'rtl',
+    textShadowColor: 'rgba(0,0,0,0.45)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 3,
+  },
 
   card: {
     flex: 1,
