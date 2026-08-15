@@ -443,6 +443,7 @@ export function HomeV2Screen() {
           notificationCount={unreadCount}
           greetingOverride={homeConfig?.heroGreeting}
           subtitleOverride={homeConfig?.heroSubtitle}
+          gradient={homeConfig?.heroGradient}
           locationLabel={locationLabel}
           onPressAvatar={goProfile}
           onPressLocation={goAddresses}

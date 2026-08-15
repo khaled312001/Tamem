@@ -32,6 +32,9 @@ interface Props {
   notificationCount?: number;
   greetingOverride?: string | null;
   subtitleOverride?: string | null;
+  /** Admin-picked header background (home-config heroGradient). Needs ≥2 colours;
+   *  falls back to the brand red→orange when absent. */
+  gradient?: string[] | null;
   onPressAvatar: () => void;
   onPressLocation: () => void;
   onPressNotifications: () => void;
@@ -46,6 +49,7 @@ function HomeHeaderBase({
   notificationCount = 0,
   greetingOverride,
   subtitleOverride,
+  gradient,
   onPressAvatar,
   onPressLocation,
   onPressNotifications,
@@ -55,9 +59,15 @@ function HomeHeaderBase({
   const firstName = (name ?? '').trim().split(/\s+/)[0] || 'بك';
   const initial = (name ?? 'ت').trim().charAt(0);
 
+  // Honour the admin's header colour; the brand gradient is the fallback.
+  const bandColors =
+    gradient && gradient.length >= 2
+      ? (gradient as [string, string, ...string[]])
+      : gradients.brand;
+
   return (
     <LinearGradient
-      colors={gradients.brand}
+      colors={bandColors}
       start={{ x: 0, y: 0 }}
       end={{ x: 1, y: 1 }}
       style={styles.band}
