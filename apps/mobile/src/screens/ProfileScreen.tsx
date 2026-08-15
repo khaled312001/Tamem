@@ -32,6 +32,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { GradientHeader } from '../components/GradientHeader';
 import { Divider, ListItem, SecondaryButton } from '../components/ui';
+import { SHOW_WALLET } from '../config/features';
 import { api } from '../lib/api';
 import { confirm, notify } from '../lib/confirm';
 import { isNotificationSoundMuted, setNotificationSoundMuted } from '../lib/notificationSound';
@@ -42,9 +43,9 @@ import { colors, fontFamilies, fontSizes, radii, shadows, spacing } from '../the
 
 type Nav = NativeStackNavigationProp<ProfileStackParamList, 'Profile'>;
 
-// Wallet is paused for now — flip to true to bring back the balance stat and the
-// "محفظتي" row in one go (the wallet screen itself is untouched).
-const SHOW_WALLET = false;
+// Wallet is paused for now. The switch lives in config/features so the home
+// screen's «المحفظة» shortcut is governed by the same flag — it was still
+// opening the wallet while this screen hid it.
 
 /** Module-level so the array identity never changes across renders. */
 const SOCKET_EVENTS = ['order:new', 'order:status'];
@@ -149,14 +150,33 @@ export function ProfileScreen() {
       return res.data.data as WalletInfo;
     },
     staleTime: 0,
+    // The wallet is paused, so do not spend a request on a balance nothing
+    // renders. Flipping SHOW_WALLET back on restores this too.
+    enabled: SHOW_WALLET,
   });
+
+  // Same key the payment picker and the «طرق الدفع» page use, so this row can
+  // never advertise فودافون كاش / إنستا باي on a build where the gateway is off
+  // and the checkout screen offers cash only.
+  const gatewayQuery = useQuery({
+    queryKey: ['payments-config'],
+    queryFn: async () => {
+      const res = await api.raw.get('/payments/config');
+      return res.data.data as { online?: boolean };
+    },
+    staleTime: 10 * 60 * 1000,
+    retry: false,
+  });
+  const payOnline = gatewayQuery.data?.online === true;
 
   // Refresh whenever the Profile tab gets focus (cheap — pageSize:1 queries).
   useFocusEffect(
     useCallback(() => {
       void ordersQuery.refetch();
       void addressesQuery.refetch();
-      void walletQuery.refetch();
+      // `refetch()` fires even on a disabled query, so the guard has to be here
+      // too or the paused wallet still costs a request on every tab focus.
+      if (SHOW_WALLET) void walletQuery.refetch();
       // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []),
   );
@@ -172,7 +192,7 @@ export function ProfileScreen() {
     void meQuery.refetch();
     void ordersQuery.refetch();
     void addressesQuery.refetch();
-    void walletQuery.refetch();
+    if (SHOW_WALLET) void walletQuery.refetch();
   };
 
   const isRefreshing =
@@ -340,7 +360,7 @@ export function ProfileScreen() {
           <Divider inset />
           <ListItem
             label="طرق الدفع"
-            sublabel="كاش، فودافون كاش، إنستا باي"
+            sublabel={payOnline ? 'كاش، فودافون كاش، إنستا باي' : 'الدفع كاش عند الاستلام'}
             Icon={CreditCard}
             onPress={() => navigation.navigate('PaymentMethods')}
           />
