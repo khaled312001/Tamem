@@ -43,7 +43,7 @@ function MenuImagesSectionBase({ images }: Props) {
         </View>
 
         <View style={styles.cardCaption}>
-          <Text style={styles.cardCaptionText}>اضغط لعرض المنيو</Text>
+          <Text style={styles.cardCaptionText}>اضغط للتكبير والزوم</Text>
         </View>
       </Pressable>
     ),

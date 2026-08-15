@@ -80,31 +80,32 @@ const SERVICE_CARDS: {
 }[] = [
   {
     key: 'delivery',
-    label: 'دليفري',
-    title: 'دليفري',
+    label: 'الدليفري',
+    title: 'خدمة الدليفري',
     subtitle: 'داخل المدينة',
     art: '/super_admin/app-art/service-delivery.jpg',
   },
   {
     key: 'shipping',
-    label: 'شحن',
-    title: 'شحن',
+    label: 'الشحن',
+    title: 'خدمة شحن المراكز والمحافظات',
     subtitle: 'بين المناطق',
     art: '/super_admin/app-art/service-shipping.jpg',
   },
   {
     key: 'merchant',
-    label: 'تاجر',
-    title: 'تاجر',
+    label: 'التجار والموزّعين',
+    title: 'خدمة التجار والموزعين',
     subtitle: 'طلبات جملة',
     art: '/super_admin/app-art/service-merchant.jpg',
   },
 ];
 
-/** The card is drawn at a fixed 1.12:1 box and the image is cropped to fill it,
- *  so the three tiles stay identical whatever gets uploaded. Telling the admin
- *  the ratio is what stops them uploading something that crops badly. */
-const SERVICE_ART_HINT = 'مقاس مثالي 560×500 بكسل (نسبة 1.12:1) — الصورة بتتقص للمقاس ده';
+/** The card is a fixed SQUARE box; the image is cropped to fill it and the
+ *  service name is drawn OVER it on a gradient, so upload plain artwork with no
+ *  text baked in. Telling the admin the ratio stops a badly-cropping upload. */
+const SERVICE_ART_HINT =
+  'مقاس مثالي 600×600 بكسل (مربّعة) — ارفع الصورة بدون كتابة الاسم عليها، الاسم بيظهر تلقائياً فوقها';
 
 /**
  * The copy the APP itself draws when a field has never been overridden. Kept
@@ -971,7 +972,7 @@ function ServiceCardEditor({
       </div>
 
       <label className="block cursor-pointer">
-        <div className="relative w-full overflow-hidden rounded-lg border border-dashed border-border bg-muted/40 aspect-[1.12/1]">
+        <div className="relative w-full overflow-hidden rounded-lg border border-dashed border-border bg-muted/40 aspect-square">
           {value.imageUrl ? (
             <img
               src={value.imageUrl}
@@ -985,11 +986,21 @@ function ServiceCardEditor({
                 alt={def.label}
                 className="absolute inset-0 h-full w-full object-cover"
               />
-              <span className="absolute bottom-1 start-1 rounded bg-black/60 px-1.5 py-0.5 text-[10px] font-bold text-white">
+              <span className="absolute top-1 start-1 rounded bg-black/60 px-1.5 py-0.5 text-[10px] font-bold text-white">
                 الصورة الأصلية
               </span>
             </>
           )}
+          {/* Name overlay — mirrors what the phone draws over the artwork. */}
+          <div className="pointer-events-none absolute inset-x-0 bottom-0 h-3/5 bg-gradient-to-t from-black/80 via-black/25 to-transparent" />
+          <div className="pointer-events-none absolute inset-x-0 bottom-0 p-1.5 text-center">
+            <span
+              className="text-[12px] font-black leading-tight text-white"
+              style={{ textShadow: '0 1px 3px rgba(0,0,0,0.5)' }}
+            >
+              {value.title ?? def.title}
+            </span>
+          </div>
           {busy && (
             <div className="absolute inset-0 grid place-items-center bg-black/40 text-xs font-bold text-white">
               جاري الرفع…
@@ -1009,19 +1020,22 @@ function ServiceCardEditor({
 
       {/* Loaded with the live text, not left blank behind a placeholder — the
           admin has to see the words the customer is reading. */}
+      <label className="block text-[11px] font-bold text-muted-foreground">
+        اسم الخدمة (بيظهر فوق الصورة)
+      </label>
       <input
         value={value.title ?? def.title}
         onChange={(e) => onChange({ title: e.target.value })}
         className="w-full px-3 py-2 rounded-lg border border-input bg-background text-sm outline-none focus:border-brand-red"
       />
+      <label className="block text-[11px] font-bold text-muted-foreground">
+        سطر فرعي (يظهر فقط لو الكارت بدون صورة)
+      </label>
       <input
         value={value.subtitle ?? def.subtitle}
         onChange={(e) => onChange({ subtitle: e.target.value })}
         className="w-full px-3 py-2 rounded-lg border border-input bg-background text-sm outline-none focus:border-brand-red"
       />
-      <p className="text-[11px] text-muted-foreground leading-relaxed">
-        السطرين دول بيظهروا بس لو الكارت من غير صورة. الصور الحالية العنوان متكتب جواها.
-      </p>
     </div>
   );
 }
