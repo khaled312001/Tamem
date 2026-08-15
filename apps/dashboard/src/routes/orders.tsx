@@ -31,7 +31,7 @@ import { ORDER_TRANSITIONS, ORDER_STATUS_AR } from '@tamem/types';
 import type { OrderStatus } from '@tamem/types';
 
 import { Badge, StatusBadge } from '../components/ui/Badge.js';
-import { formatDate, formatDateTime, formatMoney } from '../lib/format.js';
+import { formatDate, formatDateTime, formatMoney, formatTime } from '../lib/format.js';
 import { Button } from '../components/ui/Button.js';
 import { CustomOrderDialog } from './custom-order.js';
 import { ManualOrderDialog as NewManualOrderDialog } from './manual-order.js';
@@ -827,8 +827,11 @@ export function OrdersPage() {
                               : '—'}
                           </td>
                           <td className="px-4 py-3">{o.assignedDriver?.name ?? '—'}</td>
-                          <td className="px-4 py-3 text-xs text-muted-foreground">
-                            {formatDate(o.createdAt)}
+                          <td className="px-4 py-3 text-xs text-muted-foreground whitespace-nowrap">
+                            <div>{formatDate(o.createdAt)}</div>
+                            <div className="text-[11px] text-muted-foreground/70">
+                              {formatTime(o.createdAt)}
+                            </div>
                           </td>
                           <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
                             <div className="flex items-center justify-center gap-1">
