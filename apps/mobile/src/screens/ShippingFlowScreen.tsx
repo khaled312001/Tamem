@@ -36,6 +36,7 @@ import { PaymentMethodPicker, type PaymentMethod } from '../components/PaymentMe
 import { GradientHeader } from '../components/GradientHeader';
 import { api } from '../lib/api';
 import { goToNewOrder } from '../lib/goToNewOrder';
+import { refuseIfOffline } from '../lib/offline';
 import { uploadFile } from '../lib/uploadFile';
 import type { HomeStackParamList } from '../navigation/HomeStack';
 import { colors, fontFamilies, fontSizes, radii, spacing } from '../theme/tokens';
@@ -395,7 +396,10 @@ export function ShippingFlowScreen() {
         </View>
         <GradientButton
           label={submit.isPending ? 'جاري الإرسال…' : 'تأكيد طلب الشحن'}
-          onPress={() => submit.mutate()}
+          onPress={() => {
+            if (refuseIfOffline()) return;
+            submit.mutate();
+          }}
           disabled={!canSubmit}
           loading={submit.isPending}
         />

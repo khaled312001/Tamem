@@ -20,6 +20,7 @@ import { CardListSkeleton, EmptyState, MoneyText, PrimaryButton } from '../compo
 import { palette, typography } from '../theme/tokens';
 import { api } from '../lib/api';
 import { goToNewOrder } from '../lib/goToNewOrder';
+import { refuseIfOffline } from '../lib/offline';
 import { showToast } from '../lib/toast';
 import type { HomeStackParamList } from '../navigation/HomeStack';
 import { colors, fontFamilies, fontSizes, radii, shadows, spacing } from '../theme/tokens';
@@ -181,6 +182,7 @@ export function DynamicServiceFlowScreen() {
         ...(scheduledFor ? { scheduledFor } : {}),
       };
     }
+    if (refuseIfOffline()) return;
     await createOrder.mutateAsync(payload);
   };
 
