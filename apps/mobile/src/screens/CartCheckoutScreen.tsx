@@ -26,6 +26,7 @@ import { SchedulePicker } from '../components/SchedulePicker';
 import { EmptyState, MoneyText, PrimaryButton } from '../components/ui';
 import { api } from '../lib/api';
 import { goToNewOrder } from '../lib/goToNewOrder';
+import { refuseIfOffline } from '../lib/offline';
 import { showToast } from '../lib/toast';
 import { uploadFile } from '../lib/uploadFile';
 import type { HomeStackParamList } from '../navigation/HomeStack';
@@ -98,6 +99,11 @@ export function CartCheckoutScreen() {
   });
 
   const onSubmit = (): void => {
+    // Reads work from the cache offline; this does not. The order is priced
+    // from live tariffs, live stock and whether the shop is open right now, so
+    // sending it later from a queue could confirm a basket at a price nobody
+    // agreed, from a shop that has since closed.
+    if (refuseIfOffline()) return;
     if (!address || !address.address) {
       showToast({ title: 'أدخل عنوان التوصيل أولاً', tone: 'error' });
       return;
