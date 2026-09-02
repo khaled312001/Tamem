@@ -1,6 +1,6 @@
 import { Alert, Platform } from 'react-native';
 
-import { TamemClient } from '@tamem/api-client';
+import { TamemApiError, TamemClient } from '@tamem/api-client';
 import type { AuthTokens } from '@tamem/types';
 
 import { getAccessTokenAsync, useAuth } from '../stores/auth';
@@ -40,8 +40,14 @@ export const api: TamemClient = new TamemClient({
       const newTokens: AuthTokens = await api.refresh(tokens.refreshToken);
       await useAuth.getState().setTokens(newTokens);
       return newTokens;
-    } catch {
-      return null;
+    } catch (e) {
+      // Only a DEFINITIVE 401 (the refresh token is invalid/expired) ends the
+      // session → return null so the client logs out. A transient failure —
+      // no Wi-Fi yet on resume, a server hiccup, a timeout — must NOT wipe the
+      // session: rethrow so the one request fails and the user stays logged in
+      // and can just retry. This is what fixed "انتهت الجلسة" on every reopen.
+      if (e instanceof TamemApiError && e.status === 401) return null;
+      throw e;
     }
   },
   onUnauthorized: () => {

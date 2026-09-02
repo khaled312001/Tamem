@@ -6805,7 +6805,12 @@ function issueTokens(string $uid, string $role): array {
     $a = env('JWT_ACCESS_SECRET'); $r = env('JWT_REFRESH_SECRET');
     if (!$a || !$r) jsonErr('JWT secrets not configured', 500, 'CONFIG_MISSING');
     $isAdmin = in_array($role, ['ADMIN', 'SUPER_ADMIN'], true);
-    $ttl = $isAdmin ? ((int) env('ADMIN_SESSION_TTL_HOURS', '6')) * 3600 : 15 * 60;
+    // Customers/drivers on the mobile app: a 15-min access token forced a silent
+    // refresh on every return, and any hiccup in that refresh (e.g. Wi-Fi not up
+    // yet on resume) wiped the session → "انتهت الجلسة". Give them a one-month
+    // session (default 30 days). Tunable via MOBILE_SESSION_TTL_HOURS.
+    $ttl = $isAdmin ? ((int) env('ADMIN_SESSION_TTL_HOURS', '6')) * 3600
+                    : ((int) env('MOBILE_SESSION_TTL_HOURS', '720')) * 3600;
     return [
         'accessToken'  => jwtSign(['sub' => $uid, 'role' => $role], $a, $ttl),
         'refreshToken' => jwtSign(['sub' => $uid, 'typ' => 'refresh'], $r, $isAdmin ? $ttl : 30 * 24 * 3600),
@@ -10665,7 +10670,9 @@ if ($method === 'POST' && $path === '/auth/login') {
     $accessSecret = env('JWT_ACCESS_SECRET');
     $refreshSecret = env('JWT_REFRESH_SECRET');
     if (!$accessSecret || !$refreshSecret) jsonErr('JWT secrets not configured', 500, 'CONFIG_MISSING');
-    $accessTtl = 15 * 60;
+    // One-month mobile session (default 30 days). See issueTokens() for why the
+    // old 15-min access token kept logging customers/drivers out on resume.
+    $accessTtl = ((int) env('MOBILE_SESSION_TTL_HOURS', '720')) * 3600;
     $access = jwtSign(['sub' => $user['id'], 'role' => $role], $accessSecret, $accessTtl);
     $refresh = jwtSign(['sub' => $user['id'], 'typ' => 'refresh'], $refreshSecret, 30 * 24 * 3600);
     // Login-alert email (best-effort, deferred). Only if the user has an email.
