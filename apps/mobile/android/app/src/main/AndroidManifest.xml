@@ -12,6 +12,59 @@
   <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW"/>
   <uses-permission android:name="android.permission.VIBRATE"/>
   <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" tools:node="remove"/>
+  <!--
+    WHY THE INSTALL BUTTON WAS MISSING ON SOME PHONES.
+
+    Google Play hides an app from any device that lacks a hardware feature the
+    app REQUIRES. We never declared any <uses-feature>, so Play derived them
+    from the permissions and the activity orientation — and an *implied* feature
+    defaults to required="true". `aapt2 dump badging` on the v23 build listed
+    six, every one of them mandatory:
+
+      android.hardware.camera          <- CAMERA permission
+      android.hardware.location        <- ACCESS_COARSE/FINE_LOCATION
+      android.hardware.microphone      <- RECORD_AUDIO
+      android.hardware.wifi            <- ACCESS_WIFI_STATE
+      android.hardware.screen.portrait <- android:screenOrientation="portrait"
+      android.hardware.faketouch       <- default for all apps
+
+    So a tablet with no rear camera, a device with no GPS, or a cellular-only
+    device was filtered out of the store listing entirely. `android.hardware.wifi`
+    is the newest of these: it arrived with the NetInfo dependency added for
+    offline support, which quietly narrowed the audience again.
+
+    None of these are actually required to USE Tamem. The camera is one way to
+    attach a photo (the gallery is the other), location is a convenience over
+    typing an address, the microphone is for optional voice orders, and wifi
+    state is only read to decide whether to serve cached data. Declaring them
+    optional here overrides the implied requirement and lets Play offer the app
+    on every device. The features are still requested at runtime, where the code
+    already handles refusal.
+  -->
+  <uses-feature android:name="android.hardware.camera" android:required="false"/>
+  <uses-feature android:name="android.hardware.camera.any" android:required="false"/>
+  <uses-feature android:name="android.hardware.camera.front" android:required="false"/>
+  <uses-feature android:name="android.hardware.camera.autofocus" android:required="false"/>
+  <uses-feature android:name="android.hardware.camera.flash" android:required="false"/>
+  <uses-feature android:name="android.hardware.location" android:required="false"/>
+  <uses-feature android:name="android.hardware.location.gps" android:required="false"/>
+  <uses-feature android:name="android.hardware.location.network" android:required="false"/>
+  <uses-feature android:name="android.hardware.microphone" android:required="false"/>
+  <uses-feature android:name="android.hardware.wifi" android:required="false"/>
+  <uses-feature android:name="android.hardware.telephony" android:required="false"/>
+  <uses-feature android:name="android.hardware.bluetooth" android:required="false"/>
+  <uses-feature android:name="android.hardware.touchscreen" android:required="false"/>
+  <uses-feature android:name="android.hardware.faketouch" android:required="false"/>
+  <!--
+    The app is laid out for portrait and stays locked to it on phones (see the
+    activity below). But locking the ORIENTATION must not become a hardware
+    REQUIREMENT: declaring both screen orientations optional is what stops Play
+    excluding landscape-first devices — tablets, foldables, Chromebooks — from
+    the listing. Android 16 ignores the lock on large screens anyway.
+  -->
+  <uses-feature android:name="android.hardware.screen.portrait" android:required="false"/>
+  <uses-feature android:name="android.hardware.screen.landscape" android:required="false"/>
+
   <queries>
     <intent>
       <action android:name="android.intent.action.VIEW"/>

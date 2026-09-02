@@ -39,6 +39,7 @@ import { createRecorder, formatDuration, type Recorder } from '../lib/audioRecor
 import { api } from '../lib/api';
 import { useDebouncedValue } from '../lib/useDebouncedValue';
 import { productPrice } from '../lib/productPrice';
+import { refuseIfOffline } from '../lib/offline';
 import { showToast } from '../lib/toast';
 import { uploadFile } from '../lib/uploadFile';
 import { colors, fontFamilies, fontSizes, gradients, radii, spacing } from '../theme/tokens';
@@ -268,6 +269,8 @@ export function QuickOrderSheet({ visible, onClose, initialMode }: QuickOrderShe
         return;
       }
 
+      // Reads are cached offline; sending an order is not — see lib/offline.
+      if (refuseIfOffline()) return null;
       const res = await api.raw.post('/orders', {
         category: 'DELIVERY',
         serviceId: fallback.id,

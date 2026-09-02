@@ -15,7 +15,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { IconField } from '../components/IconField';
-import { PasswordField } from '../components/PasswordField';
+import { NewPasswordField } from '../components/NewPasswordField';
 import { ScreenHeader } from '../components/ScreenHeader';
 import { PrimaryButton } from '../components/ui';
 import { api } from '../lib/api';
@@ -160,19 +160,23 @@ export function ForgotPasswordScreen() {
                 autoComplete="sms-otp"
               />
 
-              <PasswordField
-                placeholder="كلمة السر الجديدة (8 أحرف على الأقل)"
+              {/* Same component as signup, so "what counts as a valid
+                  password" is answered identically in both places — and so
+                  someone who has just been locked out can generate one and copy
+                  it instead of inventing another they will forget. */}
+              <NewPasswordField
+                placeholder="كلمة السر الجديدة"
                 value={newPassword}
                 onChangeText={setNewPassword}
-                autoComplete="new-password"
+                onGenerated={setConfirmPassword}
               />
 
-              <PasswordField
+              <NewPasswordField
                 placeholder="أعد كتابة كلمة السر"
                 value={confirmPassword}
                 onChangeText={setConfirmPassword}
                 error={passwordMismatchError}
-                autoComplete="new-password"
+                plain
               />
 
               <View style={{ height: spacing.md }} />
