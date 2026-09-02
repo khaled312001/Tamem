@@ -2,7 +2,7 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { LinearGradient } from 'expo-linear-gradient';
-import { CheckCircle2, Home, Lock, MapPin, Phone, Truck, User } from 'lucide-react-native';
+import { CheckCircle2, Home, MapPin, Phone, Truck, User } from 'lucide-react-native';
 import { useState } from 'react';
 import { Controller, useForm } from 'react-hook-form';
 import {
@@ -22,7 +22,7 @@ import { type RegisterInput, registerSchema } from '@tamem/validators';
 
 import { BackChevron } from '../theme/rtl';
 import { IconField } from '../components/IconField';
-import { PasswordField } from '../components/PasswordField';
+import { NewPasswordField } from '../components/NewPasswordField';
 import { PrimaryButton } from '../components/ui';
 import { api } from '../lib/api';
 import { authErrorMessage, isPhoneAlreadyRegistered } from '../lib/authErrors';
@@ -211,14 +211,12 @@ export function RegisterScreen() {
               control={control}
               name="password"
               render={({ field: { value, onChange, onBlur } }) => (
-                <PasswordField
-                  Icon={Lock}
+                <NewPasswordField
                   placeholder="8 أحرف على الأقل"
                   value={value}
                   onChangeText={onChange}
                   onBlur={onBlur}
                   error={errors.password?.message}
-                  autoComplete="new-password"
                 />
               )}
             />
