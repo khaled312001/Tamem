@@ -83,9 +83,15 @@ export class TamemClient {
 
         if (status === 401 && !original._retry && !isAuthEndpoint && this.config.onRefreshNeeded) {
           original._retry = true;
-          this.refreshPromise ??= this.config.onRefreshNeeded();
-          const newTokens = await this.refreshPromise;
-          this.refreshPromise = null;
+          let newTokens: AuthTokens | null = null;
+          try {
+            this.refreshPromise ??= this.config.onRefreshNeeded();
+            newTokens = await this.refreshPromise;
+          } finally {
+            // Always clear, even when the refresh threw, so a rejected promise
+            // can't get stuck and poison every later request.
+            this.refreshPromise = null;
+          }
 
           if (newTokens) {
             original.headers = original.headers ?? {};
@@ -93,6 +99,11 @@ export class TamemClient {
               `Bearer ${newTokens.accessToken}`;
             return this.http.request(original);
           }
+          // Reaching here means the refresh RESOLVED to null — the refresh token
+          // itself is invalid/expired, so the session is genuinely over. A
+          // refresh that THREW (no network on resume, server hiccup) propagates
+          // out of the try above and never gets here, so a transient blip fails
+          // the one request instead of wiping the session.
           this.config.onUnauthorized?.();
         }
 

@@ -172,8 +172,14 @@ export function usePushTapNavigation(): void {
        * older is the OS handing back an ancient response on a normal launch,
        * so it is ignored no matter what its key says.
        */
+      // Freshness is the ONLY reliable guard, so require it UNCONDITIONALLY:
+      // a real cold-launch tap is seconds old. If we can't PROVE the response is
+      // fresh (date missing/0, or older than the window), it's the OS replaying
+      // an old tap on a normal relaunch/resume — the exact thing that kept
+      // dumping people on the Notifications page after switching apps. Ignore it
+      // and stay put; genuine taps still deep-link via the warm listener below.
       const when = Number((resp.notification as { date?: number }).date ?? 0);
-      if (when > 0 && Date.now() - when > COLD_TAP_MAX_AGE_MS) return;
+      if (!(when > 0 && Date.now() - when <= COLD_TAP_MAX_AGE_MS)) return;
 
       const key = responseKey(resp);
       const alreadyHandled = await AsyncStorage.getItem(HANDLED_RESP_KEY);
@@ -181,10 +187,18 @@ export function usePushTapNavigation(): void {
       await AsyncStorage.setItem(HANDLED_RESP_KEY, key);
       handle(resp);
     });
-    // Warm tap — app was already in background/foreground; always a genuine tap.
+    // Warm tap — app already alive; the listener fires on a genuine tap. But the
+    // OS can re-deliver the SAME response when the app is brought back to the
+    // foreground, so skip anything we've already consumed instead of navigating
+    // again.
     const sub = Notifications.addNotificationResponseReceivedListener((resp) => {
-      void AsyncStorage.setItem(HANDLED_RESP_KEY, responseKey(resp));
-      handle(resp);
+      void (async () => {
+        const key = responseKey(resp);
+        const alreadyHandled = await AsyncStorage.getItem(HANDLED_RESP_KEY);
+        if (key === alreadyHandled) return;
+        await AsyncStorage.setItem(HANDLED_RESP_KEY, key);
+        handle(resp);
+      })();
     });
     return () => sub.remove();
   }, []);
