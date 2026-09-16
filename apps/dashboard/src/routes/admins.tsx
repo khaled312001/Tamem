@@ -45,6 +45,7 @@ const ALL_PERMS: Array<{ key: string; label: string }> = [
   { key: 'payments', label: 'المدفوعات' },
   { key: 'payment-gateway', label: 'بوابة الدفع' },
   { key: 'coupons', label: 'الكوبونات' },
+  { key: 'promos', label: 'العروض' },
   { key: 'reports', label: 'التقارير' },
   { key: 'reviews', label: 'التقييمات' },
   { key: 'whatsapp', label: 'ربط واتساب' },

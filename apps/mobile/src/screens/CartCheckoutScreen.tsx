@@ -392,7 +392,13 @@ export function CartCheckoutScreen() {
           <View style={styles.totalLine}>
             <Text style={styles.totalLineLabel}>سعر التوصيل</Text>
             {deliveryFee != null ? (
-              <MoneyText amount={deliveryFee} size="sm" tone="brand" />
+              deliveryFee === 0 ? (
+                <Text style={[styles.totalLineLabel, { color: '#16a34a', fontWeight: '800' }]}>
+                  توصيل مجاني 🎉
+                </Text>
+              ) : (
+                <MoneyText amount={deliveryFee} size="sm" tone="brand" />
+              )
             ) : (
               <Text style={styles.totalPlaceholder}>
                 {!zoneReady
