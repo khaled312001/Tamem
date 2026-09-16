@@ -138,3 +138,8 @@ backups/
 # R8 deobfuscation map for a release build — 43 MB and rebuilt every time.
 # Upload it to Play alongside the AAB; it does not belong in git.
 release/*mapping*.txt
+
+# api.php runtime state on the server (response cache, connection budget)
+.api-runtime/
+# Account recovery codes must never reach git
+*recovery-codes*
