@@ -392,7 +392,7 @@ $ADMIN_PERM_MAP = [
     'services' => 'services', 'products' => 'products',
     'pricing' => 'pricing', 'pricing-rules' => 'pricing', 'zones' => 'pricing',
     'payments' => 'payments', 'payment-gateway' => 'payment-gateway',
-    'coupons' => 'coupons', 'reports' => 'reports', 'reviews' => 'reviews',
+    'coupons' => 'coupons', 'promos' => 'promos', 'reports' => 'reports', 'reviews' => 'reviews',
     'whatsapp' => 'whatsapp', 'broadcast' => 'broadcast', 'supervisors' => 'supervisors',
     'home-config' => 'home-settings', 'offers' => 'home-settings',
     'site-config' => 'site-settings', 'settings' => 'settings',
@@ -8340,7 +8340,11 @@ function evalDeliveryPromo(?string $customerId, float $fee, bool $hasIntercity, 
         if (!promoScheduleMatches($r)) continue;
         if (($r['excludeIntercity'] ?? true) && $hasIntercity) continue; // استثناء أوردرات قنا/الترحيل
         $minOrder = ($r['minOrderAmount'] ?? '') !== '' ? (float) $r['minOrderAmount'] : 0.0;
-        if ($minOrder > 0 && $orderAmount > 0 && $orderAmount < $minOrder) continue;
+        // An order whose value is unknown (0 — the quote, a free-text errand)
+        // has NOT reached a minimum. Skipping the check instead showed «توصيل
+        // مجاني» at checkout for a basket that was then charged at the door,
+        // and gave every errand order a promo meant for big baskets.
+        if ($minOrder > 0 && $orderAmount < $minOrder) continue;
         if ((string) ($r['audience'] ?? 'ALL') === 'FIRST_ORDER') {
             if (!$customerId || customerNonCancelledCount($customerId) > 0) continue;
         }
@@ -8816,6 +8820,12 @@ if ($method === 'POST' && $path === '/zones/quote-delivery') {
         $inter = array_values(array_filter($plan['groups'], fn($g) => $g['kind'] === 'INTERCITY'));
         if ($q[0] === 'NO_PRICE' && !$inter) jsonErr('لا يوجد سعر توصيل لهذه المنطقة، تواصل مع الدعم', 400, 'NO_DELIVERY_PRICE');
         $__promo = evalDeliveryPromo(optionalAuthUid(), (float) $plan['fee'], count($inter) > 0, 0.0);
+        // Same as the order: the groups and the «نقل + توصيل» parts have to add
+        // up to the discounted price, not the one before the promo.
+        if ($__promo) {
+            $plan = applyManualFeeToPlan($plan, (float) $__promo['newFee']);
+            $inter = array_values(array_filter($plan['groups'], fn($g) => $g['kind'] === 'INTERCITY'));
+        }
         jsonOk(array_merge($q[2] ?? [], [
             'price' => $__promo ? $__promo['newFee'] : $plan['fee'],
             'deliveryPromo' => $__promo ? ['applied' => true, 'label' => $__promo['label'], 'originalPrice' => $__promo['originalFee'], 'discount' => $__promo['discount']] : null,
@@ -9338,7 +9348,14 @@ if ($method === 'POST' && $path === '/orders/cart') {
     if ($fee !== null && $fee > 0) {
         $__hasInter = $plan && count(array_filter($plan['groups'], fn($g) => ($g['kind'] ?? '') === 'INTERCITY')) > 0;
         $deliveryPromo = evalDeliveryPromo($uid, (float) $fee, $__hasInter, (float) $grandSub);
-        if ($deliveryPromo) $fee = $deliveryPromo['newFee'];
+        if ($deliveryPromo) {
+            $fee = $deliveryPromo['newFee'];
+            // The groups must carry the discounted fee too. OrderLeg.deliveryFee
+            // is what each driver is told to COLLECT (orderLegCollect), so left
+            // at the full price a «توصيل مجاني» order sent the rider to charge
+            // the customer the fee they had just been told was free.
+            if ($plan) $plan = applyManualFeeToPlan($plan, (float) $fee);
+        }
     }
     $final = round($grandSub + ($fee ?? 0) - $discount, 2);
 
