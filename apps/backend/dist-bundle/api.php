@@ -135,6 +135,232 @@ function readJsonBody(): array {
     return is_array($j) ? $j : [];
 }
 
+// ─── 3b. Living inside 500 MySQL connections an hour ────────────────────
+/*
+ * Hostinger lets this database user open 500 NEW connections per hour. One
+ * more and MySQL refuses every connection (error 1226) until the hour rolls
+ * over — the whole API answers 503 and the app is dead. That is what happened
+ * on 2026-09-16, the first busy day: ~1,100 requests an hour, a third of them
+ * the dashboard's 15-second /admin/realtime poll. PDO's persistent handles do
+ * not help here: the server's wait_timeout is 20 seconds, so any request that
+ * arrives after a 20-second lull dials a brand-new connection. When the hour
+ * reset, every waiting client retried at once and burned the new 500 within
+ * minutes. The only lever that works is not touching MySQL at all.
+ *
+ * So the API budgets its own connections instead of hoping traffic stays low:
+ *
+ *  1. READS ARE SERVED FROM DISK. The responses of the read endpoints below are
+ *     stored and replayed without touching MySQL. Every request that writes
+ *     bumps a "data generation", and a stored answer is only replayed under the
+ *     generation it was produced in — so it is never older than the last change
+ *     made through the API. The TTL only bounds changes the API cannot see
+ *     (a store's opening hours ticking over, an edit in phpMyAdmin).
+ *  2. /admin/realtime answers "nothing new" from disk when nothing has been
+ *     written since the caller's previous poll.
+ *  3. EVERY REAL CONNECTION IS COUNTED over a rolling hour. Near the cap, reads
+ *     fall back to their last good copy and non-essential GETs are refused
+ *     WITHOUT dialling, so what is left goes to placing orders, signing in and
+ *     dispatch — the API degrades instead of going dark.
+ *
+ * All of it lives in a private dir outside the web root and fails open: if the
+ * dir cannot be written, every request simply behaves as before.
+ */
+const DB_CONN_CAP_DEFAULT = 500;
+
+function rtDir(): ?string {
+    static $dir = false;
+    if ($dir !== false) return $dir;
+    $base = env('RUNTIME_DIR') ?: dirname(__DIR__, 2) . '/.api-runtime';
+    if (!is_dir($base . '/cache')) @mkdir($base . '/cache', 0700, true);
+    return $dir = (is_dir($base . '/cache') && is_writable($base . '/cache')) ? $base : null;
+}
+/** Atomic replace — a reader sees the old file or the new one, never half. */
+function rtWrite(string $file, string $data): void {
+    $tmp = $file . '.' . getmypid() . '.' . mt_rand() . '.tmp';
+    if (@file_put_contents($tmp, $data) !== false && !@rename($tmp, $file)) @unlink($tmp);
+}
+function dataGen(): string {
+    $d = rtDir();
+    $v = $d ? @file_get_contents($d . '/gen') : false;
+    return ($v !== false && $v !== '') ? $v : '0';
+}
+/** When the last write through the API finished, in epoch ms. */
+function lastWriteMs(): int {
+    return (int) round((float) explode('-', dataGen())[0] * 1000);
+}
+function bumpDataGen(): void {
+    if ($d = rtDir()) rtWrite($d . '/gen', sprintf('%.4f-%d', microtime(true), getmypid()));
+}
+function connCap(): int {
+    return max(50, (int) (env('DB_CONN_PER_HOUR') ?: DB_CONN_CAP_DEFAULT));
+}
+/** Connections opened in the last rolling hour. Never below MySQL's own count,
+ *  which resets on a fixed hour boundary. */
+function connUsed(): int {
+    $d = rtDir();
+    $raw = $d ? (string) @file_get_contents($d . '/conns') : '';
+    $cut = time() - 3600; $n = 0;
+    foreach (explode("\n", $raw) as $ln) {
+        $p = explode(' ', $ln);
+        if (count($p) === 2 && (int) $p[1] > $cut) $n++;
+    }
+    return $n;
+}
+/** Record a connection by its MySQL id, so a reused persistent handle counts once. */
+function noteConnection(int $cid): void {
+    $d = rtDir();
+    if (!$d || $cid <= 0) return;
+    $f = $d . '/conns';
+    if (preg_match('/^' . $cid . ' /m', (string) @file_get_contents($f))) return;
+    $lk = @fopen($d . '/conns.lock', 'c');
+    if (!$lk) return;
+    if (@flock($lk, LOCK_EX)) {
+        $cut = time() - 3600; $keep = [];
+        foreach (explode("\n", (string) @file_get_contents($f)) as $ln) {
+            $p = explode(' ', $ln);
+            if (count($p) === 2 && (int) $p[1] > $cut) $keep[(int) $p[0]] = $ln;
+        }
+        $keep[$cid] ??= $cid . ' ' . time();
+        rtWrite($f, implode("\n", $keep));
+        flock($lk, LOCK_UN);
+    }
+    fclose($lk);
+}
+/** MySQL refused us moments ago — don't dial again yet. */
+function dbRefusedRecently(): bool {
+    $d = rtDir();
+    $t = $d ? (int) @file_get_contents($d . '/refused') : 0;
+    return $t > 0 && time() - $t < 20;
+}
+function dbUnderPressure(): bool { return connUsed() >= (int) (connCap() * 0.8); }
+function dbNearCap(): bool { return connUsed() >= (int) (connCap() * 0.92) || dbRefusedRecently(); }
+
+/** The verified JWT payload, or null. Signature and expiry only — no DB. */
+function peekAuth(): ?array {
+    $auth = $_SERVER['HTTP_AUTHORIZATION'] ?? $_SERVER['REDIRECT_HTTP_AUTHORIZATION'] ?? '';
+    if (!$auth || stripos($auth, 'Bearer ') !== 0) return null;
+    $parts = explode('.', trim(substr($auth, 7)));
+    if (count($parts) !== 3) return null;
+    [$h, $p, $sig] = $parts;
+    $expected = rtrim(strtr(base64_encode(hash_hmac('sha256', "$h.$p", env('JWT_ACCESS_SECRET') ?: '', true)), '+/', '-_'), '=');
+    if (!hash_equals($expected, $sig)) return null;
+    $payload = json_decode((string) base64_decode(strtr($p, '-_', '+/')), true) ?: [];
+    if (($payload['exp'] ?? 0) < time()) return null;
+    return $payload;
+}
+
+/**
+ * Which reads are replayed from disk: [path regex, TTL seconds, scope].
+ * 'public' answers are the same for everyone (verified: these handlers never
+ * look at the caller). 'caller' answers are stored per user id + role, so one
+ * person's orders or one admin's view can never be served to another; an entry
+ * only exists because the handler already authorised that caller for that URL,
+ * and any permission change is a write, which retires it.
+ * /admin/alerts(+stats) are left out on purpose: they run the alert sweep.
+ */
+function responseCacheRules(): array {
+    return [
+        ['#^/(categories|offers|services|product-sections|product-sections/featured|zones/cities|intercity-rates|home-config|site-config)$#', 600, 'public'],
+        ['#^/(services/[^/]+|zones/cities/[^/]+/villages|zones/villages/[^/]+/areas)$#', 600, 'public'],
+        // Stores carry isOpenNow, which the clock changes with no write at all.
+        ['#^/(merchants|products|merchants/[^/]+|merchants/[^/]+/(products|product-sections|suggestions)|products/[^/]+)$#', 60, 'public'],
+        ['#^/(orders/mine|notifications|notifications/unread-count|me|me/addresses|me/favorites|coupons/available)$#', 300, 'caller'],
+        ['#^/admin/(overview|orders|orders/stats|drivers|merchant-requests|merchant-requests/stats)$#', 300, 'caller'],
+        ['#^/admin/(products|products/stats|merchants|merchants/stats|customers|services|categories)$#', 600, 'caller'],
+        ['#^/admin/(products/[^/]+/options|merchants/[^/]+/hours)$#', 600, 'caller'],
+    ];
+}
+function serveReplay(string $body, string $tag): void {
+    http_response_code(200);
+    header('Content-Type: application/json; charset=utf-8');
+    header('X-Cache: ' . $tag);
+    echo $body;
+    exit;
+}
+/** On a refused connection: replay the last good answer for this URL if there is one. */
+function replayStaleIfAny(): void {
+    global $__replay;
+    if (!$__replay) return;
+    $raw = @file_get_contents($__replay['file']);
+    $nl = $raw === false ? false : strpos($raw, "\n");
+    if ($nl === false) return;
+    $__replay = null; // never store the replay itself
+    while (ob_get_level() > 0) @ob_end_clean();
+    serveReplay(substr($raw, $nl + 1), 'STALE');
+}
+
+// A request that may have changed data retires every stored answer — but only
+// once it actually reached MySQL, so a flood of rejected POSTs can't keep
+// emptying the cache. Read-only POSTs are excluded.
+if (!in_array($method, ['GET', 'HEAD', 'OPTIONS'], true)
+    && !preg_match('#^/(auth/|zones/quote-delivery$|merchants/openness$|coupons/validate$|me/fcm-token$|me/devices|uploads$|socket\.io)#', $path)) {
+    register_shutdown_function(static function (): void {
+        if (!empty($GLOBALS['__db_touched'])) bumpDataGen();
+    });
+}
+
+$__replay = null;
+if ($method === 'GET' && rtDir()) {
+    // Dashboard notifier: nothing written since this caller's last poll means
+    // nothing new to report. `now` stays at `since`, so when something does
+    // change, the next real query still covers the whole gap.
+    if ($path === '/admin/realtime') {
+        $__pl = peekAuth();
+        $__since = (int) ($_GET['since'] ?? 0);
+        $__snap = json_decode((string) @file_get_contents(rtDir() . '/realtime-counts'), true);
+        if ($__pl && in_array($__pl['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)
+            && $__since > 0 && is_array($__snap) && isset($__snap['counts'])) {
+            $__quiet = lastWriteMs() <= $__since;
+            $__young = time() - (int) ($__snap['t'] ?? 0) < 120;
+            if (($__quiet && ($__young || dbUnderPressure())) || dbNearCap()) {
+                jsonOk(['orders' => [], 'alerts' => [], 'counts' => $__snap['counts'], 'now' => $__since]);
+            }
+        }
+    }
+
+    foreach (responseCacheRules() as [$__rx, $__ttl, $__scope]) {
+        if (!preg_match($__rx, $path)) continue;
+        $__who = 'public';
+        if ($__scope === 'caller') {
+            $__pl = peekAuth();
+            if (!$__pl) break; // the handler answers the 401
+            $__who = (string) ($__pl['sub'] ?? '') . '|' . (string) ($__pl['role'] ?? '');
+        }
+        $__q = $_GET;
+        unset($__q['path']);
+        ksort($__q);
+        $__file = rtDir() . '/cache/' . sha1($__who . "\n" . $path . "\n" . http_build_query($__q));
+        $__gen = dataGen();
+        $__raw = @file_get_contents($__file);
+        $__nl = $__raw === false ? false : strpos($__raw, "\n");
+        if ($__nl !== false) {
+            $__meta = json_decode(substr($__raw, 0, $__nl), true) ?: [];
+            $__fresh = ($__meta['g'] ?? '') === $__gen && time() - (int) ($__meta['t'] ?? 0) < $__ttl;
+            if ($__fresh) serveReplay(substr($__raw, $__nl + 1), 'HIT');
+            if (dbUnderPressure() || dbRefusedRecently()) serveReplay(substr($__raw, $__nl + 1), 'STALE');
+        }
+        $__replay = ['file' => $__file, 'gen' => $__gen];
+        ob_start(static function (string $buf, int $phase): string {
+            global $__replay;
+            if ($__replay && ($phase & PHP_OUTPUT_HANDLER_FINAL) && !($phase & PHP_OUTPUT_HANDLER_CLEAN)
+                && http_response_code() === 200 && $buf !== '' && strlen($buf) < 4000000) {
+                rtWrite($__replay['file'], json_encode(['g' => $__replay['gen'], 't' => time()]) . "\n" . $buf);
+            }
+            return $buf;
+        });
+        break;
+    }
+
+    // Nearly out of connections: a GET that is not needed to order, sign in or
+    // dispatch waits rather than spend one. Its last good copy, if any, is
+    // replayed instead.
+    if (dbNearCap() && !preg_match('#^/(health|socket\.io|auth/|me$|orders/|admin/orders/[^/]+$|admin/realtime$)#', $path)) {
+        replayStaleIfAny();
+        header('Retry-After: 30');
+        jsonErr('الخادم مشغول مؤقتاً، برجاء المحاولة بعد لحظات', 503, 'DB_BUSY');
+    }
+}
+
 // ─── 4. DB (PDO/MySQL) ──────────────────────────────────────────────────
 function db(): PDO {
     static $pdo = null;
@@ -149,6 +375,13 @@ function db(): PDO {
     $pass = urldecode($p['pass'] ?? '');
     $name = trim($p['path'] ?? '', '/');
     $dsn = "mysql:host=$host;port=$port;dbname=$name;charset=utf8mb4";
+    // MySQL refused us seconds ago; dialling again only adds latency to a
+    // request that will fail the same way. Replay or 503 straight away.
+    if (dbRefusedRecently()) {
+        replayStaleIfAny();
+        header('Retry-After: 30');
+        jsonErr('الخادم مشغول مؤقتاً، برجاء المحاولة بعد لحظات', 503, 'DB_BUSY');
+    }
     try {
         $pdo = new PDO($dsn, $user, $pass, [
             PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
@@ -170,13 +403,23 @@ function db(): PDO {
         if ($pdo->inTransaction()) {
             try { $pdo->rollBack(); } catch (Throwable $e) { /* already clean */ }
         }
+        $GLOBALS['__db_touched'] = true;
+        try { noteConnection((int) $pdo->query('SELECT CONNECTION_ID()')->fetchColumn()); }
+        catch (Throwable $e) { /* accounting must never fail a request */ }
     } catch (PDOException $e) {
         // Fail soft instead of a raw 500 fatal. Hostinger's shared MySQL caps
         // connections/hour; when hit, surface a clean 503 the dashboard shows
         // as "busy, try again" rather than crashing every page blank.
+        $pdo = null;
         $code = (int) ($e->errorInfo[1] ?? 0);
+        if ($code === 0 && preg_match('/\b(1040|1203|1226)\b/', $e->getMessage(), $__em)) $code = (int) $__em[1];
         $busy = in_array($code, [1040, 1203, 1226], true) || stripos($e->getMessage(), 'max_connections') !== false;
         error_log('[api.php] DB connect failed (' . $code . '): ' . $e->getMessage());
+        if ($busy) {
+            if ($d = rtDir()) rtWrite($d . '/refused', (string) time());
+            replayStaleIfAny();
+            header('Retry-After: 30');
+        }
         jsonErr($busy ? 'الخادم مشغول مؤقتاً، برجاء المحاولة بعد لحظات' : 'تعذّر الاتصال بقاعدة البيانات',
             503, $busy ? 'DB_BUSY' : 'DB_DOWN');
     }
@@ -453,6 +696,50 @@ if (str_starts_with($path, '/admin/')) {
 
 // ─── ADMIN endpoints (require admin JWT) ────────────────────────────────
 
+// ── العروض (promos) — قواعد خصم رسوم التوصيل، متحكّم فيها بالكامل من الداشبورد ──
+// لازم تكون هنا (قبل الـ lister العام /admin/<resource> اللي تحت)، وإلا الـ GET
+// بيتلقّف ويرجّع لستة فاضية.
+if ($method === 'GET' && $path === '/admin/promos') {
+    $u = authUser(); if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
+    $out = [];
+    foreach (promoRules() as $r) {
+        $rid = (string) ($r['id'] ?? '');
+        $r['usedCount'] = $rid !== '' ? promoUsageCount($rid) : 0;
+        $out[] = $r;
+    }
+    jsonOk(['rules' => $out]);
+}
+if ($method === 'PUT' && $path === '/admin/promos') {
+    $u = authUser(); if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
+    $b = readJsonBody();
+    $clean = [];
+    foreach ((array) ($b['rules'] ?? []) as $r) {
+        if (!is_array($r)) continue;
+        $clean[] = [
+            'id' => trim((string) ($r['id'] ?? '')) ?: ('promo_' . bin2hex(random_bytes(6))),
+            'nameAr' => trim((string) ($r['nameAr'] ?? '')) ?: 'عرض توصيل',
+            'isActive' => !empty($r['isActive']),
+            'rewardType' => in_array($r['rewardType'] ?? '', ['FREE_DELIVERY', 'DELIVERY_PERCENT', 'DELIVERY_FIXED'], true) ? $r['rewardType'] : 'FREE_DELIVERY',
+            'rewardValue' => ($r['rewardValue'] ?? '') !== '' ? (float) $r['rewardValue'] : null,
+            'audience' => in_array($r['audience'] ?? '', ['ALL', 'FIRST_ORDER'], true) ? $r['audience'] : 'ALL',
+            'scheduleType' => in_array($r['scheduleType'] ?? '', ['ALWAYS', 'DATE_RANGE', 'SPECIFIC_DATES', 'WEEKLY'], true) ? $r['scheduleType'] : 'ALWAYS',
+            'dateFrom' => trim((string) ($r['dateFrom'] ?? '')) ?: null,
+            'dateTo' => trim((string) ($r['dateTo'] ?? '')) ?: null,
+            'dates' => array_values(array_filter(array_map(fn($d) => trim((string) $d), (array) ($r['dates'] ?? [])))),
+            'weekdays' => array_values(array_map('intval', (array) ($r['weekdays'] ?? []))),
+            'minOrderAmount' => ($r['minOrderAmount'] ?? '') !== '' ? (float) $r['minOrderAmount'] : null,
+            'maxDiscount' => ($r['maxDiscount'] ?? '') !== '' ? (float) $r['maxDiscount'] : null,
+            'excludeIntercity' => array_key_exists('excludeIntercity', $r) ? !empty($r['excludeIntercity']) : true,
+            'usageLimitTotal' => ($r['usageLimitTotal'] ?? '') !== '' ? (int) $r['usageLimitTotal'] : null,
+            'usageLimitPerCustomer' => ($r['usageLimitPerCustomer'] ?? '') !== '' ? (int) $r['usageLimitPerCustomer'] : null,
+            'priority' => (int) ($r['priority'] ?? 0),
+        ];
+    }
+    db()->prepare('INSERT INTO `Setting` (`key`,`value`,`description`,`updatedAt`,`updatedById`) VALUES (?,?,NULL,NOW(3),?) ON DUPLICATE KEY UPDATE `value`=VALUES(`value`), `updatedAt`=VALUES(`updatedAt`), `updatedById`=VALUES(`updatedById`)')
+        ->execute(['promo_rules', json_encode($clean, JSON_UNESCAPED_UNICODE), $u['sub'] ?? null]);
+    jsonOk(['rules' => $clean]);
+}
+
 // GET /admin/realtime?since=<ms> — ONE lightweight poll powering the dashboard's
 // live notifier (new orders / alerts + counts). Replaces two separate 60s polls
 // with a single tiny query, so it can run every ~15s in the background without
@@ -475,6 +762,10 @@ if ($method === 'GET' && $path === '/admin/realtime') {
 
     $openOrders = (int) db()->query("SELECT COUNT(*) FROM `Order` WHERE status IN ('NEW','UNDER_REVIEW','PRICED')")->fetchColumn();
     $openAlerts = (int) db()->query("SELECT COUNT(*) FROM `Alert` WHERE isResolved = 0")->fetchColumn();
+    // What the quiet polls replay until the next write (see section 3b).
+    if ($d = rtDir()) {
+        rtWrite($d . '/realtime-counts', json_encode(['t' => time(), 'counts' => ['openOrders' => $openOrders, 'alerts' => $openAlerts]]));
+    }
 
     jsonOk([
         'orders' => $orders,
@@ -1221,6 +1512,9 @@ function maybeAutoSweep(): void {
         $res = runAlertSweep();
         if (($res['created'] ?? 0) > 0) {
             error_log('[api.php] auto-sweep created ' . $res['created'] . ' alert(s)');
+            // This sweep rides on a GET, so nothing else would tell the stored
+            // dashboard answers that there are new alerts.
+            bumpDataGen();
         }
     } catch (Throwable $e) {
         error_log('[api.php] auto-sweep failed: ' . $e->getMessage());
@@ -8372,15 +8666,7 @@ function evalDeliveryPromo(?string $customerId, float $fee, bool $hasIntercity, 
 }
 /** يقرأ توكن Bearer لو موجود ويرجّع الـ uid بدون ما يرمي خطأ (للـ quote العام). */
 function optionalAuthUid(): ?string {
-    $auth = $_SERVER['HTTP_AUTHORIZATION'] ?? $_SERVER['REDIRECT_HTTP_AUTHORIZATION'] ?? '';
-    if (!$auth || stripos($auth, 'Bearer ') !== 0) return null;
-    $parts = explode('.', trim(substr($auth, 7)));
-    if (count($parts) !== 3) return null;
-    [$h, $p, $sig] = $parts;
-    $expected = rtrim(strtr(base64_encode(hash_hmac('sha256', "$h.$p", env('JWT_ACCESS_SECRET') ?: '', true)), '+/', '-_'), '=');
-    if (!hash_equals($expected, $sig)) return null;
-    $payload = json_decode((string) base64_decode(strtr($p, '-_', '+/')), true) ?: [];
-    if (($payload['exp'] ?? 0) < time()) return null;
+    $payload = peekAuth();
     return isset($payload['sub']) ? (string) $payload['sub'] : null;
 }
 
@@ -10886,48 +11172,6 @@ if ($method === 'POST' && $path === '/auth/admin/otp/verify') {
         ],
         'tokens' => ['accessToken' => $access, 'refreshToken' => $refresh],
     ]);
-}
-
-// ── العروض (promos) — قواعد خصم رسوم التوصيل، متحكّم فيها بالكامل من الداشبورد ──
-if ($method === 'GET' && $path === '/admin/promos') {
-    $u = authUser(); if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
-    $out = [];
-    foreach (promoRules() as $r) {
-        $rid = (string) ($r['id'] ?? '');
-        $r['usedCount'] = $rid !== '' ? promoUsageCount($rid) : 0;
-        $out[] = $r;
-    }
-    jsonOk(['rules' => $out]);
-}
-if ($method === 'PUT' && $path === '/admin/promos') {
-    $u = authUser(); if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
-    $b = readJsonBody();
-    $clean = [];
-    foreach ((array) ($b['rules'] ?? []) as $r) {
-        if (!is_array($r)) continue;
-        $clean[] = [
-            'id' => trim((string) ($r['id'] ?? '')) ?: ('promo_' . bin2hex(random_bytes(6))),
-            'nameAr' => trim((string) ($r['nameAr'] ?? '')) ?: 'عرض توصيل',
-            'isActive' => !empty($r['isActive']),
-            'rewardType' => in_array($r['rewardType'] ?? '', ['FREE_DELIVERY', 'DELIVERY_PERCENT', 'DELIVERY_FIXED'], true) ? $r['rewardType'] : 'FREE_DELIVERY',
-            'rewardValue' => ($r['rewardValue'] ?? '') !== '' ? (float) $r['rewardValue'] : null,
-            'audience' => in_array($r['audience'] ?? '', ['ALL', 'FIRST_ORDER'], true) ? $r['audience'] : 'ALL',
-            'scheduleType' => in_array($r['scheduleType'] ?? '', ['ALWAYS', 'DATE_RANGE', 'SPECIFIC_DATES', 'WEEKLY'], true) ? $r['scheduleType'] : 'ALWAYS',
-            'dateFrom' => trim((string) ($r['dateFrom'] ?? '')) ?: null,
-            'dateTo' => trim((string) ($r['dateTo'] ?? '')) ?: null,
-            'dates' => array_values(array_filter(array_map(fn($d) => trim((string) $d), (array) ($r['dates'] ?? [])))),
-            'weekdays' => array_values(array_map('intval', (array) ($r['weekdays'] ?? []))),
-            'minOrderAmount' => ($r['minOrderAmount'] ?? '') !== '' ? (float) $r['minOrderAmount'] : null,
-            'maxDiscount' => ($r['maxDiscount'] ?? '') !== '' ? (float) $r['maxDiscount'] : null,
-            'excludeIntercity' => array_key_exists('excludeIntercity', $r) ? !empty($r['excludeIntercity']) : true,
-            'usageLimitTotal' => ($r['usageLimitTotal'] ?? '') !== '' ? (int) $r['usageLimitTotal'] : null,
-            'usageLimitPerCustomer' => ($r['usageLimitPerCustomer'] ?? '') !== '' ? (int) $r['usageLimitPerCustomer'] : null,
-            'priority' => (int) ($r['priority'] ?? 0),
-        ];
-    }
-    db()->prepare('INSERT INTO `Setting` (`key`,`value`,`description`,`updatedAt`,`updatedById`) VALUES (?,?,NULL,NOW(3),?) ON DUPLICATE KEY UPDATE `value`=VALUES(`value`), `updatedAt`=VALUES(`updatedAt`), `updatedById`=VALUES(`updatedById`)')
-        ->execute(['promo_rules', json_encode($clean, JSON_UNESCAPED_UNICODE), $u['sub'] ?? null]);
-    jsonOk(['rules' => $clean]);
 }
 
 // Unknown route
