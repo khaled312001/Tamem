@@ -112,6 +112,7 @@ const NAV_SECTIONS: NavSection[] = [
       { to: '/pricing', icon: DollarSign, label: 'التسعير', perm: 'pricing' },
       { to: '/pricing/intercity', icon: Route, label: 'التوصيل بين المدن', perm: 'pricing' },
       { to: '/coupons', icon: Tag, label: 'الكوبونات', perm: 'coupons' },
+      { to: '/promos', icon: Sparkles, label: 'العروض', perm: 'promos' },
     ],
   },
   {

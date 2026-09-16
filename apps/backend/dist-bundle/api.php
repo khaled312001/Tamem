@@ -8280,6 +8280,106 @@ function orderLegPlan(?string $cityId, ?string $villageId, ?string $areaId, arra
  * «نقل 70 + توصيل 20» is no longer where it came from, and printing it would be
  * arithmetic that does not check out.
  */
+// ── محرّك العروض على رسوم التوصيل ──────────────────────────────────────────
+// قواعد العروض متخزّنة كـ JSON في Setting['promo_rules'] — الأدمن بيتحكم فيها
+// بالكامل من صفحة «العروض» (من غير كود ولا build). بتخصم من رسوم التوصيل بس.
+// كل قاعدة: { id, nameAr, isActive, rewardType, rewardValue, audience,
+//   scheduleType, dateFrom, dateTo, dates[], weekdays[], minOrderAmount,
+//   maxDiscount, excludeIntercity, usageLimitTotal, usageLimitPerCustomer, priority }
+// rewardType: FREE_DELIVERY | DELIVERY_PERCENT | DELIVERY_FIXED
+// audience  : ALL | FIRST_ORDER      schedule: ALWAYS|DATE_RANGE|SPECIFIC_DATES|WEEKLY
+function promoRules(): array {
+    static $cache = null;
+    if ($cache !== null) return $cache;
+    try {
+        $st = db()->prepare("SELECT `value` FROM `Setting` WHERE `key` = 'promo_rules' LIMIT 1");
+        $st->execute();
+        $arr = json_decode((string) ($st->fetchColumn() ?: ''), true);
+    } catch (Throwable $e) { $arr = []; }
+    return $cache = is_array($arr) ? $arr : [];
+}
+/** عدد أوردرات العميل غير الملغية — تعريف «أول أوردر»: صفر = مستحق. */
+function customerNonCancelledCount(string $customerId): int {
+    $st = db()->prepare("SELECT COUNT(*) FROM `Order` WHERE customerId = ? AND status NOT IN ('CANCELLED','REJECTED')");
+    $st->execute([$customerId]);
+    return (int) $st->fetchColumn();
+}
+/** كام مرة عرض اتّستخدم (إجمالي/لعميل) من customData.deliveryPromo.ruleId. */
+function promoUsageCount(string $ruleId, ?string $customerId = null): int {
+    $sql = "SELECT COUNT(*) FROM `Order` WHERE JSON_EXTRACT(customData, '$.deliveryPromo.ruleId') = ? AND status NOT IN ('CANCELLED','REJECTED')";
+    $args = [$ruleId];
+    if ($customerId !== null) { $sql .= ' AND customerId = ?'; $args[] = $customerId; }
+    try { $st = db()->prepare($sql); $st->execute($args); return (int) $st->fetchColumn(); }
+    catch (Throwable $e) { return 0; } // لو دوال JSON مش متاحة، ما نمنعش الأوردر
+}
+/** هل النهارده داخل جدول العرض؟ */
+function promoScheduleMatches(array $r): bool {
+    $type = (string) ($r['scheduleType'] ?? 'ALWAYS');
+    $today = date('Y-m-d');
+    if ($type === 'ALWAYS') return true;
+    if ($type === 'DATE_RANGE') {
+        $from = (string) ($r['dateFrom'] ?? ''); $to = (string) ($r['dateTo'] ?? '');
+        if ($from !== '' && $today < $from) return false;
+        if ($to !== '' && $today > $to) return false;
+        return true;
+    }
+    if ($type === 'SPECIFIC_DATES') return in_array($today, array_map('strval', (array) ($r['dates'] ?? [])), true);
+    if ($type === 'WEEKLY') return in_array((int) date('w'), array_map('intval', (array) ($r['weekdays'] ?? [])), true);
+    return false;
+}
+/**
+ * يقيّم العروض المفعّلة على أوردر ويرجّع الأنسب (أعلى أولوية) أو null.
+ * @return array{ruleId:string,label:string,discount:float,newFee:float,originalFee:float}|null
+ */
+function evalDeliveryPromo(?string $customerId, float $fee, bool $hasIntercity, float $orderAmount): ?array {
+    if ($fee <= 0) return null;
+    $rules = promoRules();
+    usort($rules, fn($a, $b) => ((int) ($b['priority'] ?? 0)) <=> ((int) ($a['priority'] ?? 0)));
+    foreach ($rules as $r) {
+        if (empty($r['isActive'])) continue;
+        if (!promoScheduleMatches($r)) continue;
+        if (($r['excludeIntercity'] ?? true) && $hasIntercity) continue; // استثناء أوردرات قنا/الترحيل
+        $minOrder = ($r['minOrderAmount'] ?? '') !== '' ? (float) $r['minOrderAmount'] : 0.0;
+        if ($minOrder > 0 && $orderAmount > 0 && $orderAmount < $minOrder) continue;
+        if ((string) ($r['audience'] ?? 'ALL') === 'FIRST_ORDER') {
+            if (!$customerId || customerNonCancelledCount($customerId) > 0) continue;
+        }
+        $rid = (string) ($r['id'] ?? '');
+        if ($rid !== '') {
+            $lt = ($r['usageLimitTotal'] ?? '') !== '' ? (int) $r['usageLimitTotal'] : 0;
+            if ($lt > 0 && promoUsageCount($rid) >= $lt) continue;
+            $lpc = ($r['usageLimitPerCustomer'] ?? '') !== '' ? (int) $r['usageLimitPerCustomer'] : 0;
+            if ($lpc > 0 && $customerId && promoUsageCount($rid, $customerId) >= $lpc) continue;
+        }
+        $type = (string) ($r['rewardType'] ?? 'FREE_DELIVERY');
+        $val = ($r['rewardValue'] ?? '') !== '' ? (float) $r['rewardValue'] : 0.0;
+        if ($type === 'FREE_DELIVERY') $discount = $fee;
+        elseif ($type === 'DELIVERY_PERCENT') $discount = round($fee * min(100, max(0, $val)) / 100, 2);
+        elseif ($type === 'DELIVERY_FIXED') $discount = $val;
+        else continue;
+        $maxD = ($r['maxDiscount'] ?? '') !== '' ? (float) $r['maxDiscount'] : 0.0;
+        if ($maxD > 0) $discount = min($discount, $maxD);
+        $discount = min($discount, $fee);
+        if ($discount <= 0) continue;
+        return ['ruleId' => $rid, 'label' => (string) ($r['nameAr'] ?? 'عرض توصيل'),
+            'discount' => round($discount, 2), 'newFee' => round($fee - $discount, 2), 'originalFee' => round($fee, 2)];
+    }
+    return null;
+}
+/** يقرأ توكن Bearer لو موجود ويرجّع الـ uid بدون ما يرمي خطأ (للـ quote العام). */
+function optionalAuthUid(): ?string {
+    $auth = $_SERVER['HTTP_AUTHORIZATION'] ?? $_SERVER['REDIRECT_HTTP_AUTHORIZATION'] ?? '';
+    if (!$auth || stripos($auth, 'Bearer ') !== 0) return null;
+    $parts = explode('.', trim(substr($auth, 7)));
+    if (count($parts) !== 3) return null;
+    [$h, $p, $sig] = $parts;
+    $expected = rtrim(strtr(base64_encode(hash_hmac('sha256', "$h.$p", env('JWT_ACCESS_SECRET') ?: '', true)), '+/', '-_'), '=');
+    if (!hash_equals($expected, $sig)) return null;
+    $payload = json_decode((string) base64_decode(strtr($p, '-_', '+/')), true) ?: [];
+    if (($payload['exp'] ?? 0) < time()) return null;
+    return isset($payload['sub']) ? (string) $payload['sub'] : null;
+}
+
 function applyManualFeeToPlan(array $plan, float $fee): array {
     $groups = $plan['groups'];
     if (!$groups) return $plan;
@@ -8715,8 +8815,10 @@ if ($method === 'POST' && $path === '/zones/quote-delivery') {
         }
         $inter = array_values(array_filter($plan['groups'], fn($g) => $g['kind'] === 'INTERCITY'));
         if ($q[0] === 'NO_PRICE' && !$inter) jsonErr('لا يوجد سعر توصيل لهذه المنطقة، تواصل مع الدعم', 400, 'NO_DELIVERY_PRICE');
+        $__promo = evalDeliveryPromo(optionalAuthUid(), (float) $plan['fee'], count($inter) > 0, 0.0);
         jsonOk(array_merge($q[2] ?? [], [
-            'price' => $plan['fee'],
+            'price' => $__promo ? $__promo['newFee'] : $plan['fee'],
+            'deliveryPromo' => $__promo ? ['applied' => true, 'label' => $__promo['label'], 'originalPrice' => $__promo['originalFee'], 'discount' => $__promo['discount']] : null,
             'source' => $inter ? 'INTERCITY' : ($q[2]['source'] ?? null),
             // Summed across the groups, NOT the bare zone tariff: localFee +
             // intercityFee must add up to `price`, or the app's "70 + 20"
@@ -8742,7 +8844,9 @@ if ($method === 'POST' && $path === '/zones/quote-delivery') {
     }
 
     if ($q[0] === 'NO_PRICE') jsonErr('لا يوجد سعر توصيل لهذه المنطقة، تواصل مع الدعم', 400, 'NO_DELIVERY_PRICE');
-    jsonOk(array_merge(['price' => $q[1]], $q[2]));
+    $__promo = evalDeliveryPromo(optionalAuthUid(), (float) $q[1], false, 0.0);
+    jsonOk(array_merge(['price' => $__promo ? $__promo['newFee'] : $q[1],
+        'deliveryPromo' => $__promo ? ['applied' => true, 'label' => $__promo['label'], 'originalPrice' => $__promo['originalFee'], 'discount' => $__promo['discount']] : null], $q[2]));
 }
 
 /**
@@ -9229,6 +9333,13 @@ if ($method === 'POST' && $path === '/orders/cart') {
         if (!$ok) jsonErr((string) $res, 422, 'VALIDATION_ERROR');
         $discount = (float) $res; $coupon = $c;
     }
+    // عرض توصيل (أول أوردر / يوم مجاني…) — يخصم من رسوم التوصيل قبل حساب الإجمالي.
+    $deliveryPromo = null;
+    if ($fee !== null && $fee > 0) {
+        $__hasInter = $plan && count(array_filter($plan['groups'], fn($g) => ($g['kind'] ?? '') === 'INTERCITY')) > 0;
+        $deliveryPromo = evalDeliveryPromo($uid, (float) $fee, $__hasInter, (float) $grandSub);
+        if ($deliveryPromo) $fee = $deliveryPromo['newFee'];
+    }
     $final = round($grandSub + ($fee ?? 0) - $discount, 2);
 
     $parentId = newId();
@@ -9275,6 +9386,12 @@ if ($method === 'POST' && $path === '/orders/cart') {
         ], JSON_UNESCAPED_UNICODE);
     }
 
+    if ($deliveryPromo) {
+        $__cd = $deliveryLegs ? (json_decode($deliveryLegs, true) ?: []) : [];
+        $__cd['deliveryPromo'] = ['ruleId' => $deliveryPromo['ruleId'], 'label' => $deliveryPromo['label'],
+            'originalFee' => $deliveryPromo['originalFee'], 'discount' => $deliveryPromo['discount']];
+        $deliveryLegs = json_encode($__cd, JSON_UNESCAPED_UNICODE);
+    }
     db()->prepare('INSERT INTO `Order` (id, orderNumber, serviceId, customerId, category, status, merchantId, deliveryAddress, deliveryLat, deliveryLng, cityId, villageId, areaId, paymentMethod, paymentStatus, currency, couponCode, discountAmount, merchantSubtotal, deliveryFee, quotedPrice, finalPrice, scheduledFor, customData, createdAt, updatedAt)
         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NOW(3),NOW(3))')
         ->execute([$parentId, $parentNo, $svc['id'], $uid, 'MERCHANT', 'NEW',
@@ -9426,6 +9543,7 @@ if ($method === 'POST' && $path === '/orders') {
         $dLng = $a['lng'] !== null ? (float) $a['lng'] : null;
     }
     $fee = null;
+    $__hasIntercity = false;
     if ($cityId || $villageId || $areaId) {
         $q = zoneQuote($cityId, $villageId, $areaId);
         if (!$q) jsonErr('اختيارات العنوان غير صحيحة', 400, 'INVALID_ZONE');
@@ -9445,12 +9563,25 @@ if ($method === 'POST' && $path === '/orders') {
             if ($__ic) {
                 if ($__ic['mode'] === 'REPLACE') $fee = 0.0;
                 $fee = round((float) $fee + $__ic['price'], 2);
+                $__hasIntercity = true;
             }
         }
     }
     // Shipping between named regions is priced from the admin route table.
     if ($fee === null && $cat === 'SHIPPING' && !empty($b['fromRegion']) && !empty($b['toRegion'])) {
         $fee = shippingQuote((string) $b['fromRegion'], (string) $b['toRegion'], ($b['speedTier'] ?? '') === 'EXPRESS');
+    }
+    // عرض توصيل — يخصم من الرسوم ويتسجّل في customData.
+    $deliveryPromo = null;
+    if ($fee !== null && $fee > 0) {
+        $deliveryPromo = evalDeliveryPromo($uid, (float) $fee, $__hasIntercity, 0.0);
+        if ($deliveryPromo) {
+            $fee = $deliveryPromo['newFee'];
+            $cd = is_array($b['customData'] ?? null) ? $b['customData'] : [];
+            $cd['deliveryPromo'] = ['ruleId' => $deliveryPromo['ruleId'], 'label' => $deliveryPromo['label'],
+                'originalFee' => $deliveryPromo['originalFee'], 'discount' => $deliveryPromo['discount']];
+            $b['customData'] = $cd;
+        }
     }
     $pm = (string) ($b['paymentMethod'] ?? 'CASH');
     if (!in_array($pm, ['CASH', 'VODAFONE_CASH', 'INSTAPAY'], true)) $pm = 'CASH';
@@ -10738,6 +10869,48 @@ if ($method === 'POST' && $path === '/auth/admin/otp/verify') {
         ],
         'tokens' => ['accessToken' => $access, 'refreshToken' => $refresh],
     ]);
+}
+
+// ── العروض (promos) — قواعد خصم رسوم التوصيل، متحكّم فيها بالكامل من الداشبورد ──
+if ($method === 'GET' && $path === '/admin/promos') {
+    $u = authUser(); if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
+    $out = [];
+    foreach (promoRules() as $r) {
+        $rid = (string) ($r['id'] ?? '');
+        $r['usedCount'] = $rid !== '' ? promoUsageCount($rid) : 0;
+        $out[] = $r;
+    }
+    jsonOk(['rules' => $out]);
+}
+if ($method === 'PUT' && $path === '/admin/promos') {
+    $u = authUser(); if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
+    $b = readJsonBody();
+    $clean = [];
+    foreach ((array) ($b['rules'] ?? []) as $r) {
+        if (!is_array($r)) continue;
+        $clean[] = [
+            'id' => trim((string) ($r['id'] ?? '')) ?: ('promo_' . bin2hex(random_bytes(6))),
+            'nameAr' => trim((string) ($r['nameAr'] ?? '')) ?: 'عرض توصيل',
+            'isActive' => !empty($r['isActive']),
+            'rewardType' => in_array($r['rewardType'] ?? '', ['FREE_DELIVERY', 'DELIVERY_PERCENT', 'DELIVERY_FIXED'], true) ? $r['rewardType'] : 'FREE_DELIVERY',
+            'rewardValue' => ($r['rewardValue'] ?? '') !== '' ? (float) $r['rewardValue'] : null,
+            'audience' => in_array($r['audience'] ?? '', ['ALL', 'FIRST_ORDER'], true) ? $r['audience'] : 'ALL',
+            'scheduleType' => in_array($r['scheduleType'] ?? '', ['ALWAYS', 'DATE_RANGE', 'SPECIFIC_DATES', 'WEEKLY'], true) ? $r['scheduleType'] : 'ALWAYS',
+            'dateFrom' => trim((string) ($r['dateFrom'] ?? '')) ?: null,
+            'dateTo' => trim((string) ($r['dateTo'] ?? '')) ?: null,
+            'dates' => array_values(array_filter(array_map(fn($d) => trim((string) $d), (array) ($r['dates'] ?? [])))),
+            'weekdays' => array_values(array_map('intval', (array) ($r['weekdays'] ?? []))),
+            'minOrderAmount' => ($r['minOrderAmount'] ?? '') !== '' ? (float) $r['minOrderAmount'] : null,
+            'maxDiscount' => ($r['maxDiscount'] ?? '') !== '' ? (float) $r['maxDiscount'] : null,
+            'excludeIntercity' => array_key_exists('excludeIntercity', $r) ? !empty($r['excludeIntercity']) : true,
+            'usageLimitTotal' => ($r['usageLimitTotal'] ?? '') !== '' ? (int) $r['usageLimitTotal'] : null,
+            'usageLimitPerCustomer' => ($r['usageLimitPerCustomer'] ?? '') !== '' ? (int) $r['usageLimitPerCustomer'] : null,
+            'priority' => (int) ($r['priority'] ?? 0),
+        ];
+    }
+    db()->prepare('INSERT INTO `Setting` (`key`,`value`,`description`,`updatedAt`,`updatedById`) VALUES (?,?,NULL,NOW(3),?) ON DUPLICATE KEY UPDATE `value`=VALUES(`value`), `updatedAt`=VALUES(`updatedAt`), `updatedById`=VALUES(`updatedById`)')
+        ->execute(['promo_rules', json_encode($clean, JSON_UNESCAPED_UNICODE), $u['sub'] ?? null]);
+    jsonOk(['rules' => $clean]);
 }
 
 // Unknown route
