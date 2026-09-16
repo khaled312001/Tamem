@@ -191,8 +191,23 @@ function lastWriteMs(): int {
 function bumpDataGen(): void {
     if ($d = rtDir()) rtWrite($d . '/gen', sprintf('%.4f-%d', microtime(true), getmypid()));
 }
+/** True when DATABASE_URL reaches MySQL over the local socket. */
+function dbIsLocal(): bool {
+    $h = strtolower((string) (parse_url((string) env('DATABASE_URL'), PHP_URL_HOST) ?? ''));
+    return in_array($h, ['localhost', '127.0.0.1', '::1'], true);
+}
+/**
+ * THE 500-AN-HOUR CAP BELONGS TO THE REMOTE ACCOUNT ONLY. MySQL matches
+ * `user@localhost` for socket connections and `user@%` for everything else,
+ * and on this host only the second carries MAX_CONNECTIONS_PER_HOUR 500
+ * (SHOW GRANTS, 2026-09-16). The outage happened because DATABASE_URL named
+ * srv1593.hstgr.io instead of localhost. Over localhost there is no hourly cap
+ * to budget for, so the guard stands down — and comes back by itself if the
+ * URL is ever pointed at the remote host again.
+ */
 function connCap(): int {
-    return max(50, (int) (env('DB_CONN_PER_HOUR') ?: DB_CONN_CAP_DEFAULT));
+    if (env('DB_CONN_PER_HOUR')) return max(50, (int) env('DB_CONN_PER_HOUR'));
+    return dbIsLocal() ? PHP_INT_MAX : DB_CONN_CAP_DEFAULT;
 }
 /** Connections opened in the last rolling hour. Never below MySQL's own count,
  *  which resets on a fixed hour boundary. */
@@ -232,8 +247,12 @@ function dbRefusedRecently(): bool {
     $t = $d ? (int) @file_get_contents($d . '/refused') : 0;
     return $t > 0 && time() - $t < 20;
 }
-function dbUnderPressure(): bool { return connUsed() >= (int) (connCap() * 0.8); }
-function dbNearCap(): bool { return connUsed() >= (int) (connCap() * 0.92) || dbRefusedRecently(); }
+function dbUnderPressure(): bool {
+    return connCap() !== PHP_INT_MAX && connUsed() >= (int) (connCap() * 0.8);
+}
+function dbNearCap(): bool {
+    return dbRefusedRecently() || (connCap() !== PHP_INT_MAX && connUsed() >= (int) (connCap() * 0.92));
+}
 
 /** The verified JWT payload, or null. Signature and expiry only — no DB. */
 function peekAuth(): ?array {
@@ -395,7 +414,10 @@ function db(): PDO {
             // polling) can burn through on its own.
             // Persistent handles live in the PHP worker and are reused across
             // requests, so connection count tracks WORKERS, not traffic.
-            PDO::ATTR_PERSISTENT => true,
+            // Only worth it on the remote account: over localhost there is no
+            // hourly cap, and an idle persistent handle would just sit on one
+            // of the 75 connections this user may hold at the same time.
+            PDO::ATTR_PERSISTENT => !dbIsLocal(),
         ]);
         // A pooled handle can come back still inside a transaction if an earlier
         // request died between BEGIN and COMMIT — that would silently poison this
@@ -404,8 +426,12 @@ function db(): PDO {
             try { $pdo->rollBack(); } catch (Throwable $e) { /* already clean */ }
         }
         $GLOBALS['__db_touched'] = true;
-        try { noteConnection((int) $pdo->query('SELECT CONNECTION_ID()')->fetchColumn()); }
-        catch (Throwable $e) { /* accounting must never fail a request */ }
+        // Counting only matters where there is an hourly cap; over localhost it
+        // would be a locked file rewrite on every request for nothing.
+        if (connCap() !== PHP_INT_MAX) {
+            try { noteConnection((int) $pdo->query('SELECT CONNECTION_ID()')->fetchColumn()); }
+            catch (Throwable $e) { /* accounting must never fail a request */ }
+        }
     } catch (PDOException $e) {
         // Fail soft instead of a raw 500 fatal. Hostinger's shared MySQL caps
         // connections/hour; when hit, surface a clean 503 the dashboard shows
@@ -416,9 +442,11 @@ function db(): PDO {
         $busy = in_array($code, [1040, 1203, 1226], true) || stripos($e->getMessage(), 'max_connections') !== false;
         error_log('[api.php] DB connect failed (' . $code . '): ' . $e->getMessage());
         if ($busy) {
-            if ($d = rtDir()) rtWrite($d . '/refused', (string) time());
+            // Only the hourly cap (1226) lasts long enough to stop dialling for
+            // a while; too-many-at-once (1040/1203) clears in milliseconds.
+            if ($code === 1226 && ($d = rtDir())) rtWrite($d . '/refused', (string) time());
             replayStaleIfAny();
-            header('Retry-After: 30');
+            header('Retry-After: ' . ($code === 1226 ? '30' : '2'));
         }
         jsonErr($busy ? 'الخادم مشغول مؤقتاً، برجاء المحاولة بعد لحظات' : 'تعذّر الاتصال بقاعدة البيانات',
             503, $busy ? 'DB_BUSY' : 'DB_DOWN');
