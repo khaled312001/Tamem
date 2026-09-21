@@ -395,6 +395,7 @@ export class TamemClient {
     completed: number;
     cancelled: number;
     salesToday: number;
+    deliveryToday: number;
   }> {
     return this.request({ method: 'GET', url: '/admin/orders/stats' });
   }

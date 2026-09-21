@@ -451,6 +451,50 @@ if (str_starts_with($path, '/admin/')) {
     }
 }
 
+// ── العروض (promos) — قواعد خصم رسوم التوصيل، متحكّم فيها بالكامل من الداشبورد ──
+// لازم تكون هنا (قبل الـ lister العام /admin/<resource> اللي تحت)، وإلا الـ GET
+// بيتلقّف ويرجّع لستة فاضية.
+if ($method === 'GET' && $path === '/admin/promos') {
+    $u = authUser(); if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
+    $out = [];
+    foreach (promoRules() as $r) {
+        $rid = (string) ($r['id'] ?? '');
+        $r['usedCount'] = $rid !== '' ? promoUsageCount($rid) : 0;
+        $out[] = $r;
+    }
+    jsonOk(['rules' => $out]);
+}
+if ($method === 'PUT' && $path === '/admin/promos') {
+    $u = authUser(); if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
+    $b = readJsonBody();
+    $clean = [];
+    foreach ((array) ($b['rules'] ?? []) as $r) {
+        if (!is_array($r)) continue;
+        $clean[] = [
+            'id' => trim((string) ($r['id'] ?? '')) ?: ('promo_' . bin2hex(random_bytes(6))),
+            'nameAr' => trim((string) ($r['nameAr'] ?? '')) ?: 'عرض توصيل',
+            'isActive' => !empty($r['isActive']),
+            'rewardType' => in_array($r['rewardType'] ?? '', ['FREE_DELIVERY', 'DELIVERY_PERCENT', 'DELIVERY_FIXED'], true) ? $r['rewardType'] : 'FREE_DELIVERY',
+            'rewardValue' => ($r['rewardValue'] ?? '') !== '' ? (float) $r['rewardValue'] : null,
+            'audience' => in_array($r['audience'] ?? '', ['ALL', 'FIRST_ORDER'], true) ? $r['audience'] : 'ALL',
+            'scheduleType' => in_array($r['scheduleType'] ?? '', ['ALWAYS', 'DATE_RANGE', 'SPECIFIC_DATES', 'WEEKLY'], true) ? $r['scheduleType'] : 'ALWAYS',
+            'dateFrom' => trim((string) ($r['dateFrom'] ?? '')) ?: null,
+            'dateTo' => trim((string) ($r['dateTo'] ?? '')) ?: null,
+            'dates' => array_values(array_filter(array_map(fn($d) => trim((string) $d), (array) ($r['dates'] ?? [])))),
+            'weekdays' => array_values(array_map('intval', (array) ($r['weekdays'] ?? []))),
+            'minOrderAmount' => ($r['minOrderAmount'] ?? '') !== '' ? (float) $r['minOrderAmount'] : null,
+            'maxDiscount' => ($r['maxDiscount'] ?? '') !== '' ? (float) $r['maxDiscount'] : null,
+            'excludeIntercity' => array_key_exists('excludeIntercity', $r) ? !empty($r['excludeIntercity']) : true,
+            'usageLimitTotal' => ($r['usageLimitTotal'] ?? '') !== '' ? (int) $r['usageLimitTotal'] : null,
+            'usageLimitPerCustomer' => ($r['usageLimitPerCustomer'] ?? '') !== '' ? (int) $r['usageLimitPerCustomer'] : null,
+            'priority' => (int) ($r['priority'] ?? 0),
+        ];
+    }
+    db()->prepare('INSERT INTO `Setting` (`key`,`value`,`description`,`updatedAt`,`updatedById`) VALUES (?,?,NULL,NOW(3),?) ON DUPLICATE KEY UPDATE `value`=VALUES(`value`), `updatedAt`=VALUES(`updatedAt`), `updatedById`=VALUES(`updatedById`)')
+        ->execute(['promo_rules', json_encode($clean, JSON_UNESCAPED_UNICODE), $u['sub'] ?? null]);
+    jsonOk(['rules' => $clean]);
+}
+
 // ─── ADMIN endpoints (require admin JWT) ────────────────────────────────
 
 // GET /admin/realtime?since=<ms> — ONE lightweight poll powering the dashboard's
@@ -2882,12 +2926,14 @@ if ($method === 'GET' && $path === '/admin/orders/stats') {
     // compare a stored UTC datetime against a PHP local time.
     $cairoMidnightUtc = gmdate('Y-m-d H:i:s', strtotime('today 00:00') - 3 * 3600);
     $salesStmt = db()->prepare(
-        "SELECT COALESCE(SUM(COALESCE(finalPrice, quotedPrice, 0)), 0)
+        "SELECT COALESCE(SUM(COALESCE(finalPrice, quotedPrice, 0)), 0) AS sales,
+                COALESCE(SUM(COALESCE(deliveryFee, 0)), 0)            AS delivery
          FROM `Order`
          WHERE status IN ('DELIVERED','COMPLETED')
            AND (completedAt >= ? OR deliveredAt >= ? OR createdAt >= ?)"
     );
     $salesStmt->execute([$cairoMidnightUtc, $cairoMidnightUtc, $cairoMidnightUtc]);
+    $sums = $salesStmt->fetch() ?: ['sales' => 0, 'delivery' => 0];
     jsonOk([
         'total' => (int) ($row['total'] ?? 0),
         'new' => (int) ($row['newCount'] ?? 0),
@@ -2895,7 +2941,8 @@ if ($method === 'GET' && $path === '/admin/orders/stats') {
         'delivering' => (int) ($row['delivering'] ?? 0),
         'completed' => (int) ($row['completed'] ?? 0),
         'cancelled' => (int) ($row['cancelled'] ?? 0),
-        'salesToday' => round((float) $salesStmt->fetchColumn(), 2),
+        'salesToday' => round((float) ($sums['sales'] ?? 0), 2),
+        'deliveryToday' => round((float) ($sums['delivery'] ?? 0), 2),
     ]);
 }
 if ($method === 'GET' && $path === '/admin/orders') {
@@ -3118,6 +3165,10 @@ if ($method === 'POST' && $path === '/admin/orders') {
     $u = authUser();
     if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
     $b = readJsonBody();
+    // «تسجيل صامت»: ينشئ الأوردر ويحسبه ماليًا (عدد/نسب/حسابات اليوم) من غير أي
+    // إشعارات — لا واتساب للمندوب، لا جروب إدارة، لا إيميل. للأوردرات اللي المندوب
+    // أخدها بره وبلّغ عنها بنفسه، فأي إشعار تاني بيبقى تكرار ولخبطة.
+    $silent = !empty($b['silent']);
     $serviceId = (string)($b['serviceId'] ?? '');
     if ($serviceId === '') jsonErr('اختر الخدمة', 422, 'MISSING');
     $sv = db()->prepare('SELECT category FROM `Service` WHERE id = ?'); $sv->execute([$serviceId]); $svc = $sv->fetch();
@@ -3364,10 +3415,10 @@ if ($method === 'POST' && $path === '/admin/orders') {
      * by the time it arrives. When the agent says where the order stands, that
      * is the message the customer gets.
      */
-    $notified = $advanceTo !== '' ? [] : notifyOrderParties($id, 'NEW');
+    $notified = ($advanceTo !== '' || $silent) ? [] : notifyOrderParties($id, 'NEW');
     // Additionally dispatch to the on-shift supervisor(s) (+ record dispatch) —
     // the Supervisor-table shift feature, distinct from the business number.
-    try {
+    if (!$silent) try {
         [$dow, $mins] = nowCairo();
         foreach (db()->query("SELECT * FROM `Supervisor` WHERE isActive = 1")->fetchAll() as $sup) {
             $hit = false;
@@ -3408,12 +3459,12 @@ if ($method === 'POST' && $path === '/admin/orders') {
         foreach ($createdLegs as $lg) {
             $want = $legDrivers[$lg['groupKey']] ?? ($wantDriver !== '' ? $wantDriver : '');
             if ($want === '') continue;
-            $err = assignLegDriver($id, $lg, $want, $u['sub'] ?? null);
+            $err = assignLegDriver($id, $lg, $want, $u['sub'] ?? null, $silent);
             // Self-contained: these are shown to the agent one per line, and a
             // shared trailing clause stopped making sense once the stage block
             // below started adding notes of its own.
             if ($err) $driverNotes[] = $lg['label'] . ': ' . $err . ' — عيّن مندوب تاني';
-            else $notified[] = 'واتساب المندوب';
+            elseif (!$silent) $notified[] = 'واتساب المندوب';
         }
     } elseif ($wantDriver !== '') {
         // No groups (an order with no address, or a server where the OrderLeg
@@ -3431,7 +3482,7 @@ if ($method === 'POST' && $path === '/admin/orders') {
                 ->execute([$wantDriver]);
             snapshotDriverShare($id);
             orderHistory($id, 'NEW', 'DRIVER_ASSIGNED', $u['sub'] ?? null, 'ADMIN', 'Assigned on creation');
-            $notified = array_merge($notified, notifyOrderParties($id, 'DRIVER_ASSIGNED'));
+            if (!$silent) $notified = array_merge($notified, notifyOrderParties($id, 'DRIVER_ASSIGNED'));
         }
     }
 
@@ -3505,7 +3556,7 @@ if ($method === 'POST' && $path === '/admin/orders') {
         // Recompute after the status settles, then one message for the state the
         // order actually ended in.
         computeOrderFinancials($id);
-        $notified = array_merge($notified, notifyOrderParties($id, $advanceTo));
+        if (!$silent) $notified = array_merge($notified, notifyOrderParties($id, $advanceTo));
     }
     // Built after the advance, which can add its own note (a stage that had to
     // be downgraded because no driver could take it).
@@ -3525,7 +3576,7 @@ if ($method === 'POST' && $path === '/admin/orders') {
      * assume.
      */
     $emailedTo = null;
-    if (($b['sendEmail'] ?? true) !== false) {
+    if (!$silent && ($b['sendEmail'] ?? true) !== false) {
         // Titled with the state the order ended in, so an order filed as
         // already delivered does not mail the customer "استلمنا طلبك".
         $emailedTo = sendOrderEmail($id, $advanceTo ?: 'NEW', $typedEmail ?: null);
@@ -7649,7 +7700,11 @@ if ($method === 'GET' && $path === '/offers') {
 
 if ($method === 'GET' && $path === '/merchants') {
     $page = max(1, (int) ($_GET['page'] ?? 1));
-    $pageSize = min(100, max(1, (int) ($_GET['pageSize'] ?? 20)));
+    // Default raised 20 → 200 so the store-list screen gets the WHOLE catalogue
+    // in one page even on already-installed apps that send no pageSize — which
+    // fixes both "only some stores show" and the hidden قفط/قنا city filter
+    // (it's derived from the loaded stores) with zero app rebuild. Cap 500.
+    $pageSize = min(500, max(1, (int) ($_GET['pageSize'] ?? 200)));
     $where = '1=1'; $args = [];
     if (!empty($_GET['categoryId'])) { $where .= ' AND m.categoryId = ?'; $args[] = $_GET['categoryId']; }
     if (!empty($_GET['governorate'])) { $where .= ' AND m.governorate = ?'; $args[] = $_GET['governorate']; }
@@ -8704,7 +8759,7 @@ function notifyLegDriver(string $orderId, array $leg): void {
  *                     caller decides whether that is fatal. Creating an order
  *                     must never fail because a driver went offline.
  */
-function assignLegDriver(string $orderId, array $leg, string $driverId, ?string $byAdminId = null): ?string {
+function assignLegDriver(string $orderId, array $leg, string $driverId, ?string $byAdminId = null, bool $silent = false): ?string {
     $dq = db()->prepare("SELECT u.isActive, dp.status FROM `User` u
                          LEFT JOIN `DriverProfile` dp ON dp.userId = u.id
                          WHERE u.id = ? AND u.role = 'DRIVER' LIMIT 1");
@@ -8748,12 +8803,14 @@ function assignLegDriver(string $orderId, array $leg, string $driverId, ?string 
         //
         // On a split order even THIS driver gets the leg-scoped message, not
         // the order-wide one: they are carrying one group, not the order.
-        notifyOrderParties($orderId, 'DRIVER_ASSIGNED', null, $split);
-        if ($split && $fresh) notifyLegDriver($orderId, $fresh);
+        if (!$silent) {
+            notifyOrderParties($orderId, 'DRIVER_ASSIGNED', null, $split);
+            if ($split && $fresh) notifyLegDriver($orderId, $fresh);
+        }
     } else {
         orderHistory($orderId, (string) ($o['status'] ?? ''), (string) ($o['status'] ?? ''), $byAdminId, 'ADMIN',
             'مندوب مجموعة ' . $leg['label']);
-        if ($fresh) notifyLegDriver($orderId, $fresh);
+        if (!$silent && $fresh) notifyLegDriver($orderId, $fresh);
     }
     return null;
 }
@@ -10869,48 +10926,6 @@ if ($method === 'POST' && $path === '/auth/admin/otp/verify') {
         ],
         'tokens' => ['accessToken' => $access, 'refreshToken' => $refresh],
     ]);
-}
-
-// ── العروض (promos) — قواعد خصم رسوم التوصيل، متحكّم فيها بالكامل من الداشبورد ──
-if ($method === 'GET' && $path === '/admin/promos') {
-    $u = authUser(); if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
-    $out = [];
-    foreach (promoRules() as $r) {
-        $rid = (string) ($r['id'] ?? '');
-        $r['usedCount'] = $rid !== '' ? promoUsageCount($rid) : 0;
-        $out[] = $r;
-    }
-    jsonOk(['rules' => $out]);
-}
-if ($method === 'PUT' && $path === '/admin/promos') {
-    $u = authUser(); if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
-    $b = readJsonBody();
-    $clean = [];
-    foreach ((array) ($b['rules'] ?? []) as $r) {
-        if (!is_array($r)) continue;
-        $clean[] = [
-            'id' => trim((string) ($r['id'] ?? '')) ?: ('promo_' . bin2hex(random_bytes(6))),
-            'nameAr' => trim((string) ($r['nameAr'] ?? '')) ?: 'عرض توصيل',
-            'isActive' => !empty($r['isActive']),
-            'rewardType' => in_array($r['rewardType'] ?? '', ['FREE_DELIVERY', 'DELIVERY_PERCENT', 'DELIVERY_FIXED'], true) ? $r['rewardType'] : 'FREE_DELIVERY',
-            'rewardValue' => ($r['rewardValue'] ?? '') !== '' ? (float) $r['rewardValue'] : null,
-            'audience' => in_array($r['audience'] ?? '', ['ALL', 'FIRST_ORDER'], true) ? $r['audience'] : 'ALL',
-            'scheduleType' => in_array($r['scheduleType'] ?? '', ['ALWAYS', 'DATE_RANGE', 'SPECIFIC_DATES', 'WEEKLY'], true) ? $r['scheduleType'] : 'ALWAYS',
-            'dateFrom' => trim((string) ($r['dateFrom'] ?? '')) ?: null,
-            'dateTo' => trim((string) ($r['dateTo'] ?? '')) ?: null,
-            'dates' => array_values(array_filter(array_map(fn($d) => trim((string) $d), (array) ($r['dates'] ?? [])))),
-            'weekdays' => array_values(array_map('intval', (array) ($r['weekdays'] ?? []))),
-            'minOrderAmount' => ($r['minOrderAmount'] ?? '') !== '' ? (float) $r['minOrderAmount'] : null,
-            'maxDiscount' => ($r['maxDiscount'] ?? '') !== '' ? (float) $r['maxDiscount'] : null,
-            'excludeIntercity' => array_key_exists('excludeIntercity', $r) ? !empty($r['excludeIntercity']) : true,
-            'usageLimitTotal' => ($r['usageLimitTotal'] ?? '') !== '' ? (int) $r['usageLimitTotal'] : null,
-            'usageLimitPerCustomer' => ($r['usageLimitPerCustomer'] ?? '') !== '' ? (int) $r['usageLimitPerCustomer'] : null,
-            'priority' => (int) ($r['priority'] ?? 0),
-        ];
-    }
-    db()->prepare('INSERT INTO `Setting` (`key`,`value`,`description`,`updatedAt`,`updatedById`) VALUES (?,?,NULL,NOW(3),?) ON DUPLICATE KEY UPDATE `value`=VALUES(`value`), `updatedAt`=VALUES(`updatedAt`), `updatedById`=VALUES(`updatedById`)')
-        ->execute(['promo_rules', json_encode($clean, JSON_UNESCAPED_UNICODE), $u['sub'] ?? null]);
-    jsonOk(['rules' => $clean]);
 }
 
 // Unknown route

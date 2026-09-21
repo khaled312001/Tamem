@@ -77,7 +77,9 @@ export function StoresListScreen() {
   );
   const [search, setSearch] = useState(route.params?.search ?? '');
   const [sortKey, setSortKey] = useState<SortKey>('recommended');
-  const [activeCity, setActiveCity] = useState<string | null>(null);
+  // Pre-select the city passed from the Delivery entry screen (قفط/قنا), so
+  // opening a category already filtered to a city just works.
+  const [activeCity, setActiveCity] = useState<string | null>(route.params?.city ?? null);
   // Shared product section (e.g. مشويات) filtered ACROSS merchants. When set,
   // the list switches from "stores" to matching products from every merchant.
   // Preset from the home "أقسام المنتجات" grid — opens straight into the
@@ -105,7 +107,11 @@ export function StoresListScreen() {
   } = useQuery<Merchant[]>({
     queryKey: ['merchants', activeCategory, debouncedSearch],
     queryFn: () => {
-      const params: Record<string, string> = {};
+      // Load the whole list, not just the default first page — otherwise the
+      // screen shows a slice of the stores AND the city filter can't see every
+      // city (so قفط/قنا never both appear). 200 covers the catalogue with room
+      // to grow; revisit with infinite-scroll if it ever passes a few hundred.
+      const params: Record<string, string> = { pageSize: '200' };
       if (activeCategory) params.categoryId = activeCategory;
       if (debouncedSearch) params.search = debouncedSearch;
       return api.raw.get('/merchants', { params }).then((r) => r.data.data);

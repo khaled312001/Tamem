@@ -98,6 +98,8 @@ export function CustomOrderDialog({
    */
   const [stage, setStage] = useState<OrderStageKey>(DEFAULT_ORDER_STAGE);
   const [markPaid, setMarkPaid] = useState(true);
+  // «تسجيل صامت» — ينشئ الأوردر ويحسبه في الحسابات بس من غير أي إشعارات.
+  const [silent, setSilent] = useState(false);
   // Clearing the driver after picking "مع المندوب" would otherwise submit a
   // stage that contradicts the form.
   useEffect(() => {
@@ -153,6 +155,7 @@ export function CustomOrderDialog({
         merchantId: merchantId || undefined,
         advanceTo: stage === 'NEW' ? undefined : stage,
         markPaid: stage === 'COMPLETED' ? markPaid : undefined,
+        silent: silent || undefined,
       }),
     onSuccess: (res) => {
       const d = (
@@ -418,6 +421,19 @@ export function CustomOrderDialog({
               </span>
             </label>
           )}
+          <label className="flex items-start gap-2 cursor-pointer text-sm rounded-lg bg-muted/40 border border-border p-2.5 mt-1">
+            <input
+              type="checkbox"
+              checked={silent}
+              onChange={(e) => setSilent(e.target.checked)}
+              className="h-4 w-4 accent-brand-red mt-0.5"
+            />
+            <span>
+              🔕 <b>تسجيل صامت</b> — سجّل الأوردر في الحسابات بس (عدد الأوردرات · نسبة المندوب ·
+              نسبة الشركة · حسابات اليوم) <b>من غير أي إشعارات</b>: لا واتساب مندوب، لا جروب إدارة،
+              لا إيميل. للأوردرات اللي المندوب أخدها وبلّغ عنها بنفسه.
+            </span>
+          </label>
         </section>
 
         {/* 6 — what the one button is about to do.
@@ -434,19 +450,27 @@ export function CustomOrderDialog({
                 {stage === 'COMPLETED' && markPaid ? ' وتسجّل إنه اتدفع' : ''}
               </li>
             )}
-            <li>• تبعت واتساب للعميل{driverId ? ' وللمندوب' : ''} ولجروب الإدارة</li>
-            <li>
-              •{' '}
-              {email.trim() ? (
-                <>
-                  تبعت الطلب بالتفصيل على <span dir="ltr">{email.trim()}</span>
-                </>
-              ) : (
-                <span className="text-amber-700">
-                  الإيميل مش هيتبعت — اكتب إيميل العميل فوق لو عايزه يوصله
-                </span>
-              )}
-            </li>
+            {silent ? (
+              <li className="text-amber-700 font-bold">
+                • 🔕 مفيش أي إشعارات هتتبعت (لا مندوب، لا جروب، لا إيميل) — تسجيل في الحسابات بس
+              </li>
+            ) : (
+              <>
+                <li>• تبعت واتساب للعميل{driverId ? ' وللمندوب' : ''} ولجروب الإدارة</li>
+                <li>
+                  •{' '}
+                  {email.trim() ? (
+                    <>
+                      تبعت الطلب بالتفصيل على <span dir="ltr">{email.trim()}</span>
+                    </>
+                  ) : (
+                    <span className="text-amber-700">
+                      الإيميل مش هيتبعت — اكتب إيميل العميل فوق لو عايزه يوصله
+                    </span>
+                  )}
+                </li>
+              </>
+            )}
           </ul>
         </section>
 
@@ -457,6 +481,8 @@ export function CustomOrderDialog({
           <Button onClick={() => create.mutate()} disabled={!valid || create.isPending}>
             {create.isPending ? (
               <Loader2 className="w-4 h-4 animate-spin" />
+            ) : silent ? (
+              '🔕 سجّل الأوردر (صامت)'
             ) : stage === 'COMPLETED' ? (
               'سجّل الطلب مكتمل وابعت'
             ) : (

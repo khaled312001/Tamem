@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Gift, Pencil, Plus, Trash2 } from 'lucide-react';
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import { toast } from 'sonner';
 
 import { Badge } from '../components/ui/Badge.js';
@@ -15,8 +15,8 @@ type Rule = any;
 
 const REWARD_LABEL: Record<string, string> = {
   FREE_DELIVERY: 'توصيل مجاني',
-  DELIVERY_PERCENT: 'خصم نسبة على التوصيل',
-  DELIVERY_FIXED: 'خصم مبلغ على التوصيل',
+  DELIVERY_PERCENT: 'خصم نسبة',
+  DELIVERY_FIXED: 'خصم مبلغ',
 };
 const AUDIENCE_LABEL: Record<string, string> = {
   ALL: 'كل العملاء',
@@ -24,11 +24,12 @@ const AUDIENCE_LABEL: Record<string, string> = {
 };
 const SCHEDULE_LABEL: Record<string, string> = {
   ALWAYS: 'دائم',
-  DATE_RANGE: 'فترة محددة',
+  DATE_RANGE: 'فترة',
   SPECIFIC_DATES: 'أيام محددة',
-  WEEKLY: 'أسبوعي متكرر',
+  WEEKLY: 'أسبوعي',
 };
 const WEEKDAYS = ['الأحد', 'الاثنين', 'الثلاثاء', 'الأربعاء', 'الخميس', 'الجمعة', 'السبت'];
+const todayISO = () => new Date().toISOString().slice(0, 10);
 
 function fetchRules(): Promise<Rule[]> {
   return api.raw.get('/admin/promos').then((r) => r.data.data.rules ?? []);
@@ -75,7 +76,9 @@ export function PromosPage() {
   const remove = (id: string) =>
     save.mutate(
       (rules ?? []).filter((r) => r.id !== id),
-      { onSuccess: () => toast.success('تم حذف العرض') },
+      {
+        onSuccess: () => toast.success('تم حذف العرض'),
+      },
     );
   const toggle = (id: string, isActive: boolean) =>
     save.mutate((rules ?? []).map((r) => (r.id === id ? { ...r, isActive } : r)));
@@ -197,6 +200,81 @@ export function PromosPage() {
   );
 }
 
+// ── قوالب جاهزة تملأ الفورم بضغطة ─────────────────────────────────────────
+const PRESETS: { label: string; emoji: string; patch: Partial<Rule> }[] = [
+  {
+    label: 'أول أوردر مجاني',
+    emoji: '🎁',
+    patch: {
+      nameAr: 'أول أوردر توصيل مجاني',
+      rewardType: 'FREE_DELIVERY',
+      audience: 'FIRST_ORDER',
+      scheduleType: 'ALWAYS',
+    },
+  },
+  {
+    label: 'يوم مجاني',
+    emoji: '📅',
+    patch: {
+      nameAr: `توصيل مجاني ${todayISO()}`,
+      rewardType: 'FREE_DELIVERY',
+      audience: 'ALL',
+      scheduleType: 'SPECIFIC_DATES',
+      dates: [todayISO()],
+    },
+  },
+  {
+    label: 'كل جمعة مجاني',
+    emoji: '🕌',
+    patch: {
+      nameAr: 'توصيل مجاني كل جمعة',
+      rewardType: 'FREE_DELIVERY',
+      audience: 'ALL',
+      scheduleType: 'WEEKLY',
+      weekdays: [5],
+    },
+  },
+];
+
+// ── مكوّنات صغيرة للفورم ────────────────────────────────────────────────
+function Card({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <div className="rounded-xl border border-border bg-muted/20 p-3.5 space-y-3">
+      <div className="text-[11px] font-black text-brand-red uppercase tracking-wide">{title}</div>
+      {children}
+    </div>
+  );
+}
+
+function Seg({
+  value,
+  onChange,
+  options,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  options: [string, string][];
+}) {
+  return (
+    <div className="flex flex-wrap gap-2">
+      {options.map(([k, label]) => (
+        <button
+          key={k}
+          type="button"
+          onClick={() => onChange(k)}
+          className={`px-3 py-2 rounded-lg border text-xs font-bold transition ${
+            value === k
+              ? 'border-brand-red bg-brand-red/10 text-brand-red shadow-sm'
+              : 'border-border bg-white hover:bg-muted/40 text-brand-dark'
+          }`}
+        >
+          {label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 function PromoDialog({
   rule,
   onClose,
@@ -227,7 +305,43 @@ function PromoDialog({
       rule?.usageLimitPerCustomer != null ? String(rule.usageLimitPerCustomer) : '',
     priority: rule?.priority ?? 0,
   });
-  const set = (patch: Partial<Rule>) => setF({ ...f, ...patch });
+  const set = (patch: Partial<Rule>) => setF((prev: Rule) => ({ ...prev, ...patch }));
+  const needsValue = f.rewardType !== 'FREE_DELIVERY';
+
+  const err =
+    f.nameAr.trim().length < 2
+      ? 'اكتب اسم للعرض'
+      : needsValue && !(Number(f.rewardValue) > 0)
+        ? 'اكتب قيمة الخصم'
+        : f.rewardType === 'DELIVERY_PERCENT' && Number(f.rewardValue) > 100
+          ? 'النسبة مينفعش تزيد عن 100'
+          : f.scheduleType === 'SPECIFIC_DATES' && !(f.dates ?? []).filter(Boolean).length
+            ? 'ضيف يوم واحد على الأقل'
+            : f.scheduleType === 'WEEKLY' && !(f.weekdays ?? []).length
+              ? 'اختر يوم من أيام الأسبوع'
+              : f.scheduleType === 'DATE_RANGE' && !f.dateFrom && !f.dateTo
+                ? 'حدّد بداية أو نهاية الفترة'
+                : '';
+
+  const summary = (() => {
+    const who = f.audience === 'FIRST_ORDER' ? 'أول أوردر لعميل جديد' : 'أي أوردر';
+    const reward =
+      f.rewardType === 'FREE_DELIVERY'
+        ? 'توصيل مجاني'
+        : f.rewardType === 'DELIVERY_PERCENT'
+          ? `خصم ${f.rewardValue || 0}٪ على التوصيل`
+          : `خصم ${f.rewardValue || 0} ج.م على التوصيل`;
+    const when =
+      f.scheduleType === 'ALWAYS'
+        ? 'دايمًا'
+        : f.scheduleType === 'SPECIFIC_DATES'
+          ? `في: ${(f.dates ?? []).filter(Boolean).join('، ') || '—'}`
+          : f.scheduleType === 'WEEKLY'
+            ? `كل: ${(f.weekdays ?? []).map((d: number) => WEEKDAYS[d]).join('، ') || '—'}`
+            : `من ${f.dateFrom || '…'} لـ ${f.dateTo || '…'}`;
+    const min = Number(f.minOrderAmount) > 0 ? ` (للطلبات فوق ${f.minOrderAmount} ج.م)` : '';
+    return `${who} ياخد ${reward} ${when}${min}.`;
+  })();
 
   const submit = () => {
     onSave({
@@ -243,12 +357,44 @@ function PromoDialog({
     });
     onClose();
   };
-  const canSave = f.nameAr.trim().length >= 2;
-  const selCls = 'w-full px-3 py-2 rounded-lg border border-input bg-white text-sm';
 
   return (
-    <Dialog open onOpenChange={(o) => !o && onClose()} title={isEdit ? 'تعديل العرض' : 'عرض جديد'}>
-      <div className="space-y-3 max-h-[70vh] overflow-y-auto pl-1">
+    <Dialog
+      open
+      onOpenChange={(o) => !o && onClose()}
+      title={isEdit ? 'تعديل العرض' : 'عرض جديد'}
+      size="lg"
+    >
+      <div className="space-y-3.5">
+        {!isEdit && (
+          <div className="rounded-xl border border-brand-red/20 bg-brand-red/[0.03] p-3">
+            <div className="text-[11px] font-black text-brand-red uppercase tracking-wide mb-2">
+              ابدأ بقالب جاهز (وتقدر تعدّله)
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {PRESETS.map((p) => (
+                <button
+                  key={p.label}
+                  type="button"
+                  onClick={() =>
+                    set({
+                      dates: [],
+                      weekdays: [],
+                      dateFrom: '',
+                      dateTo: '',
+                      rewardValue: '',
+                      ...p.patch,
+                    })
+                  }
+                  className="px-3 py-2 rounded-lg border border-brand-red/30 bg-white text-brand-red text-xs font-bold hover:bg-brand-red/5 shadow-sm"
+                >
+                  {p.emoji} {p.label}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
         <Field label="اسم العرض" required hint="بيظهر لك، وممكن يظهر للعميل">
           <Input
             value={f.nameAr}
@@ -257,81 +403,76 @@ function PromoDialog({
           />
         </Field>
 
-        <div className="grid grid-cols-2 gap-3">
-          <Field label="المكافأة" required>
-            <select
-              value={f.rewardType}
-              onChange={(e) => set({ rewardType: e.target.value })}
-              className={selCls}
-            >
-              {Object.entries(REWARD_LABEL).map(([k, v]) => (
-                <option key={k} value={k}>
-                  {v}
-                </option>
-              ))}
-            </select>
-          </Field>
-          {f.rewardType !== 'FREE_DELIVERY' && (
-            <Field label={f.rewardType === 'DELIVERY_PERCENT' ? 'النسبة %' : 'المبلغ ج.م'} required>
-              <Input
-                type="number"
-                value={f.rewardValue}
-                onChange={(e) => set({ rewardValue: e.target.value })}
-              />
-            </Field>
+        <Card title="المكافأة">
+          <Seg
+            value={f.rewardType}
+            onChange={(v) => set({ rewardType: v })}
+            options={Object.entries(REWARD_LABEL)}
+          />
+          {needsValue && (
+            <div className="grid grid-cols-2 gap-3">
+              <Field
+                label={f.rewardType === 'DELIVERY_PERCENT' ? 'النسبة %' : 'المبلغ ج.م'}
+                required
+              >
+                <Input
+                  type="number"
+                  value={f.rewardValue}
+                  onChange={(e) => set({ rewardValue: e.target.value })}
+                />
+              </Field>
+              <Field label="سقف الخصم" hint="اختياري">
+                <Input
+                  type="number"
+                  value={f.maxDiscount}
+                  onChange={(e) => set({ maxDiscount: e.target.value })}
+                  placeholder="بدون"
+                />
+              </Field>
+            </div>
           )}
-        </div>
+        </Card>
 
-        <Field label="لمين؟" required>
-          <select
-            value={f.audience}
-            onChange={(e) => set({ audience: e.target.value })}
-            className={selCls}
-          >
-            {Object.entries(AUDIENCE_LABEL).map(([k, v]) => (
-              <option key={k} value={k}>
-                {v}
-              </option>
-            ))}
-          </select>
-        </Field>
-
-        <Field label="التوقيت" required>
-          <select
-            value={f.scheduleType}
-            onChange={(e) => set({ scheduleType: e.target.value })}
-            className={selCls}
-          >
-            {Object.entries(SCHEDULE_LABEL).map(([k, v]) => (
-              <option key={k} value={k}>
-                {v}
-              </option>
-            ))}
-          </select>
-        </Field>
-
-        {f.scheduleType === 'DATE_RANGE' && (
-          <div className="grid grid-cols-2 gap-3">
-            <Field label="من">
-              <Input
-                type="date"
-                value={f.dateFrom}
-                onChange={(e) => set({ dateFrom: e.target.value })}
-              />
-            </Field>
-            <Field label="إلى">
-              <Input
-                type="date"
-                value={f.dateTo}
-                onChange={(e) => set({ dateTo: e.target.value })}
-              />
-            </Field>
+        <Card title="لمين ومتى">
+          <div>
+            <div className="text-xs font-bold text-muted-foreground mb-1.5">لمين؟</div>
+            <Seg
+              value={f.audience}
+              onChange={(v) => set({ audience: v })}
+              options={Object.entries(AUDIENCE_LABEL)}
+            />
           </div>
-        )}
+          <div>
+            <div className="text-xs font-bold text-muted-foreground mb-1.5">التوقيت</div>
+            <Seg
+              value={f.scheduleType}
+              onChange={(v) => set({ scheduleType: v })}
+              options={Object.entries(SCHEDULE_LABEL)}
+            />
+          </div>
 
-        {f.scheduleType === 'SPECIFIC_DATES' && (
-          <Field label="الأيام المجانية">
+          {f.scheduleType === 'DATE_RANGE' && (
+            <div className="grid grid-cols-2 gap-3">
+              <Field label="من">
+                <Input
+                  type="date"
+                  value={f.dateFrom}
+                  onChange={(e) => set({ dateFrom: e.target.value })}
+                />
+              </Field>
+              <Field label="إلى">
+                <Input
+                  type="date"
+                  value={f.dateTo}
+                  onChange={(e) => set({ dateTo: e.target.value })}
+                />
+              </Field>
+            </div>
+          )}
+
+          {f.scheduleType === 'SPECIFIC_DATES' && (
             <div className="space-y-2">
+              <div className="text-xs font-bold text-muted-foreground">الأيام المجانية</div>
               {(f.dates ?? []).map((d: string, i: number) => (
                 <div key={i} className="flex gap-2">
                   <Input
@@ -357,117 +498,119 @@ function PromoDialog({
               <Button
                 size="sm"
                 variant="outline"
-                onClick={() => set({ dates: [...(f.dates ?? []), ''] })}
+                onClick={() => set({ dates: [...(f.dates ?? []), todayISO()] })}
               >
                 <Plus className="w-4 h-4" /> إضافة يوم
               </Button>
             </div>
-          </Field>
-        )}
+          )}
 
-        {f.scheduleType === 'WEEKLY' && (
-          <Field label="أيام الأسبوع">
-            <div className="flex flex-wrap gap-2">
-              {WEEKDAYS.map((w, i) => {
-                const on = (f.weekdays ?? []).includes(i);
-                return (
-                  <button
-                    key={i}
-                    type="button"
-                    onClick={() =>
-                      set({
-                        weekdays: on
-                          ? f.weekdays.filter((d: number) => d !== i)
-                          : [...(f.weekdays ?? []), i],
-                      })
-                    }
-                    className={`px-3 py-1.5 rounded-lg border text-xs font-bold ${on ? 'border-brand-red bg-brand-red/5 text-brand-red' : 'border-border'}`}
-                  >
-                    {w}
-                  </button>
-                );
-              })}
+          {f.scheduleType === 'WEEKLY' && (
+            <div>
+              <div className="text-xs font-bold text-muted-foreground mb-1.5">أيام الأسبوع</div>
+              <div className="flex flex-wrap gap-2">
+                {WEEKDAYS.map((w, i) => {
+                  const on = (f.weekdays ?? []).includes(i);
+                  return (
+                    <button
+                      key={i}
+                      type="button"
+                      onClick={() =>
+                        set({
+                          weekdays: on
+                            ? f.weekdays.filter((d: number) => d !== i)
+                            : [...(f.weekdays ?? []), i],
+                        })
+                      }
+                      className={`px-3 py-1.5 rounded-lg border text-xs font-bold transition ${
+                        on
+                          ? 'border-brand-red bg-brand-red/10 text-brand-red'
+                          : 'border-border bg-white hover:bg-muted/40'
+                      }`}
+                    >
+                      {w}
+                    </button>
+                  );
+                })}
+              </div>
             </div>
-          </Field>
-        )}
+          )}
+        </Card>
 
-        <div className="grid grid-cols-2 gap-3">
-          <Field label="الحد الأدنى للطلب" hint="اختياري">
-            <Input
-              type="number"
-              value={f.minOrderAmount}
-              onChange={(e) => set({ minOrderAmount: e.target.value })}
-              placeholder="بدون"
-            />
-          </Field>
-          {f.rewardType !== 'FREE_DELIVERY' && (
-            <Field label="سقف الخصم" hint="اختياري">
+        <Card title="شروط وحدود (اختياري)">
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="الحد الأدنى للطلب">
               <Input
                 type="number"
-                value={f.maxDiscount}
-                onChange={(e) => set({ maxDiscount: e.target.value })}
+                value={f.minOrderAmount}
+                onChange={(e) => set({ minOrderAmount: e.target.value })}
                 placeholder="بدون"
               />
             </Field>
-          )}
-        </div>
-
-        <div className="grid grid-cols-2 gap-3">
-          <Field label="حد الاستخدام الكلي" hint="اختياري">
-            <Input
-              type="number"
-              value={f.usageLimitTotal}
-              onChange={(e) => set({ usageLimitTotal: e.target.value })}
-              placeholder="بلا حد"
+            <Field label="الأولوية" hint="الأعلى يكسب">
+              <Input
+                type="number"
+                value={f.priority}
+                onChange={(e) => set({ priority: e.target.value })}
+              />
+            </Field>
+            <Field label="حد الاستخدام الكلي">
+              <Input
+                type="number"
+                value={f.usageLimitTotal}
+                onChange={(e) => set({ usageLimitTotal: e.target.value })}
+                placeholder="بلا حد"
+              />
+            </Field>
+            <Field label="حد لكل عميل">
+              <Input
+                type="number"
+                value={f.usageLimitPerCustomer}
+                onChange={(e) => set({ usageLimitPerCustomer: e.target.value })}
+                placeholder="بلا حد"
+              />
+            </Field>
+          </div>
+          <label className="flex items-center gap-2 cursor-pointer text-sm">
+            <input
+              type="checkbox"
+              checked={!!f.excludeIntercity}
+              onChange={(e) => set({ excludeIntercity: e.target.checked })}
+              className="h-4 w-4 accent-brand-red"
             />
-          </Field>
-          <Field label="حد لكل عميل" hint="اختياري">
-            <Input
-              type="number"
-              value={f.usageLimitPerCustomer}
-              onChange={(e) => set({ usageLimitPerCustomer: e.target.value })}
-              placeholder="بلا حد"
+            <span>
+              استثناء أوردرات «من قنا» (الترحيل) — <b>مُوصى به</b>
+            </span>
+          </label>
+          <label className="flex items-center gap-2 cursor-pointer text-sm">
+            <input
+              type="checkbox"
+              checked={!!f.isActive}
+              onChange={(e) => set({ isActive: e.target.checked })}
+              className="h-4 w-4 accent-brand-red"
             />
-          </Field>
-        </div>
-
-        <Field label="الأولوية" hint="الأعلى يكسب لو أكتر من عرض ينطبق">
-          <Input
-            type="number"
-            value={f.priority}
-            onChange={(e) => set({ priority: e.target.value })}
-          />
-        </Field>
-
-        <label className="flex items-center gap-2 cursor-pointer text-sm py-1">
-          <input
-            type="checkbox"
-            checked={!!f.excludeIntercity}
-            onChange={(e) => set({ excludeIntercity: e.target.checked })}
-            className="h-4 w-4 accent-brand-red"
-          />
-          <span>
-            استثناء أوردرات «من قنا» (الترحيل) — <b>مُوصى به</b>
-          </span>
-        </label>
-        <label className="flex items-center gap-2 cursor-pointer text-sm py-1">
-          <input
-            type="checkbox"
-            checked={!!f.isActive}
-            onChange={(e) => set({ isActive: e.target.checked })}
-            className="h-4 w-4 accent-brand-red"
-          />
-          <span>مفعّل</span>
-        </label>
+            <span>مفعّل</span>
+          </label>
+        </Card>
       </div>
 
-      <div className="flex justify-end gap-2 mt-4 border-t border-border pt-3">
-        <Button variant="outline" size="md" onClick={onClose}>
-          إلغاء
-        </Button>
-        <Button onClick={() => canSave && submit()} disabled={!canSave}>
-          {isEdit ? 'حفظ' : 'إنشاء'}
-        </Button>
+      {/* footer ثابت أسفل النافذة: الملخّص + الأزرار */}
+      <div className="sticky bottom-0 -mx-6 -mb-6 mt-4 px-6 pt-3 pb-5 bg-white border-t border-border">
+        <div className="rounded-lg bg-brand-red/[0.06] border border-brand-red/15 px-3 py-2 text-sm text-brand-dark leading-relaxed mb-3">
+          <span className="font-black">الملخّص: </span>
+          {summary}
+        </div>
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-xs text-destructive font-bold">{err}</span>
+          <div className="flex gap-2">
+            <Button variant="outline" size="md" onClick={onClose}>
+              إلغاء
+            </Button>
+            <Button onClick={() => !err && submit()} disabled={!!err}>
+              {isEdit ? 'حفظ التعديل' : 'إنشاء العرض'}
+            </Button>
+          </div>
+        </div>
       </div>
     </Dialog>
   );
