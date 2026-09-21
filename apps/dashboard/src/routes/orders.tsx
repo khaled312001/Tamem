@@ -507,6 +507,13 @@ export function OrdersPage() {
             <span className="text-xs font-normal"> ج.م</span>
           </div>
         </div>
+        <div className="rounded-xl border border-border bg-gradient-to-br from-amber-50 to-amber-100/40 p-3">
+          <div className="text-xs font-bold opacity-70">توصيل اليوم</div>
+          <div className="text-xl font-black mt-0.5 tabular-nums text-amber-700">
+            {stats?.deliveryToday != null ? `${stats.deliveryToday.toLocaleString('ar-EG')}` : '—'}
+            <span className="text-xs font-normal"> ج.م</span>
+          </div>
+        </div>
       </div>
 
       {/* Quick filter presets */}

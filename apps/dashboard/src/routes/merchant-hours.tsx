@@ -55,6 +55,17 @@ function hhmmToMin(s: string): number {
   return Math.max(0, Math.min(2880, (h ?? 0) * 60 + (m ?? 0)));
 }
 
+/** دقايق → وقت عربي واضح (٢:٠٠ م) عشان مفيش لخبطة بين ص/م. */
+function fmtAr(min: number): string {
+  const norm = ((min % 1440) + 1440) % 1440;
+  let h = Math.floor(norm / 60);
+  const mi = norm % 60;
+  const ap = h < 12 ? 'ص' : 'م';
+  h %= 12;
+  if (h === 0) h = 12;
+  return `${h}:${String(mi).padStart(2, '0')} ${ap}`;
+}
+
 export function MerchantHoursPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
@@ -79,8 +90,11 @@ export function MerchantHoursPage() {
     const next: BusinessHourRow[] = [];
     for (let d = 0; d < 7; d++) {
       const existing = data.windows.find((w) => w.dayOfWeek === d);
-      if (existing) next.push({ ...existing });
-      else next.push({ dayOfWeek: d, openMin: 0, closeMin: 0, isClosed: true });
+      // Normalize a stored past-midnight close (e.g. 1560 = 2ص) back to 0–1439
+      // so the <input type="time"> shows it; we re-add the +1440 on save.
+      if (existing)
+        next.push({ ...existing, closeMin: ((existing.closeMin % 1440) + 1440) % 1440 });
+      else next.push({ dayOfWeek: d, openMin: 10 * 60, closeMin: 22 * 60, isClosed: true });
     }
     setRows(next);
   }, [data]);
@@ -119,15 +133,20 @@ export function MerchantHoursPage() {
   };
 
   const onSave = () => {
-    // Strip out closed days entirely so the backend doesn't carry rows that
-    // don't actually open. Validate that closeMin > openMin on the rest.
-    const cleaned = rows.filter((r) => !r.isClosed);
-    for (const r of cleaned) {
-      if (r.closeMin <= r.openMin) {
-        toast.error(`وقت الإغلاق لازم يكون بعد وقت الفتح في ${DAY_LABELS[r.dayOfWeek]}`);
+    // Strip closed days. A close time EARLIER than the open time means the store
+    // shuts after midnight (e.g. 10ص → 2ص) — perfectly valid, so we store it as
+    // openMin..closeMin+1440 which the backend's openness check understands.
+    const open = rows.filter((r) => !r.isClosed);
+    for (const r of open) {
+      if (r.closeMin === r.openMin) {
+        toast.error(`حدّد وقت فتح وقفل مختلفين في ${DAY_LABELS[r.dayOfWeek]}`);
         return;
       }
     }
+    const cleaned = open.map((r) => ({
+      ...r,
+      closeMin: r.closeMin < r.openMin ? r.closeMin + 1440 : r.closeMin,
+    }));
     saveHours.mutate(cleaned);
   };
 
@@ -243,6 +262,12 @@ export function MerchantHoursPage() {
           </button>
         </div>
 
+        <p className="text-xs text-muted-foreground mb-3 leading-relaxed bg-muted/40 rounded-lg px-3 py-2">
+          💡 خلّي بالك من <b>ص</b> (صباحًا) و<b>م</b> (مساءً) في خانة الوقت. ولو المطعم بيقفل{' '}
+          <b>بعد نص الليل</b> (مثلاً ١٠ص لـ ٢ص)، اكتب وقت القفل عادي (٢:٠٠ ص) والنظام هيفهمه إنه
+          اليوم التالي — بيظهرلك تحت كل يوم السطر بالعربي عشان تتأكد.
+        </p>
+
         <div className="space-y-2">
           {rows.map((row, i) => (
             <div
@@ -294,6 +319,21 @@ export function MerchantHoursPage() {
                   </button>
                 )}
               </div>
+              {!row.isClosed && (
+                <div className="col-span-12 text-xs mt-1 border-t border-border/40 pt-1.5">
+                  {row.closeMin < row.openMin ? (
+                    <span className="text-amber-700 font-bold">
+                      🌙 من {fmtAr(row.openMin)} إلى {fmtAr(row.closeMin)} — يقفل بعد نص الليل
+                      (اليوم التالي)
+                    </span>
+                  ) : (
+                    <span className="text-muted-foreground">
+                      من <b className="text-brand-dark">{fmtAr(row.openMin)}</b> إلى{' '}
+                      <b className="text-brand-dark">{fmtAr(row.closeMin)}</b>
+                    </span>
+                  )}
+                </div>
+              )}
             </div>
           ))}
         </div>
