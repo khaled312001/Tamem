@@ -27,11 +27,17 @@ from db_query_shim import db_url_from_server  # noqa: E402
 
 LOCAL_ENV = Path(r"E:\Tamem\apps\backend\dist-bundle\.env")
 
+# Production reaches MySQL over `localhost` — and MUST: only the remote account
+# (user@%) carries Hostinger's 500-connections-per-hour cap, and pointing the
+# live API at it took the whole API down on 2026-09-16. A developer machine
+# cannot use a socket on the server, so the local copy gets the remote name.
+REMOTE_DB_HOST = "srv1593.hstgr.io"
+
 
 def main() -> None:
     if not LOCAL_ENV.is_file():
         sys.exit(f"No local .env at {LOCAL_ENV}")
-    url = db_url_from_server()
+    url = re.sub(r"@(localhost|127\.0\.0\.1)(?=[:/])", "@" + REMOTE_DB_HOST, db_url_from_server())
 
     text = LOCAL_ENV.read_text(encoding="utf-8")
     line = f'DATABASE_URL="{url}"'
