@@ -635,6 +635,224 @@ if ($method === 'GET' && $path === '/health') {
     jsonOk(['status' => 'ok', 'env' => env('NODE_ENV', 'production'), 'runner' => 'php-shim', 'ts' => time() * 1000]);
 }
 
+// ─── Partner settlement (private, passphrase-gated) ─────────────────────────
+// A silent revenue page for the delivery partner: 20% of REALIZED delivery
+// fees, bucketed into 3-month quarters from the agreement date (2026-08-01),
+// for one year. Deliberately NOT under /admin — so it never touches the
+// permission map, the sidebar, or an admin login. It is reached only by
+// whoever holds PARTNER_KEY, which lives in the server .env alone and never in
+// any shipped bundle. A missing or wrong key answers 404, so even the route's
+// existence stays hidden from anyone poking at the API. Only DELIVERED/
+// COMPLETED parent orders count — the money that was actually earned — and the
+// stored deliveryFee is already net of any «توصيل مجاني» promo, so the share
+// tracks what was truly collected.
+if ($method === 'GET' && $path === '/partner/settlement') {
+    $key   = (string) env('PARTNER_KEY', '');
+    $given = (string) ($_GET['key'] ?? '');
+    if ($key === '' || !hash_equals($key, $given)) {
+        http_response_code(404);
+        header('Content-Type: application/json; charset=utf-8');
+        echo json_encode(['error' => ['message' => 'Not found', 'code' => 'NOT_FOUND']], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+    $tz        = new DateTimeZone('Africa/Cairo');
+    $utc       = new DateTimeZone('UTC');
+    $sharePct  = 20.0;
+    $startC    = new DateTime('2026-08-01 00:00:00', $tz);   // agreement start (Cairo)
+    $endC      = (clone $startC)->modify('+1 year');         // one year later
+    $nowC      = new DateTime('now', $tz);
+    $startDay  = new DateTime($startC->format('Y-m-d'), $tz);
+    $todayDay  = new DateTime($nowC->format('Y-m-d'), $tz);
+    $sh        = fn(float $v): float => round($v * $sharePct / 100, 2);
+
+    // ONE query for the whole agreement window, then bucket in PHP into day /
+    // week / month / quarter. Far cheaper on the shared DB than dozens of
+    // grouped queries, and every granularity stays perfectly consistent because
+    // it is the same rows counted four ways. Only realized (DELIVERED/COMPLETED)
+    // parent orders; effective moment is when the order actually closed.
+    $startUtc = (clone $startC)->setTimezone($utc)->format('Y-m-d H:i:s');
+    $endUtc   = (clone $endC)->setTimezone($utc)->format('Y-m-d H:i:s');
+    $st = db()->prepare(
+        "SELECT COALESCE(deliveredAt, completedAt, createdAt) AS eff, COALESCE(deliveryFee, 0) AS fee
+           FROM `Order`
+          WHERE status IN ('DELIVERED','COMPLETED')
+            AND parentOrderId IS NULL
+            AND COALESCE(deliveredAt, completedAt, createdAt) >= ?
+            AND COALESCE(deliveredAt, completedAt, createdAt) <  ?"
+    );
+    $st->execute([$startUtc, $endUtc]);
+
+    $dayAgg = $weekAgg = $monthAgg = [];       // key => [sum, count]
+    $qAgg   = [[0.0, 0], [0.0, 0], [0.0, 0], [0.0, 0]];
+    $grandSum = 0.0; $grandN = 0;
+    $bump = function (array &$agg, string $k, float $fee): void {
+        if (!isset($agg[$k])) $agg[$k] = [0.0, 0];
+        $agg[$k][0] += $fee; $agg[$k][1] += 1;
+    };
+    foreach ($st->fetchAll() as $r) {
+        if (empty($r['eff'])) continue;
+        $c   = (new DateTime((string) $r['eff'], $utc))->setTimezone($tz);
+        $fee = (float) $r['fee'];
+        $bump($dayAgg, $c->format('Y-m-d'), $fee);
+        $bump($monthAgg, $c->format('Y-m'), $fee);
+        $cDay = new DateTime($c->format('Y-m-d'), $tz);
+        $wi   = intdiv((int) $startDay->diff($cDay)->days, 7);
+        $bump($weekAgg, (string) $wi, $fee);
+        $qi = intdiv(((int) $c->format('Y') - 2026) * 12 + ((int) $c->format('n') - 8), 3);
+        if ($qi >= 0 && $qi <= 3) { $qAgg[$qi][0] += $fee; $qAgg[$qi][1]++; }
+        $grandSum += $fee; $grandN++;
+    }
+
+    $arMonths = [1 => 'يناير', 2 => 'فبراير', 3 => 'مارس', 4 => 'إبريل', 5 => 'مايو', 6 => 'يونيو',
+                 7 => 'يوليو', 8 => 'أغسطس', 9 => 'سبتمبر', 10 => 'أكتوبر', 11 => 'نوفمبر', 12 => 'ديسمبر'];
+
+    // ── Quarters (the 4 settlement windows) ──────────────────────────────────
+    $qNames   = ['الربع الأول', 'الربع الثاني', 'الربع الثالث', 'الربع الرابع'];
+    $quarters = [];
+    $cur      = null;
+    $cursor   = clone $startC;
+    for ($i = 0; $i < 4; $i++) {
+        $qStart = clone $cursor;
+        $qEnd   = (clone $cursor)->modify('+3 months');
+        $sum    = round($qAgg[$i][0], 2); $n = (int) $qAgg[$i][1];
+        $state  = $nowC >= $qEnd ? 'past' : ($nowC >= $qStart ? 'current' : 'future');
+        $row    = [
+            'index' => $i + 1, 'label' => $qNames[$i],
+            'start' => $qStart->format('Y-m-d'),
+            'end'   => (clone $qEnd)->modify('-1 day')->format('Y-m-d'),
+            'delivery' => $sum, 'orders' => $n, 'share' => $sh($sum), 'state' => $state,
+        ];
+        $quarters[] = $row;
+        if ($state === 'current') {
+            $qDaysTotal   = (int) $qStart->diff($qEnd)->days;
+            $qDaysElapsed = min($qDaysTotal, (int) $qStart->diff($todayDay)->days + 1);
+            $proj         = $qDaysElapsed > 0 ? round($sum / $qDaysElapsed * $qDaysTotal, 2) : 0.0;
+            $cur = $row + [
+                'daysElapsed' => $qDaysElapsed, 'daysTotal' => $qDaysTotal,
+                'projectedDelivery' => $proj, 'projectedShare' => $sh($proj),
+            ];
+        }
+        $cursor = $qEnd;
+    }
+
+    // ── Months (all 12 of the agreement year) ────────────────────────────────
+    $months = []; $mc = clone $startC;
+    for ($i = 0; $i < 12; $i++) {
+        $mStart = clone $mc; $mEnd = (clone $mc)->modify('+1 month');
+        $k = $mStart->format('Y-m');
+        $sum = round($monthAgg[$k][0] ?? 0.0, 2); $n = (int) ($monthAgg[$k][1] ?? 0);
+        $state = $nowC >= $mEnd ? 'past' : ($nowC >= $mStart ? 'current' : 'future');
+        $months[] = [
+            'label' => $arMonths[(int) $mStart->format('n')] . ' ' . $mStart->format('Y'),
+            'start' => $mStart->format('Y-m-d'),
+            'end'   => (clone $mEnd)->modify('-1 day')->format('Y-m-d'),
+            'delivery' => $sum, 'orders' => $n, 'share' => $sh($sum), 'state' => $state,
+        ];
+        $mc = $mEnd;
+    }
+
+    // ── Weeks (every elapsed 7-day window since the start), newest first ──────
+    $weeks = [];
+    $weeksElapsed = intdiv((int) $startDay->diff($todayDay)->days, 7);
+    for ($i = 0; $i <= $weeksElapsed; $i++) {
+        $wStart = (clone $startC)->modify('+' . ($i * 7) . ' days');
+        if ($wStart > $nowC) break;
+        $wEnd = (clone $wStart)->modify('+7 days');
+        $sum  = round($weekAgg[(string) $i][0] ?? 0.0, 2); $n = (int) ($weekAgg[(string) $i][1] ?? 0);
+        $weeks[] = [
+            'index' => $i + 1, 'label' => 'الأسبوع ' . ($i + 1),
+            'start' => $wStart->format('Y-m-d'),
+            'end'   => (clone $wEnd)->modify('-1 day')->format('Y-m-d'),
+            'delivery' => $sum, 'orders' => $n, 'share' => $sh($sum),
+        ];
+    }
+    $weeks = array_reverse($weeks);
+
+    // ── Days (last 30 days that fall inside the agreement), newest first ──────
+    $days = [];
+    for ($i = 0; $i < 30; $i++) {
+        $d = (clone $todayDay)->modify("-$i days");
+        if ($d < $startDay) break;
+        $k = $d->format('Y-m-d');
+        $sum = round($dayAgg[$k][0] ?? 0.0, 2); $n = (int) ($dayAgg[$k][1] ?? 0);
+        $days[] = ['date' => $k, 'delivery' => $sum, 'orders' => $n, 'share' => $sh($sum)];
+    }
+
+    $grandSum = round($grandSum, 2);
+
+    // ── Open (pending) & cancelled orders in the agreement window ────────────
+    // «المعلقة» = anything still live (not completed, not cancelled). «الملغية» =
+    // CANCELLED/REJECTED. The amount shown per order is its delivery fee (null on
+    // a not-yet-priced order → 0). Totals come from an aggregate so they stay
+    // correct even when the returned list is capped at 300.
+    $statusAr = [
+        'NEW' => 'جديد', 'UNDER_REVIEW' => 'تحت المراجعة', 'PRICED' => 'مسعّر',
+        'ACCEPTED' => 'مقبول', 'DRIVER_ASSIGNED' => 'مع السائق', 'PICKED_UP' => 'تم الاستلام',
+        'IN_ROUTE' => 'في الطريق', 'CANCELLED' => 'ملغي', 'REJECTED' => 'مرفوض',
+    ];
+    $orderReport = function (string $statusSql) use ($startUtc, $endUtc, $tz, $utc, $statusAr): array {
+        $pdo = db();
+        $a = $pdo->prepare(
+            "SELECT COUNT(*) AS n, COALESCE(SUM(COALESCE(deliveryFee, 0)), 0) AS total
+               FROM `Order`
+              WHERE parentOrderId IS NULL AND $statusSql
+                AND createdAt >= ? AND createdAt < ?"
+        );
+        $a->execute([$startUtc, $endUtc]);
+        $sum = $a->fetch() ?: ['n' => 0, 'total' => 0];
+        $l = $pdo->prepare(
+            "SELECT orderNumber, status, createdAt, COALESCE(deliveryFee, 0) AS fee
+               FROM `Order`
+              WHERE parentOrderId IS NULL AND $statusSql
+                AND createdAt >= ? AND createdAt < ?
+              ORDER BY createdAt DESC LIMIT 300"
+        );
+        $l->execute([$startUtc, $endUtc]);
+        $list = [];
+        foreach ($l->fetchAll() as $r) {
+            $c = (new DateTime((string) $r['createdAt'], $utc))->setTimezone($tz);
+            $list[] = [
+                'number'      => $r['orderNumber'],
+                'date'        => $c->format('Y-m-d'),
+                'time'        => $c->format('H:i'),
+                'status'      => $r['status'],
+                'statusLabel' => $statusAr[$r['status']] ?? $r['status'],
+                'delivery'    => round((float) $r['fee'], 2),
+            ];
+        }
+        return [
+            'count'    => (int) $sum['n'],
+            'delivery' => round((float) $sum['total'], 2),
+            'capped'   => (int) $sum['n'] > count($list),
+            'orders'   => $list,
+        ];
+    };
+    $pending   = $orderReport("status NOT IN ('DELIVERED','COMPLETED','CANCELLED','REJECTED')");
+    $cancelled = $orderReport("status IN ('CANCELLED','REJECTED')");
+
+    jsonOk([
+        'startDate'   => $startC->format('Y-m-d'),
+        'endDate'     => $endC->format('Y-m-d'),
+        'sharePct'    => $sharePct,
+        'currency'    => 'EGP',
+        'nowCairo'    => $nowC->format('Y-m-d H:i'),
+        'generatedAt' => (new DateTime('now', $utc))->format('c'),
+        'totals'      => [
+            'delivery'       => $grandSum,
+            'orders'         => $grandN,
+            'share'          => $sh($grandSum),
+            'avgFeePerOrder' => $grandN > 0 ? round($grandSum / $grandN, 2) : 0.0,
+        ],
+        'current'   => $cur,
+        'quarters'  => $quarters,
+        'months'    => $months,
+        'weeks'     => $weeks,
+        'days'      => $days,
+        'pending'   => $pending,
+        'cancelled' => $cancelled,
+    ]);
+}
+
 // socket.io stub — PHP can't hold persistent connections, so we return a
 // hard 501 with a body that makes the client back off. Retries are throttled
 // client-side; without a specific reason the browser reconnects immediately.
@@ -720,50 +938,6 @@ if (str_starts_with($path, '/admin/')) {
             }
         }
     }
-}
-
-// ── العروض (promos) — قواعد خصم رسوم التوصيل، متحكّم فيها بالكامل من الداشبورد ──
-// لازم تكون هنا (قبل الـ lister العام /admin/<resource> اللي تحت)، وإلا الـ GET
-// بيتلقّف ويرجّع لستة فاضية.
-if ($method === 'GET' && $path === '/admin/promos') {
-    $u = authUser(); if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
-    $out = [];
-    foreach (promoRules() as $r) {
-        $rid = (string) ($r['id'] ?? '');
-        $r['usedCount'] = $rid !== '' ? promoUsageCount($rid) : 0;
-        $out[] = $r;
-    }
-    jsonOk(['rules' => $out]);
-}
-if ($method === 'PUT' && $path === '/admin/promos') {
-    $u = authUser(); if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
-    $b = readJsonBody();
-    $clean = [];
-    foreach ((array) ($b['rules'] ?? []) as $r) {
-        if (!is_array($r)) continue;
-        $clean[] = [
-            'id' => trim((string) ($r['id'] ?? '')) ?: ('promo_' . bin2hex(random_bytes(6))),
-            'nameAr' => trim((string) ($r['nameAr'] ?? '')) ?: 'عرض توصيل',
-            'isActive' => !empty($r['isActive']),
-            'rewardType' => in_array($r['rewardType'] ?? '', ['FREE_DELIVERY', 'DELIVERY_PERCENT', 'DELIVERY_FIXED'], true) ? $r['rewardType'] : 'FREE_DELIVERY',
-            'rewardValue' => ($r['rewardValue'] ?? '') !== '' ? (float) $r['rewardValue'] : null,
-            'audience' => in_array($r['audience'] ?? '', ['ALL', 'FIRST_ORDER'], true) ? $r['audience'] : 'ALL',
-            'scheduleType' => in_array($r['scheduleType'] ?? '', ['ALWAYS', 'DATE_RANGE', 'SPECIFIC_DATES', 'WEEKLY'], true) ? $r['scheduleType'] : 'ALWAYS',
-            'dateFrom' => trim((string) ($r['dateFrom'] ?? '')) ?: null,
-            'dateTo' => trim((string) ($r['dateTo'] ?? '')) ?: null,
-            'dates' => array_values(array_filter(array_map(fn($d) => trim((string) $d), (array) ($r['dates'] ?? [])))),
-            'weekdays' => array_values(array_map('intval', (array) ($r['weekdays'] ?? []))),
-            'minOrderAmount' => ($r['minOrderAmount'] ?? '') !== '' ? (float) $r['minOrderAmount'] : null,
-            'maxDiscount' => ($r['maxDiscount'] ?? '') !== '' ? (float) $r['maxDiscount'] : null,
-            'excludeIntercity' => array_key_exists('excludeIntercity', $r) ? !empty($r['excludeIntercity']) : true,
-            'usageLimitTotal' => ($r['usageLimitTotal'] ?? '') !== '' ? (int) $r['usageLimitTotal'] : null,
-            'usageLimitPerCustomer' => ($r['usageLimitPerCustomer'] ?? '') !== '' ? (int) $r['usageLimitPerCustomer'] : null,
-            'priority' => (int) ($r['priority'] ?? 0),
-        ];
-    }
-    db()->prepare('INSERT INTO `Setting` (`key`,`value`,`description`,`updatedAt`,`updatedById`) VALUES (?,?,NULL,NOW(3),?) ON DUPLICATE KEY UPDATE `value`=VALUES(`value`), `updatedAt`=VALUES(`updatedAt`), `updatedById`=VALUES(`updatedById`)')
-        ->execute(['promo_rules', json_encode($clean, JSON_UNESCAPED_UNICODE), $u['sub'] ?? null]);
-    jsonOk(['rules' => $clean]);
 }
 
 // ─── ADMIN endpoints (require admin JWT) ────────────────────────────────
@@ -1171,11 +1345,16 @@ if ($method === 'GET' && $path === '/admin/overview') {
     $activeAlerts    = $scalar("SELECT COUNT(*) FROM `Alert` WHERE isResolved=0");
     $availableDrivers = $scalar("SELECT COUNT(*) FROM `DriverProfile` WHERE status='AVAILABLE'");
     $customersCount  = $scalar("SELECT COUNT(*) FROM `User` WHERE role='CUSTOMER' AND createdAt BETWEEN ? AND ?", [$fromSql, $toSql]);
-    // Revenue
-    $st = $pdo->prepare("SELECT finalPrice, quotedPrice FROM `Order` WHERE status IN ('COMPLETED','DELIVERED') AND (completedAt BETWEEN ? AND ? OR deliveredAt BETWEEN ? AND ? OR createdAt BETWEEN ? AND ?)");
+    // Revenue + delivery fees (same completed/delivered rowset, so the two cards
+    // on «نظرة عامة» always tell one story).
+    $st = $pdo->prepare("SELECT finalPrice, quotedPrice, deliveryFee FROM `Order` WHERE status IN ('COMPLETED','DELIVERED') AND (completedAt BETWEEN ? AND ? OR deliveredAt BETWEEN ? AND ? OR createdAt BETWEEN ? AND ?)");
     $st->execute([$fromSql, $toSql, $fromSql, $toSql, $fromSql, $toSql]);
-    $revenue = 0.0;
-    foreach ($st->fetchAll() as $r) $revenue += (float) ($r['finalPrice'] ?? $r['quotedPrice'] ?? 0);
+    $revenue = 0.0; $deliveryTotal = 0.0;
+    foreach ($st->fetchAll() as $r) {
+        $revenue += (float) ($r['finalPrice'] ?? $r['quotedPrice'] ?? 0);
+        $deliveryTotal += (float) ($r['deliveryFee'] ?? 0);
+    }
+    $deliveryTotal = round($deliveryTotal, 2);
     // 7-day trend
     $trendFromSql = gmdate('Y-m-d H:i:s', $now - 7 * 86400);
     $st = $pdo->prepare("SELECT DATE(createdAt) AS d, status, finalPrice, quotedPrice FROM `Order` WHERE createdAt >= ?");
@@ -1213,7 +1392,7 @@ if ($method === 'GET' && $path === '/admin/overview') {
     jsonOk([
         'kpis' => compact('totalOrders', 'newOrders', 'pricedOrders', 'activeOrders',
             'completedOrders', 'cancelledOrders', 'pendingPayments', 'activeAlerts',
-            'availableDrivers', 'customersCount') + ['revenue' => $revenue],
+            'availableDrivers', 'customersCount') + ['revenue' => $revenue, 'deliveryTotal' => $deliveryTotal],
         'trend' => $trend,
         'ordersByService' => $byService,
         'range' => $range,
