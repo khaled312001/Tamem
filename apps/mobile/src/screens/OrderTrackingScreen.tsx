@@ -153,7 +153,7 @@ interface OrderDetail {
 }
 
 const SUPPORT_WHATSAPP =
-  (typeof process !== 'undefined' && process.env?.EXPO_PUBLIC_TAMEM_WHATSAPP) || '+201010254819';
+  (typeof process !== 'undefined' && process.env?.EXPO_PUBLIC_TAMEM_WHATSAPP) || '+201070750167';
 
 // Shipping option labels — the customer chose these; the app has to echo them
 // back or the shipment reads as "just a photo + two addresses".

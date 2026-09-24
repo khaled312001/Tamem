@@ -21,7 +21,7 @@ const envSchema = z.object({
 
   WHATSAPP_PHONE_NUMBER_ID: z.string().optional(),
   WHATSAPP_ACCESS_TOKEN: z.string().optional(),
-  WHATSAPP_BUSINESS_NUMBER: z.string().default('+201010254819'),
+  WHATSAPP_BUSINESS_NUMBER: z.string().default('+201070750167'),
 
   FCM_SERVICE_ACCOUNT_JSON_PATH: z.string().optional(),
 

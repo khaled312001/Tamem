@@ -388,7 +388,7 @@ function SendTestCard() {
         </div>
         <div className="font-bold">إرسال رسالة تجريبية</div>
       </div>
-      <Field label="رقم المستلم" hint="اكتب الرقم بدون كود الدولة — مثال: 01010254819">
+      <Field label="رقم المستلم" hint="اكتب الرقم بدون كود الدولة — مثال: 01070750167">
         <PhoneInput value={phone} onChange={setPhone} />
       </Field>
       <Field label="نص الرسالة">

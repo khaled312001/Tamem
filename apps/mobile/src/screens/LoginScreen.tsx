@@ -177,7 +177,7 @@ export function LoginScreen() {
               render={({ field: { value, onChange, onBlur } }) => (
                 <IconField
                   Icon={Phone}
-                  placeholder="مثال: 01010254819"
+                  placeholder="مثال: 01070750167"
                   keyboardType="phone-pad"
                   value={value}
                   onChangeText={onChange}

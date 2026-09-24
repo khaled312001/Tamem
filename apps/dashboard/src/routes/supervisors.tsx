@@ -530,7 +530,7 @@ function SupervisorFormDialog({
         <Field
           label="رقم واتساب"
           required
-          hint="اكتب الرقم بدون كود الدولة — مثال: 01010254819"
+          hint="اكتب الرقم بدون كود الدولة — مثال: 01070750167"
           error={phoneError}
         >
           <PhoneInput

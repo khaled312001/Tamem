@@ -238,7 +238,7 @@ async function main() {
     },
     {
       key: 'whatsapp_business_number',
-      value: '+201010254819',
+      value: '+201070750167',
       description: 'رقم WhatsApp الرسمي لتميم',
     },
     {
