@@ -940,50 +940,6 @@ if (str_starts_with($path, '/admin/')) {
     }
 }
 
-// ── العروض (promos) — قواعد خصم رسوم التوصيل، متحكّم فيها بالكامل من الداشبورد ──
-// لازم تكون هنا (قبل الـ lister العام /admin/<resource> اللي تحت)، وإلا الـ GET
-// بيتلقّف ويرجّع لستة فاضية.
-if ($method === 'GET' && $path === '/admin/promos') {
-    $u = authUser(); if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
-    $out = [];
-    foreach (promoRules() as $r) {
-        $rid = (string) ($r['id'] ?? '');
-        $r['usedCount'] = $rid !== '' ? promoUsageCount($rid) : 0;
-        $out[] = $r;
-    }
-    jsonOk(['rules' => $out]);
-}
-if ($method === 'PUT' && $path === '/admin/promos') {
-    $u = authUser(); if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
-    $b = readJsonBody();
-    $clean = [];
-    foreach ((array) ($b['rules'] ?? []) as $r) {
-        if (!is_array($r)) continue;
-        $clean[] = [
-            'id' => trim((string) ($r['id'] ?? '')) ?: ('promo_' . bin2hex(random_bytes(6))),
-            'nameAr' => trim((string) ($r['nameAr'] ?? '')) ?: 'عرض توصيل',
-            'isActive' => !empty($r['isActive']),
-            'rewardType' => in_array($r['rewardType'] ?? '', ['FREE_DELIVERY', 'DELIVERY_PERCENT', 'DELIVERY_FIXED'], true) ? $r['rewardType'] : 'FREE_DELIVERY',
-            'rewardValue' => ($r['rewardValue'] ?? '') !== '' ? (float) $r['rewardValue'] : null,
-            'audience' => in_array($r['audience'] ?? '', ['ALL', 'FIRST_ORDER'], true) ? $r['audience'] : 'ALL',
-            'scheduleType' => in_array($r['scheduleType'] ?? '', ['ALWAYS', 'DATE_RANGE', 'SPECIFIC_DATES', 'WEEKLY'], true) ? $r['scheduleType'] : 'ALWAYS',
-            'dateFrom' => trim((string) ($r['dateFrom'] ?? '')) ?: null,
-            'dateTo' => trim((string) ($r['dateTo'] ?? '')) ?: null,
-            'dates' => array_values(array_filter(array_map(fn($d) => trim((string) $d), (array) ($r['dates'] ?? [])))),
-            'weekdays' => array_values(array_map('intval', (array) ($r['weekdays'] ?? []))),
-            'minOrderAmount' => ($r['minOrderAmount'] ?? '') !== '' ? (float) $r['minOrderAmount'] : null,
-            'maxDiscount' => ($r['maxDiscount'] ?? '') !== '' ? (float) $r['maxDiscount'] : null,
-            'excludeIntercity' => array_key_exists('excludeIntercity', $r) ? !empty($r['excludeIntercity']) : true,
-            'usageLimitTotal' => ($r['usageLimitTotal'] ?? '') !== '' ? (int) $r['usageLimitTotal'] : null,
-            'usageLimitPerCustomer' => ($r['usageLimitPerCustomer'] ?? '') !== '' ? (int) $r['usageLimitPerCustomer'] : null,
-            'priority' => (int) ($r['priority'] ?? 0),
-        ];
-    }
-    db()->prepare('INSERT INTO `Setting` (`key`,`value`,`description`,`updatedAt`,`updatedById`) VALUES (?,?,NULL,NOW(3),?) ON DUPLICATE KEY UPDATE `value`=VALUES(`value`), `updatedAt`=VALUES(`updatedAt`), `updatedById`=VALUES(`updatedById`)')
-        ->execute(['promo_rules', json_encode($clean, JSON_UNESCAPED_UNICODE), $u['sub'] ?? null]);
-    jsonOk(['rules' => $clean]);
-}
-
 // ─── ADMIN endpoints (require admin JWT) ────────────────────────────────
 
 // ── العروض (promos) — قواعد خصم رسوم التوصيل، متحكّم فيها بالكامل من الداشبورد ──
