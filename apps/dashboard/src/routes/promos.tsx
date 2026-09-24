@@ -29,7 +29,11 @@ const SCHEDULE_LABEL: Record<string, string> = {
   WEEKLY: 'أسبوعي',
 };
 const WEEKDAYS = ['الأحد', 'الاثنين', 'الثلاثاء', 'الأربعاء', 'الخميس', 'الجمعة', 'السبت'];
-const todayISO = () => new Date().toISOString().slice(0, 10);
+// Cairo, not UTC: the backend matches a promo's date against Africa/Cairo, so
+// between midnight and 3am `toISOString()` handed the preset YESTERDAY — a
+// «يوم مجاني» saved at 1am was already over before anyone ordered.
+const todayISO = () =>
+  new Intl.DateTimeFormat('en-CA', { timeZone: 'Africa/Cairo' }).format(new Date());
 
 function fetchRules(): Promise<Rule[]> {
   return api.raw.get('/admin/promos').then((r) => r.data.data.rules ?? []);
