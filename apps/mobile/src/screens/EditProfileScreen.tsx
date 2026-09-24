@@ -197,7 +197,7 @@ export function EditProfileScreen() {
               const msg = encodeURIComponent('السلام عليكم، أرغب في تغيير رقم هاتفي المسجَّل:');
               const phone =
                 (typeof process !== 'undefined' && process.env?.EXPO_PUBLIC_TAMEM_WHATSAPP) ||
-                '+201010254819';
+                '+201070750167';
               void Linking.openURL(`https://wa.me/${phone.replace(/\D/g, '')}?text=${msg}`);
             }}
           >

@@ -43,7 +43,7 @@ function toE164(local: string): string {
 }
 
 export const PhoneInput = forwardRef<HTMLInputElement, PhoneInputProps>(function PhoneInput(
-  { value, onChange, placeholder = '01010254819', disabled, required, id, autoFocus, className },
+  { value, onChange, placeholder = '01070750167', disabled, required, id, autoFocus, className },
   ref,
 ) {
   const [local, setLocal] = useState<string>(() => toLocal(value));

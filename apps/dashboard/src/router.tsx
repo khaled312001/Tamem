@@ -34,6 +34,7 @@ import { ServicesPage } from './routes/services.js';
 import { SiteSettingsPage } from './routes/site-settings.js';
 import { CouponsPage } from './routes/coupons.js';
 import { PromosPage } from './routes/promos.js';
+import { PartnerSettlementPage } from './routes/partner-settlement.js';
 import { SettingsPage } from './routes/settings.js';
 import { SupervisorsPage } from './routes/supervisors.js';
 import { NotificationTemplatesPage } from './routes/notification-templates.js';
@@ -67,6 +68,9 @@ const isMerchantSite =
 const routes: RouteObject[] = [
   { path: '/login', element: <LoginPage /> },
   { path: '/merchant-login', element: <MerchantLoginPage /> },
+  // Private partner-revenue report. Standalone on purpose: no admin auth, no
+  // sidebar, no permission — gated only by the passphrase the backend checks.
+  { path: '/partner', element: <PartnerSettlementPage /> },
   {
     path: '/merchant',
     element: <MerchantWrapper />,

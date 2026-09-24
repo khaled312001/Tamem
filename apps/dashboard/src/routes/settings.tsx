@@ -122,7 +122,7 @@ const KNOWN_SETTINGS: {
   {
     key: 'whatsapp_business_number',
     label: 'رقم WhatsApp الرسمي',
-    hint: 'مع كود الدولة، مثلاً +201010254819',
+    hint: 'مع كود الدولة، مثلاً +201070750167',
     kind: 'tel',
   },
   {
@@ -262,7 +262,7 @@ function AccountSection() {
           />
         </Field>
 
-        <Field label="رقم الهاتف" hint="اكتب الرقم بدون كود الدولة — مثال: 01010254819">
+        <Field label="رقم الهاتف" hint="اكتب الرقم بدون كود الدولة — مثال: 01070750167">
           <PhoneInput value={phone} onChange={setPhone} />
         </Field>
 

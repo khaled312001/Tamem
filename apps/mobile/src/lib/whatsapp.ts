@@ -1,6 +1,6 @@
 import * as Linking from 'expo-linking';
 
-const TAMEM_WHATSAPP = process.env.EXPO_PUBLIC_TAMEM_WHATSAPP ?? '+201010254819';
+const TAMEM_WHATSAPP = process.env.EXPO_PUBLIC_TAMEM_WHATSAPP ?? '+201070750167';
 
 interface OrderSummary {
   orderNumber: string;

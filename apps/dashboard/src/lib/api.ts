@@ -30,6 +30,11 @@ export const api: TamemClient = new TamemClient({
     // Same idea on the admin side: a failed sign-in renders its own error, and
     // reloading the page would wipe it.
     if (/\/login\/?$/.test(path)) return;
+    // The partner report is a standalone, passphrase-gated page that has no
+    // admin session by design. A stray 401 from anywhere (e.g. an in-flight
+    // request from a dashboard page the user just left) must never bounce this
+    // page to the admin login — that's the "بيحولني على login" report.
+    if (/\/partner\/?$/.test(path)) return;
     // Respect Vite's base path. In production the dashboard lives at
     // /super_admin/, so a naked `/login` would drop the base and 404.
     const base = (import.meta as unknown as { env: { BASE_URL: string } }).env.BASE_URL || '/';

@@ -59,6 +59,7 @@ interface OverviewResponse {
     completedOrders: number;
     cancelledOrders: number;
     revenue: number;
+    deliveryTotal: number;
     pendingPayments: number;
     activeAlerts: number;
     availableDrivers: number;
@@ -250,6 +251,13 @@ export function OverviewPage() {
                 value={formatMoney(k.revenue)}
                 icon={CreditCard}
                 tone="amber"
+              />
+              <StatCard
+                label="إجمالي التوصيل"
+                value={formatMoney(k.deliveryTotal)}
+                icon={Truck}
+                tone="cyan"
+                hint="رسوم التوصيل المحصّلة"
               />
               <StatCard
                 label="العملاء"

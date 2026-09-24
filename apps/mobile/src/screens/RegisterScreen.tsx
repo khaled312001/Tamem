@@ -149,7 +149,7 @@ export function RegisterScreen() {
               render={({ field: { value, onChange, onBlur } }) => (
                 <IconField
                   Icon={Phone}
-                  placeholder="مثلاً: 01010254819"
+                  placeholder="مثلاً: 01070750167"
                   keyboardType="phone-pad"
                   value={value}
                   onChangeText={onChange}
