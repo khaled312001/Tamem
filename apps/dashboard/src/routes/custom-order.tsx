@@ -156,6 +156,8 @@ export function CustomOrderDialog({
         advanceTo: stage === 'NEW' ? undefined : stage,
         markPaid: stage === 'COMPLETED' ? markPaid : undefined,
         silent: silent || undefined,
+        // صريحة: الشاشة دي هي «اليدوي المخصص»، فمفيش استنتاج من شكل الطلب.
+        source: 'CUSTOM',
       }),
     onSuccess: (res) => {
       const d = (

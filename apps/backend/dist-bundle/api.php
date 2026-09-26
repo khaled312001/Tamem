@@ -1002,7 +1002,7 @@ if ($method === 'GET' && $path === '/admin/realtime') {
     $os->execute([$sinceSql]);
     $orders = array_map('jsonizeRow', $os->fetchAll());
 
-    $al = db()->prepare("SELECT id, titleAr, title, severity, createdAt FROM `Alert` WHERE isResolved = 0 AND createdAt > ? ORDER BY createdAt DESC LIMIT 25");
+    $al = db()->prepare("SELECT id, titleAr, title, severity, relatedOrderId, createdAt FROM `Alert` WHERE isResolved = 0 AND createdAt > ? ORDER BY createdAt DESC LIMIT 25");
     $al->execute([$sinceSql]);
     $alerts = array_map('jsonizeRow', $al->fetchAll());
 
@@ -3315,6 +3315,12 @@ function jsonizeRow(?array $row): ?array {
 // actually persists.
 function orderNest(array $r): array {
     $out = jsonizeRow($r);
+    // Rows written before `source` existed were backfilled once, but a NULL that
+    // slips through must never read as "unknown" in the list: no admin created
+    // it ⇒ it came from the app.
+    if (($out['source'] ?? null) === null && array_key_exists('createdByAdminId', $r)) {
+        $out['source'] = $r['createdByAdminId'] ? 'MANUAL' : 'APP';
+    }
     $out['customer'] = ['id' => $r['customerId'] ?? null, 'name' => $r['cu_name'] ?? null, 'phone' => $r['cu_phone'] ?? null, 'city' => $r['cu_city'] ?? null];
     $out['service'] = ['id' => $r['serviceId'] ?? null, 'nameAr' => $r['s_nameAr'] ?? null, 'name' => $r['s_name'] ?? null];
     $out['assignedDriver'] = ($r['assignedDriverId'] ?? null) ? ['id' => $r['assignedDriverId'], 'name' => $r['dr_name'] ?? null, 'phone' => $r['dr_phone'] ?? null] : null;
@@ -3335,7 +3341,7 @@ const ORDER_COLS = "o.*, cu.name AS cu_name, cu.phone AS cu_phone, cu.city AS cu
  * none of which the list renders. Opening the detail still uses ORDER_COLS, so
  * nothing is lost; the list just stops shipping fields it never shows.
  */
-const ORDER_LIST_COLS = "o.id, o.orderNumber, o.status, o.category,
+const ORDER_LIST_COLS = "o.id, o.orderNumber, o.status, o.category, o.source, o.createdByAdminId,
     o.createdAt, o.updatedAt, o.deliveredAt, o.completedAt, o.cancelledAt, o.scheduledFor,
     o.customerId, o.assignedDriverId, o.serviceId, o.merchantId,
     o.deliveryAddress, o.pickupAddress,
@@ -3444,6 +3450,14 @@ if ($method === 'GET' && $path === '/admin/orders/stats') {
         'cancelled' => (int) ($row['cancelled'] ?? 0),
         'salesToday' => round((float) ($sums['sales'] ?? 0), 2),
         'deliveryToday' => round((float) ($sums['delivery'] ?? 0), 2),
+        // كام طلب من كل مصدر (كل الطلبات، مش النهارده بس) — أرقام شرائح الفلتر.
+        'bySource' => (function () {
+            $out = ['APP' => 0, 'MANUAL' => 0, 'CUSTOM' => 0];
+            $rows = db()->query("SELECT COALESCE(source, IF(createdByAdminId IS NULL, 'APP', 'MANUAL')) AS src, COUNT(*) AS n
+                                   FROM `Order` WHERE parentOrderId IS NULL GROUP BY src")->fetchAll();
+            foreach ($rows as $r) if (isset($out[$r['src']])) $out[$r['src']] = (int) $r['n'];
+            return $out;
+        })(),
     ]);
 }
 if ($method === 'GET' && $path === '/admin/orders') {
@@ -3469,7 +3483,24 @@ if ($method === 'GET' && $path === '/admin/orders') {
         $where .= ' AND (o.orderNumber LIKE ? OR cu.name LIKE ? OR cu.phone LIKE ? OR dr.name LIKE ? OR dr.phone LIKE ? OR s.nameAr LIKE ?)';
         $like = "%$search%"; array_push($args, $like, $like, $like, $like, $like, $like);
     }
-    if (($_GET['driverId'] ?? '') !== '') { $where .= ' AND o.assignedDriverId = ?'; $args[] = (string) $_GET['driverId']; }
+    // driverId=none ⇒ الطلبات اللي لسه من غير مندوب — أهم لستة في اليوم.
+    if (($_GET['driverId'] ?? '') === 'none') { $where .= ' AND o.assignedDriverId IS NULL'; }
+    elseif (($_GET['driverId'] ?? '') !== '') { $where .= ' AND o.assignedDriverId = ?'; $args[] = (string) $_GET['driverId']; }
+    // من فين جه الطلب: APP (من التطبيق) / MANUAL (يدوي من متجر) / CUSTOM (يدوي مخصص).
+    // الطلبات القديمة اتعبّى عمودها مرة واحدة، فالفلتر بيشوف التاريخ كله.
+    $srcFilter = array_values(array_filter(array_map(
+        fn($x) => in_array(strtoupper(trim($x)), ['APP', 'MANUAL', 'CUSTOM'], true) ? strtoupper(trim($x)) : null,
+        explode(',', (string) ($_GET['source'] ?? ''))
+    )));
+    if ($srcFilter) {
+        $where .= ' AND o.source IN (' . implode(',', array_fill(0, count($srcFilter), '?')) . ')';
+        array_push($args, ...$srcFilter);
+    }
+    if (($_GET['paymentStatus'] ?? '') !== '') { $where .= ' AND o.paymentStatus = ?'; $args[] = (string) $_GET['paymentStatus']; }
+    if (($_GET['category'] ?? '') !== '') { $where .= ' AND o.category = ?'; $args[] = (string) $_GET['category']; }
+    if (($_GET['cityId'] ?? '') !== '') { $where .= ' AND o.cityId = ?'; $args[] = (string) $_GET['cityId']; }
+    // scheduled=1 ⇒ الطلبات المجدولة لوقت لاحق بس.
+    if (!empty($_GET['scheduled'])) { $where .= ' AND o.scheduledFor IS NOT NULL'; }
     if (($_GET['merchantId'] ?? '') !== '') { $where .= ' AND o.merchantId = ?'; $args[] = (string) $_GET['merchantId']; }
     if (($_GET['paymentMethod'] ?? '') !== '') { $where .= ' AND o.paymentMethod = ?'; $args[] = (string) $_GET['paymentMethod']; }
     if (($_GET['from'] ?? '') !== '') { $where .= ' AND o.createdAt >= ?'; $args[] = gmdate('Y-m-d H:i:s', strtotime((string) $_GET['from'])); }
@@ -3865,7 +3896,12 @@ if ($method === 'POST' && $path === '/admin/orders') {
         'finalPrice' => $quoted ?? $computed,
         'customData' => $custom ? json_encode($custom, JSON_UNESCAPED_UNICODE) : null,
         'quotedPrice' => $quoted,
-        'paymentMethod' => !empty($b['paymentMethod']) ? (string)$b['paymentMethod'] : null];
+        'paymentMethod' => !empty($b['paymentMethod']) ? (string)$b['paymentMethod'] : null,
+        // من فين جه الأوردر. الشاشة بتقولها صراحةً، ولو مقالتش بنستنتجها من شكله:
+        // سلة متاجر ⇒ «يدوي»، من غير سلة (نقطة لنقطة) ⇒ «يدوي مخصص».
+        'source' => in_array(strtoupper(trim((string) ($b['source'] ?? ''))), ['MANUAL', 'CUSTOM'], true)
+            ? strtoupper(trim((string) $b['source']))
+            : ($lines ? 'MANUAL' : 'CUSTOM')];
     foreach ($opt as $k => $v) if ($v !== null) { $cols[] = $k; $ph[] = '?'; $args[] = $v; }
     $cols[] = 'createdAt'; $ph[] = 'NOW(3)'; $cols[] = 'updatedAt'; $ph[] = 'NOW(3)';
     $colStr = implode(',', array_map(fn($c) => "`$c`", $cols));
@@ -9959,25 +9995,25 @@ if ($method === 'POST' && $path === '/orders/cart') {
             'originalFee' => $deliveryPromo['originalFee'], 'discount' => $deliveryPromo['discount']];
         $deliveryLegs = json_encode($__cd, JSON_UNESCAPED_UNICODE);
     }
-    db()->prepare('INSERT INTO `Order` (id, orderNumber, serviceId, customerId, category, status, merchantId, deliveryAddress, deliveryLat, deliveryLng, cityId, villageId, areaId, paymentMethod, paymentStatus, currency, couponCode, discountAmount, merchantSubtotal, deliveryFee, quotedPrice, finalPrice, scheduledFor, customData, createdAt, updatedAt)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NOW(3),NOW(3))')
+    db()->prepare('INSERT INTO `Order` (id, orderNumber, serviceId, customerId, category, status, merchantId, deliveryAddress, deliveryLat, deliveryLng, cityId, villageId, areaId, paymentMethod, paymentStatus, currency, couponCode, discountAmount, merchantSubtotal, deliveryFee, quotedPrice, finalPrice, scheduledFor, customData, source, createdAt, updatedAt)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NOW(3),NOW(3))')
         ->execute([$parentId, $parentNo, $svc['id'], $uid, 'MERCHANT', 'NEW',
             $multi ? null : ($merchants[0]['merchantId'] ?? null),
             $addr, $cartLat, $cartLng,
             ($b['cityId'] ?? null) ?: null, ($b['villageId'] ?? null) ?: null, ($b['areaId'] ?? null) ?: null,
             $pm, 'PENDING', 'EGP', $coupon ? $coupon['code'] : null, $discount ?: null,
-            $grandSub, $fee, $final, null, ($b['scheduledFor'] ?? null) ?: null, $deliveryLegs]);
+            $grandSub, $fee, $final, null, ($b['scheduledFor'] ?? null) ?: null, $deliveryLegs, 'APP']);
     orderHistory($parentId, null, 'NEW', $uid, 'CUSTOMER', 'Order placed from cart');
 
     foreach ($merchants as $mi => $m) {
         $childId = $splitPerMerchant ? newId() : $parentId;
         if ($splitPerMerchant) {
-            db()->prepare('INSERT INTO `Order` (id, orderNumber, serviceId, customerId, category, status, merchantId, parentOrderId, deliveryAddress, deliveryLat, deliveryLng, paymentMethod, paymentStatus, currency, merchantSubtotal, notes, imageUrls, createdAt, updatedAt)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NOW(3),NOW(3))')
+            db()->prepare('INSERT INTO `Order` (id, orderNumber, serviceId, customerId, category, status, merchantId, parentOrderId, deliveryAddress, deliveryLat, deliveryLng, paymentMethod, paymentStatus, currency, merchantSubtotal, notes, imageUrls, source, createdAt, updatedAt)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NOW(3),NOW(3))')
                 ->execute([$childId, newOrderNumber($childId), $svc['id'], $uid, 'MERCHANT', 'NEW',
                     $m['merchantId'] ?? null, $parentId, $addr, $cartLat, $cartLng,
                     $pm, 'PENDING', 'EGP', $subtotals[$mi], ($m['notes'] ?? null) ?: null,
-                    !empty($m['imageUrls']) ? json_encode($m['imageUrls'], JSON_UNESCAPED_UNICODE) : null]);
+                    !empty($m['imageUrls']) ? json_encode($m['imageUrls'], JSON_UNESCAPED_UNICODE) : null, 'APP']);
             orderHistory($childId, null, 'NEW', $uid, 'CUSTOMER', 'Sub-order of ' . $parentNo);
         } elseif (!empty($m['notes']) || !empty($m['imageUrls'])) {
             // Per-merchant notes/images are merged onto the single order. With
@@ -10045,11 +10081,11 @@ if (preg_match('#^/orders/from/([^/]+)$#', $path, $mm) && $method === 'POST') {
     if ($src['customerId'] !== $uid) jsonErr('ممنوع', 403, 'FORBIDDEN');
     $id = newId();
     $no = newOrderNumber($id);
-    db()->prepare('INSERT INTO `Order` (id, orderNumber, serviceId, customerId, category, status, merchantId, notes, imageUrls, customData, pickupAddress, pickupLat, pickupLng, deliveryAddress, deliveryLat, deliveryLng, weightKg, sizeCategory, isFragile, speedTier, paymentMethod, paymentStatus, currency, createdAt, updatedAt)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NOW(3),NOW(3))')
+    db()->prepare('INSERT INTO `Order` (id, orderNumber, serviceId, customerId, category, status, merchantId, notes, imageUrls, customData, pickupAddress, pickupLat, pickupLng, deliveryAddress, deliveryLat, deliveryLng, weightKg, sizeCategory, isFragile, speedTier, paymentMethod, paymentStatus, currency, source, createdAt, updatedAt)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NOW(3),NOW(3))')
         ->execute([$id, $no, $src['serviceId'], $uid, $src['category'], 'NEW', $src['merchantId'], $src['notes'], $src['imageUrls'], $src['customData'],
             $src['pickupAddress'], $src['pickupLat'], $src['pickupLng'], $src['deliveryAddress'], $src['deliveryLat'], $src['deliveryLng'],
-            $src['weightKg'], $src['sizeCategory'], $src['isFragile'], $src['speedTier'], $src['paymentMethod'], 'PENDING', 'EGP']);
+            $src['weightKg'], $src['sizeCategory'], $src['isFragile'], $src['speedTier'], $src['paymentMethod'], 'PENDING', 'EGP', 'APP']);
     $its = db()->prepare('SELECT * FROM `OrderItem` WHERE orderId = ?');
     $its->execute([$mm[1]]);
     foreach ($its->fetchAll() as $it) {
@@ -10168,8 +10204,8 @@ if ($method === 'POST' && $path === '/orders') {
 
     $id = newId();
     $no = newOrderNumber($id);
-    db()->prepare('INSERT INTO `Order` (id, orderNumber, serviceId, customerId, category, status, merchantId, notes, imageUrls, customData, pickupAddress, pickupLat, pickupLng, deliveryAddress, deliveryLat, deliveryLng, cityId, villageId, areaId, weightKg, sizeCategory, isFragile, speedTier, deliveryFee, couponCode, discountAmount, paymentMethod, paymentStatus, currency, scheduledFor, createdAt, updatedAt)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NOW(3),NOW(3))')
+    db()->prepare('INSERT INTO `Order` (id, orderNumber, serviceId, customerId, category, status, merchantId, notes, imageUrls, customData, pickupAddress, pickupLat, pickupLng, deliveryAddress, deliveryLat, deliveryLng, cityId, villageId, areaId, weightKg, sizeCategory, isFragile, speedTier, deliveryFee, couponCode, discountAmount, paymentMethod, paymentStatus, currency, scheduledFor, source, createdAt, updatedAt)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NOW(3),NOW(3))')
         ->execute([$id, $no, $svc['id'], $uid, $cat, 'NEW', ($b['merchantId'] ?? null) ?: null,
             ($b['notes'] ?? null) ?: null,
             !empty($b['imageUrls']) ? json_encode($b['imageUrls'], JSON_UNESCAPED_UNICODE) : null,
@@ -10181,7 +10217,7 @@ if ($method === 'POST' && $path === '/orders') {
             isset($b['weightKg']) ? (float) $b['weightKg'] : null, ($b['sizeCategory'] ?? null) ?: null,
             !empty($b['isFragile']) ? 1 : 0, ($b['speedTier'] ?? null) ?: 'STANDARD', $fee,
             $couponCode, $discount > 0 ? $discount : null,
-            $pm, 'PENDING', 'EGP', ($b['scheduledFor'] ?? null) ?: null]);
+            $pm, 'PENDING', 'EGP', ($b['scheduledFor'] ?? null) ?: null, 'APP']);
 
     // Record the redemption so usageLimit/usagePerUser actually bind — without
     // this row couponCheck counts zero and the code can be reused forever.

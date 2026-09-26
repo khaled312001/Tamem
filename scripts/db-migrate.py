@@ -69,6 +69,12 @@ MIGRATIONS = [
     #             adding a second local fee would charge the same leg twice.
     # Defaults to ADD so every rule written before this keeps its behaviour.
     ("IntercityRate", "mode", "varchar(10) NOT NULL DEFAULT 'ADD'"),
+    # Where an order actually came from, so the list can say it instead of the
+    # agent guessing: APP (the customer's phone), MANUAL (the dashboard's
+    # store-basket screen) or CUSTOM (the point-to-point «طلب يدوي مخصص»
+    # dialog). NULL only on rows written before this column existed; those are
+    # backfilled once from createdByAdminId + whether the order has items.
+    ("Order", "source", "varchar(16) NULL"),
 ]
 
 # Tables created if absent.

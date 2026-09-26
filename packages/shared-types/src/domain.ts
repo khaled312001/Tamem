@@ -147,6 +147,13 @@ export interface Order {
   customerId: string;
   category: ServiceCategory;
   status: OrderStatus;
+  /**
+   * Where the order came from, stamped when it is created:
+   *   APP    — the customer placed it themselves from the phone app
+   *   MANUAL — an agent built it from a store's catalogue in the dashboard
+   *   CUSTOM — an agent typed a point-to-point job («طلب يدوي مخصص»)
+   */
+  source?: 'APP' | 'MANUAL' | 'CUSTOM';
   merchantId?: string;
   assignedDriverId?: string;
   customData?: Record<string, unknown>;
