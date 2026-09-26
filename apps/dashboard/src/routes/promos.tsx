@@ -87,6 +87,27 @@ export function PromosPage() {
   const toggle = (id: string, isActive: boolean) =>
     save.mutate((rules ?? []).map((r) => (r.id === id ? { ...r, isActive } : r)));
 
+  // ── دعوة صديق (referral) — تفعيل/إيقاف + إحصائيات ──
+  const { data: referral } = useQuery({
+    queryKey: ['admin', 'referral'],
+    queryFn: () =>
+      api.raw.get('/admin/referral').then(
+        (r) =>
+          r.data.data as {
+            enabled: boolean;
+            stats: { invited: number; joined: number; creditsUsed: number };
+          },
+      ),
+  });
+  const saveReferral = useMutation({
+    mutationFn: (enabled: boolean) => api.raw.put('/admin/referral', { enabled }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['admin', 'referral'] });
+      toast.success('تم الحفظ');
+    },
+    onError: (e: Error) => toast.error(e.message),
+  });
+
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
@@ -105,6 +126,48 @@ export function PromosPage() {
       <div className="rounded-lg bg-amber-50 border border-amber-200 text-amber-800 text-xs px-3 py-2 leading-relaxed">
         ⓘ العروض دي بتخصم من <b>رسوم التوصيل فقط</b> (مش المنتجات). أوردرات <b>«من قنا»</b> (فيها
         ترحيل) بتتستثنى تلقائيًا طول ما «استثناء الترحيل» مفعّل في العرض.
+      </div>
+
+      {/* دعوة صديق */}
+      <div className="rounded-xl border border-border bg-white p-4">
+        <div className="flex items-center justify-between gap-3 flex-wrap">
+          <div className="flex-1 min-w-[220px]">
+            <h2 className="font-black text-brand-dark flex items-center gap-1.5">
+              <Gift className="w-4 h-4 text-brand-red" /> دعوة صديق
+            </h2>
+            <p className="text-xs text-muted-foreground mt-1 leading-relaxed">
+              كل عميل عنده كود دعوة. أول ما صاحبه يسجّل بالكود ويعمل أول طلب من التطبيق، الاتنين
+              ياخدوا <b>توصيل مجاني</b> على الطلب اللي بعده. (بيشتغل على التطبيق بس.)
+            </p>
+          </div>
+          <button
+            onClick={() => saveReferral.mutate(!referral?.enabled)}
+            disabled={saveReferral.isPending || !referral}
+            className={`shrink-0 rounded-lg px-4 py-2 text-sm font-bold transition ${
+              referral?.enabled
+                ? 'bg-brand-red text-white'
+                : 'bg-gray-100 text-gray-600 border border-border hover:bg-gray-200'
+            }`}
+          >
+            {referral?.enabled ? '✓ مفعّل — إيقاف' : 'متوقف — تفعيل'}
+          </button>
+        </div>
+        {referral && (
+          <div className="mt-3 grid grid-cols-3 gap-2 text-center">
+            <div className="rounded-lg bg-muted/40 py-2">
+              <div className="text-lg font-black text-brand-dark">{referral.stats.invited}</div>
+              <div className="text-[11px] text-muted-foreground">دعوات</div>
+            </div>
+            <div className="rounded-lg bg-muted/40 py-2">
+              <div className="text-lg font-black text-brand-dark">{referral.stats.joined}</div>
+              <div className="text-[11px] text-muted-foreground">انضموا وطلبوا</div>
+            </div>
+            <div className="rounded-lg bg-muted/40 py-2">
+              <div className="text-lg font-black text-brand-dark">{referral.stats.creditsUsed}</div>
+              <div className="text-[11px] text-muted-foreground">توصيلات مجانية اتصرفت</div>
+            </div>
+          </div>
+        )}
       </div>
 
       <div className="bg-white rounded-xl border border-border overflow-hidden">
