@@ -6816,7 +6816,7 @@ if ($method === 'DELETE' && preg_match('#^/admin/customers/([^/]+)$#', $path, $m
     // wipes their orders, so a re-registered same phone would look brand-new and
     // could claim it again. If this customer already ordered, remember the PHONE
     // now — before the orders are wiped — so the promo can't be reused.
-    if (customerNonCancelledCount($id) > 0) recordFreeFirstPhone($id);
+    if (customerAppOrderCount($id) > 0) recordFreeFirstPhone($id);
 
     /*
      * Two RESTRICT foreign keys blocked this, and only one of them was obvious:
@@ -9004,6 +9004,21 @@ function customerNonCancelledCount(string $customerId): int {
     $st->execute([$customerId]);
     return (int) $st->fetchColumn();
 }
+/**
+ * طلبات العميل اللي عملها بنفسه من التطبيق (مش اللي الأدمن سجّلها يدوي).
+ * «أول أوردر توصيل مجاني» مكسب على استخدام التطبيق — فالطلبات اليدوية لا بتاخد
+ * العرض ولا بتحرق حق العميل فيه. الطلبات القديمة قبل عمود source (NULL) بتتحسب
+ * طلبات عميل عشان مكانش فيه طلب يدوي ساعتها.
+ */
+function customerAppOrderCount(string $customerId): int {
+    $st = db()->prepare(
+        "SELECT COUNT(*) FROM `Order`
+          WHERE customerId = ? AND status NOT IN ('CANCELLED','REJECTED')
+            AND (source IS NULL OR source NOT IN ('MANUAL','CUSTOM'))"
+    );
+    $st->execute([$customerId]);
+    return (int) $st->fetchColumn();
+}
 /** رقم موبايل العميل — للتحقق من عرض «أول أوردر» بالرقم عبر الحسابات. */
 function customerPhone(?string $customerId): string {
     if (!$customerId) return '';
@@ -9088,9 +9103,11 @@ function evalDeliveryPromo(?string $customerId, float $fee, bool $hasIntercity, 
         // and gave every errand order a promo meant for big baskets.
         if ($minOrder > 0 && $orderAmount < $minOrder) continue;
         if ((string) ($r['audience'] ?? 'ALL') === 'FIRST_ORDER') {
-            if (!$customerId || customerNonCancelledCount($customerId) > 0) continue;
+            // «أول أوردر مجاني» = أول طلب للعميل من التطبيق. الطلبات اليدوية
+            // (اللي الأدمن سجّلها) لا بتاخد العرض ولا بتحرقه.
+            if (!$customerId || customerAppOrderCount($customerId) > 0) continue;
             // حماية بالرقم: رقم خد العرض قبل كده مش هياخده تاني حتى لو اتعمله
-            // حساب جديد (الحساب القديم اتمسح بطلباته). بنتحقق للعملاء الجدد بس.
+            // حساب جديد (الحساب القديم اتمسح بطلباته).
             if (phoneUsedFreeFirst(customerPhone($customerId))) continue;
         }
         $rid = (string) ($r['id'] ?? '');
