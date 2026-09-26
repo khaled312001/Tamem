@@ -1421,6 +1421,51 @@ if ($method === 'GET' && $path === '/admin/alerts') {
     // jsonizeRow stamps the Z on createdAt/resolvedAt so the alerts page shows
     // Cairo time, not a raw UTC string parsed as local (3 hours early).
     $items = array_map('jsonizeRow', $st->fetchAll());
+    /*
+     * Attach the order each alert is about.
+     *
+     * The page has always rendered an order link, a customer phone and the
+     * driver's name under an alert — behind `alert.relatedOrder`, which this
+     * endpoint never sent. So the block rendered for nobody: «مندوب لم يتحرك»
+     * sat there naming no order, and the only way to reach it was to copy the
+     * order number out of the description and search for it.
+     *
+     * ONE extra query for the whole page, not one per alert.
+     */
+    $oids = array_values(array_unique(array_filter(array_map(fn($a) => $a['relatedOrderId'] ?? null, $items))));
+    if ($oids) {
+        $in = implode(',', array_fill(0, count($oids), '?'));
+        $os = db()->prepare(
+            'SELECT o.id, o.orderNumber, o.status, o.updatedAt, o.merchantId,'
+            . ' cu.id AS cu_id, cu.name AS cu_name, cu.phone AS cu_phone,'
+            . ' dr.id AS dr_id, dr.name AS dr_name, dr.phone AS dr_phone,'
+            . ' mp.storeNameAr AS m_name'
+            . ' FROM `Order` o'
+            . ' LEFT JOIN `User` cu ON cu.id = o.customerId'
+            . ' LEFT JOIN `User` dr ON dr.id = o.assignedDriverId'
+            . ' LEFT JOIN `MerchantProfile` mp ON mp.id = o.merchantId'
+            . " WHERE o.id IN ($in)"
+        );
+        $os->execute($oids);
+        $byId = [];
+        foreach ($os->fetchAll() as $o) {
+            $byId[$o['id']] = [
+                'order' => [
+                    'id' => $o['id'], 'orderNumber' => $o['orderNumber'], 'status' => $o['status'],
+                    'updatedAt' => isoZ((string) $o['updatedAt']),
+                    'customer' => $o['cu_id'] ? ['id' => $o['cu_id'], 'name' => $o['cu_name'], 'phone' => $o['cu_phone']] : null,
+                    'assignedDriver' => $o['dr_id'] ? ['id' => $o['dr_id'], 'name' => $o['dr_name'], 'phone' => $o['dr_phone']] : null,
+                ],
+                'merchantName' => $o['m_name'] ?: null,
+            ];
+        }
+        foreach ($items as &$a) {
+            $hit = $byId[$a['relatedOrderId'] ?? ''] ?? null;
+            $a['relatedOrder'] = $hit['order'] ?? null;
+            $a['merchantName'] = $hit['merchantName'] ?? null;
+        }
+        unset($a);
+    }
     // Stats by severity — that's what the api-client's `adminListAlerts`
     // pulls out of `meta.stats`.
     // "Active" = OPEN | ACKNOWLEDGED | ESCALATED, matching the Node backend.

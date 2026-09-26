@@ -35,7 +35,7 @@ import {
   XCircle,
 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 
 import { Dialog } from '../components/ui/Dialog.js';
@@ -579,7 +579,13 @@ function AlertCard({
   ackPending: boolean;
   escalatePending: boolean;
 }) {
+  const navigate = useNavigate();
   const isResolved = alert.status === 'RESOLVED' || alert.status === 'DISMISSED';
+  // «مندوب لم يتحرك» عن أوردر معيّن — فالمفروض النقر يفتح الأوردر ده، مش يقف
+  // عند التنبيه. لو التنبيه مش عن أوردر (تنبيه نظام) بنفتح لوحة التفاصيل.
+  const openTarget = alert.relatedOrderId
+    ? () => navigate(`/orders/${alert.relatedOrderId}`)
+    : onOpen;
   const sevTone = isResolved
     ? {
         bg: 'bg-green-50 border-green-200',
@@ -590,7 +596,13 @@ function AlertCard({
     : SEV_COLOR[alert.severity];
   return (
     <div
-      className={`rounded-xl border p-4 transition ${sevTone.bg} ${
+      onClick={(e) => {
+        // The action buttons and the phone/order links inside must keep their
+        // own behaviour — only a click on the card's own surface opens it.
+        if ((e.target as HTMLElement).closest('button, a')) return;
+        openTarget();
+      }}
+      className={`rounded-xl border p-4 transition cursor-pointer hover:shadow-md ${sevTone.bg} ${
         isFresh ? `animate-pulse ring-2 ${sevTone.ring}` : ''
       }`}
     >
@@ -722,6 +734,15 @@ function AlertCard({
             <MessageSquare className="w-3 h-3" />
             ملاحظة
           </button>
+          {alert.relatedOrderId && (
+            <Link
+              to={`/orders/${alert.relatedOrderId}`}
+              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-brand-red text-white text-xs font-bold hover:bg-brand-red/90"
+            >
+              <Truck className="w-3 h-3" />
+              فتح الطلب
+            </Link>
+          )}
           <button
             onClick={onOpen}
             className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-white border border-border text-xs font-bold hover:bg-muted"
