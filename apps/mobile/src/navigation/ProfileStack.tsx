@@ -7,6 +7,7 @@ import { FavoritesScreen } from '../screens/FavoritesScreen';
 import { PaymentMethodsScreen } from '../screens/PaymentMethodsScreen';
 import { ProfileScreen } from '../screens/ProfileScreen';
 import { RecurringOrdersScreen } from '../screens/RecurringOrdersScreen';
+import { ReferralScreen } from '../screens/ReferralScreen';
 import { SavedAddressesScreen } from '../screens/SavedAddressesScreen';
 import { SupportScreen } from '../screens/SupportScreen';
 import { WalletScreen } from '../screens/WalletScreen';
@@ -22,6 +23,7 @@ export type ProfileStackParamList = {
   Coupons: undefined;
   About: undefined;
   RecurringOrders: undefined;
+  Referral: undefined;
 };
 
 const Stack = createNativeStackNavigator<ProfileStackParamList>();
@@ -38,6 +40,7 @@ export function ProfileStack() {
       <Stack.Screen name="Favorites" component={FavoritesScreen} />
       <Stack.Screen name="Coupons" component={CouponsScreen} />
       <Stack.Screen name="RecurringOrders" component={RecurringOrdersScreen} />
+      <Stack.Screen name="Referral" component={ReferralScreen} />
       <Stack.Screen name="About" component={AboutScreen} />
     </Stack.Navigator>
   );

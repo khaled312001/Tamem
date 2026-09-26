@@ -881,7 +881,7 @@ $ADMIN_PERM_MAP = [
     'services' => 'services', 'products' => 'products',
     'pricing' => 'pricing', 'pricing-rules' => 'pricing', 'zones' => 'pricing',
     'payments' => 'payments', 'payment-gateway' => 'payment-gateway',
-    'coupons' => 'coupons', 'promos' => 'promos', 'reports' => 'reports', 'reviews' => 'reviews',
+    'coupons' => 'coupons', 'promos' => 'promos', 'referral' => 'promos', 'reports' => 'reports', 'reviews' => 'reviews',
     'whatsapp' => 'whatsapp', 'broadcast' => 'broadcast', 'supervisors' => 'supervisors',
     'home-config' => 'home-settings', 'offers' => 'home-settings',
     'site-config' => 'site-settings', 'settings' => 'settings',
@@ -984,6 +984,37 @@ if ($method === 'PUT' && $path === '/admin/promos') {
     db()->prepare('INSERT INTO `Setting` (`key`,`value`,`description`,`updatedAt`,`updatedById`) VALUES (?,?,NULL,NOW(3),?) ON DUPLICATE KEY UPDATE `value`=VALUES(`value`), `updatedAt`=VALUES(`updatedAt`), `updatedById`=VALUES(`updatedById`)')
         ->execute(['promo_rules', json_encode($clean, JSON_UNESCAPED_UNICODE), $u['sub'] ?? null]);
     jsonOk(['rules' => $clean]);
+}
+
+// ── دعوة صديق (referral) — نفس قاعدة «قبل الـ lister العام» زي العروض ──
+if ($method === 'GET' && $path === '/admin/referral') {
+    $u = authUser(); if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
+    ensureReferralSchema();
+    $agg = ['invited' => 0, 'joined' => 0, 'creditsUsed' => 0];
+    try {
+        $agg['invited']     = (int) db()->query("SELECT COUNT(*) FROM `Referral`")->fetchColumn();
+        $agg['joined']      = (int) db()->query("SELECT COUNT(*) FROM `Referral` WHERE status='COMPLETED'")->fetchColumn();
+        $agg['creditsUsed'] = (int) db()->query("SELECT (SELECT COUNT(*) FROM `Referral` WHERE referrerRewardOrderId IS NOT NULL) + (SELECT COUNT(*) FROM `Referral` WHERE referredRewardOrderId IS NOT NULL) AS n")->fetchColumn();
+    } catch (Throwable $e) { /* tables may be empty */ }
+    jsonOk(['enabled' => referralEnabled(), 'stats' => $agg]);
+}
+if ($method === 'PUT' && $path === '/admin/referral') {
+    $u = authUser(); if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
+    $b = readJsonBody();
+    ensureReferralSchema();
+    $cfg = ['enabled' => !empty($b['enabled'])];
+    db()->prepare('INSERT INTO `Setting` (`key`,`value`,`description`,`updatedAt`,`updatedById`) VALUES (?,?,NULL,NOW(3),?) ON DUPLICATE KEY UPDATE `value`=VALUES(`value`), `updatedAt`=VALUES(`updatedAt`), `updatedById`=VALUES(`updatedById`)')
+        ->execute(['referral', json_encode($cfg, JSON_UNESCAPED_UNICODE), $u['sub'] ?? null]);
+    jsonOk(['enabled' => $cfg['enabled']]);
+}
+if ($method === 'GET' && $path === '/me/referral') {
+    $u = authUser();
+    $uid = (string) ($u['sub'] ?? '');
+    if (!referralEnabled()) jsonOk(['enabled' => false]);
+    $code  = referralCodeFor($uid);
+    $stats = referralStats($uid);
+    $share = "حمّل تطبيق تميم للتوصيل واطلب بكود الدعوة بتاعي *{$code}* وأول توصيلة عليّا 🎉";
+    jsonOk(['enabled' => true, 'code' => $code, 'shareText' => $share, 'stats' => $stats]);
 }
 
 // GET /admin/realtime?since=<ms> — ONE lightweight poll powering the dashboard's
@@ -7859,6 +7890,10 @@ if ($method === 'POST' && $path === '/auth/register') {
                 ->execute([newId(), $id, 'متجري', 'متجري', $cat['id'], $city, 'قنا', $city]);
         }
     }
+    // «دعوة صديق»: a new customer who used a friend's code gets a PENDING
+    // referral now; it completes (and both sides earn a free-delivery credit)
+    // when this customer places their first order.
+    if ($role === 'CUSTOMER' && !empty($b['referralCode'])) attachReferral($id, (string) $b['referralCode'], $phone);
     jsonOk(['user' => ['id' => $id, 'name' => $name, 'phone' => $phone, 'role' => $role], 'tokens' => issueTokens($id, $role)], 201);
 }
 
@@ -9131,7 +9166,164 @@ function evalDeliveryPromo(?string $customerId, float $fee, bool $hasIntercity, 
             'audience' => (string) ($r['audience'] ?? 'ALL'),
             'discount' => round($discount, 2), 'newFee' => round($fee - $discount, 2), 'originalFee' => round($fee, 2)];
     }
+    // No promo RULE matched → fall back to a «دعوة صديق» free-delivery credit the
+    // customer earned (by inviting a friend, or being invited). Checked AFTER the
+    // rules so first-order-free (a rule) is preferred and the credit is saved for
+    // a later order. Consumed at order creation, never at quote.
+    if ($customerId && referralEnabled()) {
+        $cr = activeReferralCredit($customerId);
+        if ($cr) {
+            return ['ruleId' => 'referral', 'audience' => 'REFERRAL',
+                'referralCreditId' => $cr['id'], 'referralRole' => $cr['role'],
+                'label' => 'دعوة صديق — توصيل مجاني',
+                'discount' => round($fee, 2), 'newFee' => 0.0, 'originalFee' => round($fee, 2)];
+        }
+    }
     return null;
+}
+// ─── Referral («دعوة صديق») ───────────────────────────────────────────────
+// A growth loop that rides the delivery-promo path: when a friend a customer
+// invited places their first order, BOTH get a free-delivery credit on their
+// NEXT order. Admin-controlled (Setting 'referral'.enabled). Tables are created
+// lazily so no migration is needed on the shared host.
+function referralConfig(): array {
+    static $c = null;
+    if ($c !== null) return $c;
+    $c = ['enabled' => false];
+    try {
+        $st = db()->prepare("SELECT `value` FROM `Setting` WHERE `key` = 'referral' LIMIT 1");
+        $st->execute();
+        $v = $st->fetchColumn();
+        if (is_string($v) && $v !== '') { $d = json_decode($v, true); if (is_array($d)) $c = array_merge($c, $d); }
+    } catch (Throwable $e) { /* default disabled */ }
+    return $c;
+}
+function referralEnabled(): bool { return !empty(referralConfig()['enabled']); }
+function ensureReferralSchema(): void {
+    static $done = false;
+    if ($done) return; $done = true;
+    try {
+        db()->exec("CREATE TABLE IF NOT EXISTS `ReferralCode` (
+            userId VARCHAR(191) NOT NULL PRIMARY KEY,
+            code VARCHAR(24) NOT NULL,
+            createdAt DATETIME(3) NOT NULL,
+            UNIQUE KEY uq_code (code)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+        db()->exec("CREATE TABLE IF NOT EXISTS `Referral` (
+            id VARCHAR(191) NOT NULL PRIMARY KEY,
+            referrerId VARCHAR(191) NOT NULL,
+            referredId VARCHAR(191) NOT NULL,
+            referredPhone VARCHAR(32) NULL,
+            code VARCHAR(24) NOT NULL,
+            status VARCHAR(16) NOT NULL DEFAULT 'PENDING',
+            referrerRewardOrderId VARCHAR(191) NULL,
+            referredRewardOrderId VARCHAR(191) NULL,
+            createdAt DATETIME(3) NOT NULL,
+            completedAt DATETIME(3) NULL,
+            UNIQUE KEY uq_referred (referredId),
+            KEY k_referrer (referrerId),
+            KEY k_status (status)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+    } catch (Throwable $e) { error_log('[api.php] referral schema: ' . $e->getMessage()); }
+}
+function referralGenCode(): string {
+    $alph = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // no 0/O/1/I
+    $s = 'TM';
+    for ($i = 0; $i < 5; $i++) $s .= $alph[random_int(0, strlen($alph) - 1)];
+    return $s;
+}
+function referralCodeFor(?string $userId): string {
+    if (!$userId) return '';
+    ensureReferralSchema();
+    try {
+        $st = db()->prepare("SELECT code FROM `ReferralCode` WHERE userId = ? LIMIT 1");
+        $st->execute([$userId]);
+        $c = $st->fetchColumn();
+        if (is_string($c) && $c !== '') return $c;
+        for ($i = 0; $i < 8; $i++) {
+            $code = referralGenCode();
+            try {
+                db()->prepare("INSERT INTO `ReferralCode` (userId, code, createdAt) VALUES (?,?,NOW(3))")->execute([$userId, $code]);
+                return $code;
+            } catch (PDOException $e) {
+                $st->execute([$userId]); $ex = $st->fetchColumn();   // race: row created meanwhile
+                if (is_string($ex) && $ex !== '') return $ex;        // else code collision → retry
+            }
+        }
+    } catch (Throwable $e) { error_log('[api.php] referralCodeFor: ' . $e->getMessage()); }
+    return '';
+}
+function referralUserByCode(?string $code): ?string {
+    $code = strtoupper(trim((string) $code));
+    if ($code === '') return null;
+    ensureReferralSchema();
+    try {
+        $st = db()->prepare("SELECT userId FROM `ReferralCode` WHERE code = ? LIMIT 1");
+        $st->execute([$code]);
+        $u = $st->fetchColumn();
+        return is_string($u) && $u !== '' ? $u : null;
+    } catch (Throwable $e) { return null; }
+}
+/** New customer used a friend's code at registration → PENDING referral. */
+function attachReferral(?string $referredId, ?string $code, ?string $phone): void {
+    if (!referralEnabled() || !$referredId || !$code) return;
+    $referrerId = referralUserByCode($code);
+    if (!$referrerId || $referrerId === $referredId) return;
+    try {
+        db()->prepare("INSERT IGNORE INTO `Referral` (id, referrerId, referredId, referredPhone, code, status, createdAt)
+                       VALUES (?,?,?,?,?, 'PENDING', NOW(3))")
+            ->execute([newId(), $referrerId, $referredId, $phone, strtoupper(trim($code))]);
+    } catch (Throwable $e) { error_log('[api.php] attachReferral: ' . $e->getMessage()); }
+}
+/** The referred customer placed their first order → complete + grant both credits. */
+function maybeCompleteReferral(?string $referredId): void {
+    if (!referralEnabled() || !$referredId) return;
+    ensureReferralSchema();
+    try {
+        db()->prepare("UPDATE `Referral` SET status='COMPLETED', completedAt=NOW(3)
+                       WHERE referredId = ? AND status='PENDING'")->execute([$referredId]);
+    } catch (Throwable $e) { error_log('[api.php] maybeCompleteReferral: ' . $e->getMessage()); }
+}
+/** An unused free-delivery credit for this user: ['id'=>refId,'role'=>...] or null. */
+function activeReferralCredit(?string $userId): ?array {
+    if (!$userId) return null;
+    try {
+        $st = db()->prepare(
+            "(SELECT id, 'REFERRER' AS role FROM `Referral`
+               WHERE status='COMPLETED' AND referrerId = ? AND referrerRewardOrderId IS NULL)
+             UNION ALL
+             (SELECT id, 'REFERRED' AS role FROM `Referral`
+               WHERE status='COMPLETED' AND referredId = ? AND referredRewardOrderId IS NULL)
+             LIMIT 1"
+        );
+        $st->execute([$userId, $userId]);
+        $r = $st->fetch();
+        return $r ? ['id' => (string) $r['id'], 'role' => (string) $r['role']] : null;
+    } catch (Throwable $e) { return null; }
+}
+function consumeReferralCredit(?string $refId, string $role, string $orderId): void {
+    if (!$refId) return;
+    $col = $role === 'REFERRER' ? 'referrerRewardOrderId' : 'referredRewardOrderId';
+    try {
+        db()->prepare("UPDATE `Referral` SET `$col` = ? WHERE id = ? AND `$col` IS NULL")->execute([$orderId, $refId]);
+    } catch (Throwable $e) { error_log('[api.php] consumeReferralCredit: ' . $e->getMessage()); }
+}
+/** Counts for the app's «دعوة صديق» screen. */
+function referralStats(?string $userId): array {
+    $out = ['invited' => 0, 'joined' => 0, 'credits' => 0];
+    if (!$userId) return $out;
+    try {
+        $st = db()->prepare("SELECT COUNT(*), COALESCE(SUM(status='COMPLETED'),0) FROM `Referral` WHERE referrerId = ?");
+        $st->execute([$userId]); $row = $st->fetch(PDO::FETCH_NUM);
+        $out['invited'] = (int) ($row[0] ?? 0);
+        $out['joined']  = (int) ($row[1] ?? 0);
+        $st = db()->prepare(
+            "SELECT (SELECT COUNT(*) FROM `Referral` WHERE status='COMPLETED' AND referrerId = ? AND referrerRewardOrderId IS NULL)
+                  + (SELECT COUNT(*) FROM `Referral` WHERE status='COMPLETED' AND referredId = ? AND referredRewardOrderId IS NULL)"
+        );
+        $st->execute([$userId, $userId]); $out['credits'] = (int) $st->fetchColumn();
+    } catch (Throwable $e) { /* leave zeros */ }
+    return $out;
 }
 /** يقرأ توكن Bearer لو موجود ويرجّع الـ uid بدون ما يرمي خطأ (للـ quote العام). */
 function optionalAuthUid(): ?string {
@@ -10184,6 +10376,11 @@ if ($method === 'POST' && $path === '/orders/cart') {
             $pm, 'PENDING', 'EGP', $coupon ? $coupon['code'] : null, $discount ?: null,
             $grandSub, $fee, $final, null, ($b['scheduledFor'] ?? null) ?: null, $deliveryLegs, 'APP']);
     orderHistory($parentId, null, 'NEW', $uid, 'CUSTOMER', 'Order placed from cart');
+    // «دعوة صديق»: burn a credit if this order used one, and complete the
+    // customer's own pending referral now that they placed their first order.
+    if ($deliveryPromo && !empty($deliveryPromo['referralCreditId']))
+        consumeReferralCredit($deliveryPromo['referralCreditId'], (string) ($deliveryPromo['referralRole'] ?? 'REFERRED'), $parentId);
+    maybeCompleteReferral($uid);
 
     foreach ($merchants as $mi => $m) {
         $childId = $splitPerMerchant ? newId() : $parentId;
@@ -10407,6 +10604,10 @@ if ($method === 'POST' && $path === '/orders') {
                 ->execute([newId(), $coupon['id'], $uid, $id, $discount]);
         } catch (Throwable $e) { error_log('[api.php] coupon redeem failed: ' . $e->getMessage()); }
     }
+    // «دعوة صديق»: burn a credit if used, and complete this customer's referral.
+    if ($deliveryPromo && !empty($deliveryPromo['referralCreditId']))
+        consumeReferralCredit($deliveryPromo['referralCreditId'], (string) ($deliveryPromo['referralRole'] ?? 'REFERRED'), $id);
+    maybeCompleteReferral($uid);
 
     foreach ((array) ($b['items'] ?? []) as $it) {
         db()->prepare('INSERT INTO `OrderItem` (id, orderId, productId, productNameSnapshot, quantity, merchantId, notes) VALUES (?,?,?,?,?,?,?)')

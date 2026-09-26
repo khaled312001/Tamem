@@ -2,7 +2,7 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { LinearGradient } from 'expo-linear-gradient';
-import { CheckCircle2, Home, MapPin, Phone, Truck, User } from 'lucide-react-native';
+import { CheckCircle2, Gift, Home, MapPin, Phone, Truck, User } from 'lucide-react-native';
 import { useState } from 'react';
 import { Controller, useForm } from 'react-hook-form';
 import {
@@ -42,6 +42,8 @@ type NavProp = NativeStackNavigationProp<AuthStackParamList, 'Register'>;
 export function RegisterScreen() {
   const navigation = useNavigation<NavProp>();
   const [loading, setLoading] = useState(false);
+  // «دعوة صديق» — optional. Ignored server-side when the feature is off.
+  const [referralCode, setReferralCode] = useState('');
 
   const {
     control,
@@ -66,7 +68,11 @@ export function RegisterScreen() {
       // Public signup creates customers only. Go through the existing OTP
       // verification flow — hit the endpoint directly and discard the returned
       // tokens; OtpVerifyScreen issues fresh ones once the phone is verified.
-      const payload = { ...values, role: 'CUSTOMER' as const };
+      const payload = {
+        ...values,
+        role: 'CUSTOMER' as const,
+        referralCode: referralCode.trim() ? referralCode.trim().toUpperCase() : undefined,
+      };
       await api.raw.post('/auth/register', payload);
       navigation.replace('OtpVerify', { phone: values.phone });
     } catch (err: unknown) {
@@ -219,6 +225,15 @@ export function RegisterScreen() {
                   error={errors.password?.message}
                 />
               )}
+            />
+
+            <Text style={styles.fieldLabel}>كود دعوة صديق (اختياري)</Text>
+            <IconField
+              Icon={Gift}
+              placeholder="لو صاحبك بعتلك كود، اكتبه هنا"
+              autoCapitalize="characters"
+              value={referralCode}
+              onChangeText={(t) => setReferralCode(t.toUpperCase())}
             />
 
             <View style={styles.trustRow}>

@@ -15,6 +15,7 @@ import {
   Star,
   Trash2,
   User,
+  UserPlus,
   Wallet,
 } from 'lucide-react-native';
 import { useCallback, useEffect, useState } from 'react';
@@ -381,6 +382,13 @@ export function ProfileScreen() {
             sublabel="أكواد خصم حصرية لطلباتك"
             Icon={Gift}
             onPress={() => navigation.navigate('Coupons')}
+          />
+          <Divider inset />
+          <ListItem
+            label="دعوة صديق"
+            sublabel="ادعُ أصحابك واكسبوا توصيل مجاني سوا"
+            Icon={UserPlus}
+            onPress={() => navigation.navigate('Referral')}
           />
           <Divider inset />
           <ListItem
