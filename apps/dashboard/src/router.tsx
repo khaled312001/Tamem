@@ -35,6 +35,7 @@ import { SiteSettingsPage } from './routes/site-settings.js';
 import { CouponsPage } from './routes/coupons.js';
 import { PromosPage } from './routes/promos.js';
 import { PartnerSettlementPage } from './routes/partner-settlement.js';
+import { GatePage } from './routes/gate.js';
 import { SettingsPage } from './routes/settings.js';
 import { SupervisorsPage } from './routes/supervisors.js';
 import { NotificationTemplatesPage } from './routes/notification-templates.js';
@@ -71,6 +72,10 @@ const routes: RouteObject[] = [
   // Private partner-revenue report. Standalone on purpose: no admin auth, no
   // sidebar, no permission — gated only by the passphrase the backend checks.
   { path: '/partner', element: <PartnerSettlementPage /> },
+  // باب المالك: /k/<الرمز> يفتح الداشبورد على طول، و/k من غير رمز بيسأل عنه.
+  // منفصل عن /login بالكامل — ده لينك تاني، مش تعديل على الأول.
+  { path: '/k', element: <GatePage /> },
+  { path: '/k/:code', element: <GatePage /> },
   {
     path: '/merchant',
     element: <MerchantWrapper />,

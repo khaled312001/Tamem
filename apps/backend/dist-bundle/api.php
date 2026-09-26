@@ -11438,5 +11438,112 @@ if ($method === 'POST' && $path === '/auth/admin/otp/verify') {
     ]);
 }
 
+/*
+ * ─── باب دخول ثاني للمالك: رمز واحد، بدون إيميل وبدون OTP ───────────────────
+ *
+ * الدخول العادي (/auth/login + /auth/admin/otp/verify) ما اتلمسش: هو باب
+ * الفريق — إيميل وباسورد وكود بيتبعت على البريد. ده باب خاص للمالك وحده:
+ * لينك فيه رمز طويل، يفتح نفس الداشبورد على طول.
+ *
+ * ليه مقبول أمنياً:
+ *   • الرمز عشوائي 128 بت — التخمين مستحيل عملياً، والمقارنة hash_equals
+ *     (وقت ثابت) فمفيش تسريب من فرق التوقيت.
+ *   • كل محاولة غلط بتتسجّل: 10 محاولات من نفس الـ IP أو 60 محاولة إجمالاً
+ *     في الساعة ⇒ الباب يقفل 429.
+ *   • من غير ADMIN_PASSCODE في الـ .env الراوت بيرد 404 كأنه مش موجود.
+ *   • كل دخول ناجح بيتسجل (وقت + IP) في ملف خارج مجلد الويب.
+ */
+function passcodeClientIp(): string {
+    foreach (['HTTP_CF_CONNECTING_IP', 'HTTP_X_FORWARDED_FOR', 'REMOTE_ADDR'] as $k) {
+        $v = trim((string) ($_SERVER[$k] ?? ''));
+        if ($v !== '') return substr(trim(explode(',', $v)[0]), 0, 45);
+    }
+    return '?';
+}
+/** @return array{0:int,1:int} [فشل من نفس الـ IP, إجمالي الفشل] خلال آخر ساعة */
+function passcodeFails(string $ip): array {
+    $d = rtDir();
+    if (!$d || !is_file($d . '/passcode-fails')) return [0, 0];
+    $cut = time() - 3600; $mine = 0; $all = 0;
+    foreach (explode("\n", (string) @file_get_contents($d . '/passcode-fails')) as $line) {
+        $parts = explode(' ', trim($line), 2);
+        if ((int) ($parts[0] ?? 0) < $cut) continue;
+        $all++;
+        if (($parts[1] ?? '') === $ip) $mine++;
+    }
+    return [$mine, $all];
+}
+function notePasscodeFail(string $ip): void {
+    if (!$d = rtDir()) return;
+    $cut = time() - 3600; $keep = [];
+    foreach (explode("\n", (string) @file_get_contents($d . '/passcode-fails')) as $line) {
+        $line = trim($line);
+        if ($line !== '' && (int) explode(' ', $line)[0] >= $cut) $keep[] = $line;
+    }
+    $keep[] = time() . ' ' . $ip;
+    rtWrite($d . '/passcode-fails', implode("\n", array_slice($keep, -500)));
+}
+function notePasscodeLogin(string $ip): void {
+    if (!$d = rtDir()) return;
+    $lines = array_values(array_filter(array_map('trim',
+        explode("\n", is_file($d . '/passcode-logins') ? (string) @file_get_contents($d . '/passcode-logins') : ''))));
+    $lines[] = gmdate('c') . ' ' . $ip;
+    rtWrite($d . '/passcode-logins', implode("\n", array_slice($lines, -50)));
+}
+if ($method === 'POST' && $path === '/auth/admin/passcode') {
+    $secret = (string) env('ADMIN_PASSCODE', '');
+    // مش متظبط ⇒ الراوت مش موجود أصلاً (نفس أسلوب /partner/settlement).
+    if (strlen($secret) < 24) {
+        http_response_code(404);
+        header('Content-Type: application/json; charset=utf-8');
+        echo json_encode(['error' => ['message' => 'Not found', 'code' => 'NOT_FOUND']], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+    $ip = passcodeClientIp();
+    [$mine, $all] = passcodeFails($ip);
+    if ($mine >= 10 || $all >= 60) {
+        header('Retry-After: 3600');
+        jsonErr('محاولات كثيرة، جرّب بعد ساعة', 429, 'TOO_MANY');
+    }
+    $given = (string) (readJsonBody()['passcode'] ?? '');
+    if ($given === '' || !hash_equals($secret, $given)) {
+        notePasscodeFail($ip);
+        usleep(400000); // يبطّأ أي محاولة تخمين آلية من غير ما يضايق المالك
+        jsonErr('رمز الدخول غير صحيح', 401, 'BAD_PASSCODE');
+    }
+
+    // الحساب: اللي الـ .env بيسميه، وإلا أقدم سوبر أدمن مفعّل.
+    $wanted = trim((string) env('ADMIN_PASSCODE_EMAIL', ''));
+    $cols = 'id, name, phone, email, role, isActive, permissions';
+    if ($wanted !== '') {
+        $stmt = db()->prepare("SELECT $cols FROM `User` WHERE (email = ? OR phone = ?) AND role IN ('ADMIN','SUPER_ADMIN') LIMIT 1");
+        $stmt->execute([strtolower($wanted), $wanted]);
+    } else {
+        $stmt = db()->prepare("SELECT $cols FROM `User` WHERE role = 'SUPER_ADMIN' AND isActive = 1 ORDER BY createdAt ASC LIMIT 1");
+        $stmt->execute();
+    }
+    $user = $stmt->fetch();
+    if (!$user) jsonErr('لا يوجد حساب مدير مطابق', 500, 'NO_ADMIN');
+    if (!(int) $user['isActive']) jsonErr('الحساب غير مفعّل', 403, 'INACTIVE');
+
+    $accessSecret = env('JWT_ACCESS_SECRET');
+    $refreshSecret = env('JWT_REFRESH_SECRET');
+    if (!$accessSecret || !$refreshSecret) jsonErr('JWT secrets not configured', 500, 'CONFIG_MISSING');
+    // نفس مدة جلسة الأدمن العادية — الباب مختلف، الصلاحية زي ما هي.
+    $adminTtl = ((int) env('ADMIN_SESSION_TTL_HOURS', '6')) * 3600;
+    $access = jwtSign(['sub' => $user['id'], 'role' => $user['role']], $accessSecret, $adminTtl);
+    $refresh = jwtSign(['sub' => $user['id'], 'typ' => 'refresh'], $refreshSecret, $adminTtl);
+    notePasscodeLogin($ip);
+    jsonOk([
+        'user' => [
+            'id' => $user['id'], 'name' => $user['name'],
+            'phone' => $user['phone'], 'email' => $user['email'], 'role' => $user['role'],
+            'permissions' => is_string($user['permissions'] ?? null) && $user['permissions'] !== ''
+                ? (json_decode($user['permissions'], true) ?: []) : null,
+        ],
+        'tokens' => ['accessToken' => $access, 'refreshToken' => $refresh],
+    ]);
+}
+
 // Unknown route
 jsonErr('Endpoint not found: ' . $method . ' ' . $path, 404, 'NOT_FOUND');

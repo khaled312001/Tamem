@@ -35,6 +35,9 @@ export const api: TamemClient = new TamemClient({
     // request from a dashboard page the user just left) must never bounce this
     // page to the admin login — that's the "بيحولني على login" report.
     if (/\/partner\/?$/.test(path)) return;
+    // Same for the owner's passcode door: a wrong code answers 401, and the
+    // page shows "رمز الدخول غير صحيح" itself. Bouncing to /login would hide it.
+    if (/\/k(\/|$)/.test(path)) return;
     // Respect Vite's base path. In production the dashboard lives at
     // /super_admin/, so a naked `/login` would drop the base and 404.
     const base = (import.meta as unknown as { env: { BASE_URL: string } }).env.BASE_URL || '/';
