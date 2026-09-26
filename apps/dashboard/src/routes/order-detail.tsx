@@ -273,6 +273,18 @@ export function OrderDetailPage() {
 
   const status = order.status as OrderStatus;
   const isTerminal = status === 'COMPLETED' || status === 'CANCELLED' || status === 'REJECTED';
+  // «تم» في نظر المستخدم = اتسلّم للعميل أو اقفل. بعد كده مينفعش تغيير السائق،
+  // والتسعير بيتقفل بعد 30 دقيقة من الإنهاء (فسحة تصحيح بسيطة قبل ما يتقفل).
+  const isDone = isTerminal || status === 'DELIVERED';
+  const doneAtMs = (() => {
+    const rec = order as Record<string, unknown>;
+    for (const k of ['completedAt', 'deliveredAt', 'cancelledAt']) {
+      const v = rec[k];
+      if (typeof v === 'string' && v) return new Date(v).getTime();
+    }
+    return null;
+  })();
+  const priceLocked = isDone && doneAtMs != null && Date.now() - doneAtMs >= 30 * 60_000;
   const canCancel = (ORDER_TRANSITIONS[status] as readonly OrderStatus[]).includes('CANCELLED');
   const hasPrice = order.quotedPrice != null || order.finalPrice != null;
   const phase = currentPhaseFor(status);
@@ -321,6 +333,14 @@ export function OrderDetailPage() {
     agreedTotal?: number;
     totalReason?: string;
   } | null;
+  // A first-order / free-delivery promo the app recorded on this order, so the
+  // pricing card can show WHY delivery was discounted instead of a bare number.
+  const deliveryPromo = (customData?.deliveryPromo ?? null) as {
+    label?: string;
+    discount?: number;
+    originalFee?: number;
+  } | null;
+  const egp = (v: number | null | undefined) => `${Number(v ?? 0).toLocaleString('ar-EG')} ج.م`;
 
   // ── Media extraction (unchanged from prior version) ──────────────────────
   const BASE64_RE = /^[A-Za-z0-9+/]{500,}={0,2}$/;
@@ -379,9 +399,22 @@ export function OrderDetailPage() {
       }
     }
   }
-  ['audioUri', 'audioMime', 'audioDurationMs', 'quickOrder', 'mode', 'imageUrls'].forEach((k) =>
-    renderedKeys.add(k),
-  );
+  [
+    'audioUri',
+    'audioMime',
+    'audioDurationMs',
+    'quickOrder',
+    'mode',
+    'imageUrls',
+    // Delivery-plan internals — the routing that set the fee. They are shown
+    // readably (delivery groups card + the pricing breakdown), so dumping them
+    // as raw JSON under «بيانات إضافية» was just noise the agent couldn't read.
+    'local',
+    'intercity',
+    'groups',
+    'deliveryPromo',
+    'deliveryLegs',
+  ].forEach((k) => renderedKeys.add(k));
 
   return (
     <div className="space-y-4">
@@ -826,31 +859,84 @@ export function OrderDetailPage() {
           {/* Pricing summary — prominent because it's the conversion bottleneck */}
           <Card title="التسعير" icon={<DollarSign className="w-4 h-4" />}>
             {hasPrice ? (
-              <div className="space-y-2">
-                {order.quotedPrice != null && (
-                  <div className="flex justify-between text-sm">
-                    <span className="text-muted-foreground">السعر المعروض</span>
+              <div className="space-y-2 text-sm">
+                {/* Full breakdown — the agent needs to see فلوس التاجر and
+                    التوصيل separately, not one lump «السعر المعروض». */}
+                {order.merchantSubtotal != null && Number(order.merchantSubtotal) > 0 && (
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">🛍️ المنتجات (فلوس التاجر)</span>
+                    <span className="font-bold">{egp(order.merchantSubtotal)}</span>
+                  </div>
+                )}
+                {order.deliveryFee != null && (
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">🚚 رسوم التوصيل</span>
                     <span className="font-bold">
-                      {Number(order.quotedPrice).toLocaleString('ar-EG')} ج.م
+                      {Number(order.deliveryFee) === 0 ? (
+                        <span className="text-emerald-700">مجاناً 🎉</span>
+                      ) : (
+                        egp(order.deliveryFee)
+                      )}
                     </span>
                   </div>
                 )}
-                {order.finalPrice != null && (
-                  <div className="flex justify-between text-sm pt-2 border-t border-border">
-                    <span className="text-muted-foreground">السعر النهائي</span>
-                    <span className="font-black text-brand-red">
-                      {Number(order.finalPrice).toLocaleString('ar-EG')} ج.م
-                    </span>
+                {deliveryPromo && (deliveryPromo.discount ?? 0) > 0 && (
+                  <div className="flex justify-between text-xs text-emerald-700">
+                    <span>🎉 {deliveryPromo.label ?? 'عرض توصيل'}</span>
+                    <span>خصم {egp(deliveryPromo.discount)}</span>
+                  </div>
+                )}
+                {order.discountAmount != null && Number(order.discountAmount) > 0 && (
+                  <div className="flex justify-between text-emerald-700">
+                    <span>🎟️ خصم كوبون</span>
+                    <span className="font-bold">− {egp(order.discountAmount)}</span>
+                  </div>
+                )}
+                <div className="flex justify-between pt-2 border-t border-border text-base">
+                  <span className="font-black">الإجمالي المطلوب</span>
+                  <span className="font-black text-brand-red">
+                    {egp(order.finalPrice ?? order.quotedPrice)}
+                  </span>
+                </div>
+
+                {/* Who gets what — the split behind the total. */}
+                {(order.merchantPayout != null || order.platformCommission != null) && (
+                  <div className="mt-2 space-y-1 rounded-lg border border-dashed border-border bg-muted/20 p-2.5 text-xs">
+                    <p className="font-bold text-muted-foreground">توزيع الإيراد</p>
+                    {order.merchantPayout != null && (
+                      <div className="flex justify-between">
+                        <span className="text-muted-foreground">مستحق التاجر</span>
+                        <span className="font-bold">{egp(order.merchantPayout)}</span>
+                      </div>
+                    )}
+                    {order.platformCommission != null && Number(order.platformCommission) > 0 && (
+                      <div className="flex justify-between">
+                        <span className="text-muted-foreground">عمولة تميم من المنتجات</span>
+                        <span className="font-bold">{egp(order.platformCommission)}</span>
+                      </div>
+                    )}
+                    {order.deliveryFee != null && (
+                      <div className="flex justify-between">
+                        <span className="text-muted-foreground">إيراد تميم من التوصيل</span>
+                        <span className="font-bold">{egp(order.deliveryFee)}</span>
+                      </div>
+                    )}
                   </div>
                 )}
                 <Button
                   variant="outline"
                   size="sm"
                   className="w-full mt-2"
+                  disabled={priceLocked}
                   onClick={() => setDialog({ kind: 'price' })}
                 >
                   <Edit3 className="w-3 h-3" /> تعديل السعر
                 </Button>
+                {priceLocked && (
+                  <p className="text-center text-[11px] text-muted-foreground">
+                    اتقفل تعديل السعر بعد ٣٠ دقيقة من إنهاء الطلب
+                  </p>
+                )}
               </div>
             ) : (
               <div className="space-y-2">
@@ -882,21 +968,25 @@ export function OrderDetailPage() {
                     {order.assignedDriver.driverProfile.vehiclePlate}
                   </Badge>
                 )}
-                {!isTerminal && (
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="w-full mt-2"
-                    onClick={() => setDialog({ kind: 'assign' })}
-                  >
-                    <Edit3 className="w-3 h-3" /> تغيير السائق
-                  </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="w-full mt-2"
+                  disabled={isDone}
+                  onClick={() => setDialog({ kind: 'assign' })}
+                >
+                  <Edit3 className="w-3 h-3" /> تغيير السائق
+                </Button>
+                {isDone && (
+                  <p className="text-center text-[11px] text-muted-foreground">
+                    الطلب خلص — مينفعش تغيير السائق
+                  </p>
                 )}
               </div>
             ) : (
               <div className="space-y-2">
                 <p className="text-sm text-muted-foreground">لم يتم تعيين سائق بعد</p>
-                {!isTerminal && (
+                {!isDone && (
                   <Button
                     size="sm"
                     className="w-full"

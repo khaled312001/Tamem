@@ -1061,6 +1061,27 @@ function defaultCommissionPct(): float {
     } catch (Throwable $e) { /* fall through */ }
     return 0.0;
 }
+/**
+ * رسوم إضافية عن كل تاجر «زيادة» في نفس رحلة التوصيل — وقفة استلام زيادة.
+ * أول تاجر داخل في السعر الأساسي؛ كل تاجر بعده بيزوّد الرقم ده. Setting قابل
+ * للتغيير (extra_merchant_fee)، الافتراضي 5 ج.
+ */
+function extraMerchantFee(): float {
+    static $v = null;
+    if ($v !== null) return $v;
+    $v = 5.0;
+    try {
+        $st = db()->prepare("SELECT `value` FROM `Setting` WHERE `key` = 'extra_merchant_fee' LIMIT 1");
+        $st->execute();
+        $raw = $st->fetchColumn();
+        if ($raw !== false && $raw !== null) {
+            $d = json_decode((string) $raw, true);
+            if (is_numeric($d)) $v = (float) $d;
+            elseif (is_numeric($raw)) $v = (float) $raw;
+        }
+    } catch (Throwable $e) { /* keep default */ }
+    return $v;
+}
 /// Snapshot the assigned driver's delivery-fee share onto the order, freezing
 /// the numbers so a later change to the driver's percentage never rewrites this
 /// order's accounting. Called at driver-assign and again at delivery — delivery
@@ -1921,69 +1942,87 @@ function waMoney($v): ?string {
 // customer/driver/admin all read from ONE authoritative view of the order.
 function orderDetailBlocks(array $o): array {
     $b = [];
-    // Items — the app writes a ready human-readable bullet list into Order.notes
-    // for product orders. For free-text delivery orders the customer's typed
-    // request lives in customData.order_text (the "تفاصيل الطلب" field). Fall
-    // back to structured OrderItem rows if neither is present.
-    $items = trim((string) ($o['notes'] ?? ''));
-    if ($items === '') {
-        $cd = json_decode((string) ($o['customData'] ?? ''), true);
-        if (is_array($cd) && !empty($cd['order_text'])) $items = trim((string) $cd['order_text']);
-    }
-    if ($items === '') {
-        try {
-            // Grouped by store. The dispatcher reads this to know WHERE to buy
-            // the items, and a cart order can span several merchants — a flat
-            // list of product names left them guessing.
-            $st = db()->prepare(
-                'SELECT oi.quantity, oi.productNameSnapshot, oi.unitPriceSnapshot, oi.notes,'
-                . ' oi.variantNameSnapshot, oi.addonsSnapshot,'
-                . ' oi.merchantId, mp.storeNameAr'
-                . ' FROM `OrderItem` oi'
-                . ' LEFT JOIN `MerchantProfile` mp ON mp.id = oi.merchantId'
-                . ' WHERE oi.orderId = ? ORDER BY oi.merchantId, oi.id'
-            );
-            $st->execute([$o['id']]);
+    // Items — a PRODUCT order (store basket / manual / cart) has structured
+    // OrderItem rows, and THOSE are the order; a note on the order rides
+    // underneath them, never in their place. A FREE-TEXT order (courier /
+    // voice / typed request) has no rows — there the typed text in Order.notes
+    // (or customData.order_text) is the order itself.
+    //
+    // This used to read Order.notes FIRST, so a manual store order with a note
+    // like «كاتشب زيادة» showed only the note and dropped «بيتزا فراخ». Rows win
+    // when they exist; the note is appended below.
+    $rowItems = '';
+    try {
+        // Grouped by store. The dispatcher reads this to know WHERE to buy
+        // the items, and a cart order can span several merchants — a flat
+        // list of product names left them guessing.
+        $st = db()->prepare(
+            'SELECT oi.quantity, oi.productNameSnapshot, oi.unitPriceSnapshot, oi.notes,'
+            . ' oi.variantNameSnapshot, oi.addonsSnapshot,'
+            . ' oi.merchantId, mp.storeNameAr'
+            . ' FROM `OrderItem` oi'
+            . ' LEFT JOIN `MerchantProfile` mp ON mp.id = oi.merchantId'
+            . ' WHERE oi.orderId = ? ORDER BY oi.merchantId, oi.id'
+        );
+        $st->execute([$o['id']]);
 
-            $groups = [];
-            foreach ($st->fetchAll() as $it) {
-                $key = (string) ($it['merchantId'] ?? '');
-                $groups[$key]['name'] = trim((string) ($it['storeNameAr'] ?? ''));
-                $pl = waMoney($it['unitPriceSnapshot']);
-                // Size inline with the name, extras on a sub-line — the
-                // dispatcher has to buy exactly this, so it can't be implied.
-                $nm = trim((string) $it['productNameSnapshot']);
-                if (!empty($it['variantNameSnapshot'])) $nm .= ' — ' . $it['variantNameSnapshot'];
-                $line = '• ' . (int) $it['quantity'] . '× ' . $nm . ($pl ? " ({$pl})" : '');
+        $groups = [];
+        foreach ($st->fetchAll() as $it) {
+            $key = (string) ($it['merchantId'] ?? '');
+            $groups[$key]['name'] = trim((string) ($it['storeNameAr'] ?? ''));
+            $pl = waMoney($it['unitPriceSnapshot']);
+            // Size inline with the name, extras on a sub-line — the
+            // dispatcher has to buy exactly this, so it can't be implied.
+            $nm = trim((string) $it['productNameSnapshot']);
+            if (!empty($it['variantNameSnapshot'])) $nm .= ' — ' . $it['variantNameSnapshot'];
+            $line = '• ' . (int) $it['quantity'] . '× ' . $nm . ($pl ? " ({$pl})" : '');
 
-                $ex = json_decode((string) ($it['addonsSnapshot'] ?? ''), true);
-                if (is_array($ex) && $ex) {
-                    // Collapse repeats into "رز ×2" rather than "رز، رز".
-                    $counts = [];
-                    foreach ($ex as $a) { $n = trim((string) ($a['nameAr'] ?? '')); if ($n !== '') $counts[$n] = ($counts[$n] ?? 0) + 1; }
-                    $parts = [];
-                    foreach ($counts as $n => $c) $parts[] = $c > 1 ? "$n ×$c" : $n;
-                    if ($parts) $line .= "\n     + " . implode('، ', $parts);
-                }
-                // What the customer asked for on this line. It was stored and
-                // never sent, so "من غير بصل" reached the database and the
-                // person making the food never saw it.
-                $ln = trim((string) ($it['notes'] ?? ''));
-                if ($ln !== '') $line .= "
+            $ex = json_decode((string) ($it['addonsSnapshot'] ?? ''), true);
+            if (is_array($ex) && $ex) {
+                // Collapse repeats into "رز ×2" rather than "رز، رز".
+                $counts = [];
+                foreach ($ex as $a) { $n = trim((string) ($a['nameAr'] ?? '')); if ($n !== '') $counts[$n] = ($counts[$n] ?? 0) + 1; }
+                $parts = [];
+                foreach ($counts as $n => $c) $parts[] = $c > 1 ? "$n ×$c" : $n;
+                if ($parts) $line .= "\n     + " . implode('، ', $parts);
+            }
+            // What the customer asked for on this line. It was stored and
+            // never sent, so "من غير بصل" reached the database and the
+            // person making the food never saw it.
+            $ln = trim((string) ($it['notes'] ?? ''));
+            if ($ln !== '') $line .= "
      📝 " . $ln;
-                $groups[$key]['lines'][] = $line;
-            }
+            $groups[$key]['lines'][] = $line;
+        }
 
-            $blocks = [];
-            foreach ($groups as $g) {
-                // Label the store only when the message would otherwise be
-                // ambiguous — repeating one shop name above a single list adds
-                // noise without adding information.
-                $head = ($g['name'] !== '' && count($groups) > 1) ? '🏪 ' . $g['name'] . "\n" : '';
-                $blocks[] = $head . implode("\n", $g['lines']);
-            }
-            $items = implode("\n\n", $blocks);
-        } catch (Throwable $e) { $items = ''; }
+        $blocks = [];
+        foreach ($groups as $g) {
+            // Label the store only when the message would otherwise be
+            // ambiguous — repeating one shop name above a single list adds
+            // noise without adding information.
+            $head = ($g['name'] !== '' && count($groups) > 1) ? '🏪 ' . $g['name'] . "\n" : '';
+            $blocks[] = $head . implode("\n", $g['lines']);
+        }
+        $rowItems = implode("\n\n", $blocks);
+    } catch (Throwable $e) { $rowItems = ''; }
+
+    // The typed note / free-text request on the order itself.
+    $noteText = trim((string) ($o['notes'] ?? ''));
+    if ($noteText === '') {
+        $cd = json_decode((string) ($o['customData'] ?? ''), true);
+        if (is_array($cd) && !empty($cd['order_text'])) $noteText = trim((string) $cd['order_text']);
+    }
+
+    if ($rowItems !== '') {
+        // Products drive the message; the note (when present and not already the
+        // item list an older client wrote there) is appended below them.
+        $items = $rowItems;
+        if ($noteText !== '' && mb_strpos($rowItems, $noteText) === false) {
+            $items .= "\n\n📝 ملاحظة الطلب: " . $noteText;
+        }
+    } else {
+        // No structured items: the typed text IS the order.
+        $items = $noteText;
     }
     $b['items'] = $items;
 
@@ -2063,6 +2102,15 @@ function orderDetailBlocks(array $o): array {
     if ($o['merchantSubtotal'] !== null && $o['merchantSubtotal'] !== '') $pr[] = 'قيمة الطلب: ' . waMoney($o['merchantSubtotal']);
     if ($o['deliveryFee'] !== null && $o['deliveryFee'] !== '') {
         $pr[] = 'التوصيل: ' . waMoney($o['deliveryFee']);
+        // A delivery promo (e.g. «أول أوردر توصيل مجاني») — spell it out so the
+        // DRIVER knows not to collect the fee and the office sees why it's free.
+        $__promoCd = json_decode((string) ($o['customData'] ?? ''), true);
+        if (is_array($__promoCd) && !empty($__promoCd['deliveryPromo'])) {
+            $__pLbl = trim((string) ($__promoCd['deliveryPromo']['label'] ?? '')) ?: 'عرض توصيل';
+            $pr[] = ((float) $o['deliveryFee'] <= 0.009)
+                ? '🎁 ' . $__pLbl . ' — التوصيل على حساب الشركة (متتحصّلش)'
+                : '🎁 ' . $__pLbl;
+        }
         /*
          * When the basket spans cities the fee is two journeys, and they do not
          * arrive together — the out-of-town convoy runs at fixed times. A bare
@@ -6764,6 +6812,12 @@ if ($method === 'DELETE' && preg_match('#^/admin/customers/([^/]+)$#', $path, $m
     $victim = $st->fetch();
     if (!$victim) jsonErr('العميل غير موجود', 404, 'NOT_FOUND');
 
+    // «أول أوردر توصيل مجاني» is a first-order benefit. Deleting a customer also
+    // wipes their orders, so a re-registered same phone would look brand-new and
+    // could claim it again. If this customer already ordered, remember the PHONE
+    // now — before the orders are wiped — so the promo can't be reused.
+    if (customerNonCancelledCount($id) > 0) recordFreeFirstPhone($id);
+
     /*
      * Two RESTRICT foreign keys blocked this, and only one of them was obvious:
      *   Order.customerId            → the customer's own orders
@@ -8836,6 +8890,8 @@ function orderLegPlan(?string $cityId, ?string $villageId, ?string $areaId, arra
     $zq = zoneQuote($cityId, $villageId, $areaId);
     $hasZone = is_array($zq) && ($zq[0] ?? '') === 'OK';
     $localFee = $hasZone ? (float) $zq[1] : 0.0;
+    // كل تاجر زيادة في نفس الرحلة = وقفة استلام زيادة على السائق.
+    $perMerchant = extraMerchantFee();
 
     // Origin city per store, one query — never one per store in a loop.
     $ids = array_values(array_unique(array_filter(array_map('strval', $merchantIds), fn($v) => $v !== '')));
@@ -8866,13 +8922,17 @@ function orderLegPlan(?string $cityId, ?string $villageId, ?string $areaId, arra
             continue;
         }
         $add = $ic['mode'] === 'ADD';
+        // كل تاجر زيادة في نفس المدينة = وقفة استلام زيادة على نفس الرحلة.
+        $extra = $perMerchant * max(0, count($stores) - 1);
+        $localPart = round(($add ? $localFee : 0.0) + $extra, 2);
         $groups[] = [
             'key' => (string) $city, 'kind' => 'INTERCITY', 'city' => (string) $city,
             'label' => 'من ' . $city,
             'merchants' => $stores,
             'intercityFee' => round($ic['price'], 2),
-            'localFee' => $add ? $localFee : 0.0,
-            'fee' => round($ic['price'] + ($add ? $localFee : 0.0), 2),
+            'localFee' => $localPart,
+            'extraMerchantFee' => round($extra, 2),
+            'fee' => round($ic['price'] + $localPart, 2),
             'mode' => $ic['mode'],
             'windows' => $ic['windows'],
             'minMinutes' => $ic['minMinutes'], 'maxMinutes' => $ic['maxMinutes'], 'note' => $ic['note'],
@@ -8886,11 +8946,14 @@ function orderLegPlan(?string $cityId, ?string $villageId, ?string $areaId, arra
     // stores at all (a free-text delivery job still has a fee and a driver).
     if ($localStores || !$groups) {
         $destCity = trim((string) ($zq[2]['cityName'] ?? ''));
+        // أول تاجر داخل في السعر الأساسي؛ كل تاجر محلي زيادة = وقفة استلام زيادة.
+        $localExtra = $perMerchant * max(0, count($localStores) - 1);
+        $localTotal = round($localFee + $localExtra, 2);
         array_unshift($groups, [
             'key' => 'LOCAL', 'kind' => 'LOCAL', 'city' => $destCity ?: null,
             'label' => $destCity !== '' ? 'داخل ' . $destCity : 'توصيل محلي',
             'merchants' => $localStores,
-            'intercityFee' => 0.0, 'localFee' => $localFee, 'fee' => $localFee,
+            'intercityFee' => 0.0, 'localFee' => $localTotal, 'extraMerchantFee' => round($localExtra, 2), 'fee' => $localTotal,
             'mode' => null, 'windows' => [], 'minMinutes' => null, 'maxMinutes' => null, 'note' => null,
         ]);
     }
@@ -8941,6 +9004,48 @@ function customerNonCancelledCount(string $customerId): int {
     $st->execute([$customerId]);
     return (int) $st->fetchColumn();
 }
+/** رقم موبايل العميل — للتحقق من عرض «أول أوردر» بالرقم عبر الحسابات. */
+function customerPhone(?string $customerId): string {
+    if (!$customerId) return '';
+    try {
+        $st = db()->prepare('SELECT phone FROM `User` WHERE id = ? LIMIT 1');
+        $st->execute([$customerId]);
+        return trim((string) ($st->fetchColumn() ?: ''));
+    } catch (Throwable $e) { return ''; }
+}
+/*
+ * سجل دائم بأرقام الموبايل اللي خدت «أول أوردر توصيل مجاني».
+ * بيفضل موجود حتى لو الأدمن مسح الحساب (اللي بيمسح طلباته معاه) — فالرقم
+ * مايقدرش ياخد المجاني تاني على حساب جديد. مخزّن كـ JSON في Setting.
+ */
+function foPhoneLedger(): array {
+    static $set = null;
+    if ($set !== null) return $set;
+    $set = [];
+    try {
+        $st = db()->prepare("SELECT `value` FROM `Setting` WHERE `key` = 'promo_fo_phones' LIMIT 1");
+        $st->execute();
+        $v = $st->fetchColumn();
+        if (is_string($v) && $v !== '') { $d = json_decode($v, true); if (is_array($d)) $set = $d; }
+    } catch (Throwable $e) { $set = []; }
+    return $set;
+}
+function phoneUsedFreeFirst(?string $phone): bool {
+    $phone = trim((string) $phone);
+    return $phone !== '' && array_key_exists($phone, foPhoneLedger());
+}
+/** يسجّل رقم العميل في سجل «أول أوردر» — يتنادى ساعة إنشاء الأوردر فقط. */
+function recordFreeFirstPhone(?string $customerId): void {
+    $phone = customerPhone($customerId);
+    if ($phone === '') return;
+    try {
+        $led = foPhoneLedger();
+        if (array_key_exists($phone, $led)) return;
+        $led[$phone] = 1;
+        db()->prepare('INSERT INTO `Setting` (`key`,`value`,`description`,`updatedAt`,`updatedById`) VALUES (?,?,NULL,NOW(3),NULL) ON DUPLICATE KEY UPDATE `value`=VALUES(`value`), `updatedAt`=VALUES(`updatedAt`)')
+            ->execute(['promo_fo_phones', json_encode($led, JSON_UNESCAPED_UNICODE)]);
+    } catch (Throwable $e) { /* non-fatal — never block an order over accounting */ }
+}
 /** كام مرة عرض اتّستخدم (إجمالي/لعميل) من customData.deliveryPromo.ruleId. */
 function promoUsageCount(string $ruleId, ?string $customerId = null): int {
     $sql = "SELECT COUNT(*) FROM `Order` WHERE JSON_EXTRACT(customData, '$.deliveryPromo.ruleId') = ? AND status NOT IN ('CANCELLED','REJECTED')";
@@ -8984,6 +9089,9 @@ function evalDeliveryPromo(?string $customerId, float $fee, bool $hasIntercity, 
         if ($minOrder > 0 && $orderAmount < $minOrder) continue;
         if ((string) ($r['audience'] ?? 'ALL') === 'FIRST_ORDER') {
             if (!$customerId || customerNonCancelledCount($customerId) > 0) continue;
+            // حماية بالرقم: رقم خد العرض قبل كده مش هياخده تاني حتى لو اتعمله
+            // حساب جديد (الحساب القديم اتمسح بطلباته). بنتحقق للعملاء الجدد بس.
+            if (phoneUsedFreeFirst(customerPhone($customerId))) continue;
         }
         $rid = (string) ($r['id'] ?? '');
         if ($rid !== '') {
@@ -9003,6 +9111,7 @@ function evalDeliveryPromo(?string $customerId, float $fee, bool $hasIntercity, 
         $discount = min($discount, $fee);
         if ($discount <= 0) continue;
         return ['ruleId' => $rid, 'label' => (string) ($r['nameAr'] ?? 'عرض توصيل'),
+            'audience' => (string) ($r['audience'] ?? 'ALL'),
             'discount' => round($discount, 2), 'newFee' => round($fee - $discount, 2), 'originalFee' => round($fee, 2)];
     }
     return null;
@@ -9428,6 +9537,15 @@ if ($method === 'POST' && $path === '/zones/quote-delivery') {
     $mids = array_values(array_filter(array_map('strval', (array) ($b['merchantIds'] ?? []))));
     if (!$mids && !empty($b['merchantId'])) $mids = [(string) $b['merchantId']];
 
+    // The dashboard's manual-order quote asks for the BASE fee. It is an admin
+    // previewing a price to read to the customer on the phone, not the customer's
+    // own checkout — so the first-order/free-delivery promo must NOT apply here.
+    // Left on, it was evaluated against the ADMIN's account (which has zero past
+    // orders), so a real 20 ج.م area fee was shown as 0. Manual orders don't
+    // apply the promo at creation either, so skipping it keeps the preview equal
+    // to what the order will actually charge.
+    $skipPromo = !empty($b['skipPromo']);
+
     $fromCity = trim((string) ($b['fromCity'] ?? ''));
     if ($fromCity !== '' && !$mids) {
         // City named outright (the store page, before there is a basket).
@@ -9450,7 +9568,7 @@ if ($method === 'POST' && $path === '/zones/quote-delivery') {
         }
         $inter = array_values(array_filter($plan['groups'], fn($g) => $g['kind'] === 'INTERCITY'));
         if ($q[0] === 'NO_PRICE' && !$inter) jsonErr('لا يوجد سعر توصيل لهذه المنطقة، تواصل مع الدعم', 400, 'NO_DELIVERY_PRICE');
-        $__promo = evalDeliveryPromo(optionalAuthUid(), (float) $plan['fee'], count($inter) > 0, 0.0);
+        $__promo = $skipPromo ? null : evalDeliveryPromo(optionalAuthUid(), (float) $plan['fee'], count($inter) > 0, 0.0);
         // Same as the order: the groups and the «نقل + توصيل» parts have to add
         // up to the discounted price, not the one before the promo.
         if ($__promo) {
@@ -9485,7 +9603,7 @@ if ($method === 'POST' && $path === '/zones/quote-delivery') {
     }
 
     if ($q[0] === 'NO_PRICE') jsonErr('لا يوجد سعر توصيل لهذه المنطقة، تواصل مع الدعم', 400, 'NO_DELIVERY_PRICE');
-    $__promo = evalDeliveryPromo(optionalAuthUid(), (float) $q[1], false, 0.0);
+    $__promo = $skipPromo ? null : evalDeliveryPromo(optionalAuthUid(), (float) $q[1], false, 0.0);
     jsonOk(array_merge(['price' => $__promo ? $__promo['newFee'] : $q[1],
         'deliveryPromo' => $__promo ? ['applied' => true, 'label' => $__promo['label'], 'originalPrice' => $__promo['originalFee'], 'discount' => $__promo['discount']] : null], $q[2]));
 }

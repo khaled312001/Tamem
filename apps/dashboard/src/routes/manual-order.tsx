@@ -177,6 +177,9 @@ export function ManualOrderDialog({
           cityId,
           villageId,
           areaId,
+          // Show the real area fee, not a promo-discounted one: the agent is
+          // quoting a price, and the manual order charges the base fee anyway.
+          skipPromo: true,
           ...(merchantIds.length ? { merchantIds } : {}),
         })
         .then((r) => r.data.data as Quote)
@@ -711,7 +714,31 @@ export function ManualOrderDialog({
           <p className="font-black text-brand-dark">ملخص الحساب</p>
 
           {merchantTotals.length === 0 ? (
-            <p className="text-sm text-muted-foreground">اختر تاجر وأضف منتجات.</p>
+            // Show the delivery fee the moment the area is chosen — the agent is
+            // on the call and needs to quote it BEFORE picking a store/products.
+            cityId && villageId && areaId ? (
+              <div className="space-y-1.5 text-sm">
+                <div className="flex justify-between">
+                  <span>رسوم التوصيل</span>
+                  <span className="font-bold">
+                    {quoting ? (
+                      <span className="text-muted-foreground">…</span>
+                    ) : feeLater ? (
+                      <span className="text-amber-700">تُحدَّد لاحقاً</span>
+                    ) : effectiveFee === null ? (
+                      <span className="text-amber-700">لا يوجد سعر لهذه المنطقة</span>
+                    ) : (
+                      formatMoney(effectiveFee)
+                    )}
+                  </span>
+                </div>
+                <p className="border-t border-border pt-1.5 text-xs text-muted-foreground">
+                  اختر تاجر وأضف منتجات لإكمال الطلب.
+                </p>
+              </div>
+            ) : (
+              <p className="text-sm text-muted-foreground">اختر تاجر وأضف منتجات.</p>
+            )
           ) : (
             <div className="space-y-1.5 text-sm">
               {merchantTotals.map((m) => (
