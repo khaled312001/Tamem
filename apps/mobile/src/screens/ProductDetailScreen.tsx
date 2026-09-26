@@ -555,7 +555,7 @@ export function ProductDetailScreen() {
             >
               {canAdd && <ShoppingCart size={18} color={colors.white} />}
               <Text style={styles.addLabel} numberOfLines={1}>
-                {!productInStock ? 'غير متاح' : !merchantOpen ? 'المتجر مغلق' : 'السلة'}
+                {!productInStock ? 'غير متاح' : !merchantOpen ? 'المتجر مغلق' : 'أضف إلى السلة'}
               </Text>
               {canAdd && (
                 <Text style={styles.addPrice}>
