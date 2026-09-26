@@ -365,7 +365,14 @@ export class TamemClient {
    *  (the `now` from the previous response) + current counts. */
   async adminRealtime(since?: number): Promise<{
     orders: { id: string; orderNumber?: string; status?: string; category?: string }[];
-    alerts: { id: string; titleAr?: string; title?: string; severity?: string }[];
+    alerts: {
+      id: string;
+      titleAr?: string;
+      title?: string;
+      severity?: string;
+      /** The order the alert is about, so the bell can open it directly. */
+      relatedOrderId?: string;
+    }[];
     counts: { openOrders: number; alerts: number };
     now: number;
   }> {
@@ -375,7 +382,14 @@ export class TamemClient {
       params: since ? { since } : undefined,
     }) as Promise<{
       orders: { id: string; orderNumber?: string; status?: string; category?: string }[];
-      alerts: { id: string; titleAr?: string; title?: string; severity?: string }[];
+      alerts: {
+        id: string;
+        titleAr?: string;
+        title?: string;
+        severity?: string;
+        /** The order the alert is about, so the bell can open it directly. */
+        relatedOrderId?: string;
+      }[];
       counts: { openOrders: number; alerts: number };
       now: number;
     }>;
@@ -396,6 +410,8 @@ export class TamemClient {
     cancelled: number;
     salesToday: number;
     deliveryToday: number;
+    /** How many orders came from each place, for the source filter's counts. */
+    bySource?: { APP: number; MANUAL: number; CUSTOM: number };
   }> {
     return this.request({ method: 'GET', url: '/admin/orders/stats' });
   }

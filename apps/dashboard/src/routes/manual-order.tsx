@@ -310,6 +310,8 @@ export function ManualOrderDialog({
           : undefined,
         advanceTo: stage === 'NEW' ? undefined : stage,
         markPaid: stage === 'COMPLETED' ? markPaid : undefined,
+        // صريحة: دي شاشة «الطلب اليدوي» اللي بتبدأ من متجر وسلة.
+        source: 'MANUAL',
         notes: notes.trim() || undefined,
         merchants: baskets.map((b) => ({
           merchantId: b.merchantId,

@@ -54,6 +54,58 @@ const STATUS_TABS = [
   { value: 'CANCELLED,REJECTED', label: 'ملغي' },
 ] as const;
 
+/**
+ * Where an order came from. The backend stamps it at creation (and every older
+ * order was backfilled once), so this is what actually happened — not a guess
+ * from whether a merchant happens to be attached.
+ */
+const SOURCES = [
+  { value: '', label: 'كل المصادر', short: '', tone: '' },
+  {
+    value: 'APP',
+    label: 'من التطبيق',
+    short: 'تطبيق',
+    tone: 'bg-emerald-50 text-emerald-700 border-emerald-200',
+  },
+  {
+    value: 'MANUAL',
+    label: 'يدوي (من متجر)',
+    short: 'يدوي',
+    tone: 'bg-blue-50 text-blue-700 border-blue-200',
+  },
+  {
+    value: 'CUSTOM',
+    label: 'يدوي مخصص',
+    short: 'مخصص',
+    tone: 'bg-amber-50 text-amber-700 border-amber-200',
+  },
+] as const;
+
+function SourceBadge({ source }: { source?: string | null }) {
+  const s = SOURCES.find((x) => x.value === source);
+  if (!s || !s.value) return <span className="text-muted-foreground text-xs">—</span>;
+  return (
+    <span className={`inline-block px-2 py-0.5 rounded-md border text-[11px] font-bold ${s.tone}`}>
+      {s.short}
+    </span>
+  );
+}
+
+const PAYMENT_STATES = [
+  { value: '', label: 'كل حالات الدفع' },
+  { value: 'PENDING', label: 'لم يُدفع' },
+  { value: 'PAID', label: 'مدفوع' },
+  { value: 'FAILED', label: 'فشل الدفع' },
+  { value: 'REFUNDED', label: 'مسترجع' },
+] as const;
+
+const CATEGORIES = [
+  { value: '', label: 'كل الخدمات' },
+  { value: 'MERCHANT', label: 'طلب من متجر' },
+  { value: 'DELIVERY', label: 'توصيل' },
+  { value: 'SHIPPING', label: 'شحن' },
+] as const;
+
 // Quick filter presets — preset name + which URL params to set.
 const QUICK_FILTERS: {
   key: string;
@@ -133,6 +185,13 @@ export function OrdersPage() {
   const [fromPreset, setFromPreset] = useState<'today' | undefined>(
     searchParams.get('from') === 'today' ? 'today' : undefined,
   );
+  const [sourceFilter, setSourceFilter] = useState<string>(searchParams.get('source') ?? '');
+  const [paymentStatusFilter, setPaymentStatusFilter] = useState<string>(
+    searchParams.get('paymentStatus') ?? '',
+  );
+  const [categoryFilter, setCategoryFilter] = useState<string>(searchParams.get('category') ?? '');
+  const [noDriverOnly, setNoDriverOnly] = useState(searchParams.get('driverId') === 'none');
+  const [scheduledOnly, setScheduledOnly] = useState(searchParams.get('scheduled') === '1');
   const [search, setSearch] = useState(searchParams.get('search') ?? '');
   const [debouncedSearch, setDebouncedSearch] = useState(searchParams.get('search') ?? '');
   const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null);
@@ -187,6 +246,11 @@ export function OrdersPage() {
     if (debouncedSearch) next.search = debouncedSearch;
     if (statusFilter) next.status = statusFilter;
     if (fromPreset) next.from = fromPreset;
+    if (sourceFilter) next.source = sourceFilter;
+    if (paymentStatusFilter) next.paymentStatus = paymentStatusFilter;
+    if (categoryFilter) next.category = categoryFilter;
+    if (noDriverOnly) next.driverId = 'none';
+    if (scheduledOnly) next.scheduled = '1';
     if (page > 1) next.page = String(page);
     if (viewMode === 'map') next.view = 'map';
     if (sortBy !== 'createdAt') next.sortBy = sortBy;
@@ -197,7 +261,20 @@ export function OrdersPage() {
       Object.entries(next).some(([k, v]) => current[k] !== v);
     if (changed) setSearchParams(next, { replace: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [debouncedSearch, statusFilter, fromPreset, page, viewMode, sortBy, sortDir]);
+  }, [
+    debouncedSearch,
+    statusFilter,
+    fromPreset,
+    sourceFilter,
+    paymentStatusFilter,
+    categoryFilter,
+    noDriverOnly,
+    scheduledOnly,
+    page,
+    viewMode,
+    sortBy,
+    sortDir,
+  ]);
 
   // React to the URL changing externally (e.g. header search bar pushes a new query)
   useEffect(() => {
@@ -274,13 +351,31 @@ export function OrdersPage() {
     const p: Record<string, unknown> = { page, pageSize, sortBy, sortDir };
     if (statusFilter) p.status = statusFilter; // backend accepts CSV for grouped tabs
     if (debouncedSearch) p.search = debouncedSearch;
+    if (sourceFilter) p.source = sourceFilter;
+    if (paymentStatusFilter) p.paymentStatus = paymentStatusFilter;
+    if (categoryFilter) p.category = categoryFilter;
+    if (noDriverOnly) p.driverId = 'none';
+    if (scheduledOnly) p.scheduled = 1;
     if (fromPreset === 'today') {
       const start = new Date();
       start.setHours(0, 0, 0, 0);
       p.from = start.toISOString();
     }
     return p;
-  }, [page, pageSize, statusFilter, debouncedSearch, fromPreset, sortBy, sortDir]);
+  }, [
+    page,
+    pageSize,
+    statusFilter,
+    debouncedSearch,
+    fromPreset,
+    sourceFilter,
+    paymentStatusFilter,
+    categoryFilter,
+    noDriverOnly,
+    scheduledOnly,
+    sortBy,
+    sortDir,
+  ]);
 
   const { data, isLoading } = useQuery({
     queryKey: ['admin', 'orders', params],
@@ -540,13 +635,25 @@ export function OrdersPage() {
             </button>
           );
         })}
-        {(statusFilter || fromPreset || debouncedSearch) && (
+        {(statusFilter ||
+          fromPreset ||
+          debouncedSearch ||
+          sourceFilter ||
+          paymentStatusFilter ||
+          categoryFilter ||
+          noDriverOnly ||
+          scheduledOnly) && (
           <button
             onClick={() => {
               setStatusFilter('');
               setFromPreset(undefined);
               setSearch('');
               setDebouncedSearch('');
+              setSourceFilter('');
+              setPaymentStatusFilter('');
+              setCategoryFilter('');
+              setNoDriverOnly(false);
+              setScheduledOnly(false);
               setPage(1);
             }}
             className="inline-flex items-center gap-1 px-3 py-1.5 rounded-full text-xs text-muted-foreground hover:text-brand-red"
@@ -583,6 +690,92 @@ export function OrdersPage() {
             onChange={(e) => setSearch(e.target.value)}
             className="ps-10"
           />
+        </div>
+
+        {/* مصدر الطلب — الشريحة الأهم: طلب جه من التطبيق لوحده غير طلب الموظف
+            كتبه بإيده، والفرق ده كان مستخبي تمامًا في اللستة. */}
+        <div className="flex flex-wrap items-center gap-2 pt-1">
+          <span className="text-xs font-bold text-muted-foreground">المصدر</span>
+          {SOURCES.map((src) => {
+            const on = sourceFilter === src.value;
+            const n = src.value
+              ? (stats?.bySource?.[src.value as 'APP' | 'MANUAL' | 'CUSTOM'] ?? null)
+              : null;
+            return (
+              <button
+                key={src.value || 'all'}
+                onClick={() => {
+                  setSourceFilter(src.value);
+                  setPage(1);
+                }}
+                className={`px-3 py-1.5 rounded-lg text-sm transition ${
+                  on ? 'bg-brand-red text-white font-bold' : 'bg-muted hover:bg-muted/80'
+                }`}
+              >
+                {src.label}
+                {n != null && (
+                  <span className={`ms-1.5 text-xs ${on ? 'opacity-80' : 'opacity-60'}`}>
+                    ({n.toLocaleString('ar-EG')})
+                  </span>
+                )}
+              </button>
+            );
+          })}
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2">
+          <select
+            value={paymentStatusFilter}
+            onChange={(e) => {
+              setPaymentStatusFilter(e.target.value);
+              setPage(1);
+            }}
+            className="rounded-lg border border-border bg-white px-3 py-1.5 text-sm"
+          >
+            {PAYMENT_STATES.map((o) => (
+              <option key={o.value} value={o.value}>
+                {o.label}
+              </option>
+            ))}
+          </select>
+          <select
+            value={categoryFilter}
+            onChange={(e) => {
+              setCategoryFilter(e.target.value);
+              setPage(1);
+            }}
+            className="rounded-lg border border-border bg-white px-3 py-1.5 text-sm"
+          >
+            {CATEGORIES.map((o) => (
+              <option key={o.value} value={o.value}>
+                {o.label}
+              </option>
+            ))}
+          </select>
+          <label className="inline-flex items-center gap-1.5 text-sm cursor-pointer rounded-lg border border-border bg-white px-3 py-1.5">
+            <input
+              type="checkbox"
+              checked={noDriverOnly}
+              onChange={(e) => {
+                setNoDriverOnly(e.target.checked);
+                setPage(1);
+              }}
+              className="h-4 w-4 accent-brand-red"
+            />
+            من غير مندوب
+          </label>
+          <label className="inline-flex items-center gap-1.5 text-sm cursor-pointer rounded-lg border border-border bg-white px-3 py-1.5">
+            <input
+              type="checkbox"
+              checked={scheduledOnly}
+              onChange={(e) => {
+                setScheduledOnly(e.target.checked);
+                setPage(1);
+              }}
+              className="h-4 w-4 accent-brand-red"
+            />
+            مجدولة لوقت لاحق
+          </label>
         </div>
       </div>
 
@@ -695,6 +888,7 @@ export function OrdersPage() {
                       onToggle={toggleSort}
                     />
                     <th className="px-4 py-3 font-bold">العميل</th>
+                    <th className="px-4 py-3 font-bold">المصدر</th>
                     <th className="px-4 py-3 font-bold">الخدمة</th>
                     <th className="px-4 py-3 font-bold">المتجر</th>
                     <SortableTh
@@ -805,6 +999,9 @@ export function OrdersPage() {
                               {o.customer?.phone ?? ''}
                             </div>
                           </td>
+                          <td className="px-4 py-3">
+                            <SourceBadge source={o.source} />
+                          </td>
                           <td className="px-4 py-3">{o.service?.nameAr ?? '—'}</td>
                           {/*
                             The store the order is bought from. It was on no
@@ -912,6 +1109,10 @@ export function OrdersPage() {
                                   <span className="text-muted-foreground">↳ </span>
                                   {sub.orderNumber}
                                 </td>
+                                {/* العميل + المصدر: نفس بتوع الأوردر الأب،
+                                    فسايبينهم فاضيين عشان الأعمدة تفضل متطابقة. */}
+                                <td className="px-4 py-2" />
+                                <td className="px-4 py-2" />
                                 {/* Items in the الخدمة column, store in the new
                                     المتجر column — the sub-row now lines up
                                     with the parent's headers instead of

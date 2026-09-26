@@ -531,6 +531,24 @@ export function OrderDetailPage() {
               {new Date(order.createdAt).toLocaleString('ar-EG')} ·{' '}
               {order.service?.nameAr ?? order.category}
             </div>
+            {/* من فين جه الطلب — أول سؤال بيتسأل وقت المراجعة. */}
+            {order.source && (
+              <span
+                className={`inline-block mt-2 px-2 py-0.5 rounded-md border text-[11px] font-bold ${
+                  order.source === 'APP'
+                    ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                    : order.source === 'MANUAL'
+                      ? 'bg-blue-50 text-blue-700 border-blue-200'
+                      : 'bg-amber-50 text-amber-700 border-amber-200'
+                }`}
+              >
+                {order.source === 'APP'
+                  ? '📱 من التطبيق'
+                  : order.source === 'MANUAL'
+                    ? '🧾 يدوي (من متجر)'
+                    : '✍️ يدوي مخصص'}
+              </span>
+            )}
           </div>
           <div className="text-right">
             <div className="text-xs text-muted-foreground">الإجمالي</div>

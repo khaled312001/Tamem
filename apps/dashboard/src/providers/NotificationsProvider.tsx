@@ -27,7 +27,13 @@ export function NotificationsProvider({ children }: { children: React.ReactNode 
   const notify = useCallback(
     (
       kind: NotifKind,
-      payload: { id?: string; orderNumber?: string; status?: string; titleAr?: string },
+      payload: {
+        id?: string;
+        orderNumber?: string;
+        status?: string;
+        titleAr?: string;
+        relatedOrderId?: string;
+      },
     ) => {
       let title = '';
       let body = '';
@@ -40,7 +46,10 @@ export function NotificationsProvider({ children }: { children: React.ReactNode 
           body = payload.orderNumber
             ? `طلب ${payload.orderNumber} ينتظر المراجعة`
             : 'طلب جديد ينتظر المراجعة';
-          link = payload.id ? `/orders` : undefined;
+          // The order itself, not the list: an admin who taps "طلب جديد" wants
+          // that order open, and hunting for it in a 1,400-row list was the
+          // whole complaint.
+          link = payload.id ? `/orders/${payload.id}` : '/orders';
           chime = 'alert';
           qc.invalidateQueries({ queryKey: ['admin', 'orders'] });
           qc.invalidateQueries({ queryKey: ['admin', 'overview-counts'] });
@@ -50,14 +59,16 @@ export function NotificationsProvider({ children }: { children: React.ReactNode 
           body = payload.orderNumber
             ? `طلب ${payload.orderNumber} → ${payload.status ?? 'حالة جديدة'}`
             : 'تحديث حالة طلب';
-          link = `/orders`;
+          link = payload.id ? `/orders/${payload.id}` : '/orders';
           chime = payload.status === 'COMPLETED' ? 'success' : 'info';
           qc.invalidateQueries({ queryKey: ['admin', 'orders'] });
           break;
         case 'alert:new':
           title = '⚠️ تنبيه جديد';
           body = payload.titleAr ?? 'تم إضافة تنبيه إلى المركز';
-          link = `/alerts`;
+          // Most alerts are ABOUT an order ("طلب متأخر", "مندوب لم يتحرك") — open
+          // that order. Only a system-wide alert has nothing to point at.
+          link = payload.relatedOrderId ? `/orders/${payload.relatedOrderId}` : '/alerts';
           chime = 'alert';
           qc.invalidateQueries({ queryKey: ['admin', 'alerts'] });
           qc.invalidateQueries({ queryKey: ['admin', 'alerts-count'] });
@@ -67,7 +78,7 @@ export function NotificationsProvider({ children }: { children: React.ReactNode 
           body = payload.orderNumber
             ? `طلب ${payload.orderNumber} رفع إثبات دفع`
             : 'إثبات دفع جديد ينتظر التأكيد';
-          link = `/payments`;
+          link = payload.relatedOrderId ? `/orders/${payload.relatedOrderId}` : '/payments';
           chime = 'success';
           qc.invalidateQueries({ queryKey: ['admin', 'payments'] });
           break;
@@ -103,7 +114,9 @@ export function NotificationsProvider({ children }: { children: React.ReactNode 
           const n = new Notification(title, { body, tag: kind, icon: '/favicon.ico' });
           n.onclick = () => {
             window.focus();
-            if (link) window.location.href = link;
+            // Same base-path trap as the toast above: a bare `/orders/…` lands
+            // on the domain root, which is the public site, not the dashboard.
+            if (link) window.location.href = base + link;
             n.close();
           };
         } catch {
@@ -130,8 +143,10 @@ export function NotificationsProvider({ children }: { children: React.ReactNode 
     const onNewOrder = (p: { id?: string; orderNumber?: string }) => handle('order:new', p);
     const onStatus = (p: { id?: string; orderNumber?: string; status?: string }) =>
       handle('order:status', p);
-    const onAlert = (p: { id?: string; titleAr?: string }) => handle('alert:new', p);
-    const onPayment = (p: { id?: string; orderNumber?: string }) => handle('payment:new', p);
+    const onAlert = (p: { id?: string; titleAr?: string; relatedOrderId?: string }) =>
+      handle('alert:new', p);
+    const onPayment = (p: { id?: string; orderNumber?: string; relatedOrderId?: string }) =>
+      handle('payment:new', p);
 
     socket.on('order:new', onNewOrder);
     socket.on('order:status', onStatus);
@@ -167,7 +182,13 @@ export function NotificationsProvider({ children }: { children: React.ReactNode 
 function usePollingFallback(
   notify: (
     kind: NotifKind,
-    payload: { id?: string; orderNumber?: string; status?: string; titleAr?: string },
+    payload: {
+      id?: string;
+      orderNumber?: string;
+      status?: string;
+      titleAr?: string;
+      relatedOrderId?: string;
+    },
   ) => void,
 ) {
   const qc = useQueryClient();
@@ -213,7 +234,11 @@ function usePollingFallback(
       if (seen.current.has(key)) continue;
       seen.current.add(key);
       fired = true;
-      notify('alert:new', { id: a.id, titleAr: a.titleAr });
+      notify('alert:new', {
+        id: a.id,
+        titleAr: a.titleAr,
+        relatedOrderId: (a as { relatedOrderId?: string }).relatedOrderId,
+      });
     }
 
     // Keep the sidebar badges in sync without a second request.
