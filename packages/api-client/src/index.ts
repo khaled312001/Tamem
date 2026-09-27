@@ -361,6 +361,12 @@ export class TamemClient {
     return this.request({ method: 'GET', url: '/admin/overview', params: { range } });
   }
 
+  /** Advanced analytics: source mix, best weekdays, peak hours, status mix,
+   *  top merchants, top products, plus decision KPIs. */
+  async adminAnalytics(range: 'today' | 'week' | 'month' = 'week'): Promise<unknown> {
+    return this.request({ method: 'GET', url: '/admin/analytics', params: { range } });
+  }
+
   /** One lightweight poll for the live notifier: new orders/alerts since `since`
    *  (the `now` from the previous response) + current counts. */
   async adminRealtime(since?: number): Promise<{

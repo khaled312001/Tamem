@@ -41,6 +41,7 @@ import { api } from '../lib/api.js';
 import { formatCount, formatMoney, formatWeekdayDate } from '../lib/format.js';
 import { connectSocket } from '../lib/socket.js';
 import { playNewOrderSound } from '../lib/sound.js';
+import { AnalyticsSection } from './overview-analytics.js';
 
 const RANGE_OPTIONS = [
   { value: 'today', label: 'اليوم' },
@@ -358,6 +359,9 @@ export function OverviewPage() {
               )}
             </div>
           </div>
+
+          {/* ── تحليلات متقدمة ── */}
+          <AnalyticsSection range={range} />
         </>
       ) : null}
     </div>

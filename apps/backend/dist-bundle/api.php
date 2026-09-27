@@ -1368,6 +1368,103 @@ if ($method === 'GET' && $path === '/admin/reports/customers') {
     ], $rows));
 }
 
+// GET /admin/analytics — the advanced analytics section on «نظرة عامة»:
+// order source, best weekdays, peak hours, status mix, top merchants, top
+// products, plus decision KPIs. One handful of grouped queries per load.
+if ($method === 'GET' && $path === '/admin/analytics') {
+    $u = authUser();
+    if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
+    $range = $_GET['range'] ?? 'week';
+    $now = time();
+    if ($range === 'today') $fromTs = strtotime('today');
+    elseif ($range === 'month') $fromTs = strtotime('first day of this month 00:00');
+    else $fromTs = $now - 7 * 86400;
+    $fromSql = gmdate('Y-m-d H:i:s', $fromTs);
+    $toSql = gmdate('Y-m-d H:i:s', $now);
+    $pdo = db();
+    // Stored times are UTC; +3h ≈ Cairo for weekday/hour bucketing.
+    $CAIRO = 'DATE_ADD(createdAt, INTERVAL 3 HOUR)';
+    $live = "status NOT IN ('CANCELLED','REJECTED')";
+    $val  = 'COALESCE(finalPrice, quotedPrice, 0)';
+    $run = function (string $sql) use ($pdo, $fromSql, $toSql): array {
+        $s = $pdo->prepare($sql); $s->execute([$fromSql, $toSql]); return $s->fetchAll();
+    };
+
+    // 1) مصدر الطلب (تطبيق / يدوي / مخصص)
+    $bySource = [];
+    foreach ($run("SELECT COALESCE(NULLIF(source,''),'APP') s, COUNT(*) n, COALESCE(SUM($val),0) v
+                   FROM `Order` WHERE createdAt BETWEEN ? AND ? GROUP BY s") as $r)
+        $bySource[] = ['source' => (string) $r['s'], 'orders' => (int) $r['n'], 'sales' => round((float) $r['v'], 2)];
+
+    // 2) أفضل أيام البيع (0=الأحد … 6=السبت)
+    $byWeekday = [];
+    for ($i = 0; $i < 7; $i++) $byWeekday[$i] = ['weekday' => $i, 'orders' => 0, 'sales' => 0.0];
+    foreach ($run("SELECT (DAYOFWEEK($CAIRO)-1) d, COUNT(*) n, COALESCE(SUM($val),0) v
+                   FROM `Order` WHERE createdAt BETWEEN ? AND ? AND $live GROUP BY d") as $r) {
+        $d = (int) $r['d']; if ($d >= 0 && $d < 7) $byWeekday[$d] = ['weekday' => $d, 'orders' => (int) $r['n'], 'sales' => round((float) $r['v'], 2)];
+    }
+
+    // 3) ساعات الذروة
+    $byHour = [];
+    for ($i = 0; $i < 24; $i++) $byHour[$i] = ['hour' => $i, 'orders' => 0];
+    foreach ($run("SELECT HOUR($CAIRO) h, COUNT(*) n FROM `Order` WHERE createdAt BETWEEN ? AND ? AND $live GROUP BY h") as $r) {
+        $h = (int) $r['h']; if ($h >= 0 && $h < 24) $byHour[$h] = ['hour' => $h, 'orders' => (int) $r['n']];
+    }
+
+    // 4) توزيع الحالات
+    $byStatus = [];
+    foreach ($run("SELECT status s, COUNT(*) n FROM `Order` WHERE createdAt BETWEEN ? AND ? GROUP BY s") as $r)
+        $byStatus[] = ['status' => (string) $r['s'], 'orders' => (int) $r['n']];
+
+    // 5) أعلى المتاجر طلبًا (عبر OrderItem.merchantId)
+    $topMerchants = [];
+    foreach ($run("SELECT mp.storeNameAr name, COUNT(DISTINCT oi.orderId) orders, COALESCE(SUM(oi.unitPriceSnapshot*oi.quantity),0) sales
+                   FROM `OrderItem` oi JOIN `Order` o ON o.id = oi.orderId
+                   LEFT JOIN `MerchantProfile` mp ON mp.id = oi.merchantId
+                   WHERE o.createdAt BETWEEN ? AND ? AND o.status NOT IN ('CANCELLED','REJECTED') AND oi.merchantId IS NOT NULL
+                   GROUP BY oi.merchantId, mp.storeNameAr ORDER BY orders DESC, sales DESC LIMIT 10") as $r)
+        $topMerchants[] = ['name' => (string) ($r['name'] ?: 'متجر'), 'orders' => (int) $r['orders'], 'sales' => round((float) $r['sales'], 2)];
+
+    // 6) أعلى المنتجات طلبًا
+    $topProducts = [];
+    foreach ($run("SELECT oi.productNameSnapshot name, COALESCE(SUM(oi.quantity),0) qty, COALESCE(SUM(oi.unitPriceSnapshot*oi.quantity),0) sales
+                   FROM `OrderItem` oi JOIN `Order` o ON o.id = oi.orderId
+                   WHERE o.createdAt BETWEEN ? AND ? AND o.status NOT IN ('CANCELLED','REJECTED') AND TRIM(COALESCE(oi.productNameSnapshot,'')) <> ''
+                   GROUP BY oi.productNameSnapshot ORDER BY qty DESC LIMIT 10") as $r)
+        $topProducts[] = ['name' => (string) $r['name'], 'qty' => (int) $r['qty'], 'sales' => round((float) $r['sales'], 2)];
+
+    // 7) KPIs
+    $kr = $pdo->prepare("SELECT COUNT(*) total,
+            COALESCE(SUM($live),0) active,
+            COALESCE(SUM(status IN ('DELIVERED','COMPLETED')),0) completed,
+            COALESCE(SUM(status IN ('CANCELLED','REJECTED')),0) cancelled,
+            COALESCE(SUM(CASE WHEN status IN ('DELIVERED','COMPLETED') THEN $val ELSE 0 END),0) sales,
+            COALESCE(SUM(CASE WHEN status IN ('DELIVERED','COMPLETED') THEN COALESCE(deliveryFee,0) ELSE 0 END),0) delivery
+          FROM `Order` WHERE createdAt BETWEEN ? AND ?");
+    $kr->execute([$fromSql, $toSql]);
+    $k = $kr->fetch() ?: [];
+    $nc = $pdo->prepare("SELECT COUNT(*) FROM `User` WHERE role='CUSTOMER' AND createdAt BETWEEN ? AND ?");
+    $nc->execute([$fromSql, $toSql]); $newCustomers = (int) $nc->fetchColumn();
+    $total = (int) ($k['total'] ?? 0); $completed = (int) ($k['completed'] ?? 0); $sales = round((float) ($k['sales'] ?? 0), 2);
+
+    jsonOk([
+        'range' => ['from' => gmdate('c', $fromTs), 'to' => gmdate('c', $now)],
+        'kpis' => [
+            'orders' => $total, 'active' => (int) ($k['active'] ?? 0),
+            'completed' => $completed, 'cancelled' => (int) ($k['cancelled'] ?? 0),
+            'sales' => $sales, 'delivery' => round((float) ($k['delivery'] ?? 0), 2),
+            'avgOrderValue' => $completed > 0 ? round($sales / $completed, 2) : 0,
+            'completionRate' => $total > 0 ? round($completed * 100 / $total, 1) : 0,
+            'newCustomers' => $newCustomers,
+        ],
+        'bySource' => $bySource,
+        'byWeekday' => array_values($byWeekday),
+        'byHour' => array_values($byHour),
+        'byStatus' => $byStatus,
+        'topMerchants' => $topMerchants,
+        'topProducts' => $topProducts,
+    ]);
+}
 if ($method === 'GET' && $path === '/admin/overview') {
     $u = authUser();
     if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
