@@ -13,7 +13,7 @@
  */
 import { useQuery } from '@tanstack/react-query';
 import { Calendar, FileSpreadsheet, Loader2, Printer } from 'lucide-react';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
 
 import { api } from '../lib/api.js';
@@ -441,6 +441,24 @@ function PrintableReport({
   data: ReportPayload;
   showCommission: boolean;
 }) {
+  // Pagination for the (potentially huge) order-detail table. The summary, the
+  // breakdowns and the Excel export still use ALL rows — only this table pages,
+  // so the page doesn't render thousands of <tr> at once.
+  const ROWS_PER_PAGE = 50;
+  const [rowsPage, setRowsPage] = useState(1);
+  useEffect(() => setRowsPage(1), [data]);
+  const rowsPaged = useMemo(() => {
+    const all = data.rows;
+    const totalPages = Math.max(1, Math.ceil(all.length / ROWS_PER_PAGE));
+    const cur = Math.min(rowsPage, totalPages);
+    return {
+      total: all.length,
+      totalPages,
+      cur,
+      rows: all.slice((cur - 1) * ROWS_PER_PAGE, cur * ROWS_PER_PAGE),
+    };
+  }, [data, rowsPage]);
+
   return (
     <div className="space-y-4 print:space-y-3">
       {/* Print-only header */}
@@ -599,7 +617,7 @@ function PrintableReport({
               </tr>
             </thead>
             <tbody>
-              {data.rows.map((r) => (
+              {rowsPaged.rows.map((r) => (
                 <tr key={r.orderId} className="border-b border-border/40 hover:bg-muted/20">
                   <td className="px-2 py-2 font-mono">{r.orderNumber}</td>
                   <td className="px-2 py-2 whitespace-nowrap">{fmtDate(r.completedAt)}</td>
@@ -659,6 +677,48 @@ function PrintableReport({
             </tfoot>
           </table>
         </div>
+
+        {rowsPaged.total > ROWS_PER_PAGE && (
+          <div className="mt-3 flex items-center justify-between gap-2 flex-wrap print:hidden">
+            <span className="text-xs text-muted-foreground">
+              عرض {(rowsPaged.cur - 1) * ROWS_PER_PAGE + 1}–
+              {Math.min(rowsPaged.cur * ROWS_PER_PAGE, rowsPaged.total)} من {rowsPaged.total} طلب
+            </span>
+            <div className="flex items-center gap-1">
+              <button
+                onClick={() => setRowsPage(1)}
+                disabled={rowsPaged.cur <= 1}
+                className="rounded-lg border border-border px-2 py-1.5 text-xs font-bold disabled:opacity-40 hover:bg-muted/50"
+              >
+                « الأولى
+              </button>
+              <button
+                onClick={() => setRowsPage((p) => Math.max(1, p - 1))}
+                disabled={rowsPaged.cur <= 1}
+                className="rounded-lg border border-border px-3 py-1.5 text-xs font-bold disabled:opacity-40 hover:bg-muted/50"
+              >
+                السابق
+              </button>
+              <span className="px-2 text-xs font-bold text-brand-dark">
+                {rowsPaged.cur} / {rowsPaged.totalPages}
+              </span>
+              <button
+                onClick={() => setRowsPage((p) => Math.min(rowsPaged.totalPages, p + 1))}
+                disabled={rowsPaged.cur >= rowsPaged.totalPages}
+                className="rounded-lg border border-border px-3 py-1.5 text-xs font-bold disabled:opacity-40 hover:bg-muted/50"
+              >
+                التالي
+              </button>
+              <button
+                onClick={() => setRowsPage(rowsPaged.totalPages)}
+                disabled={rowsPaged.cur >= rowsPaged.totalPages}
+                className="rounded-lg border border-border px-2 py-1.5 text-xs font-bold disabled:opacity-40 hover:bg-muted/50"
+              >
+                الأخيرة »
+              </button>
+            </div>
+          </div>
+        )}
       </Section>
 
       {/* Print-only signature block */}
