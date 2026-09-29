@@ -39,10 +39,11 @@
         "backgroundColor": "#E0301E"
       },
       "permissions": [
-        "ACCESS_FINE_LOCATION",
-        "ACCESS_COARSE_LOCATION",
-        "CAMERA",
-        "POST_NOTIFICATIONS"
+        "android.permission.ACCESS_FINE_LOCATION",
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.CAMERA",
+        "android.permission.POST_NOTIFICATIONS",
+        "android.permission.RECORD_AUDIO"
       ],
       "blockedPermissions": [
         "android.permission.READ_MEDIA_IMAGES",
@@ -81,11 +82,12 @@
     "extra": {
       "forceRTL": true,
       "eas": {
-        "projectId": ""
+        "projectId": "1d399315-69df-4baf-b6e5-f5d41e65f3e9"
       }
     },
     "experiments": {
       "typedRoutes": false
-    }
+    },
+    "owner": "delivery-tamem"
   }
 }
