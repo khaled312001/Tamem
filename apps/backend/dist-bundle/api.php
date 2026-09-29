@@ -1397,6 +1397,143 @@ if ($method === 'GET' && $path === '/admin/reports/customers') {
     ], $rows));
 }
 
+/**
+ * GET /admin/analytics?range=today|week|month — «تحليلات متقدمة» في نظرة عامة.
+ *
+ * الصفحة دي كانت منشورة في لوحة التحكم من غير ما الـ endpoint يتعمل هنا، فكانت
+ * بتقع على الـ catch-all اللي بيرجّع {"data":[]} بكود 200. الواجهة بتعمل
+ * `data.bySource.map(...)` على طول، فكانت بترمي
+ * «Cannot read properties of undefined» وتوقع اللوحة كلها على شاشة الخطأ —
+ * مش صفحة التحليلات بس. النطاقات والإيراد محسوبين بنفس قواعد /admin/overview
+ * بالظبط عشان الرقمين اللي جنب بعض مايقولوش كلامين مختلفين.
+ */
+if ($method === 'GET' && $path === '/admin/analytics') {
+    $u = authUser();
+    if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
+    $range = (string) ($_GET['range'] ?? 'week');
+    $now = time();
+    if ($range === 'today') $fromTs = strtotime('today');
+    elseif ($range === 'month') $fromTs = strtotime('first day of this month 00:00');
+    else $fromTs = $now - 7 * 86400;
+    $fromSql = gmdate('Y-m-d H:i:s', $fromTs);
+    $toSql = gmdate('Y-m-d H:i:s', $now);
+    $pdo = db();
+    $DONE = "('COMPLETED','DELIVERED')";
+
+    // كل أوردرات النطاق مرة واحدة: الاستعلام الواحد أرخص من ٦ على استضافة
+    // مشتركة، والتجميع في PHP على بضع آلاف صف مش مشكلة.
+    $st = $pdo->prepare(
+        "SELECT o.status, o.source, o.createdAt, o.merchantId, o.deliveryFee,
+                COALESCE(o.finalPrice, o.quotedPrice, 0) AS amount,
+                o.createdByAdminId
+           FROM `Order` o
+          WHERE o.createdAt BETWEEN ? AND ?"
+    );
+    $st->execute([$fromSql, $toSql]);
+    $rows = $st->fetchAll();
+
+    $orders = count($rows);
+    $sales = 0.0; $delivery = 0.0; $completed = 0;
+    $bySrc = ['APP' => ['orders' => 0, 'sales' => 0.0],
+              'MANUAL' => ['orders' => 0, 'sales' => 0.0],
+              'CUSTOM' => ['orders' => 0, 'sales' => 0.0]];
+    $byStatus = []; $byWeekday = []; $byHour = []; $byMerchant = [];
+    foreach ($rows as $r) {
+        $isDone = in_array((string) $r['status'], ['COMPLETED', 'DELIVERED'], true);
+        $amt = (float) $r['amount'];
+        if ($isDone) { $completed++; $sales += $amt; }
+        $delivery += (float) ($r['deliveryFee'] ?? 0);
+
+        // نفس الاستنتاج اللي في orderNest(): أوردرات قبل عمود source لسه NULL.
+        $src = strtoupper(trim((string) ($r['source'] ?? '')));
+        if (!isset($bySrc[$src])) $src = !empty($r['createdByAdminId']) ? 'MANUAL' : 'APP';
+        $bySrc[$src]['orders']++;
+        if ($isDone) $bySrc[$src]['sales'] += $amt;
+
+        $stt = (string) $r['status'];
+        $byStatus[$stt] = ($byStatus[$stt] ?? 0) + 1;
+
+        $ts = strtotime((string) $r['createdAt']);
+        $wd = (int) gmdate('w', $ts);   // 0 = الأحد، زي ترتيب أسماء الأيام في الواجهة
+        $hr = (int) gmdate('G', $ts);
+        if (!isset($byWeekday[$wd])) $byWeekday[$wd] = ['orders' => 0, 'sales' => 0.0];
+        $byWeekday[$wd]['orders']++;
+        if ($isDone) $byWeekday[$wd]['sales'] += $amt;
+        $byHour[$hr] = ($byHour[$hr] ?? 0) + 1;
+
+        $mid = (string) ($r['merchantId'] ?? '');
+        if ($mid !== '') {
+            if (!isset($byMerchant[$mid])) $byMerchant[$mid] = ['orders' => 0, 'sales' => 0.0];
+            $byMerchant[$mid]['orders']++;
+            if ($isDone) $byMerchant[$mid]['sales'] += $amt;
+        }
+    }
+
+    // أسماء المتاجر لأعلى ١٠ بس — مش لكل متجر ظهر في النطاق.
+    arsort($byMerchant);
+    $topIds = array_slice(array_keys($byMerchant), 0, 10);
+    $names = [];
+    if ($topIds) {
+        $in = implode(',', array_fill(0, count($topIds), '?'));
+        $ms = $pdo->prepare("SELECT id, COALESCE(storeNameAr, storeName) AS nm FROM `MerchantProfile` WHERE id IN ($in)");
+        $ms->execute($topIds);
+        foreach ($ms->fetchAll() as $m) $names[(string) $m['id']] = (string) $m['nm'];
+    }
+    $topMerchants = [];
+    foreach ($topIds as $mid) {
+        $topMerchants[] = ['name' => $names[$mid] ?? 'متجر محذوف',
+            'orders' => $byMerchant[$mid]['orders'], 'sales' => round($byMerchant[$mid]['sales'], 2)];
+    }
+
+    // الأصناف: الكمية من OrderItem، والمبيعات من سعر اللحظة لو متسجّل.
+    $ps = $pdo->prepare(
+        "SELECT i.productNameSnapshot AS nm, SUM(i.quantity) AS qty,
+                SUM(i.quantity * COALESCE(i.unitPriceSnapshot, 0)) AS sales
+           FROM `OrderItem` i JOIN `Order` o ON o.id = i.orderId
+          WHERE o.createdAt BETWEEN ? AND ?
+          GROUP BY i.productNameSnapshot
+          ORDER BY qty DESC
+          LIMIT 10"
+    );
+    $ps->execute([$fromSql, $toSql]);
+    $topProducts = array_map(fn($r) => [
+        'name' => (string) $r['nm'], 'qty' => (int) $r['qty'], 'sales' => round((float) $r['sales'], 2),
+    ], $ps->fetchAll());
+
+    $nc = $pdo->prepare("SELECT COUNT(*) FROM `User` WHERE role='CUSTOMER' AND createdAt BETWEEN ? AND ?");
+    $nc->execute([$fromSql, $toSql]);
+
+    $srcOut = [];
+    foreach ($bySrc as $k => $v) $srcOut[] = ['source' => $k, 'orders' => $v['orders'], 'sales' => round($v['sales'], 2)];
+    $stOut = [];
+    foreach ($byStatus as $k => $v) $stOut[] = ['status' => $k, 'orders' => $v];
+    $wdOut = [];
+    foreach ($byWeekday as $k => $v) $wdOut[] = ['weekday' => $k, 'orders' => $v['orders'], 'sales' => round($v['sales'], 2)];
+    $hrOut = [];
+    foreach ($byHour as $k => $v) $hrOut[] = ['hour' => $k, 'orders' => $v];
+    usort($wdOut, fn($a, $b) => $a['weekday'] <=> $b['weekday']);
+    usort($hrOut, fn($a, $b) => $a['hour'] <=> $b['hour']);
+
+    jsonOk([
+        'range' => $range,
+        'kpis' => [
+            'orders' => $orders,
+            'sales' => round($sales, 2),
+            // متوسط قيمة الأوردر المكتمل — القسمة على كل الأوردرات كانت هتبيّن
+            // المتوسط أقل من الحقيقة كل ما في أوردرات لسه بتتسعّر.
+            'avgOrderValue' => $completed > 0 ? round($sales / $completed, 2) : 0,
+            'delivery' => round($delivery, 2),
+            'completionRate' => $orders > 0 ? (int) round($completed * 100 / $orders) : 0,
+            'newCustomers' => (int) $nc->fetchColumn(),
+        ],
+        'bySource' => $srcOut,
+        'byStatus' => $stOut,
+        'byWeekday' => $wdOut,
+        'byHour' => $hrOut,
+        'topMerchants' => $topMerchants,
+        'topProducts' => $topProducts,
+    ]);
+}
 if ($method === 'GET' && $path === '/admin/overview') {
     $u = authUser();
     if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
