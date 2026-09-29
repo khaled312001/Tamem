@@ -150,3 +150,10 @@ release/post-images/
 # scratch space for image/video generation — the generator in
 # scripts/social-post is what belongs in git, not its 20 MB of output.
 .work/
+
+# Private credentials and the store guide that carries the signing key.
+.secrets/
+
+# Build artefacts and generated marketing output; never in git.
+release/video/
+tsconfig.tsbuildinfo
