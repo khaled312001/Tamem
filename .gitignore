@@ -143,3 +143,6 @@ release/*mapping*.txt
 .api-runtime/
 # Account recovery codes must never reach git
 *recovery-codes*
+
+# Store listing graphics — 10 MB of PNGs regenerated from device captures.
+release/store-screenshots/
