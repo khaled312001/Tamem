@@ -10959,6 +10959,84 @@ if ($method === 'POST' && $path === '/uploads') {
 }
 
 // ═══ HOME / SITE CONFIG (public) ═══════════════════════════════════════
+/*
+ * ─── أرقام التواصل (contact lines) ──────────────────────────────────────────
+ *
+ * الأرقام اللي التطبيق والموقع بيعرضوها للعميل. كانت متكتوبة جوه كود التطبيق،
+ * يعني تغيير رقم = بناء ونشر نسخة جديدة على المتجر وانتظار الناس تحدّث. دلوقتي
+ * مصدرها هنا (Setting: contact_lines)، والداشبورد بيعدّلها.
+ *
+ * الافتراضي هو أرقام تميم الرسمية، فحتى لو الـ Setting مش موجود مفيش رقم شخصي
+ * بيتسرّب.
+ */
+function contactLinesDefault(): array {
+    return [
+        ['key' => 'delivery1', 'phone' => '+201070750167', 'labelAr' => 'خدمة الدليفري — خط 1', 'descAr' => 'مطاعم، صيدليات، سوبر ماركت'],
+        ['key' => 'delivery2', 'phone' => '+201070750168', 'labelAr' => 'خدمة الدليفري — خط 2', 'descAr' => 'خط بديل لخدمة التوصيل'],
+        ['key' => 'shipping',  'phone' => '+201070750165', 'labelAr' => 'خدمة الشحن', 'descAr' => 'الشحن بين المحافظات'],
+        ['key' => 'support',   'phone' => '+201070750169', 'labelAr' => 'الشكاوى والإدارة', 'descAr' => 'استفسارات وشكاوى'],
+    ];
+}
+function contactLines(): array {
+    static $v = null;
+    if ($v !== null) return $v;
+    $v = contactLinesDefault();
+    try {
+        $st = db()->prepare("SELECT `value` FROM `Setting` WHERE `key` = 'contact_lines' LIMIT 1");
+        $st->execute();
+        $raw = $st->fetchColumn();
+        $d = $raw ? json_decode((string) $raw, true) : null;
+        if (is_array($d) && $d) $v = $d;
+    } catch (Throwable $e) { /* الافتراضي كفاية */ }
+    return $v;
+}
+/** واتساب الإدارة — الرقم اللي أزرار «تواصل مع الإدارة» بتفتح عليه. */
+function supportWhatsapp(): string {
+    foreach (contactLines() as $l) if (($l['key'] ?? '') === 'support') return (string) ($l['phone'] ?? '');
+    $first = contactLines()[0] ?? [];
+    return (string) ($first['phone'] ?? '+201070750169');
+}
+if ($method === 'GET' && $path === '/settings/contacts') {
+    $lines = array_map(function ($l) {
+        $digits = preg_replace('/\D/', '', (string) ($l['phone'] ?? '')) ?? '';
+        return [
+            'key' => (string) ($l['key'] ?? ''),
+            'phone' => (string) ($l['phone'] ?? ''),
+            'whatsapp' => 'https://wa.me/' . $digits,
+            'labelAr' => (string) ($l['labelAr'] ?? ''),
+            'descAr' => (string) ($l['descAr'] ?? ''),
+        ];
+    }, contactLines());
+    jsonOk([
+        'lines' => $lines,
+        'primaryPhone' => $lines[0]['phone'] ?? '',
+        'supportWhatsapp' => supportWhatsapp(),
+        'addressAr' => 'المقر الرئيسي — مدينة قفط، محافظة قنا',
+        'email' => 'info@deliverytamem.com',
+    ]);
+}
+if ($method === 'PUT' && $path === '/admin/settings/contacts') {
+    $u = authUser();
+    if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
+    $b = readJsonBody();
+    $clean = [];
+    foreach ((array) ($b['lines'] ?? []) as $l) {
+        if (!is_array($l)) continue;
+        $phone = preg_replace('/[^\d+]/', '', (string) ($l['phone'] ?? '')) ?? '';
+        if ($phone === '') continue;
+        $clean[] = [
+            'key' => trim((string) ($l['key'] ?? '')) ?: ('line' . (count($clean) + 1)),
+            'phone' => $phone,
+            'labelAr' => trim((string) ($l['labelAr'] ?? '')) ?: 'خط تواصل',
+            'descAr' => trim((string) ($l['descAr'] ?? '')),
+        ];
+    }
+    if (!$clean) jsonErr('لازم رقم واحد على الأقل', 422, 'EMPTY');
+    db()->prepare('INSERT INTO `Setting` (`key`,`value`,`description`,`updatedAt`,`updatedById`) VALUES (?,?,NULL,NOW(3),?) ON DUPLICATE KEY UPDATE `value`=VALUES(`value`), `updatedAt`=VALUES(`updatedAt`), `updatedById`=VALUES(`updatedById`)')
+        ->execute(['contact_lines', json_encode($clean, JSON_UNESCAPED_UNICODE), $u['sub'] ?? null]);
+    jsonOk(['lines' => $clean]);
+}
+
 if ($method === 'GET' && $path === '/home-config') {
     $rows = db()->query('SELECT * FROM `HomeConfig` ORDER BY id ASC LIMIT 1')->fetchAll();
     $cfg = $rows[0] ?? null;
