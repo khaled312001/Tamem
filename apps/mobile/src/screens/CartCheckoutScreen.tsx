@@ -35,6 +35,7 @@ import { ScreenHeader } from '../components/ScreenHeader';
 import { SchedulePicker } from '../components/SchedulePicker';
 import { EmptyState, MoneyText, PrimaryButton } from '../components/ui';
 import { api } from '../lib/api';
+import { merchantsCount } from '../lib/arabicCount';
 import { goToNewOrder } from '../lib/goToNewOrder';
 import { refuseIfOffline } from '../lib/offline';
 import { showToast } from '../lib/toast';
@@ -207,7 +208,7 @@ export function CartCheckoutScreen() {
     <SafeAreaView edges={['top']} style={styles.container}>
       <ScreenHeader
         title="إتمام الطلب"
-        subtitle={groups.length > 1 ? `${groups.length} تجار في طلب واحد` : undefined}
+        subtitle={groups.length > 1 ? `${merchantsCount(groups.length)} في طلب واحد` : undefined}
       />
 
       <KeyboardAvoidingView
@@ -662,14 +663,17 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
+    // stretch + gap, not `flex: 1` on the label: a grown label swallowed the
+    // free space and the amount ended up glued to it ("٢١٠ ج.مإجمالي المنتجات").
+    alignSelf: 'stretch',
+    gap: spacing.sm,
     paddingVertical: spacing.xs,
   },
   totalLineLabel: {
     fontFamily: fontFamilies.body,
     color: colors.text.secondary,
     fontSize: fontSizes.sm,
-    flex: 1,
-    marginInlineEnd: spacing.sm,
+    flexShrink: 1,
   },
   totalDivider: { height: 1, backgroundColor: colors.line, marginVertical: spacing.xs },
   verifyNudge: {

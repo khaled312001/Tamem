@@ -1,6 +1,7 @@
 package com.tamem.delivery
 
 import android.app.Application
+import android.content.Context
 import android.content.res.Configuration
 
 import com.facebook.react.PackageList
@@ -38,8 +39,29 @@ class MainApplication : Application(), ReactApplication {
   override val reactHost: ReactHost
     get() = ReactNativeHostWrapper.createReactHost(applicationContext, reactNativeHost)
 
+  /**
+   * Pin the layout direction to RTL before React starts.
+   *
+   * App.tsx calls I18nManager.forceRTL(true), but that only writes the flag —
+   * the direction React lays out with is read once, natively, at startup. So a
+   * fresh install (and, as we saw, a reinstall that drops the flag) paints the
+   * whole app mirrored, and it does not always heal on the next launch. These
+   * are the same preferences I18nManager writes, set early enough to count.
+   */
+  private fun pinRtl() {
+    val prefs = getSharedPreferences(
+        "com.facebook.react.modules.i18nmanager.I18nUtil", Context.MODE_PRIVATE)
+    if (prefs.getBoolean("RCTI18nUtil_forceRTL", false) &&
+        prefs.getBoolean("RCTI18nUtil_allowRTL", false)) return
+    prefs.edit()
+        .putBoolean("RCTI18nUtil_allowRTL", true)
+        .putBoolean("RCTI18nUtil_forceRTL", true)
+        .commit()
+  }
+
   override fun onCreate() {
     super.onCreate()
+    pinRtl()
     DefaultNewArchitectureEntryPoint.releaseLevel = try {
       ReleaseLevel.valueOf(BuildConfig.REACT_NATIVE_RELEASE_LEVEL.uppercase())
     } catch (e: IllegalArgumentException) {

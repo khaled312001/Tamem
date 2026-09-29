@@ -15,6 +15,7 @@ import { useEffect, useRef } from 'react';
 import { Animated, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { MoneyText } from './ui';
+import { merchantsCount } from '../lib/arabicCount';
 import { navigationRef } from '../lib/push';
 import { useCart } from '../stores/cart';
 import { colors, fontFamilies, fontSizes, gradients, radii, spacing } from '../theme/tokens';
@@ -107,7 +108,7 @@ export function FloatingCartBar({ bottomOffset = 0 }: Props) {
             <Text style={styles.label}>عرض السلة</Text>
             <Text style={styles.merchant} numberOfLines={1}>
               {cart.merchantIds.length > 1
-                ? `${cart.merchantIds.length} تجار`
+                ? merchantsCount(cart.merchantIds.length)
                 : (cart.items[0]?.merchantNameAr ?? '')}
             </Text>
           </View>

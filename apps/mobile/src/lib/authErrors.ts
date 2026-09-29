@@ -15,13 +15,14 @@ import { TamemApiError } from '@tamem/api-client';
 
 interface NormalizedError {
   status: number;
+  code?: string;
   messageAr?: string;
   fallback: string;
 }
 
 function normalize(err: unknown): NormalizedError | null {
   if (err instanceof TamemApiError) {
-    return { status: err.status, messageAr: err.messageAr, fallback: err.message };
+    return { status: err.status, code: err.code, messageAr: err.messageAr, fallback: err.message };
   }
   // Axios-shaped error: { response: { status, data: { error: { messageAr } } } }
   if (typeof err === 'object' && err !== null && 'isAxiosError' in err) {
@@ -31,7 +32,12 @@ function normalize(err: unknown): NormalizedError | null {
     const data = axiosErr.response?.data;
     const messageAr =
       data?.error?.messageAr ?? data?.error?.message ?? data?.messageAr ?? undefined;
-    return { status, messageAr, fallback: axiosErr.message ?? 'حصلت مشكلة' };
+    return {
+      status,
+      code: data?.error?.code,
+      messageAr,
+      fallback: axiosErr.message ?? 'حصلت مشكلة',
+    };
   }
   return null;
 }
@@ -42,8 +48,12 @@ export function authErrorMessage(
 ): string {
   const norm = normalize(err);
   if (norm) {
-    const { status, messageAr } = norm;
+    const { status, code, messageAr } = norm;
     if (status === 401) {
+      // An account with no password yet also answers 401. Flattening that to
+      // "wrong password" sent people (and a Play reviewer) round in circles —
+      // there was no password to get right. The server already says what to do.
+      if (code === 'ACCOUNT_NEEDS_PASSWORD' && messageAr) return messageAr;
       return context === 'login'
         ? 'رقم الهاتف أو كلمة المرور غير صحيحة. تأكد منهما وحاول مرة أخرى.'
         : (messageAr ?? 'انتهت صلاحية الجلسة. سجّل دخولك من جديد.');

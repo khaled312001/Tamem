@@ -18,6 +18,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { ScreenHeader } from '../components/ScreenHeader';
 import { EmptyState, MoneyText, PrimaryButton } from '../components/ui';
 import { api } from '../lib/api';
+import { merchantsCount } from '../lib/arabicCount';
 import { confirm } from '../lib/confirm';
 import { haptic } from '../lib/haptics';
 import type { HomeStackParamList } from '../navigation/HomeStack';
@@ -117,7 +118,7 @@ export function CartScreen() {
         title="سلتي"
         subtitle={
           groups.length > 1
-            ? `منتجات من ${groups.length} تجار`
+            ? `منتجات من ${merchantsCount(groups.length)}`
             : groups[0]
               ? `من ${groups[0].merchantNameAr}`
               : undefined
