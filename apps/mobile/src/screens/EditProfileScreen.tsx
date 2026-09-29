@@ -6,7 +6,6 @@ import { useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
-  Image,
   KeyboardAvoidingView,
   Linking,
   Platform,
@@ -16,6 +15,7 @@ import {
   Text,
   View,
 } from 'react-native';
+import { Image } from '../components/ui/CachedImage';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { GradientButton } from '../components/GradientButton';

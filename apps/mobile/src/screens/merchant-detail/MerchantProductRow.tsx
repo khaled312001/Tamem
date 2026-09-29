@@ -11,7 +11,8 @@
  */
 import { ChevronLeft, Minus, Plus, Store } from 'lucide-react-native';
 import { memo } from 'react';
-import { Image, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Image } from '../../components/ui/CachedImage';
 
 import { MoneyText } from '../../components/ui';
 import { productPrice } from '../../lib/productPrice';
@@ -105,11 +106,24 @@ function MerchantProductRowBase({
           sizes. Those rows always open the picker instead. */}
       {quantity > 0 && !p.hasOptions ? (
         <View style={[styles.stepper, { flexDirection: ROW }]}>
-          <Pressable onPress={onRemove} hitSlop={6} style={styles.stepBtn}>
+          <Pressable
+            onPress={onRemove}
+            hitSlop={10}
+            style={styles.stepBtn}
+            accessibilityRole="button"
+            accessibilityLabel="تقليل الكمية"
+          >
             <Minus size={15} color={colors.brand.red} />
           </Pressable>
           <Text style={styles.qty}>{quantity}</Text>
-          <Pressable onPress={onAdd} hitSlop={6} style={styles.stepBtn} disabled={disabled}>
+          <Pressable
+            onPress={onAdd}
+            hitSlop={10}
+            style={styles.stepBtn}
+            disabled={disabled}
+            accessibilityRole="button"
+            accessibilityLabel="زيادة الكمية"
+          >
             <Plus size={15} color={disabled ? colors.brand.gray : colors.brand.red} />
           </Pressable>
         </View>
@@ -216,7 +230,14 @@ const styles = StyleSheet.create({
     paddingHorizontal: 8,
     paddingVertical: 4,
   },
-  stepBtn: { padding: 2 },
+  stepBtn: {
+    // 44pt is the platform minimum for a reliable tap. The pill stays the same
+    // size it looks — the extra area comes from hitSlop, so nothing reflows.
+    minWidth: 28,
+    minHeight: 28,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   qty: {
     minWidth: 16,
     textAlign: 'center',

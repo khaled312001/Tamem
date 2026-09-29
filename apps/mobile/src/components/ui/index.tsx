@@ -11,7 +11,6 @@ import { Bike, Clock, Star, type LucideIcon } from 'lucide-react-native';
 import type { ReactNode } from 'react';
 import {
   ActivityIndicator,
-  Image,
   Pressable,
   StyleSheet,
   Text,
@@ -19,6 +18,7 @@ import {
   type ImageSourcePropType,
   type ViewStyle,
 } from 'react-native';
+import { Image } from './CachedImage';
 
 import { colors, fontFamilies, fontSizes, radii, shadows, spacing } from '../../theme/tokens';
 import { ForwardChevron } from '../../theme/rtl';

@@ -1,6 +1,7 @@
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 
 import { CartCheckoutScreen } from '../screens/CartCheckoutScreen';
+import { OtpVerifyScreen } from '../screens/OtpVerifyScreen';
 import { CartScreen } from '../screens/CartScreen';
 import { DeliveryServicesScreen } from '../screens/DeliveryServicesScreen';
 import { DynamicServiceFlowScreen } from '../screens/DynamicServiceFlowScreen';
@@ -24,8 +25,16 @@ export type HomeStackParamList = {
   ProductDetail: { productId: string };
   Cart: undefined;
   CartCheckout: undefined;
+  /** تأكيد الرقم وإحنا داخل التطبيق — مش شاشة تسجيل الدخول. */
+  VerifyPhone: { phone: string };
   Deals: undefined;
-  DynamicServiceFlow: { serviceKey?: string; serviceId?: string; merchantId?: string };
+  DynamicServiceFlow: {
+    serviceKey?: string;
+    serviceId?: string;
+    merchantId?: string;
+    /** اسم قسم المتجر — بيحدد مثال «تفاصيل الطلب». */
+    categoryName?: string;
+  };
   DeliveryServices: undefined;
   ShippingFlow: undefined;
   MerchantFlow: undefined;
@@ -49,6 +58,7 @@ export function HomeStack() {
       <Stack.Screen name="ProductDetail" component={ProductDetailScreen} />
       <Stack.Screen name="Cart" component={CartScreen} />
       <Stack.Screen name="CartCheckout" component={CartCheckoutScreen} />
+      <Stack.Screen name="VerifyPhone" component={OtpVerifyScreen} />
       <Stack.Screen name="DynamicServiceFlow" component={DynamicServiceFlowScreen} />
       <Stack.Screen name="DeliveryServices" component={DeliveryServicesScreen} />
       <Stack.Screen name="ShippingFlow" component={ShippingFlowScreen} />

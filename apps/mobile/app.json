@@ -16,11 +16,23 @@
     "assetBundlePatterns": ["**/*"],
     "ios": {
       "supportsTablet": false,
-      "bundleIdentifier": "com.tamem.delivery"
+      "bundleIdentifier": "com.tamem.delivery",
+      "buildNumber": "29",
+      "infoPlist": {
+        "NSLocationWhenInUseUsageDescription": "نستخدم موقعك عشان نحدد عنوان التوصيل بدقة ونوصّل لك الطلب بسرعة.",
+        "NSCameraUsageDescription": "نحتاج الكاميرا عشان تصوّر طلبك أو الروشتة وترفقها مع الطلب.",
+        "NSPhotoLibraryUsageDescription": "نحتاج الصور عشان ترفق صورة لطلبك أو تغيّر صورة حسابك.",
+        "NSPhotoLibraryAddUsageDescription": "عشان نحفظ صورة إيصال الطلب في ألبوم صورك.",
+        "NSMicrophoneUsageDescription": "نحتاج الميكروفون عشان تسجّل طلبك بصوتك بدل ما تكتبه.",
+        "ITSAppUsesNonExemptEncryption": false
+      },
+      "config": {
+        "usesNonExemptEncryption": false
+      }
     },
     "android": {
       "package": "com.tamem.delivery",
-      "versionCode": 28,
+      "versionCode": 29,
       "googleServicesFile": "./google-services.json",
       "adaptiveIcon": {
         "foregroundImage": "./src/assets/icon.png",

@@ -18,7 +18,8 @@ import { useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
-  Image,
+  KeyboardAvoidingView,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -27,6 +28,7 @@ import {
   TextInput,
   View,
 } from 'react-native';
+import { Image } from '../components/ui/CachedImage';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import type { Service } from '@tamem/types';
@@ -203,185 +205,196 @@ export function ShippingFlowScreen() {
     <SafeAreaView edges={['top']} style={styles.container}>
       <GradientHeader greeting="طلب شحن" location="بين المناطق" />
 
-      <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
-        {/* From / To — pick from the priced regions */}
-        <Text style={styles.section}>المسار</Text>
-        <View style={styles.routeCard}>
-          <View style={styles.routeRow}>
-            <View style={[styles.routePin, { backgroundColor: colors.success }]} />
-            <Text style={styles.routeLabel}>من</Text>
+      <KeyboardAvoidingView
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        style={styles.kavFlex}
+      >
+        <ScrollView
+          contentContainerStyle={styles.scroll}
+          showsVerticalScrollIndicator={false}
+          keyboardShouldPersistTaps="handled"
+        >
+          {/* From / To — pick from the priced regions */}
+          <Text style={styles.section}>المسار</Text>
+          <View style={styles.routeCard}>
+            <View style={styles.routeRow}>
+              <View style={[styles.routePin, { backgroundColor: colors.success }]} />
+              <Text style={styles.routeLabel}>من</Text>
+            </View>
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.regionRow}
+            >
+              {regions.map((r) => {
+                const on = from === r;
+                return (
+                  <Pressable
+                    key={`from-${r}`}
+                    onPress={() => setFrom(r)}
+                    style={[styles.regionChip, on && styles.regionChipOn]}
+                  >
+                    <Text style={[styles.regionChipTxt, on && styles.regionChipTxtOn]}>{r}</Text>
+                  </Pressable>
+                );
+              })}
+            </ScrollView>
+
+            <View style={styles.routeDivider} />
+
+            <View style={styles.routeRow}>
+              <View style={[styles.routePin, { backgroundColor: colors.brand.red }]} />
+              <Text style={styles.routeLabel}>إلى</Text>
+              <MapPin size={16} color={colors.brand.red} style={{ marginStart: 'auto' }} />
+            </View>
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.regionRow}
+            >
+              {regions.map((r) => {
+                const on = to === r;
+                const disabled = from === r;
+                return (
+                  <Pressable
+                    key={`to-${r}`}
+                    onPress={() => setTo(r)}
+                    disabled={disabled}
+                    style={[
+                      styles.regionChip,
+                      on && styles.regionChipOn,
+                      disabled && styles.regionChipOff,
+                    ]}
+                  >
+                    <Text style={[styles.regionChipTxt, on && styles.regionChipTxtOn]}>{r}</Text>
+                  </Pressable>
+                );
+              })}
+            </ScrollView>
           </View>
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            contentContainerStyle={styles.regionRow}
-          >
-            {regions.map((r) => {
-              const on = from === r;
+
+          {/* Weight */}
+          <Text style={styles.section}>تفاصيل الشحنة</Text>
+          <View style={styles.inputWrap}>
+            <Weight size={18} color={colors.brand.red} />
+            <TextInput
+              value={weight}
+              onChangeText={setWeight}
+              keyboardType="numeric"
+              placeholder="الوزن بالكيلو"
+              placeholderTextColor={colors.text.muted}
+              style={styles.input}
+            />
+            <Text style={styles.unitLabel}>كجم</Text>
+          </View>
+
+          {/* Size */}
+          <Text style={styles.subLabel}>الحجم</Text>
+          <View style={styles.optionsRow}>
+            {SIZES.map((s) => {
+              const on = size === s.key;
               return (
                 <Pressable
-                  key={`from-${r}`}
-                  onPress={() => setFrom(r)}
-                  style={[styles.regionChip, on && styles.regionChipOn]}
+                  key={s.key}
+                  onPress={() => setSize(s.key)}
+                  style={[styles.optionCard, on && styles.optionCardOn]}
                 >
-                  <Text style={[styles.regionChipTxt, on && styles.regionChipTxtOn]}>{r}</Text>
+                  <Box size={18} color={on ? colors.white : colors.brand.red} />
+                  <Text style={[styles.optionLabel, on && { color: colors.white }]}>{s.label}</Text>
+                  <Text style={[styles.optionSub, on && { color: 'rgba(255,255,255,0.85)' }]}>
+                    {s.sub}
+                  </Text>
                 </Pressable>
               );
             })}
-          </ScrollView>
-
-          <View style={styles.routeDivider} />
-
-          <View style={styles.routeRow}>
-            <View style={[styles.routePin, { backgroundColor: colors.brand.red }]} />
-            <Text style={styles.routeLabel}>إلى</Text>
-            <MapPin size={16} color={colors.brand.red} style={{ marginStart: 'auto' }} />
           </View>
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            contentContainerStyle={styles.regionRow}
-          >
-            {regions.map((r) => {
-              const on = to === r;
-              const disabled = from === r;
+
+          {/* Fragile */}
+          <View style={styles.switchRow}>
+            <View style={styles.switchIcon}>
+              <AlertTriangle size={18} color={colors.brand.gold} />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.switchLabel}>شحنة قابلة للكسر</Text>
+              <Text style={styles.switchHint}>تغليف إضافي + رسوم خاصة</Text>
+            </View>
+            <Switch
+              value={fragile}
+              onValueChange={setFragile}
+              trackColor={{ false: colors.line2, true: colors.brand.red }}
+              thumbColor={colors.white}
+            />
+          </View>
+
+          {/* Shipment photo (optional) — helps verify size/contents before pickup */}
+          <Text style={styles.subLabel}>صورة الشحنة (اختياري)</Text>
+          <Text style={styles.photoHint}>
+            صوّر الشحنة عشان نتأكد من حجمها وتفاصيلها قبل الاستلام
+          </Text>
+          {photoUri ? (
+            <View style={styles.photoPreviewWrap}>
+              <Image source={{ uri: photoUri }} style={styles.photoPreview} resizeMode="cover" />
+              {uploadingPhoto ? (
+                <View style={styles.photoOverlay}>
+                  <ActivityIndicator color={colors.white} />
+                </View>
+              ) : (
+                <Pressable
+                  onPress={() => {
+                    setPhotoUri(null);
+                    setPhotoUrl(null);
+                  }}
+                  style={styles.photoRemove}
+                  hitSlop={8}
+                >
+                  <X size={16} color={colors.white} />
+                </Pressable>
+              )}
+            </View>
+          ) : (
+            <View style={styles.photoActions}>
+              <Pressable onPress={() => pickPhoto('camera')} style={styles.photoBtn}>
+                <Camera size={18} color={colors.brand.red} />
+                <Text style={styles.photoBtnText}>التقط صورة</Text>
+              </Pressable>
+              <Pressable onPress={() => pickPhoto('gallery')} style={styles.photoBtn}>
+                <ImagePlus size={18} color={colors.brand.red} />
+                <Text style={styles.photoBtnText}>من المعرض</Text>
+              </Pressable>
+            </View>
+          )}
+
+          {/* Speed */}
+          <Text style={styles.subLabel}>سرعة الشحن</Text>
+          <View style={styles.optionsRow}>
+            {SPEEDS.map((s) => {
+              const on = speed === s.key;
               return (
                 <Pressable
-                  key={`to-${r}`}
-                  onPress={() => setTo(r)}
-                  disabled={disabled}
-                  style={[
-                    styles.regionChip,
-                    on && styles.regionChipOn,
-                    disabled && styles.regionChipOff,
-                  ]}
+                  key={s.key}
+                  onPress={() => setSpeed(s.key)}
+                  style={[styles.optionCard, on && styles.optionCardOn]}
                 >
-                  <Text style={[styles.regionChipTxt, on && styles.regionChipTxtOn]}>{r}</Text>
+                  <Zap size={18} color={on ? colors.white : colors.brand.red} />
+                  <Text style={[styles.optionLabel, on && { color: colors.white }]}>
+                    {s.label} {s.multiplier}
+                  </Text>
+                  <Text style={[styles.optionSub, on && { color: 'rgba(255,255,255,0.85)' }]}>
+                    {s.sub}
+                  </Text>
                 </Pressable>
               );
             })}
-          </ScrollView>
-        </View>
-
-        {/* Weight */}
-        <Text style={styles.section}>تفاصيل الشحنة</Text>
-        <View style={styles.inputWrap}>
-          <Weight size={18} color={colors.brand.red} />
-          <TextInput
-            value={weight}
-            onChangeText={setWeight}
-            keyboardType="numeric"
-            placeholder="الوزن بالكيلو"
-            placeholderTextColor={colors.text.muted}
-            style={styles.input}
-          />
-          <Text style={styles.unitLabel}>كجم</Text>
-        </View>
-
-        {/* Size */}
-        <Text style={styles.subLabel}>الحجم</Text>
-        <View style={styles.optionsRow}>
-          {SIZES.map((s) => {
-            const on = size === s.key;
-            return (
-              <Pressable
-                key={s.key}
-                onPress={() => setSize(s.key)}
-                style={[styles.optionCard, on && styles.optionCardOn]}
-              >
-                <Box size={18} color={on ? colors.white : colors.brand.red} />
-                <Text style={[styles.optionLabel, on && { color: colors.white }]}>{s.label}</Text>
-                <Text style={[styles.optionSub, on && { color: 'rgba(255,255,255,0.85)' }]}>
-                  {s.sub}
-                </Text>
-              </Pressable>
-            );
-          })}
-        </View>
-
-        {/* Fragile */}
-        <View style={styles.switchRow}>
-          <View style={styles.switchIcon}>
-            <AlertTriangle size={18} color={colors.brand.gold} />
           </View>
-          <View style={{ flex: 1 }}>
-            <Text style={styles.switchLabel}>شحنة قابلة للكسر</Text>
-            <Text style={styles.switchHint}>تغليف إضافي + رسوم خاصة</Text>
-          </View>
-          <Switch
-            value={fragile}
-            onValueChange={setFragile}
-            trackColor={{ false: colors.line2, true: colors.brand.red }}
-            thumbColor={colors.white}
-          />
-        </View>
 
-        {/* Shipment photo (optional) — helps verify size/contents before pickup */}
-        <Text style={styles.subLabel}>صورة الشحنة (اختياري)</Text>
-        <Text style={styles.photoHint}>صوّر الشحنة عشان نتأكد من حجمها وتفاصيلها قبل الاستلام</Text>
-        {photoUri ? (
-          <View style={styles.photoPreviewWrap}>
-            <Image source={{ uri: photoUri }} style={styles.photoPreview} resizeMode="cover" />
-            {uploadingPhoto ? (
-              <View style={styles.photoOverlay}>
-                <ActivityIndicator color={colors.white} />
-              </View>
-            ) : (
-              <Pressable
-                onPress={() => {
-                  setPhotoUri(null);
-                  setPhotoUrl(null);
-                }}
-                style={styles.photoRemove}
-                hitSlop={8}
-              >
-                <X size={16} color={colors.white} />
-              </Pressable>
-            )}
-          </View>
-        ) : (
-          <View style={styles.photoActions}>
-            <Pressable onPress={() => pickPhoto('camera')} style={styles.photoBtn}>
-              <Camera size={18} color={colors.brand.red} />
-              <Text style={styles.photoBtnText}>التقط صورة</Text>
-            </Pressable>
-            <Pressable onPress={() => pickPhoto('gallery')} style={styles.photoBtn}>
-              <ImagePlus size={18} color={colors.brand.red} />
-              <Text style={styles.photoBtnText}>من المعرض</Text>
-            </Pressable>
-          </View>
-        )}
-
-        {/* Speed */}
-        <Text style={styles.subLabel}>سرعة الشحن</Text>
-        <View style={styles.optionsRow}>
-          {SPEEDS.map((s) => {
-            const on = speed === s.key;
-            return (
-              <Pressable
-                key={s.key}
-                onPress={() => setSpeed(s.key)}
-                style={[styles.optionCard, on && styles.optionCardOn]}
-              >
-                <Zap size={18} color={on ? colors.white : colors.brand.red} />
-                <Text style={[styles.optionLabel, on && { color: colors.white }]}>
-                  {s.label} {s.multiplier}
-                </Text>
-                <Text style={[styles.optionSub, on && { color: 'rgba(255,255,255,0.85)' }]}>
-                  {s.sub}
-                </Text>
-              </Pressable>
-            );
-          })}
-        </View>
-
-        {/* Payment. This flow always sent CASH and never said so — the customer
+          {/* Payment. This flow always sent CASH and never said so — the customer
             reached the driver without ever being told how they were paying. */}
-        <Text style={styles.section}>طريقة الدفع</Text>
-        <PaymentMethodPicker value={paymentMethod} onChange={setPaymentMethod} />
+          <Text style={styles.section}>طريقة الدفع</Text>
+          <PaymentMethodPicker value={paymentMethod} onChange={setPaymentMethod} />
 
-        <View style={{ height: 80 }} />
-      </ScrollView>
+          <View style={{ height: 80 }} />
+        </ScrollView>
+      </KeyboardAvoidingView>
 
       {/* Sticky bottom: estimate + CTA */}
       <LinearGradient
@@ -594,6 +607,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   fade: { position: 'absolute', left: 0, right: 0, bottom: 110, height: 40 },
+  kavFlex: { flex: 1 },
   footer: {
     padding: spacing.lg,
     backgroundColor: colors.white,

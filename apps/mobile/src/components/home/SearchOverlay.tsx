@@ -20,7 +20,6 @@ import {
   ActivityIndicator,
   Animated,
   Easing,
-  Image,
   Modal,
   Platform,
   Pressable,
@@ -30,6 +29,7 @@ import {
   TextInput,
   View,
 } from 'react-native';
+import { Image } from '../ui/CachedImage';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { api } from '../../lib/api';
@@ -215,7 +215,13 @@ export function SearchOverlay({ visible, onClose }: Props) {
         <Animated.View style={[styles.sheet, { transform: [{ translateY }] }]}>
           {/* Search input row */}
           <View style={styles.inputRow}>
-            <Pressable onPress={onClose} style={styles.closeBtn} hitSlop={10}>
+            <Pressable
+              onPress={onClose}
+              style={styles.closeBtn}
+              hitSlop={10}
+              accessibilityRole="button"
+              accessibilityLabel="إغلاق البحث"
+            >
               <ArrowRight size={20} color={colors.ink} />
             </Pressable>
             <View style={styles.inputWrap}>

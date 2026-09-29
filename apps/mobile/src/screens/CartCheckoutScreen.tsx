@@ -16,7 +16,17 @@ import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useMutation } from '@tanstack/react-query';
 import { Calendar, Camera, Clock, Package, Store, X } from 'lucide-react-native';
 import { useMemo, useState } from 'react';
-import { Image, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import {
+  KeyboardAvoidingView,
+  Platform,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
+} from 'react-native';
+import { Image } from '../components/ui/CachedImage';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { AddressPicker, type PickedAddress } from '../components/AddressPicker';
@@ -30,6 +40,7 @@ import { refuseIfOffline } from '../lib/offline';
 import { showToast } from '../lib/toast';
 import { uploadFile } from '../lib/uploadFile';
 import type { HomeStackParamList } from '../navigation/HomeStack';
+import { useAuth } from '../stores/auth';
 import { clearCart, getMerchantGroups, groupAddonLabel, useCart } from '../stores/cart';
 import { palette, typography } from '../theme/tokens';
 import { colors, fontFamilies, fontSizes, radii, shadows, spacing } from '../theme/tokens';
@@ -48,6 +59,7 @@ const SCHEDULING_ENABLED = false;
 
 export function CartCheckoutScreen() {
   const navigation = useNavigation<NavProp>();
+  const user = useAuth((st) => st.user);
   const cart = useCart();
   const groups = useMemo(() => getMerchantGroups(cart), [cart]);
 
@@ -176,6 +188,9 @@ export function CartCheckoutScreen() {
   const zoneReady = !!(address?.zone?.cityId && address?.zone?.villageId && address?.zone?.areaId);
   const quoteStatus = zoneReady ? address?.zone?.quoteStatus : undefined;
   const blockedByQuote = quoteStatus === 'pending' || quoteStatus === 'error';
+  // The server worked out that this customer is owed a free first delivery and
+  // is only missing the WhatsApp code on their number.
+  const needsPhoneVerify = !!address?.zone?.verifyPhoneForFreeDelivery;
 
   if (cart.items.length === 0) {
     return (
@@ -195,232 +210,259 @@ export function CartCheckoutScreen() {
         subtitle={groups.length > 1 ? `${groups.length} تجار في طلب واحد` : undefined}
       />
 
-      <ScrollView contentContainerStyle={styles.scrollPad} showsVerticalScrollIndicator={false}>
-        {/* ─────── Per-merchant blocks ─────── */}
-        {groups.map((group) => {
-          const extra = getExtras(group.merchantId);
-          return (
-            <View key={group.merchantId} style={styles.merchantBlock}>
-              <View style={styles.merchantStrip}>
-                <View style={styles.merchantIcon}>
-                  <Store size={16} color={colors.brand.red} />
-                </View>
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.merchantLabel}>المتجر</Text>
-                  <Text style={styles.merchantName} numberOfLines={1}>
-                    {group.merchantNameAr}
-                  </Text>
-                </View>
-                <View style={styles.merchantTotalPill}>
-                  <MoneyText amount={group.subtotal} tone="brand" size="sm" />
-                </View>
-              </View>
-
-              {/* Items snapshot */}
-              {group.items.map((item) => (
-                <View key={item.lineId} style={[styles.lineItem, shadows.sm]}>
-                  <View style={styles.thumb}>
-                    {item.imageUrl ? (
-                      <Image
-                        source={{ uri: item.imageUrl }}
-                        style={{ width: '100%', height: '100%' }}
-                      />
-                    ) : (
-                      <Package size={18} color={colors.brand.red} />
-                    )}
+      <KeyboardAvoidingView
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        style={styles.flex}
+      >
+        <ScrollView
+          contentContainerStyle={styles.scrollPad}
+          showsVerticalScrollIndicator={false}
+          keyboardShouldPersistTaps="handled"
+        >
+          {/* ─────── Per-merchant blocks ─────── */}
+          {groups.map((group) => {
+            const extra = getExtras(group.merchantId);
+            return (
+              <View key={group.merchantId} style={styles.merchantBlock}>
+                <View style={styles.merchantStrip}>
+                  <View style={styles.merchantIcon}>
+                    <Store size={16} color={colors.brand.red} />
                   </View>
-                  <View style={{ flex: 1, gap: 2 }}>
-                    <Text style={styles.itemName} numberOfLines={2}>
-                      {item.nameAr}
-                      {item.variantNameAr ? ` — ${item.variantNameAr}` : ''}
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.merchantLabel}>المتجر</Text>
+                    <Text style={styles.merchantName} numberOfLines={1}>
+                      {group.merchantNameAr}
                     </Text>
-                    {!!item.addons?.length && (
-                      <Text style={styles.itemExtras} numberOfLines={2}>
-                        + {groupAddonLabel(item.addons)}
+                  </View>
+                  <View style={styles.merchantTotalPill}>
+                    <MoneyText amount={group.subtotal} tone="brand" size="sm" />
+                  </View>
+                </View>
+
+                {/* Items snapshot */}
+                {group.items.map((item) => (
+                  <View key={item.lineId} style={[styles.lineItem, shadows.sm]}>
+                    <View style={styles.thumb}>
+                      {item.imageUrl ? (
+                        <Image
+                          source={{ uri: item.imageUrl }}
+                          style={{ width: '100%', height: '100%' }}
+                        />
+                      ) : (
+                        <Package size={18} color={colors.brand.red} />
+                      )}
+                    </View>
+                    <View style={{ flex: 1, gap: 2 }}>
+                      <Text style={styles.itemName} numberOfLines={2}>
+                        {item.nameAr}
+                        {item.variantNameAr ? ` — ${item.variantNameAr}` : ''}
                       </Text>
-                    )}
-                    <View style={styles.itemMeta}>
-                      <MoneyText amount={item.price} size="sm" />
-                      <Text style={styles.itemMultiplier}>× {item.quantity}</Text>
+                      {!!item.addons?.length && (
+                        <Text style={styles.itemExtras} numberOfLines={2}>
+                          + {groupAddonLabel(item.addons)}
+                        </Text>
+                      )}
+                      <View style={styles.itemMeta}>
+                        <MoneyText amount={item.price} size="sm" />
+                        <Text style={styles.itemMultiplier}>× {item.quantity}</Text>
+                      </View>
                     </View>
                   </View>
-                </View>
-              ))}
-
-              {/* Per-merchant optional details */}
-              <Text style={styles.detailsLabel}>ملاحظات خاصة بهذا المتجر (اختياري)</Text>
-              <TextInput
-                value={extra.notes}
-                onChangeText={(t) => setExtrasFor(group.merchantId, { notes: t })}
-                placeholder="مثال: ضيف لي علبة تونة، استبدل أي صنف ناقص بالمتاح..."
-                placeholderTextColor={colors.text.muted}
-                multiline
-                numberOfLines={3}
-                style={styles.notesInput}
-              />
-
-              {/* Per-merchant image upload */}
-              <Text style={styles.detailsLabel}>صور (اختياري)</Text>
-              <View style={styles.imageRow}>
-                {extra.imageUrls.map((url) => (
-                  <View key={url} style={styles.imagePreviewWrap}>
-                    <Image source={{ uri: url }} style={styles.imagePreview} />
-                    <Pressable
-                      onPress={() =>
-                        setExtrasFor(group.merchantId, {
-                          imageUrls: extra.imageUrls.filter((u) => u !== url),
-                        })
-                      }
-                      style={styles.imageRemoveBtn}
-                      hitSlop={4}
-                    >
-                      <X size={12} color={colors.white} />
-                    </Pressable>
-                  </View>
                 ))}
-                {extra.imageUrls.length < 3 && (
-                  <Pressable
-                    onPress={async () => {
-                      try {
-                        const ImagePicker = await import('expo-image-picker');
-                        const result = await ImagePicker.launchImageLibraryAsync({
-                          mediaTypes: ['images'],
-                          quality: 0.85,
-                        });
-                        if (result.canceled || !result.assets?.[0]) return;
-                        const uploaded = await uploadFile(result.assets[0].uri, {
-                          mime: 'image/jpeg',
-                        });
-                        if (!uploaded?.url) throw new Error('فشل رفع الصورة');
-                        setExtrasFor(group.merchantId, {
-                          imageUrls: [...extra.imageUrls, uploaded.url],
-                        });
-                      } catch (err) {
-                        showToast({
-                          title: 'فشل رفع الصورة',
-                          message: err instanceof Error ? err.message : undefined,
-                          tone: 'error',
-                        });
-                      }
-                    }}
-                    style={({ pressed }) => [styles.uploadBtn, pressed && { opacity: 0.7 }]}
-                  >
-                    <Camera size={18} color={colors.brand.red} />
-                    <Text style={styles.uploadLabel}>إضافة صورة</Text>
-                    <Text style={styles.uploadCount}>{extra.imageUrls.length}/3</Text>
-                  </Pressable>
-                )}
-              </View>
-            </View>
-          );
-        })}
 
-        {/* ─────── Shared address ─────── */}
-        <Text style={styles.sectionTitle}>عنوان التوصيل</Text>
-        {/* EVERY store, not the first: a basket spanning cities is several
+                {/* Per-merchant optional details */}
+                <Text style={styles.detailsLabel}>ملاحظات خاصة بهذا المتجر (اختياري)</Text>
+                <TextInput
+                  value={extra.notes}
+                  onChangeText={(t) => setExtrasFor(group.merchantId, { notes: t })}
+                  placeholder="مثال: ضيف لي علبة تونة، استبدل أي صنف ناقص بالمتاح..."
+                  placeholderTextColor={colors.text.muted}
+                  multiline
+                  numberOfLines={3}
+                  style={styles.notesInput}
+                />
+
+                {/* Per-merchant image upload */}
+                <Text style={styles.detailsLabel}>صور (اختياري)</Text>
+                <View style={styles.imageRow}>
+                  {extra.imageUrls.map((url) => (
+                    <View key={url} style={styles.imagePreviewWrap}>
+                      <Image source={{ uri: url }} style={styles.imagePreview} />
+                      <Pressable
+                        onPress={() =>
+                          setExtrasFor(group.merchantId, {
+                            imageUrls: extra.imageUrls.filter((u) => u !== url),
+                          })
+                        }
+                        style={styles.imageRemoveBtn}
+                        hitSlop={4}
+                      >
+                        <X size={12} color={colors.white} />
+                      </Pressable>
+                    </View>
+                  ))}
+                  {extra.imageUrls.length < 3 && (
+                    <Pressable
+                      onPress={async () => {
+                        try {
+                          const ImagePicker = await import('expo-image-picker');
+                          const result = await ImagePicker.launchImageLibraryAsync({
+                            mediaTypes: ['images'],
+                            quality: 0.85,
+                          });
+                          if (result.canceled || !result.assets?.[0]) return;
+                          const uploaded = await uploadFile(result.assets[0].uri, {
+                            mime: 'image/jpeg',
+                          });
+                          if (!uploaded?.url) throw new Error('فشل رفع الصورة');
+                          setExtrasFor(group.merchantId, {
+                            imageUrls: [...extra.imageUrls, uploaded.url],
+                          });
+                        } catch (err) {
+                          showToast({
+                            title: 'فشل رفع الصورة',
+                            message: err instanceof Error ? err.message : undefined,
+                            tone: 'error',
+                          });
+                        }
+                      }}
+                      style={({ pressed }) => [styles.uploadBtn, pressed && { opacity: 0.7 }]}
+                    >
+                      <Camera size={18} color={colors.brand.red} />
+                      <Text style={styles.uploadLabel}>إضافة صورة</Text>
+                      <Text style={styles.uploadCount}>{extra.imageUrls.length}/3</Text>
+                    </Pressable>
+                  )}
+                </View>
+              </View>
+            );
+          })}
+
+          {/* ─────── Shared address ─────── */}
+          <Text style={styles.sectionTitle}>عنوان التوصيل</Text>
+          {/* EVERY store, not the first: a basket spanning cities is several
             journeys with several fees, and quoting it from whichever store the
             customer opened first made the same basket cost 20 or 70. The server
             groups the stores and returns the split. */}
-        <AddressPicker
-          merchantIds={groups.map((g) => g.merchantId)}
-          value={address}
-          onChange={setAddress}
-        />
+          <AddressPicker
+            merchantIds={groups.map((g) => g.merchantId)}
+            value={address}
+            onChange={setAddress}
+          />
 
-        {/* ─────── Schedule (hidden for now — SCHEDULING_ENABLED) ─────── */}
-        {SCHEDULING_ENABLED && (
-          <>
-            <Text style={styles.sectionTitle}>ميعاد التوصيل</Text>
-            <Pressable
-              onPress={() => setScheduleSheetOpen(true)}
-              style={({ pressed }) => [styles.scheduleRow, pressed && { opacity: 0.92 }]}
-            >
-              <View
-                style={[
-                  styles.scheduleIcon,
-                  { backgroundColor: scheduledFor ? palette.red[50] : colors.soft },
-                ]}
+          {/* ─────── Schedule (hidden for now — SCHEDULING_ENABLED) ─────── */}
+          {SCHEDULING_ENABLED && (
+            <>
+              <Text style={styles.sectionTitle}>ميعاد التوصيل</Text>
+              <Pressable
+                onPress={() => setScheduleSheetOpen(true)}
+                style={({ pressed }) => [styles.scheduleRow, pressed && { opacity: 0.92 }]}
               >
-                {scheduledFor ? (
-                  <Calendar size={20} color={palette.red[600]} />
-                ) : (
-                  <Clock size={20} color={colors.text.secondary} />
-                )}
-              </View>
-              <View style={{ flex: 1 }}>
-                <Text style={[typography.bodyBold, { color: colors.ink }]}>
-                  {scheduledFor ? 'مجدول' : 'توصيل فوري'}
+                <View
+                  style={[
+                    styles.scheduleIcon,
+                    { backgroundColor: scheduledFor ? palette.red[50] : colors.soft },
+                  ]}
+                >
+                  {scheduledFor ? (
+                    <Calendar size={20} color={palette.red[600]} />
+                  ) : (
+                    <Clock size={20} color={colors.text.secondary} />
+                  )}
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={[typography.bodyBold, { color: colors.ink }]}>
+                    {scheduledFor ? 'مجدول' : 'توصيل فوري'}
+                  </Text>
+                  <Text style={[typography.caption, { color: colors.text.muted, marginTop: 2 }]}>
+                    {scheduledFor
+                      ? new Date(scheduledFor).toLocaleString('ar-EG', {
+                          weekday: 'long',
+                          day: 'numeric',
+                          month: 'short',
+                          hour: '2-digit',
+                          minute: '2-digit',
+                        })
+                      : 'هنبدأ المراجعة فوراً'}
+                  </Text>
+                </View>
+                <Text style={[typography.smallBold, { color: palette.red[600] }]}>
+                  {scheduledFor ? 'تعديل' : 'جدولة'}
                 </Text>
-                <Text style={[typography.caption, { color: colors.text.muted, marginTop: 2 }]}>
-                  {scheduledFor
-                    ? new Date(scheduledFor).toLocaleString('ar-EG', {
-                        weekday: 'long',
-                        day: 'numeric',
-                        month: 'short',
-                        hour: '2-digit',
-                        minute: '2-digit',
-                      })
-                    : 'هنبدأ المراجعة فوراً'}
+              </Pressable>
+            </>
+          )}
+
+          {/* ─────── Payment ─────── */}
+          <Text style={styles.sectionTitle}>طريقة الدفع</Text>
+          <PaymentMethodPicker value={paymentMethod} onChange={setPaymentMethod} />
+
+          {/* ─────── Grand total card ─────── */}
+          <View style={[styles.totalCard, shadows.sm]}>
+            {groups.map((g) => (
+              <View key={g.merchantId} style={styles.totalLine}>
+                <Text style={styles.totalLineLabel} numberOfLines={1}>
+                  {g.merchantNameAr}
                 </Text>
+                <MoneyText amount={g.subtotal} size="sm" />
               </View>
-              <Text style={[typography.smallBold, { color: palette.red[600] }]}>
-                {scheduledFor ? 'تعديل' : 'جدولة'}
-              </Text>
-            </Pressable>
-          </>
-        )}
-
-        {/* ─────── Payment ─────── */}
-        <Text style={styles.sectionTitle}>طريقة الدفع</Text>
-        <PaymentMethodPicker value={paymentMethod} onChange={setPaymentMethod} />
-
-        {/* ─────── Grand total card ─────── */}
-        <View style={[styles.totalCard, shadows.sm]}>
-          {groups.map((g) => (
-            <View key={g.merchantId} style={styles.totalLine}>
-              <Text style={styles.totalLineLabel} numberOfLines={1}>
-                {g.merchantNameAr}
-              </Text>
-              <MoneyText amount={g.subtotal} size="sm" />
+            ))}
+            <View style={styles.totalDivider} />
+            <View style={styles.totalLine}>
+              <Text style={styles.totalLineLabel}>إجمالي المنتجات</Text>
+              <MoneyText amount={cart.subtotal} size="sm" />
             </View>
-          ))}
-          <View style={styles.totalDivider} />
-          <View style={styles.totalLine}>
-            <Text style={styles.totalLineLabel}>إجمالي المنتجات</Text>
-            <MoneyText amount={cart.subtotal} size="sm" />
-          </View>
-          <View style={styles.totalLine}>
-            <Text style={styles.totalLineLabel}>سعر التوصيل</Text>
-            {deliveryFee != null ? (
-              deliveryFee === 0 ? (
-                <Text style={[styles.totalLineLabel, { color: '#16a34a', fontWeight: '800' }]}>
-                  توصيل مجاني 🎉
-                </Text>
+            <View style={styles.totalLine}>
+              <Text style={styles.totalLineLabel}>سعر التوصيل</Text>
+              {deliveryFee != null ? (
+                deliveryFee === 0 ? (
+                  <Text
+                    style={[
+                      styles.totalLineLabel,
+                      { color: palette.green[600], fontWeight: '800' },
+                    ]}
+                  >
+                    توصيل مجاني 🎉
+                  </Text>
+                ) : (
+                  <MoneyText amount={deliveryFee} size="sm" tone="brand" />
+                )
               ) : (
-                <MoneyText amount={deliveryFee} size="sm" tone="brand" />
-              )
-            ) : (
-              <Text style={styles.totalPlaceholder}>
-                {!zoneReady
-                  ? 'حدد المنطقة'
-                  : quoteStatus === 'pending'
-                    ? 'جاري الحساب…'
-                    : quoteStatus === 'error'
-                      ? 'غير متاح'
-                      : '—'}
-              </Text>
-            )}
+                <Text style={styles.totalPlaceholder}>
+                  {!zoneReady
+                    ? 'حدد المنطقة'
+                    : quoteStatus === 'pending'
+                      ? 'جاري الحساب…'
+                      : quoteStatus === 'error'
+                        ? 'غير متاح'
+                        : '—'}
+                </Text>
+              )}
+            </View>
+            {needsPhoneVerify && user?.phone ? (
+              <Pressable
+                onPress={() => navigation.navigate('VerifyPhone', { phone: user.phone! })}
+                accessibilityRole="button"
+                accessibilityLabel="أكّد رقمك واستلم أول توصيلة مجانًا"
+                style={({ pressed }) => [styles.verifyNudge, pressed && { opacity: 0.85 }]}
+              >
+                <Text style={styles.verifyNudgeText}>
+                  🎉 أول توصيلة مجانًا — أكّد رقمك بكود واتساب
+                </Text>
+                <Text style={styles.verifyNudgeCta}>تأكيد الآن</Text>
+              </Pressable>
+            ) : null}
+            <View style={styles.totalDivider} />
+            <View style={styles.totalLine}>
+              <Text style={styles.grandTotalLabel}>الإجمالي الكلي</Text>
+              <MoneyText amount={grandTotal} size="lg" tone="brand" />
+            </View>
+            <Text style={styles.advisoryNote}>(المبلغ غير نهائي - سيُحدّث عند الموافقة)</Text>
           </View>
-          <View style={styles.totalDivider} />
-          <View style={styles.totalLine}>
-            <Text style={styles.grandTotalLabel}>الإجمالي الكلي</Text>
-            <MoneyText amount={grandTotal} size="lg" tone="brand" />
-          </View>
-          <Text style={styles.advisoryNote}>(المبلغ غير نهائي - سيُحدّث عند الموافقة)</Text>
-        </View>
 
-        <View style={{ height: 120 }} />
-      </ScrollView>
+          <View style={{ height: 120 }} />
+        </ScrollView>
+      </KeyboardAvoidingView>
 
       {/* Sticky bottom: confirm */}
       <View style={[styles.footer, shadows.lg]}>
@@ -457,6 +499,7 @@ export function CartCheckoutScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.surface },
+  flex: { flex: 1 },
   scrollPad: { padding: spacing.lg },
   sectionTitle: {
     fontSize: fontSizes.xs,
@@ -629,6 +672,33 @@ const styles = StyleSheet.create({
     marginInlineEnd: spacing.sm,
   },
   totalDivider: { height: 1, backgroundColor: colors.line, marginVertical: spacing.xs },
+  verifyNudge: {
+    marginTop: spacing.sm,
+    borderRadius: radii.md,
+    backgroundColor: palette.green[50],
+    borderWidth: 1,
+    borderColor: palette.green[100],
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.md,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing.sm,
+    // 44pt is the smallest reliably tappable target on both platforms.
+    minHeight: 44,
+  },
+  verifyNudgeText: {
+    flex: 1,
+    fontFamily: fontFamilies.bodyBold,
+    fontSize: fontSizes.sm,
+    color: palette.green[700],
+  },
+  verifyNudgeCta: {
+    fontFamily: fontFamilies.bodyBold,
+    fontSize: fontSizes.sm,
+    color: palette.green[600],
+    textDecorationLine: 'underline',
+  },
   totalPlaceholder: {
     fontFamily: fontFamilies.bodyBold,
     color: colors.text.muted,

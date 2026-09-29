@@ -563,6 +563,7 @@ export function MerchantDetailScreen() {
                 navigation.navigate('DynamicServiceFlow', {
                   serviceKey: 'delivery-supermarket',
                   merchantId: data.id,
+                  categoryName: data.category?.nameAr ?? undefined,
                 });
               }}
             />

@@ -12,7 +12,8 @@
  */
 import { Maximize2 } from 'lucide-react-native';
 import { memo, useCallback, useState } from 'react';
-import { FlatList, Image, Pressable, StyleSheet, Text, View } from 'react-native';
+import { FlatList, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Image } from '../../components/ui/CachedImage';
 
 import { ImageViewer } from '../../components/ImageViewer';
 import { colors, fontFamilies, radii, shadows, spacing } from '../../theme/tokens';

@@ -11,7 +11,8 @@ import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useQuery } from '@tanstack/react-query';
 import { Minus, Package, Plus, ShoppingBag, Store, Trash2 } from 'lucide-react-native';
 import { useMemo } from 'react';
-import { Image, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Image } from '../components/ui/CachedImage';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { ScreenHeader } from '../components/ScreenHeader';
@@ -210,7 +211,7 @@ export function CartScreen() {
                         setItemQuantity(item.lineId, item.quantity - 1, item.merchantId);
                       }
                     }}
-                    hitSlop={4}
+                    hitSlop={8}
                     style={({ pressed }) => [styles.stepBtn, pressed && { opacity: 0.7 }]}
                     accessibilityLabel="نقصان"
                   >
@@ -226,7 +227,7 @@ export function CartScreen() {
                       haptic.tap();
                       setItemQuantity(item.lineId, item.quantity + 1, item.merchantId);
                     }}
-                    hitSlop={4}
+                    hitSlop={8}
                     style={({ pressed }) => [styles.stepBtn, pressed && { opacity: 0.7 }]}
                     accessibilityLabel="زيادة"
                   >

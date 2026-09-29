@@ -14,7 +14,6 @@ import { type Control, Controller, type FieldErrors, type FieldValues } from 're
 import {
   ActivityIndicator,
   FlatList,
-  Image,
   Modal,
   Pressable,
   ScrollView,
@@ -24,6 +23,7 @@ import {
   TextInput,
   View,
 } from 'react-native';
+import { Image } from '../ui/CachedImage';
 
 import type { ServiceField } from '@tamem/types';
 

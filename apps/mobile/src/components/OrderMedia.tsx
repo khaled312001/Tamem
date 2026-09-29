@@ -7,7 +7,8 @@
 import { Audio } from 'expo-av';
 import { Mic, Pause, Play, X } from 'lucide-react-native';
 import { useEffect, useRef, useState } from 'react';
-import { Image, Modal, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Modal, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Image } from './ui/CachedImage';
 
 import { colors, fontFamilies, fontSizes, radii, spacing } from '../theme/tokens';
 

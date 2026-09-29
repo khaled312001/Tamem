@@ -150,7 +150,7 @@ function ProductOptionsBase({
                     <View style={[styles.stepper, { flexDirection: ROW }]}>
                       <Pressable
                         onPress={() => !disabled && onRemoveAddon(a.id)}
-                        hitSlop={6}
+                        hitSlop={10}
                         style={styles.stepBtn}
                         accessibilityRole="button"
                         accessibilityLabel={`أنقص ${a.nameAr}`}
@@ -160,7 +160,7 @@ function ProductOptionsBase({
                       <Text style={styles.stepQty}>{qty}</Text>
                       <Pressable
                         onPress={() => !disabled && onAddAddon(a.id)}
-                        hitSlop={6}
+                        hitSlop={10}
                         style={styles.stepBtn}
                         accessibilityRole="button"
                         accessibilityLabel={`زوّد ${a.nameAr}`}
@@ -316,7 +316,12 @@ const styles = StyleSheet.create({
     paddingHorizontal: 8,
     paddingVertical: 3,
   },
-  stepBtn: { padding: 2 },
+  stepBtn: {
+    minWidth: 28,
+    minHeight: 28,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   stepQty: {
     minWidth: 16,
     textAlign: 'center',

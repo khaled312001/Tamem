@@ -1,5 +1,4 @@
 import {
-  Image,
   StyleSheet,
   Text,
   View,
@@ -8,6 +7,7 @@ import {
   type StyleProp,
   type ViewStyle,
 } from 'react-native';
+import { Image } from './CachedImage';
 
 import { colors, palette, sizes } from '../../theme/tokens';
 

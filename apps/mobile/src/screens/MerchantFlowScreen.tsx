@@ -16,6 +16,8 @@ import { useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
+  KeyboardAvoidingView,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -152,114 +154,123 @@ export function MerchantFlowScreen() {
     <SafeAreaView edges={['top']} style={styles.container}>
       <GradientHeader greeting="طلب تاجر / موزع" location="بياناتك وأوردرات عملائك" />
 
-      <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
-        {/* ── Merchant info ── */}
-        <SectionHeader Icon={Store} title="بيانات التاجر" />
-        <View style={styles.card}>
-          <Field
-            Icon={User}
-            value={merchantName}
-            onChangeText={setMerchantName}
-            placeholder="اسم التاجر / المحل"
-          />
-          <Field
-            Icon={MapPin}
-            value={merchantAddress}
-            onChangeText={setMerchantAddress}
-            placeholder="عنوان التاجر (مثال: قفط - شارع المحطة)"
-          />
-          <Field
-            Icon={Phone}
-            value={merchantPhone}
-            onChangeText={(v) => setMerchantPhone(v.replace(/[^\d+]/g, ''))}
-            placeholder="رقم تليفون التاجر"
-            keyboardType="phone-pad"
-            last
-          />
-        </View>
-
-        {/* ── Orders (per customer) ── */}
-        <SectionHeader Icon={Package} title="الأوردرات" count={validOrders.length} />
-        {orders.map((o, idx) => (
-          <View key={o.id} style={styles.repeater}>
-            <View style={styles.repeaterHeader}>
-              <Text style={styles.repeaterTitle}>أوردر {idx + 1}</Text>
-              {orders.length > 1 && (
-                <Pressable
-                  onPress={() => setOrders((p) => p.filter((x) => x.id !== o.id))}
-                  hitSlop={8}
-                >
-                  <Trash2 size={16} color={colors.danger} />
-                </Pressable>
-              )}
-            </View>
+      <KeyboardAvoidingView
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        style={styles.kavFlex}
+      >
+        <ScrollView
+          contentContainerStyle={styles.scroll}
+          showsVerticalScrollIndicator={false}
+          keyboardShouldPersistTaps="handled"
+        >
+          {/* ── Merchant info ── */}
+          <SectionHeader Icon={Store} title="بيانات التاجر" />
+          <View style={styles.card}>
             <Field
               Icon={User}
-              value={o.customerName}
-              onChangeText={(v) => setOrder(o.id, { customerName: v })}
-              placeholder="اسم العميل"
-            />
-            <Field
-              Icon={Phone}
-              value={o.customerPhone}
-              onChangeText={(v) => setOrder(o.id, { customerPhone: v.replace(/[^\d+]/g, '') })}
-              placeholder="رقم تليفون العميل"
-              keyboardType="phone-pad"
+              value={merchantName}
+              onChangeText={setMerchantName}
+              placeholder="اسم التاجر / المحل"
             />
             <Field
               Icon={MapPin}
-              value={o.customerAddress}
-              onChangeText={(v) => setOrder(o.id, { customerAddress: v })}
-              placeholder="عنوان العميل (المدينة / القرية / الشارع)"
+              value={merchantAddress}
+              onChangeText={setMerchantAddress}
+              placeholder="عنوان التاجر (مثال: قفط - شارع المحطة)"
             />
-            <Text style={styles.sizeLabel}>حجم الأوردر</Text>
-            <View style={styles.sizeRow}>
-              {(['BAG', 'CARTON'] as PkgSize[]).map((s) => {
-                const on = o.size === s;
-                return (
-                  <Pressable
-                    key={s}
-                    onPress={() => setOrder(o.id, { size: s })}
-                    style={[styles.sizeChip, on && styles.sizeChipOn]}
-                  >
-                    <Box size={16} color={on ? colors.white : colors.brand.red} />
-                    <Text style={[styles.sizeChipText, on && { color: colors.white }]}>
-                      {SIZE_LABEL[s]}
-                    </Text>
-                  </Pressable>
-                );
-              })}
-            </View>
+            <Field
+              Icon={Phone}
+              value={merchantPhone}
+              onChangeText={(v) => setMerchantPhone(v.replace(/[^\d+]/g, ''))}
+              placeholder="رقم تليفون التاجر"
+              keyboardType="phone-pad"
+              last
+            />
           </View>
-        ))}
-        <AddButton
-          label="إضافة أوردر آخر"
-          onPress={() =>
-            setOrders((p) => [
-              ...p,
-              {
-                id: newId(),
-                customerName: '',
-                customerPhone: '',
-                customerAddress: '',
-                size: 'BAG',
-              },
-            ])
-          }
-        />
 
-        <View style={styles.noteBox}>
-          <Text style={styles.noteText}>
-            سعر التوصيل يُحدَّد من الإدارة حسب المسافة بين عنوان التاجر وكل عميل.
-          </Text>
-        </View>
+          {/* ── Orders (per customer) ── */}
+          <SectionHeader Icon={Package} title="الأوردرات" count={validOrders.length} />
+          {orders.map((o, idx) => (
+            <View key={o.id} style={styles.repeater}>
+              <View style={styles.repeaterHeader}>
+                <Text style={styles.repeaterTitle}>أوردر {idx + 1}</Text>
+                {orders.length > 1 && (
+                  <Pressable
+                    onPress={() => setOrders((p) => p.filter((x) => x.id !== o.id))}
+                    hitSlop={8}
+                  >
+                    <Trash2 size={16} color={colors.danger} />
+                  </Pressable>
+                )}
+              </View>
+              <Field
+                Icon={User}
+                value={o.customerName}
+                onChangeText={(v) => setOrder(o.id, { customerName: v })}
+                placeholder="اسم العميل"
+              />
+              <Field
+                Icon={Phone}
+                value={o.customerPhone}
+                onChangeText={(v) => setOrder(o.id, { customerPhone: v.replace(/[^\d+]/g, '') })}
+                placeholder="رقم تليفون العميل"
+                keyboardType="phone-pad"
+              />
+              <Field
+                Icon={MapPin}
+                value={o.customerAddress}
+                onChangeText={(v) => setOrder(o.id, { customerAddress: v })}
+                placeholder="عنوان العميل (المدينة / القرية / الشارع)"
+              />
+              <Text style={styles.sizeLabel}>حجم الأوردر</Text>
+              <View style={styles.sizeRow}>
+                {(['BAG', 'CARTON'] as PkgSize[]).map((s) => {
+                  const on = o.size === s;
+                  return (
+                    <Pressable
+                      key={s}
+                      onPress={() => setOrder(o.id, { size: s })}
+                      style={[styles.sizeChip, on && styles.sizeChipOn]}
+                    >
+                      <Box size={16} color={on ? colors.white : colors.brand.red} />
+                      <Text style={[styles.sizeChipText, on && { color: colors.white }]}>
+                        {SIZE_LABEL[s]}
+                      </Text>
+                    </Pressable>
+                  );
+                })}
+              </View>
+            </View>
+          ))}
+          <AddButton
+            label="إضافة أوردر آخر"
+            onPress={() =>
+              setOrders((p) => [
+                ...p,
+                {
+                  id: newId(),
+                  customerName: '',
+                  customerPhone: '',
+                  customerAddress: '',
+                  size: 'BAG',
+                },
+              ])
+            }
+          />
 
-        {/* This flow always sent CASH and never showed it. */}
-        <SectionHeader Icon={Banknote} title="طريقة الدفع" />
-        <PaymentMethodPicker value={paymentMethod} onChange={setPaymentMethod} />
+          <View style={styles.noteBox}>
+            <Text style={styles.noteText}>
+              سعر التوصيل يُحدَّد من الإدارة حسب المسافة بين عنوان التاجر وكل عميل.
+            </Text>
+          </View>
 
-        <View style={{ height: 90 }} />
-      </ScrollView>
+          {/* This flow always sent CASH and never showed it. */}
+          <SectionHeader Icon={Banknote} title="طريقة الدفع" />
+          <PaymentMethodPicker value={paymentMethod} onChange={setPaymentMethod} />
+
+          <View style={{ height: 90 }} />
+        </ScrollView>
+      </KeyboardAvoidingView>
 
       <View style={styles.footer}>
         <GradientButton
@@ -452,6 +463,7 @@ const styles = StyleSheet.create({
     lineHeight: 20,
     textAlign: 'center',
   },
+  kavFlex: { flex: 1 },
   footer: {
     padding: spacing.lg,
     backgroundColor: colors.white,

@@ -1,11 +1,11 @@
 import { useNavigation, useRoute, type RouteProp } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useMutation, useQuery } from '@tanstack/react-query';
-import { useRef, useState } from 'react';
-import { ScrollView, StyleSheet, Text, View } from 'react-native';
+import { useMemo, useRef, useState } from 'react';
+import { KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import type { Service } from '@tamem/types';
+import { ServiceFieldType, type Service } from '@tamem/types';
 
 import { Calendar, Clock } from 'lucide-react-native';
 import { Pressable } from 'react-native';
@@ -21,6 +21,7 @@ import { palette, typography } from '../theme/tokens';
 import { api } from '../lib/api';
 import { goToNewOrder } from '../lib/goToNewOrder';
 import { refuseIfOffline } from '../lib/offline';
+import { orderPlaceholderFor } from '../lib/orderPlaceholders';
 import { showToast } from '../lib/toast';
 import type { HomeStackParamList } from '../navigation/HomeStack';
 import { colors, fontFamilies, fontSizes, radii, shadows, spacing } from '../theme/tokens';
@@ -37,7 +38,7 @@ interface AppliedCoupon {
 export function DynamicServiceFlowScreen() {
   const route = useRoute<RouteParam>();
   const navigation = useNavigation<NavProp>();
-  const { serviceKey, serviceId, merchantId } = route.params;
+  const { serviceKey, serviceId, merchantId, categoryName } = route.params;
 
   const [estimatedPrice, setEstimatedPrice] = useState<number | null>(null);
   const [coupon, setCoupon] = useState<AppliedCoupon | null>(null);
@@ -65,6 +66,35 @@ export function DynamicServiceFlowScreen() {
     enabled: !!sourceService?.id,
     queryFn: () => api.raw.get(`/services/${sourceService!.id}`).then((r) => r.data.data),
   });
+
+  // The store page passes its category straight through; a banner or a deep
+  // link doesn't, so look it up rather than fall back to the wrong example.
+  const { data: merchant } = useQuery<{ category?: { nameAr?: string } }>({
+    queryKey: ['merchant-category', merchantId],
+    enabled: !!merchantId && !categoryName,
+    // productsPageSize: 1 — we only want the category, not the catalogue.
+    queryFn: () =>
+      api.raw
+        .get(`/merchants/${merchantId}`, { params: { productsPageSize: 1 } })
+        .then((r) => r.data.data),
+    staleTime: 10 * 60_000,
+  });
+  const storeCategory = categoryName ?? merchant?.category?.nameAr ?? null;
+
+  /*
+   * «تفاصيل الطلب» is one field shared by every section, so the example the
+   * admin typed into it (a supermarket basket) was shown to someone ordering
+   * from a pharmacy. Swap in an example that matches the store's category —
+   * the admin's own text only stands when there is no store to judge by.
+   */
+  const formFields = useMemo(() => {
+    const fields = service?.fields ?? [];
+    return fields.map((f) =>
+      f.type === ServiceFieldType.TEXTAREA
+        ? { ...f, placeholderAr: orderPlaceholderFor(storeCategory) }
+        : f,
+    );
+  }, [service?.fields, storeCategory]);
 
   const createOrder = useMutation({
     mutationFn: (payload: Record<string, unknown>) =>
@@ -208,128 +238,137 @@ export function DynamicServiceFlowScreen() {
     <SafeAreaView edges={['top']} style={styles.container}>
       <ScreenHeader title={service.nameAr} subtitle={service.descriptionAr ?? undefined} />
 
-      <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
-        <View style={[styles.formCard, shadows.sm]}>
-          <DynamicForm
-            fields={service.fields ?? []}
-            onSubmit={handleSubmit}
-            onChange={(v) => {
-              formValuesRef.current = v;
-              if (service.pricingMethod === 'FIXED' && service.basePrice) {
-                setEstimatedPrice(Number(service.basePrice));
-              }
-            }}
-            formRef={(handle) => {
-              submitFormRef.current = handle.submit;
-            }}
-          />
-        </View>
+      <KeyboardAvoidingView
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        style={styles.flex}
+      >
+        <ScrollView
+          contentContainerStyle={styles.content}
+          showsVerticalScrollIndicator={false}
+          keyboardShouldPersistTaps="handled"
+        >
+          <View style={[styles.formCard, shadows.sm]}>
+            <DynamicForm
+              fields={formFields}
+              onSubmit={handleSubmit}
+              onChange={(v) => {
+                formValuesRef.current = v;
+                if (service.pricingMethod === 'FIXED' && service.basePrice) {
+                  setEstimatedPrice(Number(service.basePrice));
+                }
+              }}
+              formRef={(handle) => {
+                submitFormRef.current = handle.submit;
+              }}
+            />
+          </View>
 
-        {/* ─────── Address (DELIVERY only) ─────── */}
-        {service.category === 'DELIVERY' ? (
-          <>
-            <Text style={styles.sectionTitle}>عنوان التوصيل</Text>
-            {/* The store has to reach the quote too. Without it the picker
+          {/* ─────── Address (DELIVERY only) ─────── */}
+          {service.category === 'DELIVERY' ? (
+            <>
+              <Text style={styles.sectionTitle}>عنوان التوصيل</Text>
+              {/* The store has to reach the quote too. Without it the picker
                 priced this as a local delivery while the server charged the
                 inter-city fee at creation — quoted 20, charged 90. */}
-            <AddressPicker merchantId={merchantId} value={address} onChange={setAddress} />
-          </>
-        ) : null}
+              <AddressPicker merchantId={merchantId} value={address} onChange={setAddress} />
+            </>
+          ) : null}
 
-        {/* ─────── Schedule (optional) ─────── */}
-        <Text style={styles.sectionTitle}>ميعاد التوصيل</Text>
-        <Pressable
-          onPress={() => setScheduleSheetOpen(true)}
-          style={({ pressed }) => [styles.scheduleRow, pressed && { opacity: 0.92 }]}
-        >
-          <View
-            style={[
-              styles.scheduleIcon,
-              { backgroundColor: scheduledFor ? palette.red[50] : colors.soft },
-            ]}
+          {/* ─────── Schedule (optional) ─────── */}
+          <Text style={styles.sectionTitle}>ميعاد التوصيل</Text>
+          <Pressable
+            onPress={() => setScheduleSheetOpen(true)}
+            style={({ pressed }) => [styles.scheduleRow, pressed && { opacity: 0.92 }]}
           >
-            {scheduledFor ? (
-              <Calendar size={20} color={palette.red[600]} />
-            ) : (
-              <Clock size={20} color={colors.text.secondary} />
-            )}
-          </View>
-          <View style={{ flex: 1 }}>
-            <Text style={[typography.bodyBold, { color: colors.ink }]}>
-              {scheduledFor ? 'مجدول' : 'توصيل فوري'}
+            <View
+              style={[
+                styles.scheduleIcon,
+                { backgroundColor: scheduledFor ? palette.red[50] : colors.soft },
+              ]}
+            >
+              {scheduledFor ? (
+                <Calendar size={20} color={palette.red[600]} />
+              ) : (
+                <Clock size={20} color={colors.text.secondary} />
+              )}
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={[typography.bodyBold, { color: colors.ink }]}>
+                {scheduledFor ? 'مجدول' : 'توصيل فوري'}
+              </Text>
+              <Text style={[typography.caption, { color: colors.text.muted, marginTop: 2 }]}>
+                {scheduledFor
+                  ? new Date(scheduledFor).toLocaleString('ar-EG', {
+                      weekday: 'long',
+                      day: 'numeric',
+                      month: 'short',
+                      hour: '2-digit',
+                      minute: '2-digit',
+                    })
+                  : 'هنبدأ المراجعة فوراً'}
+              </Text>
+            </View>
+            <Text style={[typography.smallBold, { color: palette.red[600] }]}>
+              {scheduledFor ? 'تعديل' : 'جدولة'}
             </Text>
-            <Text style={[typography.caption, { color: colors.text.muted, marginTop: 2 }]}>
-              {scheduledFor
-                ? new Date(scheduledFor).toLocaleString('ar-EG', {
-                    weekday: 'long',
-                    day: 'numeric',
-                    month: 'short',
-                    hour: '2-digit',
-                    minute: '2-digit',
-                  })
-                : 'هنبدأ المراجعة فوراً'}
-            </Text>
-          </View>
-          <Text style={[typography.smallBold, { color: palette.red[600] }]}>
-            {scheduledFor ? 'تعديل' : 'جدولة'}
-          </Text>
-        </Pressable>
+          </Pressable>
 
-        {/* ─────── Payment method ─────── */}
-        <Text style={styles.sectionTitle}>طريقة الدفع</Text>
-        <PaymentMethodPicker value={paymentMethod} onChange={setPaymentMethod} />
+          {/* ─────── Payment method ─────── */}
+          <Text style={styles.sectionTitle}>طريقة الدفع</Text>
+          <PaymentMethodPicker value={paymentMethod} onChange={setPaymentMethod} />
 
-        {/* ─────── Coupon ─────── */}
-        <Text style={styles.sectionTitle}>كوبون الخصم</Text>
-        <CouponInput
-          orderAmount={basePrice}
-          onApplied={(code, discount, finalAmount) => setCoupon({ code, discount, finalAmount })}
-          onCleared={() => setCoupon(null)}
-        />
+          {/* ─────── Coupon ─────── */}
+          <Text style={styles.sectionTitle}>كوبون الخصم</Text>
+          <CouponInput
+            orderAmount={basePrice}
+            onApplied={(code, discount, finalAmount) => setCoupon({ code, discount, finalAmount })}
+            onCleared={() => setCoupon(null)}
+          />
 
-        {/* ─────── Price breakdown ─────── */}
-        {basePrice > 0 || zoneFee > 0 ? (
-          <View style={[styles.priceCard, shadows.sm]}>
-            {basePrice > 0 ? (
-              <View style={styles.priceLine}>
-                <Text style={styles.priceLineLabel}>سعر الخدمة</Text>
-                <MoneyText amount={basePrice} size="sm" />
-              </View>
-            ) : null}
-            {zoneFee > 0 ? (
-              <View style={styles.priceLine}>
-                <Text style={styles.priceLineLabel}>رسوم التوصيل</Text>
-                <MoneyText amount={zoneFee} size="sm" />
-              </View>
-            ) : null}
-            {coupon ? (
-              <View style={styles.priceLine}>
-                <Text style={styles.priceLineDiscountLabel}>خصم الكوبون ({coupon.code})</Text>
-                <MoneyText amount={-coupon.discount} size="sm" tone="success" />
-              </View>
-            ) : null}
-            <View style={styles.priceDivider} />
-            {isQuoted ? (
-              <>
+          {/* ─────── Price breakdown ─────── */}
+          {basePrice > 0 || zoneFee > 0 ? (
+            <View style={[styles.priceCard, shadows.sm]}>
+              {basePrice > 0 ? (
                 <View style={styles.priceLine}>
-                  <Text style={styles.priceTotalLabel}>المدفوع الآن</Text>
+                  <Text style={styles.priceLineLabel}>سعر الخدمة</Text>
+                  <MoneyText amount={basePrice} size="sm" />
+                </View>
+              ) : null}
+              {zoneFee > 0 ? (
+                <View style={styles.priceLine}>
+                  <Text style={styles.priceLineLabel}>رسوم التوصيل</Text>
+                  <MoneyText amount={zoneFee} size="sm" />
+                </View>
+              ) : null}
+              {coupon ? (
+                <View style={styles.priceLine}>
+                  <Text style={styles.priceLineDiscountLabel}>خصم الكوبون ({coupon.code})</Text>
+                  <MoneyText amount={-coupon.discount} size="sm" tone="success" />
+                </View>
+              ) : null}
+              <View style={styles.priceDivider} />
+              {isQuoted ? (
+                <>
+                  <View style={styles.priceLine}>
+                    <Text style={styles.priceTotalLabel}>المدفوع الآن</Text>
+                    <MoneyText amount={finalPrice} size="lg" tone="brand" />
+                  </View>
+                  <Text style={styles.priceNote}>
+                    قيمة الطلب نفسه هتتحدد بعد المراجعة وهنبعتهالك قبل ما نبدأ.
+                  </Text>
+                </>
+              ) : (
+                <View style={styles.priceLine}>
+                  <Text style={styles.priceTotalLabel}>الإجمالي</Text>
                   <MoneyText amount={finalPrice} size="lg" tone="brand" />
                 </View>
-                <Text style={styles.priceNote}>
-                  قيمة الطلب نفسه هتتحدد بعد المراجعة وهنبعتهالك قبل ما نبدأ.
-                </Text>
-              </>
-            ) : (
-              <View style={styles.priceLine}>
-                <Text style={styles.priceTotalLabel}>الإجمالي</Text>
-                <MoneyText amount={finalPrice} size="lg" tone="brand" />
-              </View>
-            )}
-          </View>
-        ) : null}
+              )}
+            </View>
+          ) : null}
 
-        <View style={{ height: 120 }} />
-      </ScrollView>
+          <View style={{ height: 120 }} />
+        </ScrollView>
+      </KeyboardAvoidingView>
 
       <View style={[styles.footer, shadows.lg]}>
         <PrimaryButton
@@ -351,6 +390,7 @@ export function DynamicServiceFlowScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.surface },
+  flex: { flex: 1 },
   content: { padding: spacing.lg },
   skelPad: { padding: spacing.lg, gap: spacing.md },
   formCard: {

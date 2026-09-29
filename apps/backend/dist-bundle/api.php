@@ -7918,6 +7918,35 @@ if ($method === 'POST' && $path === '/auth/refresh') {
 
 if ($method === 'POST' && $path === '/auth/logout') { noContent(); }
 
+/**
+ * سقف ساعي على الـ IP لطلبات كود التحقق.
+ *
+ * الـ cooldown الموجود على الرقم (60 ثانية) مابيمنعش حد يلف على آلاف الأرقام
+ * من نفس الجهاز — وكل رقم بيتبعت له رسالة واتساب فعلية، فطابور الرسائل
+ * بيتملى، القرص بيتاكل، والرقم بتاعنا معرّض للحظر كسبام. السقف عالي عن قصد
+ * (مستخدم حقيقي مابيوصلوش) وقابل للتعديل من env من غير نشر جديد، لأن مشغّلي
+ * المحمول في مصر بيشاركوا IP واحد بين مستخدمين كتير.
+ */
+function otpIpAllow(string $ip): bool {
+    $cap = max(1, (int) env('OTP_IP_HOURLY', '40'));
+    if (!$d = rtDir()) return true; // من غير مجلد حالة ما نمنعش حد
+    $f = $d . '/otp-ips';
+    $cut = time() - 3600; $keep = []; $mine = 0;
+    foreach (explode("
+", is_file($f) ? (string) @file_get_contents($f) : '') as $line) {
+        $line = trim($line);
+        if ($line === '') continue;
+        $prt = explode(' ', $line, 2);
+        if ((int) $prt[0] < $cut) continue;
+        $keep[] = $line;
+        if (($prt[1] ?? '') === $ip) $mine++;
+    }
+    $ok = $mine < $cap;
+    if ($ok) $keep[] = time() . ' ' . $ip;
+    rtWrite($f, implode("
+", array_slice($keep, -3000)));
+    return $ok;
+}
 if ($method === 'POST' && $path === '/auth/otp/request') {
     $b = readJsonBody();
     $phone = normPhoneEg((string) ($b['phone'] ?? ''));
@@ -7929,6 +7958,12 @@ if ($method === 'POST' && $path === '/auth/otp/request') {
     $st->execute([$phone]);
     if ($st->fetch()) {
         jsonOk(['sent' => true, 'channel' => 'COOLDOWN', 'retryInSec' => 60]);
+    }
+    // بعد الـ cooldown عن قصد: إعادة الإرسال لنفس الرقم بترجع من فوق من غير
+    // ما تاكل من رصيد الـ IP.
+    if (!otpIpAllow(passcodeClientIp())) {
+        header('Retry-After: 3600');
+        jsonErr('طلبات كتير من نفس الشبكة — جرّب بعد شوية', 429, 'TOO_MANY');
     }
     $code = str_pad((string) random_int(0, 999999), 6, '0', STR_PAD_LEFT);
     db()->prepare("INSERT INTO `OtpCode` (id, phone, codeHash, purpose, attempts, expiresAt, createdAt) VALUES (?,?,?,'VERIFY',0,DATE_ADD(NOW(3), INTERVAL 5 MINUTE),NOW(3))")
@@ -8106,6 +8141,9 @@ if ($method === 'PATCH' && $path === '/me') {
 if ($method === 'DELETE' && $path === '/me') {
     $u = authUser();
     $uid = (string) ($u['sub'] ?? '');
+    // الحذف بيحرّر الرقم (بيتسمّى deleted_…) فيقدر يتسجّل من أول وجديد. سجّل
+    // الرقم قبل ما يتغيّر عشان «أول أوردر مجاني» ما يتاخدش تاني على نفس الخط.
+    if (customerAppOrderCount($uid) > 0) recordFreeFirstPhone($uid);
     db()->prepare("UPDATE `User` SET isActive = 0, phone = CONCAT('deleted_', SUBSTRING(id,1,8), '_', DATE_FORMAT(NOW(),'%Y%m%d')), email = NULL, googleId = NULL, passwordHash = NULL, fcmToken = NULL, updatedAt = NOW(3) WHERE id = ?")
         ->execute([$uid]);
     jsonOk(['deleted' => true]);
@@ -9033,6 +9071,27 @@ function promoRules(): array {
     } catch (Throwable $e) { $arr = []; }
     return $cache = is_array($arr) ? $arr : [];
 }
+/**
+ * العميل مستحق «أول أوردر مجاني» وناقصه تأكيد الرقم بس؟
+ *
+ * من غير الإشارة دي العميل بيشوف السعر كامل من غير أي سبب، وده بيبان كأن
+ * العرض كدب. التطبيق بيستعملها عشان يقوله «أكّد رقمك واستلم أول توصيلة
+ * مجانًا» ويوديه على شاشة الكود على طول.
+ */
+function firstOrderNeedsVerification(?string $customerId): bool {
+    if (!$customerId) return false;
+    foreach (promoRules() as $r) {
+        if (empty($r['isActive'])) continue;
+        if ((string) ($r['audience'] ?? 'ALL') !== 'FIRST_ORDER') continue;
+        if (!promoScheduleMatches($r)) continue;
+        if (customerAppOrderCount($customerId) > 0) return false;
+        $i = customerPhoneInfo($customerId);
+        if ($i['verified']) return false;                       // مستحق فعلاً، مش محتاج تنبيه
+        if (!isRealEgPhone($i['phone'])) return true;           // حساب جوجل من غير رقم
+        return !phoneUsedFreeFirst($i['phone']);                // الرقم خد العرض قبل كده؟
+    }
+    return false;
+}
 /** عدد أوردرات العميل غير الملغية — تعريف «أول أوردر»: صفر = مستحق. */
 function customerNonCancelledCount(string $customerId): int {
     $st = db()->prepare("SELECT COUNT(*) FROM `Order` WHERE customerId = ? AND status NOT IN ('CANCELLED','REJECTED')");
@@ -9054,21 +9113,55 @@ function customerAppOrderCount(string $customerId): int {
     $st->execute([$customerId]);
     return (int) $st->fetchColumn();
 }
+/** رقم موبايل العميل + هل اتأكد بكود — استعلام واحد، مخزّن للطلب الحالي. */
+function customerPhoneInfo(?string $customerId): array {
+    static $cache = [];
+    if (!$customerId) return ['phone' => '', 'verified' => false];
+    if (isset($cache[$customerId])) return $cache[$customerId];
+    $out = ['phone' => '', 'verified' => false];
+    try {
+        $st = db()->prepare('SELECT phone, isPhoneVerified FROM `User` WHERE id = ? LIMIT 1');
+        $st->execute([$customerId]);
+        $r = $st->fetch();
+        if ($r) $out = ['phone' => trim((string) ($r['phone'] ?? '')), 'verified' => (bool) (int) ($r['isPhoneVerified'] ?? 0)];
+    } catch (Throwable $e) { /* leave empty — a lookup failure must not grant the promo */ }
+    return $cache[$customerId] = $out;
+}
 /** رقم موبايل العميل — للتحقق من عرض «أول أوردر» بالرقم عبر الحسابات. */
 function customerPhone(?string $customerId): string {
-    if (!$customerId) return '';
-    try {
-        $st = db()->prepare('SELECT phone FROM `User` WHERE id = ? LIMIT 1');
-        $st->execute([$customerId]);
-        return trim((string) ($st->fetchColumn() ?: ''));
-    } catch (Throwable $e) { return ''; }
+    return customerPhoneInfo($customerId)['phone'];
+}
+/**
+ * رقم مصري حقيقي؟ بيستبعد الـ placeholders: حساب جوجل من غير رقم بياخد
+ * `g_<sub>` وحساب اتمسح بياخد `deleted_…` — الاتنين مفتاح فريد جديد، يعني
+ * «أول أوردر مجاني» تاني لو اتعاملوا كأرقام.
+ */
+function isRealEgPhone(?string $phone): bool {
+    return normPhoneEg((string) $phone) !== null;
 }
 /*
  * سجل دائم بأرقام الموبايل اللي خدت «أول أوردر توصيل مجاني».
- * بيفضل موجود حتى لو الأدمن مسح الحساب (اللي بيمسح طلباته معاه) — فالرقم
- * مايقدرش ياخد المجاني تاني على حساب جديد. مخزّن كـ JSON في Setting.
+ * بيفضل موجود حتى لو الحساب اتمسح — من الأدمن أو من العميل نفسه — فالرقم
+ * مايقدرش ياخد المجاني تاني على حساب جديد.
+ *
+ * جدول مخصص، مش JSON في Setting زي الأول: مع آلاف المستخدمين الـ JSON كان
+ * بيتقرا ويتكتب بالكامل في كل تسجيلة (read-modify-write)، فتسجيلتين في نفس
+ * اللحظة بتضيّع واحدة، والعمود بيكبر بلا سقف. INSERT IGNORE على مفتاح
+ * أساسي بيخلّي العملية ذرّية وتكلفتها ثابتة. الـ Setting القديم لسه بيتقرا
+ * عشان الأرقام اللي اتسجلت قبل الجدول تفضل محجوبة.
  */
-function foPhoneLedger(): array {
+function ensureFoPhoneSchema(): void {
+    static $done = false;
+    if ($done) return; $done = true;
+    try {
+        db()->exec("CREATE TABLE IF NOT EXISTS `PromoFirstOrderPhone` (
+            phone VARCHAR(32) NOT NULL PRIMARY KEY,
+            createdAt DATETIME(3) NOT NULL
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+    } catch (Throwable $e) { error_log('[api.php] fo-phone schema: ' . $e->getMessage()); }
+}
+/** الأرقام اللي اتسجلت في Setting قبل الجدول — قراءة فقط. */
+function foPhoneLegacyLedger(): array {
     static $set = null;
     if ($set !== null) return $set;
     $set = [];
@@ -9082,18 +9175,26 @@ function foPhoneLedger(): array {
 }
 function phoneUsedFreeFirst(?string $phone): bool {
     $phone = trim((string) $phone);
-    return $phone !== '' && array_key_exists($phone, foPhoneLedger());
-}
-/** يسجّل رقم العميل في سجل «أول أوردر» — يتنادى ساعة إنشاء الأوردر فقط. */
-function recordFreeFirstPhone(?string $customerId): void {
-    $phone = customerPhone($customerId);
-    if ($phone === '') return;
+    if ($phone === '') return false;
+    if (array_key_exists($phone, foPhoneLegacyLedger())) return true;
+    ensureFoPhoneSchema();
     try {
-        $led = foPhoneLedger();
-        if (array_key_exists($phone, $led)) return;
-        $led[$phone] = 1;
-        db()->prepare('INSERT INTO `Setting` (`key`,`value`,`description`,`updatedAt`,`updatedById`) VALUES (?,?,NULL,NOW(3),NULL) ON DUPLICATE KEY UPDATE `value`=VALUES(`value`), `updatedAt`=VALUES(`updatedAt`)')
-            ->execute(['promo_fo_phones', json_encode($led, JSON_UNESCAPED_UNICODE)]);
+        $st = db()->prepare('SELECT 1 FROM `PromoFirstOrderPhone` WHERE phone = ? LIMIT 1');
+        $st->execute([$phone]);
+        return (bool) $st->fetchColumn();
+    } catch (Throwable $e) { return false; }
+}
+/** يسجّل رقم العميل في سجل «أول أوردر». */
+function recordFreeFirstPhone(?string $customerId): void {
+    recordFreeFirstPhoneRaw(customerPhone($customerId));
+}
+function recordFreeFirstPhoneRaw(?string $phone): void {
+    $phone = trim((string) $phone);
+    // الـ placeholders مش أرقام — تسجيلها بيملا الجدول بمفاتيح مالهاش معنى.
+    if (!isRealEgPhone($phone)) return;
+    ensureFoPhoneSchema();
+    try {
+        db()->prepare('INSERT IGNORE INTO `PromoFirstOrderPhone` (phone, createdAt) VALUES (?, NOW(3))')->execute([$phone]);
     } catch (Throwable $e) { /* non-fatal — never block an order over accounting */ }
 }
 /** كام مرة عرض اتّستخدم (إجمالي/لعميل) من customData.deliveryPromo.ruleId. */
@@ -9141,9 +9242,21 @@ function evalDeliveryPromo(?string $customerId, float $fee, bool $hasIntercity, 
             // «أول أوردر مجاني» = أول طلب للعميل من التطبيق. الطلبات اليدوية
             // (اللي الأدمن سجّلها) لا بتاخد العرض ولا بتحرقه.
             if (!$customerId || customerAppOrderCount($customerId) > 0) continue;
+            $__fo = customerPhoneInfo($customerId);
+            /*
+             * العرض لازم يبقى على رقم مصري حقيقي اتأكد بكود واتساب.
+             *
+             * التسجيل نفسه مابيتحققش من الرقم (isPhoneVerified = 0 وقت
+             * الإنشاء)، فمن غير الشرط ده أي حد يكتب رقم متخيّل صحيح الشكل
+             * (01000000001، 01000000002…) وياخد توصيل مجاني بلا حدود من غير
+             * ما يملك أي خط — وحساب جوجل من غير رقم (placeholder g_…) كان
+             * بياخده كمان. التطبيق أصلاً بيوجّه كل تسجيل على شاشة الكود، فده
+             * مابيكلّفش العميل الحقيقي أي خطوة زيادة.
+             */
+            if (!isRealEgPhone($__fo['phone']) || !$__fo['verified']) continue;
             // حماية بالرقم: رقم خد العرض قبل كده مش هياخده تاني حتى لو اتعمله
-            // حساب جديد (الحساب القديم اتمسح بطلباته).
-            if (phoneUsedFreeFirst(customerPhone($customerId))) continue;
+            // حساب جديد (سواء الأدمن مسح القديم أو العميل مسحه بنفسه).
+            if (phoneUsedFreeFirst($__fo['phone'])) continue;
         }
         $rid = (string) ($r['id'] ?? '');
         if ($rid !== '') {
@@ -9278,6 +9391,9 @@ function attachReferral(?string $referredId, ?string $code, ?string $phone): voi
 /** The referred customer placed their first order → complete + grant both credits. */
 function maybeCompleteReferral(?string $referredId): void {
     if (!referralEnabled() || !$referredId) return;
+    // صاحب الدعوة ماياخدش مكسب على حساب وهمي: التسجيل مابيتحققش من الرقم،
+    // فلازم المدعوّ يكون أكّد رقمه بكود واتساب قبل ما الدعوة تكتمل.
+    if (!customerPhoneInfo($referredId)['verified']) return;
     ensureReferralSchema();
     try {
         db()->prepare("UPDATE `Referral` SET status='COMPLETED', completedAt=NOW(3)
@@ -9787,6 +9903,7 @@ if ($method === 'POST' && $path === '/zones/quote-delivery') {
         jsonOk(array_merge($q[2] ?? [], [
             'price' => $__promo ? $__promo['newFee'] : $plan['fee'],
             'deliveryPromo' => $__promo ? ['applied' => true, 'label' => $__promo['label'], 'originalPrice' => $__promo['originalFee'], 'discount' => $__promo['discount']] : null,
+            'verifyPhoneForFreeDelivery' => !$__promo && !$skipPromo && firstOrderNeedsVerification(optionalAuthUid()),
             'source' => $inter ? 'INTERCITY' : ($q[2]['source'] ?? null),
             // Summed across the groups, NOT the bare zone tariff: localFee +
             // intercityFee must add up to `price`, or the app's "70 + 20"
@@ -9814,7 +9931,8 @@ if ($method === 'POST' && $path === '/zones/quote-delivery') {
     if ($q[0] === 'NO_PRICE') jsonErr('لا يوجد سعر توصيل لهذه المنطقة، تواصل مع الدعم', 400, 'NO_DELIVERY_PRICE');
     $__promo = $skipPromo ? null : evalDeliveryPromo(optionalAuthUid(), (float) $q[1], false, 0.0);
     jsonOk(array_merge(['price' => $__promo ? $__promo['newFee'] : $q[1],
-        'deliveryPromo' => $__promo ? ['applied' => true, 'label' => $__promo['label'], 'originalPrice' => $__promo['originalFee'], 'discount' => $__promo['discount']] : null], $q[2]));
+        'deliveryPromo' => $__promo ? ['applied' => true, 'label' => $__promo['label'], 'originalPrice' => $__promo['originalFee'], 'discount' => $__promo['discount']] : null,
+        'verifyPhoneForFreeDelivery' => !$__promo && !$skipPromo && firstOrderNeedsVerification(optionalAuthUid())], $q[2]));
 }
 
 /**
@@ -10376,6 +10494,11 @@ if ($method === 'POST' && $path === '/orders/cart') {
             $pm, 'PENDING', 'EGP', $coupon ? $coupon['code'] : null, $discount ?: null,
             $grandSub, $fee, $final, null, ($b['scheduledFor'] ?? null) ?: null, $deliveryLegs, 'APP']);
     orderHistory($parentId, null, 'NEW', $uid, 'CUSTOMER', 'Order placed from cart');
+    // العرض اتصرف فعلاً → احرق الرقم دلوقتي. التسجيل وقت الحذف بس مكانش
+    // كافي: العميل بيمسح حسابه من التطبيق (DELETE /me) ويسجّل تاني بنفس
+    // الرقم فيرجع «عميل جديد» — الحرق وقت الاستخدام بيقفل ده مهما اتزاد
+    // مسارات حذف بعد كده.
+    if (($deliveryPromo['audience'] ?? '') === 'FIRST_ORDER') recordFreeFirstPhone($uid);
     // «دعوة صديق»: burn a credit if this order used one, and complete the
     // customer's own pending referral now that they placed their first order.
     if ($deliveryPromo && !empty($deliveryPromo['referralCreditId']))
@@ -10604,6 +10727,8 @@ if ($method === 'POST' && $path === '/orders') {
                 ->execute([newId(), $coupon['id'], $uid, $id, $discount]);
         } catch (Throwable $e) { error_log('[api.php] coupon redeem failed: ' . $e->getMessage()); }
     }
+    // نفس حرق رقم «أول أوردر» بتاع مسار السلة — الطلب من خدمة بياخد العرض برضه.
+    if (($deliveryPromo['audience'] ?? '') === 'FIRST_ORDER') recordFreeFirstPhone($uid);
     // «دعوة صديق»: burn a credit if used, and complete this customer's referral.
     if ($deliveryPromo && !empty($deliveryPromo['referralCreditId']))
         consumeReferralCredit($deliveryPromo['referralCreditId'], (string) ($deliveryPromo['referralRole'] ?? 'REFERRED'), $id);

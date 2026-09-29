@@ -3,7 +3,8 @@ import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useQuery } from '@tanstack/react-query';
 import { ShoppingBag } from 'lucide-react-native';
 import { useMemo, useState } from 'react';
-import { FlatList, Image, Pressable, StyleSheet, Text, View } from 'react-native';
+import { FlatList, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Image } from '../components/ui/CachedImage';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { iconFor } from '../components/home/CategoriesStrip';
