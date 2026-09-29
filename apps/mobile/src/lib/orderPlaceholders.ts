@@ -23,11 +23,15 @@ interface Rule {
 
 const RULES: readonly Rule[] = [
   {
-    match: ['صيدل', 'دوا', 'pharmac', 'medicine'],
+    // not bare 'دوا': 'الدواجن' contains it, and poultry was getting the
+    // pharmacy example.
+    match: ['صيدل', 'أدوية', 'ادوية', 'دواء', 'pharmac', 'medicine'],
     placeholder: 'مثال: علبة بنادول إكسترا، شريط كونجستال، فيتامين سي\nلو الدوا بروشتة ارفق صورتها',
   },
   {
-    match: ['مطعم', 'وجب', 'restaurant', 'food'],
+    // 'مطاعم' does not contain 'مطعم' — the alef sits between ط and ع, so the
+    // one category this rule exists for was falling through to the generic example.
+    match: ['مطعم', 'مطاعم', 'وجب', 'restaurant', 'food'],
     placeholder: 'مثال: وجبة فراخ مشوية + رز، 2 بيبسي\nاكتب الإضافات والحاجات اللي مش عايزها',
   },
   {
