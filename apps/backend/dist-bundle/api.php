@@ -289,6 +289,34 @@ function responseCacheRules(): array {
         ['#^/admin/(products/[^/]+/options|merchants/[^/]+/hours)$#', 600, 'caller'],
     ];
 }
+/**
+ * تنظيف عرضي لمجلد الكاش.
+ *
+ * كل إجابة بتتخزن بمفتاح (مستخدم × مسار × باراميترات) وما بتتمسحش أبدًا —
+ * بتتكتب فوق نفسها بس لو نفس المستخدم طلب نفس الرابط تاني. يعني أي عميل
+ * يستخدم التطبيق مرة ويسيبه بيسيب ملفاته وراه للأبد. على استضافة مشتركة
+ * ده بياكل inodes بالتدريج لحد ما الكتابة نفسها تفشل والكاش يقع كله.
+ *
+ * مفيش cron هنا، فالتنظيف بيحصل في طلب واحد من كل ~300 وبسقف على عدد
+ * الملفات اللي بيتفرجعليها، عشان مايبقاش هو نفسه حِمل. readdir مش glob:
+ * glob بيحمّل كل أسماء المجلد في الذاكرة مرة واحدة.
+ */
+function rcSweep(): void {
+    if (mt_rand(1, 300) !== 1) return;
+    if (!$d = rtDir()) return;
+    $dir = $d . '/cache';
+    $h = @opendir($dir);
+    if (!$h) return;
+    $cut = time() - 86400;          // إجابة عمرها يوم اتخطّت جيلها أكيد
+    $seen = 0; $killed = 0;
+    while (($f = readdir($h)) !== false) {
+        if ($f === '.' || $f === '..') continue;
+        if (++$seen > 20000 || $killed >= 3000) break;
+        $full = $dir . '/' . $f;
+        if (@filemtime($full) < $cut) { @unlink($full); $killed++; }
+    }
+    closedir($h);
+}
 function serveReplay(string $body, string $tag): void {
     http_response_code(200);
     header('Content-Type: application/json; charset=utf-8');
@@ -358,6 +386,7 @@ if ($method === 'GET' && rtDir()) {
             if ($__fresh) serveReplay(substr($__raw, $__nl + 1), 'HIT');
             if (dbUnderPressure() || dbRefusedRecently()) serveReplay(substr($__raw, $__nl + 1), 'STALE');
         }
+        rcSweep();
         $__replay = ['file' => $__file, 'gen' => $__gen];
         ob_start(static function (string $buf, int $phase): string {
             global $__replay;

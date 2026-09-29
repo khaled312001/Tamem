@@ -19,6 +19,7 @@ import {
   Dimensions,
   FlatList,
   Pressable,
+  RefreshControl,
   ScrollView,
   StyleSheet,
   Text,
@@ -97,7 +98,7 @@ export function ProductDetailScreen() {
   const [variantId, setVariantId] = useState<string | null>(null);
   const [addonIds, setAddonIds] = useState<string[]>([]);
 
-  const { data, isLoading, error, refetch } = useQuery<ProductDetail>({
+  const { data, isLoading, isFetching, error, refetch } = useQuery<ProductDetail>({
     queryKey: ['product', productId],
     queryFn: () => api.raw.get(`/products/${productId}`).then((r) => r.data.data),
     // Always-fresh on focus so price/availability stay current after admin
@@ -273,6 +274,14 @@ export function ProductDetailScreen() {
         style={{ flex: 1 }}
         showsVerticalScrollIndicator={false}
         contentContainerStyle={{ paddingBottom: spacing.lg }}
+        /* A cached product page can be showing yesterday's price. */
+        refreshControl={
+          <RefreshControl
+            refreshing={isFetching && !isLoading}
+            onRefresh={() => void refetch()}
+            tintColor={colors.brand.red}
+          />
+        }
       >
         {/* ─────── Big image + back button ─────── */}
         <View style={styles.imageWrap}>

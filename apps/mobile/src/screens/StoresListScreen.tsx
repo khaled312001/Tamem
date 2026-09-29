@@ -1,9 +1,28 @@
 import { useNavigation, useRoute, type RouteProp } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useQuery } from '@tanstack/react-query';
-import { ArrowDownUp, MapPin, Package, Search, Star, Store, WifiOff } from 'lucide-react-native';
+import {
+  ArrowDownUp,
+  MapPin,
+  Package,
+  Search,
+  Star,
+  Store,
+  WifiOff,
+  Check,
+} from 'lucide-react-native';
 import { useMemo, useState } from 'react';
-import { FlatList, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import {
+  FlatList,
+  Modal,
+  Pressable,
+  RefreshControl,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
+} from 'react-native';
 
 import { Image } from '../components/ui/CachedImage';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -20,6 +39,11 @@ import { colors, fontFamilies, fontSizes, radii, spacing } from '../theme/tokens
 
 type Nav = NativeStackNavigationProp<HomeStackParamList, 'StoresList'>;
 type SortKey = 'recommended' | 'rating' | 'open';
+const SORT_LABELS: Record<SortKey, string> = {
+  recommended: 'الموصى بها',
+  rating: 'الأعلى تقييماً',
+  open: 'المفتوحة أولاً',
+};
 
 interface Merchant {
   id: string;
@@ -102,6 +126,7 @@ export function StoresListScreen() {
   const {
     data: merchants,
     isLoading,
+    isFetching,
     isError: merchantsError,
     refetch: refetchMerchants,
   } = useQuery<Merchant[]>({
@@ -190,11 +215,14 @@ export function StoresListScreen() {
     return list;
   }, [merchants, sortKey, activeCity]);
 
-  const cycleSort = () => {
-    setSortKey((k) => (k === 'recommended' ? 'rating' : k === 'rating' ? 'open' : 'recommended'));
-  };
-  const sortLabel =
-    sortKey === 'rating' ? 'الأعلى تقييماً' : sortKey === 'open' ? 'المفتوحة أولاً' : 'الموصى بها';
+  /*
+   * Sorting used to be one button that cycled recommended → rating → open.
+   * Nothing on screen said those three existed, so the only way to find out
+   * was to keep tapping and read the label each time — and to get back to the
+   * one you wanted you had to go all the way round. The choices are listed now.
+   */
+  const [sortOpen, setSortOpen] = useState(false);
+  const sortLabel = SORT_LABELS[sortKey];
 
   // One product card, reused by the section view and the search-fallback view.
   // The image falls back to the STORE LOGO when the product has no photo (many
@@ -266,6 +294,16 @@ export function StoresListScreen() {
       <FlatList
         {...LIST_PERF}
         style={styles.list}
+        /* The catalogue is served from disk when the connection drops, so a
+           customer can be looking at a week-old list with no way to ask for a
+           fresh one. Pull-to-refresh is that way. */
+        refreshControl={
+          <RefreshControl
+            refreshing={isFetching && !isLoading}
+            onRefresh={() => void refetchMerchants()}
+            tintColor={colors.brand.red}
+          />
+        }
         data={data ?? []}
         keyExtractor={(p) => p.id}
         contentContainerStyle={[
@@ -330,15 +368,49 @@ export function StoresListScreen() {
           })}
         </ScrollView>
         <Pressable
-          onPress={cycleSort}
+          onPress={() => setSortOpen(true)}
           style={({ pressed }) => [styles.sortBtn, pressed && { opacity: 0.7 }]}
-          hitSlop={6}
-          accessibilityLabel="ترتيب القائمة"
+          hitSlop={10}
+          accessibilityRole="button"
+          accessibilityLabel={`ترتيب القائمة، الحالي: ${sortLabel}`}
         >
           <ArrowDownUp size={14} color={colors.brand.red} />
           <Text style={styles.sortText}>{sortLabel}</Text>
         </Pressable>
       </View>
+
+      <Modal
+        visible={sortOpen}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setSortOpen(false)}
+      >
+        <Pressable style={styles.sortBackdrop} onPress={() => setSortOpen(false)}>
+          <Pressable style={styles.sortSheet} onPress={(e) => e.stopPropagation()}>
+            <Text style={styles.sortSheetTitle}>ترتيب المتاجر</Text>
+            {(Object.keys(SORT_LABELS) as SortKey[]).map((k) => {
+              const on = k === sortKey;
+              return (
+                <Pressable
+                  key={k}
+                  onPress={() => {
+                    setSortKey(k);
+                    setSortOpen(false);
+                  }}
+                  style={({ pressed }) => [styles.sortRow, pressed && { opacity: 0.7 }]}
+                  accessibilityRole="button"
+                  accessibilityState={{ selected: on }}
+                >
+                  <Text style={[styles.sortRowText, on && styles.sortRowTextOn]}>
+                    {SORT_LABELS[k]}
+                  </Text>
+                  {on ? <Check size={18} color={colors.brand.red} /> : null}
+                </Pressable>
+              );
+            })}
+          </Pressable>
+        </Pressable>
+      </Modal>
 
       {/* City row. Only drawn when the results actually span more than one. */}
       {cityOptions.length > 1 && (
@@ -533,6 +605,43 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.lg,
     paddingVertical: spacing.md,
     gap: spacing.xs,
+  },
+  sortBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.35)',
+    justifyContent: 'flex-end',
+  },
+  sortSheet: {
+    backgroundColor: colors.white,
+    borderTopLeftRadius: radii.lg,
+    borderTopRightRadius: radii.lg,
+    padding: spacing.lg,
+    paddingBottom: spacing.xl,
+    gap: spacing.xs,
+  },
+  sortSheetTitle: {
+    fontFamily: fontFamilies.headingBlack,
+    fontSize: fontSizes.md,
+    color: colors.brand.dark,
+    marginBottom: spacing.sm,
+    textAlign: 'right',
+  },
+  sortRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    minHeight: 48,
+    paddingHorizontal: spacing.sm,
+    borderRadius: radii.md,
+  },
+  sortRowText: {
+    fontFamily: fontFamilies.bodyMedium,
+    fontSize: fontSizes.md,
+    color: colors.text.primary,
+  },
+  sortRowTextOn: {
+    fontFamily: fontFamilies.bodyExtraBold,
+    color: colors.brand.red,
   },
   sortBtn: {
     flexDirection: 'row',

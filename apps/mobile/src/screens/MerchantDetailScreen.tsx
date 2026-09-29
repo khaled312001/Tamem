@@ -11,6 +11,7 @@ import {
   FlatList,
   Linking,
   Pressable,
+  RefreshControl,
   Share,
   StyleSheet,
   Text,
@@ -371,6 +372,18 @@ export function MerchantDetailScreen() {
       */}
       <FlatList
         {...LIST_PERF}
+        /* Prices and what is in stock are exactly what goes stale on a cached
+           store page, and this is the screen the customer orders from. */
+        refreshControl={
+          <RefreshControl
+            refreshing={productsQ.isFetching && !productsQ.isLoading}
+            onRefresh={() => {
+              void refetch();
+              void productsQ.refetch();
+            }}
+            tintColor={colors.brand.red}
+          />
+        }
         data={products}
         keyExtractor={productKey}
         renderItem={renderProduct}
