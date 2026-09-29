@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 """Builds soundtrack.wav: the music bed plus effects locked to the timeline."""
 import os
+import json
+import subprocess
 
 import numpy as np
 
@@ -8,6 +10,7 @@ import audio as A
 from timeline import SCENES, STARTS, DURATION
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+RAW = os.path.join(HERE, "soundtrack-raw.wav")
 OUT = os.path.join(HERE, "soundtrack.wav")
 
 
@@ -49,12 +52,35 @@ def main():
             A.place(fx, A.chime(72, 0.30), t0 + 0.9)
 
     stereo = A.master(bed, fx, DURATION, bed_peak_db=-12.0, fx_peak_db=-6.0)
-    A.write_wav(OUT, stereo)
+    A.write_wav(RAW, stereo)
 
     peak = np.abs(stereo).max()
     rms = float(np.sqrt((stereo ** 2).mean()))
-    print("duration %.2fs  peak %.1f dBFS  rms %.1f dBFS  -> %s"
-          % (DURATION, A.db(peak), A.db(rms), OUT))
+    print("duration %.2fs  peak %.1f dBFS  rms %.1f dBFS"
+          % (DURATION, A.db(peak), A.db(rms)))
+    normalise(RAW, OUT)
+
+
+def normalise(src, dst, target=-16.0):
+    """Two-pass loudnorm to -16 LUFS.
+
+    Mixing to a peak target left the bed at -24 LUFS: numerically fine, but
+    next to anything else in a feed it read as silent. -16 is a step under the
+    -14 platforms normalise to, so the music still sits behind the picture.
+    """
+    probe = subprocess.run(
+        ["ffmpeg", "-hide_banner", "-nostats", "-i", src, "-af",
+         "loudnorm=I=%s:TP=-1.5:LRA=9:print_format=json" % target, "-f", "null", "-"],
+        capture_output=True, text=True).stderr
+    m = json.loads(probe[probe.rindex("{"):probe.rindex("}") + 1])
+    subprocess.run(
+        ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-i", src, "-af",
+         "loudnorm=I=%s:TP=-1.5:LRA=9:measured_I=%s:measured_TP=%s:measured_LRA=%s:"
+         "measured_thresh=%s:offset=%s:linear=true"
+         % (target, m["input_i"], m["input_tp"], m["input_lra"],
+            m["input_thresh"], m["target_offset"]),
+         "-ar", "44100", "-c:a", "pcm_s16le", dst], check=True)
+    print("normalised %s LUFS -> %s" % (m["input_i"], dst))
 
 
 if __name__ == "__main__":

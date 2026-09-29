@@ -82,7 +82,9 @@ def pad_chord(notes, dur, level=0.20):
         f = n2f(m)
         for det in (-0.004, 0.0, 0.005):
             out += saw(f, n, det) * 0.33
-        out += np.sin(2 * np.pi * f * 0.5 * t_of(n)) * 0.25   # sub octave
+        t = t_of(n)
+        out += np.sin(2 * np.pi * f * 0.5 * t) * 0.08     # a hint of sub, no more
+        out += np.sin(2 * np.pi * f * 2 * t) * 0.16       # shimmer, carries on a phone
     out = lowpass(out, 1500)
     return out * env_asr(n, 0.35, 0.45) * (level / max(1, len(notes)))
 
@@ -112,8 +114,9 @@ def kick(level=0.55):
     f = 118 * np.exp(-t * 26) + 44
     x = np.sin(2 * np.pi * np.cumsum(f) / SR)
     x *= np.exp(-t * 15)
-    click = np.random.default_rng(3).normal(0, 1, n) * np.exp(-t * 320) * 0.12
-    return (x + click) * level
+    click = np.random.default_rng(3).normal(0, 1, n) * np.exp(-t * 320) * 0.30
+    knock = np.sin(2 * np.pi * 190 * t) * np.exp(-t * 60) * 0.35
+    return (x + click + knock) * level
 
 
 def hat(level=0.10, closed=True):
@@ -276,9 +279,11 @@ def music(duration, build_at=None):
     pad *= duck
     bas *= duck * 0.85 + 0.15
 
-    mix = pad * 1.0 + arp * 0.85 + bas * 1.0 + drm * 0.8
-    mix = reverb(mix, wet=0.26)
-    mix = lowpass(mix, 12000)
+    mix = pad * 0.85 + arp * 1.25 + bas * 0.9 + drm * 0.95
+    mix = reverb(mix, wet=0.24)
+    mix = lowpass(mix, 13500)
+    mix = highpass(mix, 78)                    # drop what a phone cannot reproduce
+    mix = mix + highpass(mix, 2200) * 0.38     # presence shelf, so it cuts through
 
     out = mix[:int(duration * SR)]
     # ease the very start and the very end
