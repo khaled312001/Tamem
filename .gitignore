@@ -146,3 +146,7 @@ release/*mapping*.txt
 
 # Store listing graphics — 10 MB of PNGs regenerated from device captures.
 release/store-screenshots/
+release/post-images/
+# scratch space for image/video generation — the generator in
+# scripts/social-post is what belongs in git, not its 20 MB of output.
+.work/
