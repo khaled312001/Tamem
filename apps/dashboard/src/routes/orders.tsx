@@ -905,6 +905,7 @@ export function OrdersPage() {
                       sortDir={sortDir}
                       onToggle={toggleSort}
                     />
+                    <th className="px-4 py-3 font-bold">التوصيل</th>
                     <th className="px-4 py-3 font-bold">السائق</th>
                     <SortableTh
                       label="التاريخ"
@@ -1030,6 +1031,11 @@ export function OrdersPage() {
                               ? formatMoney(o.finalPrice ?? o.quotedPrice)
                               : '—'}
                           </td>
+                          <td className="px-4 py-3 whitespace-nowrap">
+                            {o.deliveryFee != null && o.deliveryFee !== ''
+                              ? formatMoney(o.deliveryFee)
+                              : '—'}
+                          </td>
                           <td className="px-4 py-3">{o.assignedDriver?.name ?? '—'}</td>
                           <td className="px-4 py-3 text-xs text-muted-foreground whitespace-nowrap">
                             <div>{formatDate(o.createdAt)}</div>
@@ -1142,6 +1148,7 @@ export function OrdersPage() {
                                       )
                                     : '—'}
                                 </td>
+                                <td className="px-4 py-2" />
                                 <td className="px-4 py-2">{sub.assignedDriver?.name ?? '—'}</td>
                                 <td className="px-4 py-2" />
                                 <td className="px-4 py-2 text-center">

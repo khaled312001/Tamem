@@ -985,6 +985,39 @@ if ($method === 'PUT' && $path === '/admin/promos') {
         ->execute(['promo_rules', json_encode($clean, JSON_UNESCAPED_UNICODE), $u['sub'] ?? null]);
     jsonOk(['rules' => $clean]);
 }
+// مين استخدم العرض ده: قايمة الأوردرات اللي اتطبّق عليها العرض (رقم الأوردر،
+// العميل، الخصم، التاريخ). مسار بمقطعين فمش بيتلقّفه الـ lister العام.
+if ($method === 'GET' && $path === '/admin/promos/usages') {
+    $u = authUser(); if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
+    $ruleId = trim((string) ($_GET['ruleId'] ?? ''));
+    if ($ruleId === '') jsonErr('ruleId مطلوب', 422, 'VALIDATION_ERROR');
+    $st = db()->prepare(
+        "SELECT o.id, o.orderNumber, o.status, o.createdAt, o.deliveryFee,
+                cu.name AS customerName, cu.phone AS customerPhone,
+                JSON_UNQUOTE(JSON_EXTRACT(o.customData, '$.deliveryPromo.discount'))    AS discount,
+                JSON_UNQUOTE(JSON_EXTRACT(o.customData, '$.deliveryPromo.originalFee')) AS originalFee
+           FROM `Order` o
+           LEFT JOIN `User` cu ON cu.id = o.customerId
+          WHERE JSON_EXTRACT(o.customData, '$.deliveryPromo.ruleId') = ?
+          ORDER BY o.createdAt DESC
+          LIMIT 500"
+    );
+    $st->execute([$ruleId]);
+    $rows = array_map(function ($r) {
+        return [
+            'orderId'       => $r['id'],
+            'orderNumber'   => $r['orderNumber'],
+            'status'        => $r['status'],
+            'createdAt'     => isoZ($r['createdAt']),
+            'customerName'  => $r['customerName'] ?: 'عميل',
+            'customerPhone' => $r['customerPhone'] ?: '',
+            'discount'      => $r['discount'] !== null ? round((float) $r['discount'], 2) : null,
+            'originalFee'   => $r['originalFee'] !== null ? round((float) $r['originalFee'], 2) : null,
+        ];
+    }, $st->fetchAll());
+    $totalSaved = array_sum(array_map(fn($r) => (float) ($r['discount'] ?? 0), $rows));
+    jsonOk(['ruleId' => $ruleId, 'count' => count($rows), 'totalSaved' => round($totalSaved, 2), 'usages' => $rows]);
+}
 
 // ── دعوة صديق (referral) — نفس قاعدة «قبل الـ lister العام» زي العروض ──
 if ($method === 'GET' && $path === '/admin/referral') {

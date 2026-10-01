@@ -57,6 +57,7 @@ export function PromosPage() {
   const qc = useQueryClient();
   const [editTarget, setEditTarget] = useState<Rule | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
+  const [usagesFor, setUsagesFor] = useState<Rule | null>(null);
 
   const { data: rules, isLoading } = useQuery({
     queryKey: ['admin', 'promos'],
@@ -214,7 +215,13 @@ export function PromosPage() {
                       <div className="text-muted-foreground">{scheduleText(r)}</div>
                     </td>
                     <td className="px-3 py-3 font-bold">
-                      {r.usedCount ?? 0}
+                      <button
+                        onClick={() => setUsagesFor(r)}
+                        className="text-brand-red underline decoration-dotted underline-offset-2 hover:opacity-80"
+                        title="مين استخدم العرض"
+                      >
+                        {r.usedCount ?? 0}
+                      </button>
                       {r.usageLimitTotal ? (
                         <span className="text-xs text-muted-foreground">
                           {' '}
@@ -263,7 +270,120 @@ export function PromosPage() {
       {editTarget && (
         <PromoDialog rule={editTarget} onClose={() => setEditTarget(null)} onSave={upsert} />
       )}
+      {usagesFor && <UsagesDialog rule={usagesFor} onClose={() => setUsagesFor(null)} />}
     </div>
+  );
+}
+
+// مين استخدم العرض: قايمة الأوردرات (رقم الأوردر، العميل، الخصم، الحالة، التاريخ).
+function UsagesDialog({ rule, onClose }: { rule: Rule; onClose: () => void }) {
+  const { data, isLoading } = useQuery({
+    queryKey: ['admin', 'promo-usages', rule.id],
+    queryFn: () =>
+      api.raw.get('/admin/promos/usages', { params: { ruleId: rule.id } }).then((r) => r.data.data),
+  });
+  const STATUS: Record<string, string> = {
+    NEW: 'جديد',
+    UNDER_REVIEW: 'تحت المراجعة',
+    PRICED: 'مسعّر',
+    ACCEPTED: 'مقبول',
+    DRIVER_ASSIGNED: 'مع السائق',
+    PICKED_UP: 'تم الاستلام',
+    IN_ROUTE: 'في الطريق',
+    DELIVERED: 'تم التسليم',
+    COMPLETED: 'مكتمل',
+    CANCELLED: 'ملغي',
+    REJECTED: 'مرفوض',
+  };
+  const egp = (n: number | null) => (n == null ? '—' : `${Number(n).toLocaleString('ar-EG')} ج.م`);
+  const fmt = (iso: string) =>
+    new Date(iso).toLocaleString('ar-EG', { dateStyle: 'short', timeStyle: 'short' });
+  return (
+    <Dialog
+      open
+      onOpenChange={(o) => !o && onClose()}
+      title={`مين استخدم «${rule.nameAr}»`}
+      size="lg"
+    >
+      {isLoading ? (
+        <p className="p-4 text-sm text-muted-foreground">جاري التحميل…</p>
+      ) : !data ? null : (
+        <div className="space-y-3">
+          <div className="flex flex-wrap gap-4 text-sm">
+            <span>
+              إجمالي الاستخدامات: <b>{data.count}</b>
+            </span>
+            <span>
+              وفّر العملاء: <b className="text-emerald-600">{egp(data.totalSaved)}</b>
+            </span>
+          </div>
+          <div className="max-h-[60vh] overflow-auto rounded-lg border border-border">
+            <table className="w-full text-xs">
+              <thead className="sticky top-0 bg-muted/50">
+                <tr className="text-right">
+                  <th className="px-2 py-2 font-bold">رقم الأوردر</th>
+                  <th className="px-2 py-2 font-bold">العميل</th>
+                  <th className="px-2 py-2 font-bold">الخصم</th>
+                  <th className="px-2 py-2 font-bold">الحالة</th>
+                  <th className="px-2 py-2 font-bold">التاريخ</th>
+                </tr>
+              </thead>
+              <tbody>
+                {(data.usages ?? []).map(
+                  (u: {
+                    orderId: string;
+                    orderNumber: string;
+                    customerName: string;
+                    customerPhone: string;
+                    discount: number | null;
+                    status: string;
+                    createdAt: string;
+                  }) => {
+                    const cancelled = u.status === 'CANCELLED' || u.status === 'REJECTED';
+                    return (
+                      <tr key={u.orderId} className="border-t border-border/40">
+                        <td className="px-2 py-2 font-mono">{u.orderNumber}</td>
+                        <td className="px-2 py-2">
+                          <div className="font-bold">{u.customerName}</div>
+                          <div dir="ltr" className="text-muted-foreground">
+                            {u.customerPhone}
+                          </div>
+                        </td>
+                        <td className="px-2 py-2 font-bold text-emerald-600">{egp(u.discount)}</td>
+                        <td className="px-2 py-2">
+                          <span
+                            className={`rounded px-1.5 py-0.5 text-[10px] font-bold ${
+                              cancelled
+                                ? 'bg-red-100 text-red-700'
+                                : 'bg-emerald-100 text-emerald-700'
+                            }`}
+                          >
+                            {STATUS[u.status] ?? u.status}
+                          </span>
+                        </td>
+                        <td className="whitespace-nowrap px-2 py-2 text-muted-foreground">
+                          {fmt(u.createdAt)}
+                        </td>
+                      </tr>
+                    );
+                  },
+                )}
+                {(data.usages ?? []).length === 0 && (
+                  <tr>
+                    <td colSpan={5} className="px-3 py-6 text-center text-muted-foreground">
+                      مفيش استخدامات لسه
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+          <p className="text-[11px] text-muted-foreground">
+            «الملغي» يعني العميل بدأ الطلب بالعرض وألغاه — بيظهر للمتابعة.
+          </p>
+        </div>
+      )}
+    </Dialog>
   );
 }
 
