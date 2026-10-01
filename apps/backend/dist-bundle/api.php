@@ -526,7 +526,23 @@ function otpSweep(): void {
 }
 
 // ─── 7. Helpers: SMTP mailer (raw sockets, TLS, LOGIN auth) ─────────────
+function envOn(string $k, string $default = '0'): bool {
+    return in_array(strtolower(trim((string) env($k, $default))), ['1', 'true', 'yes', 'on'], true);
+}
+/**
+ * Master switch for ALL outgoing email — login alerts, welcome mails, order
+ * mails, password-reset codes, admin OTP. OFF unless MAIL_ENABLED=1.
+ *
+ * The mailbox allows 100 sends a day. Order and login mails alone burned
+ * through that, and once the cap is hit nothing else goes out — including the
+ * admin OTP, which locked the super admin out of the dashboard. Every send
+ * funnels through smtpSend()/mailDefer(), so the check lives there.
+ */
+function mailEnabled(): bool {
+    return envOn('MAIL_ENABLED');
+}
 function smtpSend(array $to, string $subject, string $textBody, ?string $htmlBody = null): array {
+    if (!mailEnabled()) return ['ok' => false, 'error' => 'mail disabled (MAIL_ENABLED is off)'];
     $host = env('SMTP_HOST', 'smtp.hostinger.com');
     $port = (int) env('SMTP_PORT', '465');
     $user = env('SMTP_USER');
@@ -601,6 +617,7 @@ function smtpSend(array $to, string $subject, string $textBody, ?string $htmlBod
 // where the SAPI supports it, so the client never waits on the mail server.
 $GLOBALS['__deferred_mail'] = [];
 function mailDefer(string $toAddr, string $subject, string $textBody, ?string $htmlBody = null): void {
+    if (!mailEnabled()) return;
     $toAddr = trim($toAddr);
     if ($toAddr === '' || !filter_var($toAddr, FILTER_VALIDATE_EMAIL)) return;
     $GLOBALS['__deferred_mail'][] = [$toAddr, $subject, $textBody, $htmlBody];
@@ -2600,6 +2617,8 @@ function orderForMessages(string $orderId): ?array {
  * customer phones back asking where their confirmation is.
  */
 function sendOrderEmail(string $orderId, string $status, ?string $to = null): ?string {
+    // Mail switched off ⇒ nothing goes out, so report nothing went out.
+    if (!mailEnabled()) return null;
     try {
         $o = orderForMessages($orderId);
         if (!$o) return null;
@@ -12109,8 +12128,16 @@ if ($method === 'POST' && $path === '/auth/login') {
     if (!(int) $user['isActive']) jsonErr('الحساب غير مفعّل', 403, 'INACTIVE');
 
     $role = (string) $user['role'];
-    // Admin → OTP flow. Everyone else → direct tokens.
-    if ($role === 'ADMIN' || $role === 'SUPER_ADMIN') {
+    $isAdmin = $role === 'ADMIN' || $role === 'SUPER_ADMIN';
+    // Admin OTP is OFF unless ADMIN_OTP_REQUIRED=1. The code travels by email,
+    // and once Hostinger's daily send cap is hit no code arrives — the admins,
+    // the super admin included, were locked out of the dashboard for the rest
+    // of the day. With it off, admins get tokens straight from the password
+    // check below (6-hour admin session, same as after the OTP step). It also
+    // needs mail on: an OTP that can't be emailed is a locked door.
+    $adminOtp = $isAdmin && mailEnabled() && envOn('ADMIN_OTP_REQUIRED');
+    // Admin + ADMIN_OTP_REQUIRED → OTP flow. Everyone else → direct tokens.
+    if ($adminOtp) {
         otpSweep();
         $code = str_pad((string) random_int(0, 999999), 6, '0', STR_PAD_LEFT);
         $token = rtrim(strtr(base64_encode(random_bytes(24)), '+/', '-_'), '=');
@@ -12150,10 +12177,34 @@ if ($method === 'POST' && $path === '/auth/login') {
         ]);
     }
 
-    // Non-admin: sign and return tokens directly.
     $accessSecret = env('JWT_ACCESS_SECRET');
     $refreshSecret = env('JWT_REFRESH_SECRET');
     if (!$accessSecret || !$refreshSecret) jsonErr('JWT secrets not configured', 500, 'CONFIG_MISSING');
+
+    // Admin without OTP: same tokens and payload /auth/admin/otp/verify hands
+    // out, so the dashboard can't tell which way the admin came in. No
+    // login-alert email here — the mail quota is exactly what ran out.
+    if ($isAdmin) {
+        $stmt = db()->prepare('SELECT permissions FROM `User` WHERE id = ? LIMIT 1');
+        $stmt->execute([$user['id']]);
+        $perms = $stmt->fetchColumn();
+        $adminTtl = ((int) env('ADMIN_SESSION_TTL_HOURS', '6')) * 3600;
+        $access = jwtSign(['sub' => $user['id'], 'role' => $role], $accessSecret, $adminTtl);
+        $refresh = jwtSign(['sub' => $user['id'], 'typ' => 'refresh'], $refreshSecret, $adminTtl);
+        jsonOk([
+            'requiresOtp' => false,
+            'user' => [
+                'id' => $user['id'], 'name' => $user['name'],
+                'phone' => $user['phone'], 'email' => $user['email'], 'role' => $role,
+                // null = unrestricted (super/legacy); an array = a scoped admin.
+                'permissions' => is_string($perms) && $perms !== ''
+                    ? (json_decode($perms, true) ?: []) : null,
+            ],
+            'tokens' => ['accessToken' => $access, 'refreshToken' => $refresh],
+        ]);
+    }
+
+    // Non-admin: sign and return tokens directly.
     // One-month mobile session (default 30 days). See issueTokens() for why the
     // old 15-min access token kept logging customers/drivers out on resume.
     $accessTtl = ((int) env('MOBILE_SESSION_TTL_HOURS', '720')) * 3600;
