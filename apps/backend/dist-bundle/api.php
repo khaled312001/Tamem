@@ -4002,6 +4002,15 @@ if ($method === 'GET' && preg_match('#^/admin/orders/([^/]+)$#', $path, $m)) {
     try { $sh = db()->prepare('SELECT * FROM `OrderStatusHistory` WHERE orderId = ? ORDER BY createdAt ASC'); $sh->execute([$m[1]]); $o['statusHistory'] = array_map('jsonizeRow', $sh->fetchAll()); } catch (Throwable $e) {}
     jsonOk($o);
 }
+// Whether email goes out at all (MAIL_ENABLED). The manual/custom order screens
+// read it so the confirm summary doesn't promise the agent an email the
+// server is going to drop.
+if ($method === 'GET' && $path === '/admin/mail-status') {
+    $u = authUser();
+    if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
+    jsonOk(['enabled' => mailEnabled()]);
+}
+
 if ($method === 'POST' && $path === '/admin/orders') {
     $u = authUser();
     if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');

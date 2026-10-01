@@ -29,6 +29,7 @@ import { Dialog } from '../components/ui/Dialog.js';
 import { Field, Input, Textarea } from '../components/ui/Input.js';
 import { api } from '../lib/api.js';
 import { formatMoney } from '../lib/format.js';
+import { useMailEnabled } from '../lib/mailStatus.js';
 import { DEFAULT_ORDER_STAGE, ORDER_STAGES, type OrderStageKey } from '../lib/orderStages.js';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -56,6 +57,7 @@ export function CustomOrderDialog({
   // customer's own address is theirs — but always used for this order's copy,
   // which is what «ابعتله الإيميل» means when they just said it out loud.
   const [email, setEmail] = useState('');
+  const mailOn = useMailEnabled();
   const [customerId, setCustomerId] = useState<string | null>(null);
   const [debPhone, setDebPhone] = useState('');
   useEffect(() => {
@@ -227,7 +229,11 @@ export function CustomOrderDialog({
           </div>
           <Field
             label="الإيميل (اختياري)"
-            hint="عشان يوصله الطلب بالتفصيل على الإيميل — لو العميل مالوش إيميل محفوظ هيتحفظ له"
+            hint={
+              mailOn
+                ? 'عشان يوصله الطلب بالتفصيل على الإيميل — لو العميل مالوش إيميل محفوظ هيتحفظ له'
+                : 'الإيميل متوقف حالياً — بيتحفظ على حساب العميل بس'
+            }
           >
             <Input
               value={email}
@@ -461,7 +467,11 @@ export function CustomOrderDialog({
                 <li>• تبعت واتساب للعميل{driverId ? ' وللمندوب' : ''} ولجروب الإدارة</li>
                 <li>
                   •{' '}
-                  {email.trim() ? (
+                  {!mailOn ? (
+                    <span className="text-amber-700">
+                      الإيميل متوقف حالياً — مفيش إيميل هيتبعت للعميل
+                    </span>
+                  ) : email.trim() ? (
                     <>
                       تبعت الطلب بالتفصيل على <span dir="ltr">{email.trim()}</span>
                     </>
