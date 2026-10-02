@@ -45,6 +45,17 @@ NODE = "/opt/alt/alt-nodejs20/root/usr/bin/node"
 STATUS = f"{HOME}/domains/deliverytamem.com/public_html/backendtamem/uploads/.wa/status.json"
 
 DRY_RUN = "--dry-run" in sys.argv
+# On GitHub Actions the log is public (the repo is public): no phone numbers,
+# no bridge.log lines (they carry numbers), only states and counts.
+PUBLIC_LOG = bool(os.environ.get("CI"))
+
+
+def show_phone(p) -> str:
+    return "(hidden)" if PUBLIC_LOG else str(p)
+
+
+def show_log(text: str) -> str:
+    return "(bridge.log not shown in a public CI log)" if PUBLIC_LOG else text
 
 
 def read_password() -> str:
@@ -90,7 +101,7 @@ def main() -> None:
     live = f"{BRIDGE_DIR}/wa-bridge.js"
     print("server:", run(f"stat -c '%s bytes  %y' '{live}'"))
     before = status()
-    print("bridge now:", before.get("status"), "| phone:", before.get("phone"),
+    print("bridge now:", before.get("status"), "| phone:", show_phone(before.get("phone")),
           "| queue:", run(f"ls '{os.path.dirname(STATUS)}/queue' 2>/dev/null | wc -l"), "file(s)")
 
     if DRY_RUN:
@@ -136,14 +147,14 @@ def main() -> None:
     restart()
     if wait_connected():
         st = status()
-        print(f"\nbridge connected as {st.get('phone')} — deployed. Previous version kept at {backup}")
-        print(run(f"tail -n 5 '{BRIDGE_DIR}/bridge.log'"))
+        print(f"\nbridge connected as {show_phone(st.get('phone'))} — deployed. Previous version kept at {backup}")
+        print(show_log(run(f"tail -n 5 '{BRIDGE_DIR}/bridge.log'")))
     else:
         print("bridge did not report 'connected' within 90s — rolling back")
         print(run(f"cp -p {backup} '{live}' && echo 'restored {backup}'"))
         restart()
         print("after rollback:", "connected" if wait_connected() else "STILL NOT CONNECTED — check bridge.log")
-        print(run(f"tail -n 20 '{BRIDGE_DIR}/bridge.log'"))
+        print(show_log(run(f"tail -n 20 '{BRIDGE_DIR}/bridge.log'")))
         cli.close()
         sys.exit(1)
     cli.close()
