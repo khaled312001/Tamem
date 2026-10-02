@@ -94,6 +94,24 @@ const MAX_ATTEMPTS = 6;
 // timeout is 60s; past that the send is in an unknown state.
 const SEND_TIMEOUT_MS = 75 * 1000;
 
+// Sending limits. WhatsApp bans numbers that blast messages, so every send
+// goes through these (env overrides are read at start-up):
+//  - at least WA_MIN_GAP_MS between two sends
+//  - at most WA_MAX_PER_HOUR sends in any rolling hour; past that, messages
+//    wait in the queue (nothing is lost)
+//  - at most WA_MAX_PER_NUMBER sends to one person in 10 minutes; past that
+//    the message is parked in dead/ and never sent. That is what a flood looks
+//    like: the same code twenty times, a reset button hammered. Groups are
+//    exempt, since every order lands there.
+const MIN_GAP_MS = +process.env.WA_MIN_GAP_MS || 3000;
+const MAX_PER_HOUR = +process.env.WA_MAX_PER_HOUR || 300;
+const MAX_PER_NUMBER = +process.env.WA_MAX_PER_NUMBER || 5;
+const PER_NUMBER_WINDOW_MS = 10 * 60 * 1000;
+let lastSendAt = 0;
+const sentTimes = []; // timestamps of sends in the last hour
+const perNumber = new Map(); // jid -> timestamps of sends in the last 10 min
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
 // A queue file is renamed to `<name>.sending` while its send is in flight, so
 // it is claimed by exactly one send. One still here at start-up means the
 // bridge died mid-send: the message may well have been delivered, so it is
@@ -222,10 +240,20 @@ async function refreshGroups() {
 // After connecting, keep trying to warm the group cache until it succeeds, so
 // group sends become available as soon as possible (not on a fixed 4s guess
 // that can miss under load).
+//
+// It used to give up after 11 tries (~30s). Group sends wait on groupsReady,
+// so one bad stretch at connect time left every group message sitting in the
+// queue until the next reconnect, which could be days. Fast tries first, then
+// one a minute until it works. One retry chain at a time.
+let warmTimer = null;
 function warmGroups(attempt = 0) {
-  if (attempt > 10) return;
+  if (warmTimer) clearTimeout(warmTimer);
+  warmTimer = null;
+  // Disconnected: stop here. The next 'open' starts a fresh chain.
+  if (readStatus().status !== 'connected') return;
   refreshGroups().then((ok) => {
-    if (!ok) setTimeout(() => warmGroups(attempt + 1), 3000);
+    if (ok) return;
+    warmTimer = setTimeout(() => warmGroups(attempt + 1), attempt < 10 ? 3000 : 60000);
   });
 }
 
@@ -436,6 +464,29 @@ async function ipcTick() {
       // layer. Wait (without burning an attempt) — warmGroups() flips this on
       // within a few seconds of connecting, then the message goes out cleanly.
       if (String(msg.to).includes('@g.us') && !groupsReady) continue;
+
+      const jid = toJid(msg.to);
+      const now = Date.now();
+      while (sentTimes.length && sentTimes[0] < now - 3600 * 1000) sentTimes.shift();
+      if (sentTimes.length >= MAX_PER_HOUR) break; // hourly cap: the rest stays queued
+      if (!jid.endsWith('@g.us')) {
+        const recent = (perNumber.get(jid) || []).filter((t) => t > now - PER_NUMBER_WINDOW_MS);
+        perNumber.set(jid, recent);
+        if (recent.length >= MAX_PER_NUMBER) {
+          park(f, full, {
+            ...msg,
+            reason: 'per-number limit (' + MAX_PER_NUMBER + ' in 10 min) — not sent',
+          });
+          continue;
+        }
+      }
+      if (perNumber.size > 2000) {
+        for (const [k, v] of perNumber)
+          if (!v.some((t) => t > now - PER_NUMBER_WINDOW_MS)) perNumber.delete(k);
+      }
+      const wait = lastSendAt + MIN_GAP_MS - Date.now();
+      if (wait > 0) await sleep(wait);
+
       // Claim the file before sending. If the rename fails, someone else has it.
       const claimed = full + '.sending';
       try {
@@ -443,11 +494,11 @@ async function ipcTick() {
       } catch {
         continue;
       }
+      lastSendAt = Date.now();
+      sentTimes.push(lastSendAt);
+      if (!jid.endsWith('@g.us')) perNumber.get(jid).push(lastSendAt);
       try {
-        await withTimeout(
-          sock.sendMessage(toJid(msg.to), { text: String(msg.text) }),
-          SEND_TIMEOUT_MS,
-        );
+        await withTimeout(sock.sendMessage(jid, { text: String(msg.text) }), SEND_TIMEOUT_MS);
         if (msg.dedupe) rememberSent(msg.dedupe);
         try {
           fs.unlinkSync(claimed);

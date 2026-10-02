@@ -42,7 +42,45 @@ HOST, PORT, USER = "77.37.37.207", 65002, "u748721963"
 HOME = "/home/u748721963"
 BRIDGE_DIR = f"{HOME}/whatsapp"
 NODE = "/opt/alt/alt-nodejs20/root/usr/bin/node"
-STATUS = f"{HOME}/domains/deliverytamem.com/public_html/backendtamem/uploads/.wa/status.json"
+WA_DIR = f"{HOME}/domains/deliverytamem.com/public_html/backendtamem/uploads/.wa"
+STATUS = f"{WA_DIR}/status.json"
+
+# Run on the server with its own node. Summarises the queue and, with "park",
+# moves messages to a PERSON that have sat there over 30 minutes into dead/
+# (kept, not sent). A backlog flushed at restart is how customers get a burst
+# of expired codes and stale order updates. Group messages are left to go out.
+# Prints counts only; digits in error texts are masked.
+QUEUE_TIDY_JS = r"""
+const fs = require('fs'), path = require('path');
+const Q = process.argv[2] + '/queue', D = process.argv[2] + '/dead', PARK = process.argv[3] === 'park';
+const MAXAGE = 30 * 60 * 1000, now = Date.now();
+const o = { total: 0, group: 0, person: 0, person_over_30min: 0, retrying: 0, parked: 0, errors: {} };
+try { fs.mkdirSync(D, { recursive: true }); } catch {}
+let files = [];
+try { files = fs.readdirSync(Q).filter((f) => f.endsWith('.json')); } catch {}
+for (const f of files) {
+  const full = path.join(Q, f);
+  let m;
+  try { m = JSON.parse(fs.readFileSync(full, 'utf8')); } catch { continue; }
+  const group = String(m.to || '').includes('@g.us');
+  o.total++; group ? o.group++ : o.person++;
+  if (m.attempts) o.retrying++;
+  if (m.lastError) { const k = String(m.lastError).replace(/\d+/g, '#').slice(0, 70); o.errors[k] = (o.errors[k] || 0) + 1; }
+  let age = 0;
+  try { age = now - fs.statSync(full).mtimeMs; } catch { continue; }
+  if (!group && age > MAXAGE) {
+    o.person_over_30min++;
+    if (PARK) {
+      try {
+        fs.writeFileSync(path.join(D, f), JSON.stringify({ ...m, reason: 'stale at deploy (>30 min) - not sent' }));
+        fs.unlinkSync(full);
+        o.parked++;
+      } catch {}
+    }
+  }
+}
+console.log(JSON.stringify(o));
+"""
 
 DRY_RUN = "--dry-run" in sys.argv
 # On GitHub Actions the log is public (the repo is public): no phone numbers,
@@ -99,25 +137,34 @@ def main() -> None:
             return {}
 
     live = f"{BRIDGE_DIR}/wa-bridge.js"
+    tidy = f"{BRIDGE_DIR}/.queue-tidy.js"
+    sftp = cli.open_sftp()
+    sftp.putfo(io.BytesIO(QUEUE_TIDY_JS.encode("utf-8")), tidy)
+
+    def queue(mode: str) -> str:
+        return run(f"'{NODE}' '{tidy}' '{WA_DIR}' {mode}")
+
     print("server:", run(f"stat -c '%s bytes  %y' '{live}'"))
     before = status()
-    print("bridge now:", before.get("status"), "| phone:", show_phone(before.get("phone")),
-          "| queue:", run(f"ls '{os.path.dirname(STATUS)}/queue' 2>/dev/null | wc -l"), "file(s)")
+    print("bridge now:", before.get("status"), "| phone:", show_phone(before.get("phone")))
+    print("queue now:", queue("report"))
 
     if DRY_RUN:
+        run(f"rm -f '{tidy}'")
+        sftp.close()
         print("\n[dry-run] would deploy to", live)
         cli.close()
         return
 
-    staged = live + ".new"
-    sftp = cli.open_sftp()
+    # Staged with a .js extension: node --check refuses any other.
+    staged = f"{BRIDGE_DIR}/wa-bridge.next.js"
     sftp.putfo(io.BytesIO(payload), staged)
     sftp.close()
     print("uploaded ->", staged)
 
-    check = run(f"cd '{BRIDGE_DIR}' && '{NODE}' --check wa-bridge.js.new && echo SYNTAX_OK")
+    check = run(f"cd '{BRIDGE_DIR}' && '{NODE}' --check wa-bridge.next.js && echo SYNTAX_OK")
     if "SYNTAX_OK" not in check:
-        run(f"rm -f '{staged}'")
+        run(f"rm -f '{staged}' '{tidy}'")
         cli.close()
         sys.exit("node --check FAILED on the server — running bridge untouched.\n" + check)
 
@@ -127,36 +174,52 @@ def main() -> None:
               f"cp -p '{live}' {backup} && echo 'backup -> {backup}'"))
     print(run(f"mv '{staged}' '{live}' && echo 'swapped in new wa-bridge.js'"))
 
-    def restart() -> None:
+    def server_ms() -> float:
+        try:
+            return float(run("date +%s%3N"))
+        except ValueError:
+            return time.time() * 1000
+
+    def restart(park: bool = False) -> float:
+        """Stop the bridge; the supervisor starts the new one ~3s later.
+        Returns the server's clock at the restart."""
+        t0 = server_ms()
         # [n]ode: the pattern must not match this very shell's command line.
         run("pkill -f '[n]ode wa-bridge.js' ; true")
+        if park:  # nothing is sending now: safe to move files
+            print("queue tidy:", queue("park"))
         time.sleep(4)
         # If the supervisor itself was reaped, keepalive starts it.
         run(f"bash '{BRIDGE_DIR}/keepalive.sh' ; true")
+        return t0
 
-    def wait_connected(limit: int = 90) -> bool:
+    def wait_connected(t0: float, limit: int = 90) -> bool:
+        """Connected AND reported by the bridge started after t0 — the old
+        one's status.json says "connected" for a while after it is gone."""
         start = time.time()
         while time.time() - start < limit:
             st = status()
-            fresh = (time.time() * 1000 - float(st.get("ts") or 0)) < 30000
-            if st.get("status") == "connected" and fresh:
+            if st.get("status") == "connected" and float(st.get("startedAt") or 0) >= t0:
                 return True
             time.sleep(5)
         return False
 
-    restart()
-    if wait_connected():
+    t0 = restart(park=True)
+    if wait_connected(t0):
         st = status()
         print(f"\nbridge connected as {show_phone(st.get('phone'))} — deployed. Previous version kept at {backup}")
         print(show_log(run(f"tail -n 5 '{BRIDGE_DIR}/bridge.log'")))
     else:
         print("bridge did not report 'connected' within 90s — rolling back")
         print(run(f"cp -p {backup} '{live}' && echo 'restored {backup}'"))
-        restart()
-        print("after rollback:", "connected" if wait_connected() else "STILL NOT CONNECTED — check bridge.log")
+        t1 = restart()
+        print("after rollback:", "connected" if wait_connected(t1) else "STILL NOT CONNECTED — check bridge.log")
         print(show_log(run(f"tail -n 20 '{BRIDGE_DIR}/bridge.log'")))
+        run(f"rm -f '{tidy}'")
         cli.close()
         sys.exit(1)
+    print("queue after:", queue("report"))
+    run(f"rm -f '{tidy}'")
     cli.close()
 
 
