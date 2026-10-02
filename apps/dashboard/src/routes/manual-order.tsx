@@ -38,7 +38,7 @@ import { Dialog } from '../components/ui/Dialog.js';
 import { Field, Input, Textarea } from '../components/ui/Input.js';
 import { api } from '../lib/api.js';
 import { formatMoney } from '../lib/format.js';
-import { useMailEnabled } from '../lib/mailStatus.js';
+import { useNotifyStatus } from '../lib/notifyStatus.js';
 import { DEFAULT_ORDER_STAGE, ORDER_STAGES, type OrderStageKey } from '../lib/orderStages.js';
 import { cn } from '../lib/utils.js';
 
@@ -110,7 +110,7 @@ export function ManualOrderDialog({
   // Typed on the call so the customer's emailed copy can go out from the same
   // click. Saved to the account only when it has none.
   const [email, setEmail] = useState('');
-  const mailOn = useMailEnabled();
+  const { email: mailOn, whatsappCustomer: waCustomerOn } = useNotifyStatus();
   const [customerId, setCustomerId] = useState<string | null>(null);
   const [debPhone, setDebPhone] = useState('');
   useEffect(() => {
@@ -931,7 +931,10 @@ export function ManualOrderDialog({
                 </p>
               )}
               <p className="text-muted-foreground">
-                • واتساب للعميل{anyDriver ? ' وللمندوب' : ''} ولجروب الإدارة
+                • واتساب{' '}
+                {[waCustomerOn && 'للعميل', anyDriver && 'للمندوب', 'لجروب الإدارة']
+                  .filter(Boolean)
+                  .join(' و')}
               </p>
               <p className="text-muted-foreground">
                 •{' '}

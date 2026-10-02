@@ -29,7 +29,7 @@ import { Dialog } from '../components/ui/Dialog.js';
 import { Field, Input, Textarea } from '../components/ui/Input.js';
 import { api } from '../lib/api.js';
 import { formatMoney } from '../lib/format.js';
-import { useMailEnabled } from '../lib/mailStatus.js';
+import { useNotifyStatus } from '../lib/notifyStatus.js';
 import { DEFAULT_ORDER_STAGE, ORDER_STAGES, type OrderStageKey } from '../lib/orderStages.js';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -57,7 +57,7 @@ export function CustomOrderDialog({
   // customer's own address is theirs — but always used for this order's copy,
   // which is what «ابعتله الإيميل» means when they just said it out loud.
   const [email, setEmail] = useState('');
-  const mailOn = useMailEnabled();
+  const { email: mailOn, whatsappCustomer: waCustomerOn } = useNotifyStatus();
   const [customerId, setCustomerId] = useState<string | null>(null);
   const [debPhone, setDebPhone] = useState('');
   useEffect(() => {
@@ -464,7 +464,12 @@ export function CustomOrderDialog({
               </li>
             ) : (
               <>
-                <li>• تبعت واتساب للعميل{driverId ? ' وللمندوب' : ''} ولجروب الإدارة</li>
+                <li>
+                  • تبعت واتساب{' '}
+                  {[waCustomerOn && 'للعميل', driverId && 'للمندوب', 'لجروب الإدارة']
+                    .filter(Boolean)
+                    .join(' و')}
+                </li>
                 <li>
                   •{' '}
                   {!mailOn ? (

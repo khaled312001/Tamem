@@ -541,6 +541,10 @@ function envOn(string $k, string $default = '0'): bool {
 function mailEnabled(): bool {
     return envOn('MAIL_ENABLED');
 }
+/** Order-status WhatsApp to the customer. OFF unless WA_CUSTOMER_ORDER_MSGS=1. */
+function waCustomerOrderMsgs(): bool {
+    return envOn('WA_CUSTOMER_ORDER_MSGS');
+}
 function smtpSend(array $to, string $subject, string $textBody, ?string $htmlBody = null): array {
     if (!mailEnabled()) return ['ok' => false, 'error' => 'mail disabled (MAIL_ENABLED is off)'];
     $host = env('SMTP_HOST', 'smtp.hostinger.com');
@@ -2692,9 +2696,12 @@ function notifyOrderParties(string $orderId, string $status, ?string $reason = n
             return $r !== '' ? $r : null;
         };
 
-        // ── CUSTOMER ──
+        // ── CUSTOMER ── off unless WA_CUSTOMER_ORDER_MSGS=1, whatever the
+        // template editor says. Order updates go to the group; the customer
+        // follows the order in the app (push + in-app below). The rendered
+        // text is still kept: extra recipients fall back to it.
         $custMsg = $render('CUSTOMER');
-        if ($custMsg && !empty($o['cust_phone'])) { waEnqueue($o['cust_phone'], $custMsg); $sent = true; $log[] = 'واتساب العميل'; }
+        if ($custMsg && !empty($o['cust_phone']) && waCustomerOrderMsgs()) { waEnqueue($o['cust_phone'], $custMsg); $sent = true; $log[] = 'واتساب العميل'; }
 
         /*
          * The order as an email, at the stages worth keeping a record of.
@@ -4002,13 +4009,13 @@ if ($method === 'GET' && preg_match('#^/admin/orders/([^/]+)$#', $path, $m)) {
     try { $sh = db()->prepare('SELECT * FROM `OrderStatusHistory` WHERE orderId = ? ORDER BY createdAt ASC'); $sh->execute([$m[1]]); $o['statusHistory'] = array_map('jsonizeRow', $sh->fetchAll()); } catch (Throwable $e) {}
     jsonOk($o);
 }
-// Whether email goes out at all (MAIL_ENABLED). The manual/custom order screens
-// read it so the confirm summary doesn't promise the agent an email the
-// server is going to drop.
-if ($method === 'GET' && $path === '/admin/mail-status') {
+// Which customer-facing channels are switched on (MAIL_ENABLED,
+// WA_CUSTOMER_ORDER_MSGS). The manual/custom order screens read it so the
+// confirm summary doesn't promise the agent a message the server will drop.
+if ($method === 'GET' && $path === '/admin/notify-status') {
     $u = authUser();
     if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
-    jsonOk(['enabled' => mailEnabled()]);
+    jsonOk(['email' => mailEnabled(), 'whatsappCustomer' => waCustomerOrderMsgs()]);
 }
 
 if ($method === 'POST' && $path === '/admin/orders') {

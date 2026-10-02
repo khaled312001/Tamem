@@ -90,6 +90,37 @@ for (const d of [BASE, AUTH_DIR, IPC, QUEUE_DIR, CONTROL_DIR, DEAD_DIR])
 // A message that keeps failing after this many tries is parked in dead/ — never
 // silently dropped, so it can be inspected/re-queued instead of lost.
 const MAX_ATTEMPTS = 6;
+// One send may take this long before we stop waiting on it. Baileys' own query
+// timeout is 60s; past that the send is in an unknown state.
+const SEND_TIMEOUT_MS = 75 * 1000;
+
+// A queue file is renamed to `<name>.sending` while its send is in flight, so
+// it is claimed by exactly one send. One still here at start-up means the
+// bridge died mid-send: the message may well have been delivered, so it is
+// parked in dead/ rather than sent again. (Re-sending is how customers ended up
+// with the same code twenty times.)
+for (const f of (() => {
+  try {
+    return fs.readdirSync(QUEUE_DIR).filter((n) => n.endsWith('.sending'));
+  } catch {
+    return [];
+  }
+})()) {
+  const full = path.join(QUEUE_DIR, f);
+  try {
+    const body = JSON.parse(fs.readFileSync(full, 'utf8'));
+    fs.writeFileSync(
+      path.join(DEAD_DIR, f.replace(/\.sending$/, '')),
+      JSON.stringify({
+        ...body,
+        reason: 'interrupted mid-send — not resent (may have been delivered)',
+      }),
+    );
+  } catch {}
+  try {
+    fs.unlinkSync(full);
+  } catch {}
+}
 
 // Recently-delivered dedupe keys → expiry timestamp. Guards against re-sending a
 // message that delivered but whose sendMessage() threw (so it was requeued).
@@ -295,8 +326,42 @@ async function connect() {
   }
 }
 
-// IPC loop: control commands + outgoing message queue
+// IPC loop: control commands + outgoing message queue.
+//
+// The tick is async and a single send can take a minute (the first message to
+// a new number fetches its devices and keys first). setInterval does not wait
+// for the previous tick, so without this guard every 2s tick re-read the same
+// still-queued file and sent it AGAIN while the first send was in flight — a
+// new customer's activation code arrived ~20 times. One tick at a time.
+let tickBusy = false;
 setInterval(async () => {
+  if (tickBusy) return;
+  tickBusy = true;
+  try {
+    await ipcTick();
+  } catch (e) {
+    try {
+      writeStatus({ lastError: 'queue loop: ' + String((e && e.message) || e) });
+    } catch {}
+  } finally {
+    tickBusy = false;
+  }
+}, 2000);
+
+function withTimeout(promise, ms) {
+  let t;
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => {
+      t = setTimeout(
+        () => reject(Object.assign(new Error('send timed out'), { timedOut: true })),
+        ms,
+      );
+    }),
+  ]).finally(() => clearTimeout(t));
+}
+
+async function ipcTick() {
   // control commands (logout / restart)
   for (const f of safeList(CONTROL_DIR)) {
     const full = path.join(CONTROL_DIR, f);
@@ -371,17 +436,38 @@ setInterval(async () => {
       // layer. Wait (without burning an attempt) — warmGroups() flips this on
       // within a few seconds of connecting, then the message goes out cleanly.
       if (String(msg.to).includes('@g.us') && !groupsReady) continue;
+      // Claim the file before sending. If the rename fails, someone else has it.
+      const claimed = full + '.sending';
       try {
-        await sock.sendMessage(toJid(msg.to), { text: String(msg.text) });
+        fs.renameSync(full, claimed);
+      } catch {
+        continue;
+      }
+      try {
+        await withTimeout(
+          sock.sendMessage(toJid(msg.to), { text: String(msg.text) }),
+          SEND_TIMEOUT_MS,
+        );
         if (msg.dedupe) rememberSent(msg.dedupe);
         try {
-          fs.unlinkSync(full);
+          fs.unlinkSync(claimed);
         } catch {} // delivered
       } catch (e) {
-        const attempts = (msg.attempts || 0) + 1;
         msg.lastError = String((e && e.message) || e);
+        if (e && e.timedOut) {
+          // Still running in the background and may yet deliver. Retrying is
+          // how one message becomes many, so park it instead.
+          if (msg.dedupe) rememberSent(msg.dedupe);
+          park(f, claimed, {
+            ...msg,
+            reason: 'send timed out — not retried (may have been delivered)',
+          });
+          writeStatus({ lastError: 'رسالة اتأخرت ومتبعتتش تاني: ' + msg.lastError });
+          continue;
+        }
+        const attempts = (msg.attempts || 0) + 1;
         if (attempts >= MAX_ATTEMPTS) {
-          park(f, full, msg);
+          park(f, claimed, msg);
           writeStatus({ lastError: 'رسالة فشلت بعد ' + attempts + ' محاولات: ' + msg.lastError });
         } else {
           msg.attempts = attempts;
@@ -390,11 +476,14 @@ setInterval(async () => {
           try {
             fs.writeFileSync(full, JSON.stringify(msg));
           } catch {}
+          try {
+            fs.unlinkSync(claimed);
+          } catch {}
         }
       }
     }
   }
-}, 2000);
+}
 
 // heartbeat so PHP can detect a dead bridge (stale ts)
 setInterval(() => writeStatus({}), 15000);
