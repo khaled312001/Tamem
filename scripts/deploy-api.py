@@ -52,6 +52,10 @@ DRY_RUN = "--dry-run" in sys.argv
 
 def read_password() -> str:
     """Pull the SSH password out of HANDOFF.md without echoing it."""
+    # TAMEM_SSH_PASS wins over HANDOFF.md, so a changed password can be
+    # used without editing the file:  $env:TAMEM_SSH_PASS = "..."
+    if os.environ.get("TAMEM_SSH_PASS"):
+        return os.environ["TAMEM_SSH_PASS"]
     txt = open(HANDOFF, encoding="utf-8").read()
     i = txt.find("SSH / SFTP")
     if i == -1:

@@ -19,6 +19,7 @@ import { PageHeader } from '../components/ui/PageHeader.js';
 import { TableSkeleton } from '../components/ui/Skeleton.js';
 import { ErrorState } from '../components/ui/States.js';
 import { api } from '../lib/api.js';
+import { useNotifyStatus } from '../lib/notifyStatus.js';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Row = any;
@@ -108,6 +109,15 @@ export function NotificationTemplatesPage() {
     queryKey: ['admin', 'notification-templates'],
     queryFn: () => api.adminNotificationTemplates(),
   });
+  // What the server will actually do, which this page used to contradict:
+  // customer order messages can be off server-wide (WA_CUSTOMER_ORDER_MSGS),
+  // and a GROUP row only sends while the group alert on /whatsapp is on.
+  const { whatsappCustomer } = useNotifyStatus();
+  const { data: groupData } = useQuery({
+    queryKey: ['admin', 'whatsapp', 'groups'],
+    queryFn: () => api.adminWhatsAppGroups(),
+  });
+  const groupLive = !!(groupData?.config.enabled && groupData?.config.groupId);
 
   // Seed drafts from server on first load; edits live in `drafts` after that.
   const templates = (data?.templates as Row[] | undefined) ?? [];
@@ -238,6 +248,16 @@ export function NotificationTemplatesPage() {
                           <div className="text-xs text-muted-foreground truncate">
                             {d.enabled ? d.text.split('\n')[0] : 'موقوف — لن تُرسل'}
                           </div>
+                          {t.recipient === 'CUSTOMER' && !whatsappCustomer && (
+                            <div className="text-xs text-amber-700 truncate">
+                              موقوفة من السيرفر — العميل بيتابع طلبه من إشعارات التطبيق
+                            </div>
+                          )}
+                          {t.recipient === 'GROUP' && d.enabled && groupData && !groupLive && (
+                            <div className="text-xs text-amber-700 truncate">
+                              مش هتتبعت: تنبيه الجروب مقفول من صفحة «ربط واتساب»
+                            </div>
+                          )}
                         </button>
 
                         {/* enable toggle */}
@@ -452,11 +472,12 @@ function ExtraRecipients({ event }: { event: string }) {
                     onChange={(e) => patch(r.id, { text: e.target.value })}
                     rows={3}
                     dir="rtl"
-                    placeholder="اتركه فاضياً ليستقبل نفس رسالة المشرف، أو اكتب نصاً خاصاً بهذا الرقم…"
+                    placeholder="اتركه فاضياً ليستقبل رسالة المشرف (أو الجروب)، أو اكتب نصاً خاصاً بهذا الرقم…"
                     className="w-full px-2 py-1.5 rounded border border-input bg-popover text-xs font-mono leading-6"
                   />
                   <div className="text-[10px] text-muted-foreground mt-0.5">
-                    فاضي = نفس رسالة المشرف لهذا الحدث. تقدر تستخدم نفس المتغيرات.
+                    فاضي = رسالة المشرف لهذا الحدث (أو الجروب لو مفيش)، حتى لو صفوفهم موقوفة. تقدر
+                    تستخدم نفس المتغيرات.
                   </div>
                 </div>
               )}

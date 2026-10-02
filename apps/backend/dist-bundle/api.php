@@ -526,7 +526,27 @@ function otpSweep(): void {
 }
 
 // ─── 7. Helpers: SMTP mailer (raw sockets, TLS, LOGIN auth) ─────────────
+function envOn(string $k, string $default = '0'): bool {
+    return in_array(strtolower(trim((string) env($k, $default))), ['1', 'true', 'yes', 'on'], true);
+}
+/**
+ * Master switch for ALL outgoing email — login alerts, welcome mails, order
+ * mails, password-reset codes, admin OTP. OFF unless MAIL_ENABLED=1.
+ *
+ * The mailbox allows 100 sends a day. Order and login mails alone burned
+ * through that, and once the cap is hit nothing else goes out — including the
+ * admin OTP, which locked the super admin out of the dashboard. Every send
+ * funnels through smtpSend()/mailDefer(), so the check lives there.
+ */
+function mailEnabled(): bool {
+    return envOn('MAIL_ENABLED');
+}
+/** Order-status WhatsApp to the customer. OFF unless WA_CUSTOMER_ORDER_MSGS=1. */
+function waCustomerOrderMsgs(): bool {
+    return envOn('WA_CUSTOMER_ORDER_MSGS');
+}
 function smtpSend(array $to, string $subject, string $textBody, ?string $htmlBody = null): array {
+    if (!mailEnabled()) return ['ok' => false, 'error' => 'mail disabled (MAIL_ENABLED is off)'];
     $host = env('SMTP_HOST', 'smtp.hostinger.com');
     $port = (int) env('SMTP_PORT', '465');
     $user = env('SMTP_USER');
@@ -601,6 +621,7 @@ function smtpSend(array $to, string $subject, string $textBody, ?string $htmlBod
 // where the SAPI supports it, so the client never waits on the mail server.
 $GLOBALS['__deferred_mail'] = [];
 function mailDefer(string $toAddr, string $subject, string $textBody, ?string $htmlBody = null): void {
+    if (!mailEnabled()) return;
     $toAddr = trim($toAddr);
     if ($toAddr === '' || !filter_var($toAddr, FILTER_VALIDATE_EMAIL)) return;
     $GLOBALS['__deferred_mail'][] = [$toAddr, $subject, $textBody, $htmlBody];
@@ -2058,7 +2079,12 @@ if ($method === 'POST' && $path === '/internal/alerts/sweep') {
 //   control/*.json → we write {action:'logout'} etc.
 function waDir(): string { $d = __DIR__ . '/uploads/.wa'; if (!is_dir($d)) @mkdir($d, 0755, true); return $d; }
 // Queue an outgoing WhatsApp message for the Baileys bridge to send.
-function waEnqueue(?string $to, string $text): void {
+/**
+ * @param bool $staff A message to staff (driver, supervisor, an admin's extra
+ *   number). The bridge's per-number flood cap is for customers; staff numbers
+ *   legitimately get many order messages at busy times and are exempt.
+ */
+function waEnqueue(?string $to, string $text, bool $staff = false): void {
     $to = trim((string)$to);
     if ($to === '' || $text === '') return;
     $dir = waDir();
@@ -2070,7 +2096,9 @@ function waEnqueue(?string $to, string $text): void {
     // Order-stage messages for one transition are byte-identical, and no genuine
     // flow re-sends identical text to the same number within seconds (OTPs embed
     // a unique code, so they never collide). Drop the repeat.
-    $key = hash('sha256', $to . '|' . $text);
+    // Keyed on the number as WhatsApp sees it, so "010…" and "+2010…" (one
+    // typed as the supervisor, one as an extra number) are the same person.
+    $key = hash('sha256', waNormTo($to) . '|' . $text);
     $marker = $dir . '/dedupe/' . $key . '.txt';
     $now = time();
     $TTL = 180; // 3 minutes
@@ -2088,7 +2116,15 @@ function waEnqueue(?string $to, string $text): void {
     // The bridge also honours this key as a second line of defence against a
     // send that delivered but threw (timeout) and would otherwise be retried.
     @file_put_contents($dir . '/queue/' . bin2hex(random_bytes(8)) . '.json',
-        json_encode(['to' => $to, 'text' => $text, 'dedupe' => $key], JSON_UNESCAPED_UNICODE));
+        json_encode(['to' => $to, 'text' => $text, 'dedupe' => $key] + ($staff ? ['staff' => true] : []), JSON_UNESCAPED_UNICODE));
+}
+/** Same normalisation as the bridge's toJid(): a group id as is, a number as 20XXXXXXXXXX. */
+function waNormTo(string $to): string {
+    if (str_contains($to, '@')) return $to;
+    $n = preg_replace('/\D/', '', $to) ?? '';
+    if (str_starts_with($n, '0')) $n = '20' . substr($n, 1);
+    if (strlen($n) === 10 && $n[0] === '1') $n = '20' . $n;
+    return $n;
 }
 function orderStatusLabelAr(string $s): string {
     return [
@@ -2600,6 +2636,8 @@ function orderForMessages(string $orderId): ?array {
  * customer phones back asking where their confirmation is.
  */
 function sendOrderEmail(string $orderId, string $status, ?string $to = null): ?string {
+    // Mail switched off ⇒ nothing goes out, so report nothing went out.
+    if (!mailEnabled()) return null;
     try {
         $o = orderForMessages($orderId);
         if (!$o) return null;
@@ -2673,9 +2711,12 @@ function notifyOrderParties(string $orderId, string $status, ?string $reason = n
             return $r !== '' ? $r : null;
         };
 
-        // ── CUSTOMER ──
+        // ── CUSTOMER ── off unless WA_CUSTOMER_ORDER_MSGS=1, whatever the
+        // template editor says. Order updates go to the group; the customer
+        // follows the order in the app (push + in-app below). The rendered
+        // text is still kept: extra recipients fall back to it.
         $custMsg = $render('CUSTOMER');
-        if ($custMsg && !empty($o['cust_phone'])) { waEnqueue($o['cust_phone'], $custMsg); $sent = true; $log[] = 'واتساب العميل'; }
+        if ($custMsg && !empty($o['cust_phone']) && waCustomerOrderMsgs()) { waEnqueue($o['cust_phone'], $custMsg); $sent = true; $log[] = 'واتساب العميل'; }
 
         /*
          * The order as an email, at the stages worth keeping a record of.
@@ -2708,7 +2749,7 @@ function notifyOrderParties(string $orderId, string $status, ?string $reason = n
 
         // ── DRIVER ──
         $drvMsg = $skipDriver ? null : $render('DRIVER');
-        if ($drvMsg && !empty($o['drv_phone'])) { waEnqueue($o['drv_phone'], $drvMsg); $sent = true; $log[] = 'واتساب المندوب'; }
+        if ($drvMsg && !empty($o['drv_phone'])) { waEnqueue($o['drv_phone'], $drvMsg, true); $sent = true; $log[] = 'واتساب المندوب'; }
         // The driver used to get WhatsApp only — nothing reached their phone's
         // notification tray. Same push path the customer gets, carrying orderId
         // so the tap opens the order.
@@ -2732,7 +2773,7 @@ function notifyOrderParties(string $orderId, string $status, ?string $reason = n
             $txt = $done[$status] ?? "✅ اكتمل الطلب #{$no} — شكراً لمجهودك.";
             foreach (orderLegsFor($orderId) as $lg) {
                 if (empty($lg['driverId']) || $lg['driverId'] === ($o['assignedDriverId'] ?? null)) continue;
-                if (!empty($lg['driverPhone'])) { waEnqueue((string) $lg['driverPhone'], $txt . "\nالمجموعة: " . $lg['label']); $sent = true; }
+                if (!empty($lg['driverPhone'])) { waEnqueue((string) $lg['driverPhone'], $txt . "\nالمجموعة: " . $lg['label'], true); $sent = true; }
                 notifyUser((string) $lg['driverId'], 'ORDER_STATUS', 'تحديث على الطلب', 'تحديث على الطلب', $txt, $txt,
                     ['orderId' => $orderId, 'orderNumber' => $no, 'screen' => 'OrderTracking', 'status' => $status]);
             }
@@ -2741,7 +2782,7 @@ function notifyOrderParties(string $orderId, string $status, ?string $reason = n
         // ── SUPERVISOR ── the business / admin oversight number
         $supMsg = $render('SUPERVISOR');
         $adminNo = waAdminNumber();
-        if ($supMsg && $adminNo) { waEnqueue($adminNo, $supMsg); $sent = true; $log[] = 'واتساب المشرف'; }
+        if ($supMsg && $adminNo) { waEnqueue($adminNo, $supMsg, true); $sent = true; $log[] = 'واتساب المشرف'; }
 
         // ── GROUP ── the linked WhatsApp group (when one is picked + enabled)
         $grpMsg = $render('GROUP');
@@ -2751,7 +2792,23 @@ function notifyOrderParties(string $orderId, string $status, ?string $reason = n
         }
 
         // ── EXTRA per-event recipients ── each enabled row gets its own text,
-        // or — when left blank — the supervisor / group / customer copy.
+        // or — when left blank — the supervisor / group copy.
+        $oversightText = function () use ($event, $ctx): ?string {
+            foreach (['SUPERVISOR', 'GROUP'] as $rcp) {
+                $rule = notifRule($event, $rcp);
+                $tpl = $rule['override'];
+                if ($tpl === null) {
+                    foreach (notifDefaultCatalog() as $t) {
+                        if ($t['event'] === $event && $t['recipient'] === $rcp) { $tpl = $t['default']; break; }
+                    }
+                }
+                if ($tpl !== null && $tpl !== '') {
+                    $r = notifRender($tpl, $ctx);
+                    if ($r !== '') return $r;
+                }
+            }
+            return null; // e.g. PICKED_UP has no oversight template
+        };
         if ($event) {
             $extra = notifReadSetting('notification_recipients');
             $n = 0;
@@ -2759,8 +2816,12 @@ function notifyOrderParties(string $orderId, string $status, ?string $reason = n
                 $phone = trim((string) ($r['phone'] ?? ''));
                 if ($phone === '' || (array_key_exists('enabled', $r) && !$r['enabled'])) continue;
                 $txt = trim((string) ($r['text'] ?? ''));
-                $msg = $txt !== '' ? notifRender($txt, $ctx) : ($supMsg ?: ($grpMsg ?: $custMsg));
-                if ($msg) { waEnqueue($phone, $msg); $sent = true; $n++; }
+                // Blank text: the oversight copy (supervisor, else group), even
+                // when those rows are switched off — never the customer's
+                // wording, which used to reach admins as «استلمنا طلبك…», and
+                // never nothing, which is what an all-off event used to send.
+                $msg = $txt !== '' ? notifRender($txt, $ctx) : ($supMsg ?: ($grpMsg ?: $oversightText()));
+                if ($msg) { waEnqueue($phone, $msg, true); $sent = true; $n++; }
             }
             if ($n) $log[] = "أرقام إضافية ({$n})";
         }
@@ -3983,6 +4044,15 @@ if ($method === 'GET' && preg_match('#^/admin/orders/([^/]+)$#', $path, $m)) {
     try { $sh = db()->prepare('SELECT * FROM `OrderStatusHistory` WHERE orderId = ? ORDER BY createdAt ASC'); $sh->execute([$m[1]]); $o['statusHistory'] = array_map('jsonizeRow', $sh->fetchAll()); } catch (Throwable $e) {}
     jsonOk($o);
 }
+// Which customer-facing channels are switched on (MAIL_ENABLED,
+// WA_CUSTOMER_ORDER_MSGS). The manual/custom order screens read it so the
+// confirm summary doesn't promise the agent a message the server will drop.
+if ($method === 'GET' && $path === '/admin/notify-status') {
+    $u = authUser();
+    if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
+    jsonOk(['email' => mailEnabled(), 'whatsappCustomer' => waCustomerOrderMsgs()]);
+}
+
 if ($method === 'POST' && $path === '/admin/orders') {
     $u = authUser();
     if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
@@ -4252,7 +4322,7 @@ if ($method === 'POST' && $path === '/admin/orders') {
             foreach (shiftsForSupervisor($sup['id']) as $sh) if (shiftCoversNow($sh, $dow, $mins)) { $hit = true; break; }
             if ($hit) {
                 $addr = (string)($b['deliveryAddress'] ?? '');
-                waEnqueue($sup['whatsappPhone'], "🆕 طلب جديد *#{$orderNumber}*\nالعميل: " . (string)($b['customerName'] ?? '') . ($addr ? "\nالعنوان: $addr" : ''));
+                waEnqueue($sup['whatsappPhone'], "🆕 طلب جديد *#{$orderNumber}*\nالعميل: " . (string)($b['customerName'] ?? '') . ($addr ? "\nالعنوان: $addr" : ''), true);
                 try { db()->prepare('INSERT INTO `SupervisorOrderDispatch` (id, supervisorId, orderId, status, sentAt, createdAt) VALUES (?,?,?,?,NOW(3),NOW(3))')->execute([newId(), $sup['id'], $id, 'SENT']); } catch (Throwable $e) {}
                 break;
             }
@@ -7153,8 +7223,15 @@ if ($method === 'PATCH' && preg_match('#^/admin/orders/([^/]+)/status$#', $path,
             }
         } catch (Throwable $e) { error_log('[api.php] driver release: ' . $e->getMessage()); }
     }
-    // Fan out role-specific WhatsApp updates (customer / driver / admin).
-    notifyOrderParties($m[1], $status, !empty($b['reason']) ? (string) $b['reason'] : null);
+    // Fan out role-specific WhatsApp updates (customer / driver / admin) on a
+    // real move only. Re-saving the same status re-sent the whole round, and
+    // COMPLETED is the same DELIVERED message, so «تأكيد التسليم» then «إنهاء»
+    // told the group (and everyone else) twice.
+    if ($prevStatus !== $status && !($status === 'COMPLETED' && $prevStatus === 'DELIVERED')) {
+        notifyOrderParties($m[1], $status, !empty($b['reason']) ? (string) $b['reason'] : null);
+    } else {
+        resolveOrderAlerts($m[1]);
+    }
     $r = db()->prepare('SELECT * FROM `Order` WHERE id = ?'); $r->execute([$m[1]]);
     jsonOk(jsonizeRow($r->fetch()) ?: []);
 }
@@ -7163,6 +7240,9 @@ if ($method === 'PATCH' && preg_match('#^/admin/orders/([^/]+)/price$#', $path, 
     $b = readJsonBody();
     // An admin may price the goods and the delivery separately; both feed the
     // money model. deliveryFee is only overwritten when explicitly supplied.
+    $ps = db()->prepare('SELECT `status` FROM `Order` WHERE id = ?');
+    $ps->execute([$m[1]]);
+    $wasNew = $ps->fetchColumn() === 'NEW';
     $sets = ['`quotedPrice` = ?', "`status` = CASE WHEN `status` = 'NEW' THEN 'PRICED' ELSE `status` END", '`updatedAt` = NOW(3)'];
     $args = [(float) ($b['quotedPrice'] ?? 0)];
     if (isset($b['deliveryFee']) && $b['deliveryFee'] !== '') { $sets[] = '`deliveryFee` = ?'; $args[] = (float) $b['deliveryFee']; }
@@ -7194,7 +7274,11 @@ if ($method === 'PATCH' && preg_match('#^/admin/orders/([^/]+)/price$#', $path, 
     }
     // Re-derive commission/payout from the new price.
     computeOrderFinancials($m[1]);
-    notifyOrderParties($m[1], 'PRICED');
+    // Only when this save is what priced it (NEW → PRICED). Every re-save, in
+    // any status, used to send «تم التسعير» again — up to 30 minutes after
+    // the order was done.
+    if ($wasNew) notifyOrderParties($m[1], 'PRICED');
+    else resolveOrderAlerts($m[1]);
     $r = db()->prepare('SELECT * FROM `Order` WHERE id = ?'); $r->execute([$m[1]]);
     jsonOk(jsonizeRow($r->fetch()) ?: []);
 }
@@ -9915,7 +9999,7 @@ function notifyLegDriver(string $orderId, array $leg): void {
             ? '💰 مدفوع — لا تُحصّل شيئاً'
             : '💰 التحصيل: *' . waMoney($amount) . '* (' . waPayMethodAr($o['paymentMethod'] ?? null) . ')';
 
-        if (!empty($o['drv_phone'])) waEnqueue((string) $o['drv_phone'], implode("\n", $msg));
+        if (!empty($o['drv_phone'])) waEnqueue((string) $o['drv_phone'], implode("\n", $msg), true);
         notifyUser((string) $leg['driverId'], 'ORDER_STATUS', 'مجموعة توصيل جديدة', 'مجموعة توصيل جديدة',
             "طلب #{$no} — " . $leg['label'], "طلب #{$no} — " . $leg['label'],
             ['orderId' => $orderId, 'orderNumber' => $no, 'screen' => 'OrderTracking', 'status' => 'DRIVER_ASSIGNED']);
@@ -10939,6 +11023,9 @@ if (preg_match('#^/orders/([^/]+)/cancel$#', $path, $mm) && $method === 'POST') 
     db()->prepare("UPDATE `Order` SET status = 'CANCELLED', cancelledAt = NOW(3), cancellationReason = ?, updatedAt = NOW(3) WHERE id = ? OR parentOrderId = ?")
         ->execute([$reason, $mm[1], $mm[1]]);
     orderHistory($mm[1], (string) $o['status'], 'CANCELLED', $uid, 'CUSTOMER', $reason);
+    // Nobody heard about it: no group message, and a driver already on the way
+    // kept going. Same fan-out as an admin cancel (customer copy stays off).
+    notifyOrderParties($mm[1], 'CANCELLED', $reason);
     $st->execute([$mm[1]]);
     jsonOk(orderRow($st->fetch()));
 }
@@ -12109,8 +12196,16 @@ if ($method === 'POST' && $path === '/auth/login') {
     if (!(int) $user['isActive']) jsonErr('الحساب غير مفعّل', 403, 'INACTIVE');
 
     $role = (string) $user['role'];
-    // Admin → OTP flow. Everyone else → direct tokens.
-    if ($role === 'ADMIN' || $role === 'SUPER_ADMIN') {
+    $isAdmin = $role === 'ADMIN' || $role === 'SUPER_ADMIN';
+    // Admin OTP is OFF unless ADMIN_OTP_REQUIRED=1. The code travels by email,
+    // and once Hostinger's daily send cap is hit no code arrives — the admins,
+    // the super admin included, were locked out of the dashboard for the rest
+    // of the day. With it off, admins get tokens straight from the password
+    // check below (6-hour admin session, same as after the OTP step). It also
+    // needs mail on: an OTP that can't be emailed is a locked door.
+    $adminOtp = $isAdmin && mailEnabled() && envOn('ADMIN_OTP_REQUIRED');
+    // Admin + ADMIN_OTP_REQUIRED → OTP flow. Everyone else → direct tokens.
+    if ($adminOtp) {
         otpSweep();
         $code = str_pad((string) random_int(0, 999999), 6, '0', STR_PAD_LEFT);
         $token = rtrim(strtr(base64_encode(random_bytes(24)), '+/', '-_'), '=');
@@ -12150,10 +12245,34 @@ if ($method === 'POST' && $path === '/auth/login') {
         ]);
     }
 
-    // Non-admin: sign and return tokens directly.
     $accessSecret = env('JWT_ACCESS_SECRET');
     $refreshSecret = env('JWT_REFRESH_SECRET');
     if (!$accessSecret || !$refreshSecret) jsonErr('JWT secrets not configured', 500, 'CONFIG_MISSING');
+
+    // Admin without OTP: same tokens and payload /auth/admin/otp/verify hands
+    // out, so the dashboard can't tell which way the admin came in. No
+    // login-alert email here — the mail quota is exactly what ran out.
+    if ($isAdmin) {
+        $stmt = db()->prepare('SELECT permissions FROM `User` WHERE id = ? LIMIT 1');
+        $stmt->execute([$user['id']]);
+        $perms = $stmt->fetchColumn();
+        $adminTtl = ((int) env('ADMIN_SESSION_TTL_HOURS', '6')) * 3600;
+        $access = jwtSign(['sub' => $user['id'], 'role' => $role], $accessSecret, $adminTtl);
+        $refresh = jwtSign(['sub' => $user['id'], 'typ' => 'refresh'], $refreshSecret, $adminTtl);
+        jsonOk([
+            'requiresOtp' => false,
+            'user' => [
+                'id' => $user['id'], 'name' => $user['name'],
+                'phone' => $user['phone'], 'email' => $user['email'], 'role' => $role,
+                // null = unrestricted (super/legacy); an array = a scoped admin.
+                'permissions' => is_string($perms) && $perms !== ''
+                    ? (json_decode($perms, true) ?: []) : null,
+            ],
+            'tokens' => ['accessToken' => $access, 'refreshToken' => $refresh],
+        ]);
+    }
+
+    // Non-admin: sign and return tokens directly.
     // One-month mobile session (default 30 days). See issueTokens() for why the
     // old 15-min access token kept logging customers/drivers out on resume.
     $accessTtl = ((int) env('MOBILE_SESSION_TTL_HOURS', '720')) * 3600;
