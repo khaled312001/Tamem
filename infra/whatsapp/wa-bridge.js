@@ -99,10 +99,11 @@ const SEND_TIMEOUT_MS = 75 * 1000;
 //  - at least WA_MIN_GAP_MS between two sends
 //  - at most WA_MAX_PER_HOUR sends in any rolling hour; past that, messages
 //    wait in the queue (nothing is lost)
-//  - at most WA_MAX_PER_NUMBER sends to one person in 10 minutes; past that
+//  - at most WA_MAX_PER_NUMBER sends to one customer in 10 minutes; past that
 //    the message is parked in dead/ and never sent. That is what a flood looks
-//    like: the same code twenty times, a reset button hammered. Groups are
-//    exempt, since every order lands there.
+//    like: the same code twenty times, a reset button hammered. Groups and
+//    staff messages (msg.staff, set by api.php) are exempt: order alerts reach
+//    them in bursts by design.
 const MIN_GAP_MS = +process.env.WA_MIN_GAP_MS || 3000;
 const MAX_PER_HOUR = +process.env.WA_MAX_PER_HOUR || 300;
 const MAX_PER_NUMBER = +process.env.WA_MAX_PER_NUMBER || 5;
@@ -469,7 +470,9 @@ async function ipcTick() {
       const now = Date.now();
       while (sentTimes.length && sentTimes[0] < now - 3600 * 1000) sentTimes.shift();
       if (sentTimes.length >= MAX_PER_HOUR) break; // hourly cap: the rest stays queued
-      if (!jid.endsWith('@g.us')) {
+      // Customers only: groups and staff (drivers, supervisor, an admin's
+      // extra number) get many order messages at busy times by design.
+      if (!jid.endsWith('@g.us') && !msg.staff) {
         const recent = (perNumber.get(jid) || []).filter((t) => t > now - PER_NUMBER_WINDOW_MS);
         perNumber.set(jid, recent);
         if (recent.length >= MAX_PER_NUMBER) {
@@ -496,7 +499,7 @@ async function ipcTick() {
       }
       lastSendAt = Date.now();
       sentTimes.push(lastSendAt);
-      if (!jid.endsWith('@g.us')) perNumber.get(jid).push(lastSendAt);
+      if (!jid.endsWith('@g.us') && !msg.staff) perNumber.get(jid).push(lastSendAt);
       try {
         await withTimeout(sock.sendMessage(jid, { text: String(msg.text) }), SEND_TIMEOUT_MS);
         if (msg.dedupe) rememberSent(msg.dedupe);

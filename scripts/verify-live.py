@@ -21,6 +21,7 @@ Usage:  python scripts/verify-live.py      (TAMEM_SSH_PASS or HANDOFF.md)
 import json
 import os
 import re
+import shlex
 import sys
 import time
 import urllib.request
@@ -83,8 +84,11 @@ def main() -> None:
         ("function waCustomerOrderMsgs", "api.php has the customer-WhatsApp switch"),
         ("/admin/notify-status", "api.php serves /admin/notify-status"),
         ("$adminOtp = $isAdmin && mailEnabled()", "api.php: admin login skips OTP unless enabled"),
+        ("function waNormTo", "api.php: duplicate guard matches 010… and +2010…"),
+        ("$prevStatus !== $status && !($status === 'COMPLETED'", "api.php: status re-saves don't re-notify"),
+        ("notifyOrderParties($mm[1], 'CANCELLED', $reason)", "api.php: customer cancel reaches the group"),
     ]:
-        check(label, run(f"grep -cF '{marker}' '{api}'") not in ("", "0"))
+        check(label, run(f"grep -cF -- {shlex.quote(marker)} '{api}'") not in ("", "0"))
 
     flags = {}
     for line in run(f"grep -E '^(MAIL_ENABLED|ADMIN_OTP_REQUIRED|WA_CUSTOMER_ORDER_MSGS)=' '{API_DIR}/.env'").splitlines():
@@ -96,6 +100,7 @@ def main() -> None:
         check(f".env {k} is off", not on, f"set to {v!r}" if v is not None else "not set (default off)")
 
     check("wa-bridge.js has the one-send-at-a-time guard", run(f"grep -c tickBusy '{BRIDGE}'") not in ("", "0"))
+    check("wa-bridge.js has the send limits (staff exempt)", run(f"grep -c 'msg.staff' '{BRIDGE}'") not in ("", "0"))
     try:
         st = json.loads(run(f"cat '{WA_DIR}/status.json'") or "{}")
     except ValueError:
@@ -103,8 +108,15 @@ def main() -> None:
     age = time.time() - float(st.get("ts") or 0) / 1000
     check("bridge connected", st.get("status") == "connected", f"status={st.get('status')!r}")
     check("bridge heartbeat fresh (< 60s)", age < 60, f"{int(age)}s old")
-    print(f"info  queue: {run(f'ls {WA_DIR}/queue 2>/dev/null | wc -l')} file(s), "
-          f"dead/: {run(f'ls {WA_DIR}/dead 2>/dev/null | wc -l')} file(s)")
+    # Only *.json is a message the bridge sends; anything else in the folder
+    # is ignored by it (shown so a bare file count doesn't read as a backlog).
+    q = f"{WA_DIR}/queue"
+    waiting = run(f"ls {q}/*.json 2>/dev/null | wc -l")
+    other = run(f"ls -A {q} 2>/dev/null | grep -vc '[.]json$'")
+    types = run(f"ls -A {q} 2>/dev/null | grep -v '[.]json$' | sed -E 's/.*[.]/./' | sort | uniq -c | tr -s '[:space:]' ' '")
+    dead = run(f"ls {WA_DIR}/dead 2>/dev/null | wc -l")
+    print(f"info  queue: {waiting} message(s) waiting, {other} other file(s) the bridge ignores "
+          f"(types: {types.strip() or '-'}), dead/: {dead} file(s)")
     cli.close()
 
     code, _ = http_get(HEALTH)
