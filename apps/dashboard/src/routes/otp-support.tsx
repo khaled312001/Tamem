@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
-import { Copy, KeyRound, Loader2, RefreshCw, Search } from 'lucide-react';
+import { Copy, KeyRound, Loader2, MessageCircle, RefreshCw, Search } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { toast } from 'sonner';
 
@@ -137,10 +137,15 @@ function ActiveCode({ data, onRefresh }: { data: LookupResult; onRefresh: () => 
   }, [data.expiresAt]);
 
   const code = data.code ?? '';
-  const copy = async () => {
+  const message = buildCustomerMessage(code);
+  const waDigits = data.phone.replace(/\D+/g, '');
+  const waUrl =
+    waDigits.length >= 11 ? `https://wa.me/${waDigits}?text=${encodeURIComponent(message)}` : null;
+
+  const copyText = async (text: string, label: string) => {
     try {
-      await navigator.clipboard.writeText(code);
-      toast.success('تم نسخ الكود');
+      await navigator.clipboard.writeText(text);
+      toast.success(label);
     } catch {
       toast.error('تعذّر النسخ');
     }
@@ -166,14 +171,46 @@ function ActiveCode({ data, onRefresh }: { data: LookupResult; onRefresh: () => 
           صالح · باقي <b>{formatCountdown(remaining)}</b>
         </div>
       )}
-      <div className="flex justify-center gap-2 pt-1">
-        <Button size="sm" onClick={copy} disabled={expiredNow}>
+      <div className="flex flex-wrap justify-center gap-2 pt-1">
+        <Button
+          size="sm"
+          onClick={() => copyText(message, 'تم نسخ الرسالة — ابعتها للعميل')}
+          disabled={expiredNow}
+        >
+          <Copy className="h-3.5 w-3.5" /> نسخ الرسالة
+        </Button>
+        {waUrl && !expiredNow && (
+          <a
+            href={waUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center justify-center gap-1.5 rounded-md bg-[#25D366] px-3 py-1.5 text-sm font-bold text-white transition hover:brightness-95"
+          >
+            <MessageCircle className="h-3.5 w-3.5" /> واتساب العميل
+          </a>
+        )}
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={() => copyText(code, 'تم نسخ الكود')}
+          disabled={expiredNow}
+        >
           <Copy className="h-3.5 w-3.5" /> نسخ الكود
         </Button>
         <Button size="sm" variant="outline" onClick={onRefresh}>
           <RefreshCw className="h-3.5 w-3.5" /> تحديث
         </Button>
       </div>
+      {!expiredNow && (
+        <details className="text-start">
+          <summary className="cursor-pointer text-[11px] font-bold text-emerald-800/80">
+            معاينة الرسالة
+          </summary>
+          <pre className="mt-1 whitespace-pre-wrap rounded-md border border-emerald-200 bg-white p-2 text-start font-sans text-xs leading-5 text-foreground">
+            {message}
+          </pre>
+        </details>
+      )}
       {(data.attempts ?? 0) > 0 && (
         <div className="text-[11px] text-muted-foreground">
           محاولات إدخال خاطئة: {data.attempts} (بعد ٥ محاولات يتقفل الكود)
@@ -199,6 +236,23 @@ function Notice({ tone, children }: { tone: 'muted' | 'warn'; children: React.Re
       ? 'border-amber-200 bg-amber-50 text-amber-900'
       : 'border-border bg-muted/30 text-muted-foreground';
   return <div className={`rounded-xl border p-5 text-center text-sm ${cls}`}>{children}</div>;
+}
+
+/** The ready-to-send customer WhatsApp message carrying their login code. */
+function buildCustomerMessage(code: string): string {
+  return [
+    'تميم للتوصيل 🚚',
+    '',
+    'أهلاً بيك 👋',
+    'كود الدخول الخاص بحسابك هو:',
+    '',
+    `🔐 ${code}`,
+    '',
+    'صالح لمدة ٥ دقائق، ويُستخدم مرة واحدة.',
+    'دخّله في التطبيق عشان تكمّل تسجيل الدخول.',
+    '',
+    '⚠️ الكود ده خاص بيك لوحدك — متشاركهوش مع أي حد.',
+  ].join('\n');
 }
 
 function secondsLeft(iso?: string): number {
