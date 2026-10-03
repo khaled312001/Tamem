@@ -5255,6 +5255,20 @@ if ($method === 'GET' && $path === '/admin/drivers') {
         ] : null;
         $rows[] = $row;
     }
+    // Real delivered count per driver on this page — the stored totalDeliveries
+    // column is never updated, so the card always showed 0. One grouped query.
+    $dids = array_values(array_filter(array_map(fn($x) => $x['id'] ?? null, $rows)));
+    if ($dids) {
+        $in = implode(',', array_fill(0, count($dids), '?'));
+        $cst = db()->prepare("SELECT assignedDriverId, COUNT(*) c FROM `Order` WHERE assignedDriverId IN ($in) AND status IN ('DELIVERED','COMPLETED') GROUP BY assignedDriverId");
+        $cst->execute($dids);
+        $cmap = [];
+        foreach ($cst->fetchAll() as $cr) $cmap[(string) $cr['assignedDriverId']] = (int) $cr['c'];
+        foreach ($rows as &$row) {
+            if (!empty($row['driverProfile'])) $row['driverProfile']['deliveredCount'] = $cmap[(string) $row['id']] ?? 0;
+        }
+        unset($row);
+    }
     http_response_code(200);
     echo json_encode(['data' => $rows, 'meta' => ['pagination' => ['page' => $page, 'pageSize' => $size, 'total' => $total, 'totalPages' => (int) ceil($total / max(1, $size))]]], JSON_UNESCAPED_UNICODE);
     exit;
@@ -5314,6 +5328,26 @@ if ($method === 'GET' && preg_match('#^/admin/drivers/([^/]+)$#', $path, $m)) {
             '5' => (int) ($s['s5'] ?? 0), '4' => (int) ($s['s4'] ?? 0), '3' => (int) ($s['s3'] ?? 0),
             '2' => (int) ($s['s2'] ?? 0), '1' => (int) ($s['s1'] ?? 0),
         ],
+    ];
+    // Delivery throughput + money for this driver — today / week / month / total
+    // (Cairo-bound), from the real delivered orders. driverShare = the snapshot
+    // cut when present, else deliveryFee × the driver's current share %.
+    $share = "COALESCE(o.driverDeliveryRevenue, ROUND(COALESCE(o.deliveryFee,0) * COALESCE(dp.deliverySharePct,0) / 100, 2))";
+    $dstat = db()->prepare(
+        "SELECT COUNT(*) n, COALESCE(SUM(COALESCE(o.deliveryFee,0)),0) fees, COALESCE(SUM($share),0) driverShare
+           FROM `Order` o LEFT JOIN `DriverProfile` dp ON dp.userId = o.assignedDriverId
+          WHERE o.assignedDriverId = ? AND o.status IN ('DELIVERED','COMPLETED')
+            AND COALESCE(o.deliveredAt, o.completedAt, o.updatedAt) >= ?"
+    );
+    $period = function (string $since) use ($dstat, $did): array {
+        $dstat->execute([$did, $since]); $r = $dstat->fetch() ?: [];
+        return ['deliveries' => (int) ($r['n'] ?? 0), 'fees' => round((float) ($r['fees'] ?? 0), 2), 'driverShare' => round((float) ($r['driverShare'] ?? 0), 2)];
+    };
+    $out['delivery'] = [
+        'today' => $period(gmdate('Y-m-d H:i:s', strtotime('today 00:00') - 3 * 3600)),
+        'week'  => $period(gmdate('Y-m-d H:i:s', time() - 7 * 86400)),
+        'month' => $period(gmdate('Y-m-d H:i:s', strtotime('first day of this month 00:00') - 3 * 3600)),
+        'total' => $period('1970-01-01 00:00:00'),
     ];
     jsonOk($out);
 }

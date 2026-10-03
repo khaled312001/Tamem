@@ -20,6 +20,7 @@ import { toast } from 'sonner';
 import { DriverStatusBadge } from '../components/ui/Badge.js';
 import { Button } from '../components/ui/Button.js';
 import { Dialog } from '../components/ui/Dialog.js';
+import { formatMoney } from '../lib/format.js';
 import { Field, Input } from '../components/ui/Input.js';
 import { PhoneInput } from '../components/ui/PhoneInput.js';
 import { Pagination } from '../components/ui/Pagination.js';
@@ -142,6 +143,7 @@ export function DriversPage() {
   const [createOpen, setCreateOpen] = useState(false);
   const [editing, setEditing] = useState<Row | null>(null);
   const [viewingReviews, setViewingReviews] = useState<Row | null>(null);
+  const [viewingStats, setViewingStats] = useState<Row | null>(null);
 
   // Server-side search + paging. This screen used to request one capped page of
   // 100 drivers with no search box and no way to reach anyone past row 100.
@@ -267,7 +269,9 @@ export function DriversPage() {
                 </div>
                 <div className="flex justify-between">
                   <span className="text-muted-foreground">التوصيلات</span>
-                  <span className="font-bold">{d.driverProfile?.totalDeliveries ?? 0}</span>
+                  <span className="font-bold">
+                    {d.driverProfile?.deliveredCount ?? d.driverProfile?.totalDeliveries ?? 0}
+                  </span>
                 </div>
                 {d.driverProfile?.rating && (
                   <div className="flex justify-between">
@@ -302,6 +306,12 @@ export function DriversPage() {
                   <Star className="w-3 h-3" /> التقييمات
                 </button>
                 <button
+                  onClick={() => setViewingStats(d)}
+                  className="inline-flex items-center gap-1 text-xs text-emerald-600 hover:underline"
+                >
+                  <Truck className="w-3 h-3" /> الإحصائيات
+                </button>
+                <button
                   onClick={() => {
                     if (confirm(`حذف السائق "${d.name}"؟`)) deleteMut.mutate(d.id);
                   }}
@@ -331,7 +341,72 @@ export function DriversPage() {
       {viewingReviews && (
         <DriverReviewsDialog driver={viewingReviews} onClose={() => setViewingReviews(null)} />
       )}
+      {viewingStats && (
+        <DriverStatsDialog driver={viewingStats} onClose={() => setViewingStats(null)} />
+      )}
     </div>
+  );
+}
+
+/** Delivery throughput + money per driver: today / week / month / all-time. */
+function DriverStatsDialog({ driver, onClose }: { driver: Row; onClose: () => void }) {
+  const { data, isLoading } = useQuery({
+    queryKey: ['admin', 'driver', driver.id, 'delivery-stats'],
+    queryFn: () => api.adminGetDriver(driver.id) as Promise<Row>,
+  });
+
+  type Period = { deliveries: number; fees: number; driverShare: number };
+  const delivery: Record<string, Period> = data?.delivery ?? {};
+  const cards: { key: string; label: string; accent: string }[] = [
+    { key: 'today', label: 'اليوم', accent: 'bg-emerald-50 border-emerald-200 text-emerald-900' },
+    { key: 'week', label: 'آخر أسبوع', accent: 'bg-sky-50 border-sky-200 text-sky-900' },
+    { key: 'month', label: 'هذا الشهر', accent: 'bg-violet-50 border-violet-200 text-violet-900' },
+    { key: 'total', label: 'الإجمالي', accent: 'bg-amber-50 border-amber-200 text-amber-900' },
+  ];
+
+  return (
+    <Dialog
+      open
+      onOpenChange={(o) => !o && onClose()}
+      title={`إحصائيات التوصيل · ${driver.name}`}
+      size="lg"
+    >
+      {isLoading ? (
+        <div className="py-8 text-center text-muted-foreground">
+          <Loader2 className="w-5 h-5 animate-spin inline" /> جاري التحميل…
+        </div>
+      ) : (
+        <div className="space-y-4">
+          <div className="grid grid-cols-2 gap-3">
+            {cards.map((c) => {
+              const p = delivery[c.key] ?? { deliveries: 0, fees: 0, driverShare: 0 };
+              return (
+                <div key={c.key} className={`border rounded-xl p-4 ${c.accent}`}>
+                  <div className="text-xs font-bold opacity-70">{c.label}</div>
+                  <div className="mt-1 flex items-baseline gap-1.5">
+                    <span className="text-3xl font-black">{p.deliveries}</span>
+                    <span className="text-xs opacity-70">توصيلة</span>
+                  </div>
+                  <div className="mt-2 space-y-0.5 text-xs">
+                    <div className="flex justify-between">
+                      <span className="opacity-70">إجمالي التوصيل</span>
+                      <span className="font-bold">{formatMoney(p.fees)}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="opacity-70">نصيب السائق</span>
+                      <span className="font-bold">{formatMoney(p.driverShare)}</span>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+          <p className="text-xs text-muted-foreground text-center">
+            تُحسب التوصيلات من الطلبات المُسلَّمة فقط · «نصيب السائق» حسب نسبته من رسوم التوصيل
+          </p>
+        </div>
+      )}
+    </Dialog>
   );
 }
 
