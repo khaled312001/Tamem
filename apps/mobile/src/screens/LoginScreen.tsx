@@ -55,6 +55,10 @@ type LoginFormValues = z.input<typeof loginSchema>;
 
 // Errors now go through the shared lib/authErrors helper.
 
+// إخفاء رابط «أنشئ حساب جديد» مؤقتًا فقط — الدخول بالهاتف/كلمة المرور وجوجل
+// كلهم شغّالين زي ما هم. رجّعه false عشان الرابط يظهر تاني.
+const HIDE_REGISTER = true;
+
 export function LoginScreen() {
   const navigation = useNavigation<NavProp>();
   const route = useRoute<LoginRouteProp>();
@@ -242,17 +246,19 @@ export function LoginScreen() {
             />
           </View>
 
-          <Pressable
-            // Forward the role choice so the Register screen lands on the same
-            // tile the user picked back on RoleChoice. They can still swap
-            // tiles on the Register screen if they change their mind.
-            onPress={() => navigation.navigate('Register', { initialRole })}
-            style={({ pressed }) => [styles.registerLink, pressed && { opacity: 0.8 }]}
-          >
-            <Text style={styles.registerText}>
-              ليس لديك حساب؟ <Text style={styles.registerCta}>أنشئ حساب جديد</Text>
-            </Text>
-          </Pressable>
+          {!HIDE_REGISTER && (
+            <Pressable
+              // Forward the role choice so the Register screen lands on the same
+              // tile the user picked back on RoleChoice. They can still swap
+              // tiles on the Register screen if they change their mind.
+              onPress={() => navigation.navigate('Register', { initialRole })}
+              style={({ pressed }) => [styles.registerLink, pressed && { opacity: 0.8 }]}
+            >
+              <Text style={styles.registerText}>
+                ليس لديك حساب؟ <Text style={styles.registerCta}>أنشئ حساب جديد</Text>
+              </Text>
+            </Pressable>
+          )}
         </ScrollView>
       </KeyboardAvoidingView>
 
