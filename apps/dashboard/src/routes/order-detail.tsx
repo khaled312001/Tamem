@@ -7,6 +7,7 @@ import {
   ChevronRight,
   ClipboardCheck,
   Clock,
+  Copy,
   DollarSign,
   Edit3,
   FileSearch,
@@ -180,6 +181,76 @@ function currentPhaseFor(status: OrderStatus): PhaseId | 'done' | 'cancelled' {
 // ────────────────────────────────────────────────────────────────────────────
 // Page
 // ────────────────────────────────────────────────────────────────────────────
+
+/**
+ * The driver's WhatsApp message for this order, as a copy-and-send box. The
+ * automatic send to drivers over the WhatsApp bridge is unreliable, so the
+ * admin copies this (or taps "فتح واتساب" to open the chat pre-filled) and
+ * sends it by hand. Text comes from the SAME template the bridge would use.
+ */
+function DriverMessageBox({ orderId }: { orderId: string }) {
+  const { data, isLoading } = useQuery({
+    queryKey: ['admin', 'order', orderId, 'driver-message'],
+    queryFn: () =>
+      api.raw.get(`/admin/orders/${orderId}/driver-message`).then(
+        (r) =>
+          r.data.data as {
+            text: string;
+            waUrl: string | null;
+            driverPhone: string;
+            driverName: string;
+          },
+      ),
+  });
+
+  if (isLoading) {
+    return (
+      <div className="mt-2 flex items-center gap-1 text-xs text-muted-foreground">
+        <Loader2 className="w-3 h-3 animate-spin" /> تجهيز رسالة السائق…
+      </div>
+    );
+  }
+  if (!data?.text) return null;
+
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(data.text);
+      toast.success('تم نسخ الرسالة — ابعتها للسائق على واتساب');
+    } catch {
+      toast.error('تعذّر النسخ — حدّد النص وانسخه يدويًا');
+    }
+  };
+
+  return (
+    <div className="mt-3 space-y-2 rounded-lg border border-emerald-200 bg-emerald-50/60 p-3">
+      <div className="flex items-center gap-1.5 text-xs font-bold text-emerald-800">
+        <MessageSquare className="w-3.5 h-3.5" /> رسالة واتساب للسائق — انسخها وابعتها
+      </div>
+      <textarea
+        readOnly
+        dir="rtl"
+        value={data.text}
+        onFocus={(e) => e.currentTarget.select()}
+        className="h-40 w-full resize-y rounded-md border border-emerald-200 bg-white p-2 font-mono text-xs leading-5"
+      />
+      <div className="flex gap-2">
+        <Button size="sm" className="flex-1" onClick={copy}>
+          <Copy className="w-3.5 h-3.5" /> نسخ الرسالة
+        </Button>
+        {data.waUrl && (
+          <a
+            href={data.waUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex flex-1 items-center justify-center gap-1.5 rounded-md bg-[#25D366] py-2 text-sm font-bold text-white transition hover:brightness-95"
+          >
+            <MessageSquare className="w-3.5 h-3.5" /> فتح واتساب
+          </a>
+        )}
+      </div>
+    </div>
+  );
+}
 
 export function OrderDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -982,6 +1053,7 @@ export function OrderDetailPage() {
                     الطلب خلص — مينفعش تغيير السائق
                   </p>
                 )}
+                <DriverMessageBox orderId={id!} />
               </div>
             ) : (
               <div className="space-y-2">

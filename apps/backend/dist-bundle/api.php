@@ -2565,6 +2565,29 @@ function orderMessageContext(array $o, ?string $reason = null): array {
     $ctx['collect']     = ($o['paymentStatus'] ?? '') === 'PAID'
         ? 'مدفوع — لا تُحصّل شيئاً'
         : ('حصّل *' . ($d['total'] ?? '') . '* (' . waPayMethodAr($o['paymentMethod'] ?? null) . ')');
+    // A driver-framed money breakdown: what to hand the merchant for the goods,
+    // the delivery fee on its own, any discount/wallet, then the SINGLE amount
+    // to collect from the customer (or "paid — collect nothing"). The driver
+    // used to see only the total, so "أدفع للتاجر كام والتوصيل كام؟" was a phone
+    // call every order. Built from the same fields as priceBlock so the parts
+    // always reconcile with the total.
+    $dc = [];
+    if ($o['merchantSubtotal'] !== null && $o['merchantSubtotal'] !== '' && (float) $o['merchantSubtotal'] > 0) {
+        $dc[] = '• تدفع للتاجر (قيمة الطلب): ' . waMoney($o['merchantSubtotal']);
+    }
+    if ($o['deliveryFee'] !== null && $o['deliveryFee'] !== '') {
+        $dc[] = '• التوصيل: ' . ((float) $o['deliveryFee'] <= 0.009 ? 'مجاني 🎁' : waMoney($o['deliveryFee']));
+    }
+    if (!empty($o['discountAmount']) && (float) $o['discountAmount'] > 0) {
+        $dc[] = '• خصم: -' . waMoney($o['discountAmount']);
+    }
+    if (!empty($o['walletUsed']) && (float) $o['walletUsed'] > 0) {
+        $dc[] = '• مدفوع من المحفظة: -' . waMoney($o['walletUsed']);
+    }
+    $dc[] = ($o['paymentStatus'] ?? '') === 'PAID'
+        ? '• ✅ مدفوع بالكامل — لا تُحصّل من العميل'
+        : ('• 💰 تُحصّل من العميل: *' . ($d['total'] ?? 'غير محدد') . '* (' . waPayMethodAr($o['paymentMethod'] ?? null) . ')');
+    $ctx['driverCollect'] = implode("\n", $dc);
     return $ctx;
 }
 
@@ -2895,7 +2918,7 @@ function notifDefaultCatalog(): array {
         $ev('ORDER_ACCEPTED', 'GROUP', 'جروب الإدارة', $oversight('✅ طلب مؤكد')),
         // ═══ DRIVER_ASSIGNED ═══
         $ev('DRIVER_ASSIGNED', 'CUSTOMER', 'العميل', "تميم للتوصيل 🚚\nالكابتن *{{driverName}}* في الطريق لطلبك — للتواصل: {{driverPhone}}\n\n{{summary}}"),
-        $ev('DRIVER_ASSIGNED', 'DRIVER', 'السائق', "🚚 *طلب جديد مُسند إليك* #{{orderNumber}}\nالخدمة: {{serviceName}}\n👤 العميل: {{customerName}}\n📞 الهاتف: {{customerPhone}}\n🏪 المتجر: {{merchantName}}\n🛒 المطلوب: {{items}}\n{{locations}}\n💰 التحصيل: {{collect}}"),
+        $ev('DRIVER_ASSIGNED', 'DRIVER', 'السائق', "🚚 *طلب جديد مُسند إليك* #{{orderNumber}}\nالخدمة: {{serviceName}}\n👤 العميل: {{customerName}}\n📞 الهاتف: {{customerPhone}}\n🏪 المتجر: {{merchantName}}\n🛒 المطلوب: {{items}}\n{{locations}}\n\n💵 *الحساب:*\n{{driverCollect}}"),
         $ev('DRIVER_ASSIGNED', 'SUPERVISOR', 'المشرف', $oversight('🚚 تعيين سائق لطلب')),
         $ev('DRIVER_ASSIGNED', 'GROUP', 'جروب الإدارة', $oversight('🚚 تعيين سائق لطلب')),
         // ═══ PICKED_UP ═══
@@ -2927,7 +2950,8 @@ function notifVariables(): array {
         // Multi-line values (each empty when not applicable, so its line drops):
         'items' => 'المطلوب / المنتجات', 'locations' => 'عناوين الاستلام والتسليم + الخرائط',
         'priceBlock' => 'تفاصيل السعر والإجمالي', 'summary' => 'ملخص الطلب الكامل للعميل',
-        'collect' => 'تعليمات التحصيل للسائق', 'shipping' => 'تفاصيل الشحن',
+        'collect' => 'تعليمات التحصيل للسائق',
+        'driverCollect' => 'حساب السائق (للتاجر + التوصيل + المطلوب تحصيله)', 'shipping' => 'تفاصيل الشحن',
         // Only fills in when the order really is more than one trip (a basket
         // مثلاً من قنا ومن قفط) — otherwise it is empty and its line drops.
         'groups' => 'مجموعات التوصيل (كل مجموعة ومندوبها وسعرها)',
@@ -2986,6 +3010,46 @@ function notifStatusToEvent(string $status): ?string {
         'DRIVER_ASSIGNED' => 'DRIVER_ASSIGNED', 'PICKED_UP' => 'PICKED_UP', 'IN_ROUTE' => 'IN_ROUTE',
         'DELIVERED' => 'DELIVERED', 'COMPLETED' => 'DELIVERED', 'CANCELLED' => 'CANCELLED',
     ][$status] ?? null;
+}
+/**
+ * Render ONE (status→event, recipient) message for an order EXACTLY as
+ * notifyOrderParties would send it — the admin's saved override if present,
+ * else the rich default from notifDefaultCatalog(). Unlike the send path this
+ * ignores the enabled flag: it powers the "copy the message and send it by
+ * hand" admin tool, used when the WhatsApp bridge is down/flaky, so the admin
+ * still needs the text even if auto-send to that recipient is switched off.
+ * Returns '' only when the (event,recipient) pair has no template at all.
+ */
+function renderOrderMessage(array $o, string $status, string $recipient, ?string $reason = null): string {
+    $event = notifStatusToEvent($status);
+    if ($event === null) return '';
+    $tpl = notifRule($event, $recipient)['override'];
+    if ($tpl === null) {
+        foreach (notifDefaultCatalog() as $t) {
+            if ($t['event'] === $event && $t['recipient'] === $recipient) { $tpl = $t['default']; break; }
+        }
+    }
+    if ($tpl === null || $tpl === '') return '';
+    return notifRender($tpl, orderMessageContext($o, $reason));
+}
+/**
+ * The driver's WhatsApp message for an order, plus a wa.me deep link so the
+ * admin can one-tap open the chat with the text pre-filled. Phone is normalised
+ * to full international digits (no +): a local 01xxxxxxxxx becomes 201xxxxxxxxx.
+ */
+function driverMessagePayload(array $o, string $status = 'DRIVER_ASSIGNED'): array {
+    $text = renderOrderMessage($o, $status, 'DRIVER');
+    $raw = (string) ($o['drv_phone'] ?? '');
+    $digits = preg_replace('/\D+/', '', $raw);
+    if ($digits !== '' && strlen($digits) === 11 && $digits[0] === '0') $digits = '20' . substr($digits, 1);
+    return [
+        'orderNumber' => (string) ($o['orderNumber'] ?? ''),
+        'driverName' => trim((string) ($o['drv_name'] ?? '')),
+        'driverPhone' => $raw,
+        'status' => $status,
+        'text' => $text,
+        'waUrl' => ($digits !== '' && $text !== '') ? ('https://wa.me/' . $digits . '?text=' . rawurlencode($text)) : null,
+    ];
 }
 
 if ($method === 'GET' && $path === '/admin/notification-templates') {
@@ -7268,7 +7332,30 @@ if ($method === 'PATCH' && preg_match('#^/admin/orders/([^/]+)/assign-driver$#',
     // Notifies the driver (new assignment + pickup/delivery) AND the customer.
     notifyOrderParties($m[1], 'DRIVER_ASSIGNED');
     $r = db()->prepare('SELECT * FROM `Order` WHERE id = ?'); $r->execute([$m[1]]);
-    jsonOk(jsonizeRow($r->fetch()) ?: []);
+    $row = jsonizeRow($r->fetch()) ?: [];
+    // Hand the admin the driver's exact WhatsApp message + a wa.me link so they
+    // can copy-and-send by hand — the auto-send over the bridge is unreliable.
+    $omo = orderForMessages($m[1]);
+    if ($omo) $row['driverMessage'] = driverMessagePayload($omo, 'DRIVER_ASSIGNED');
+    jsonOk($row);
+}
+
+/*
+ * GET /admin/orders/{id}/driver-message — the driver's WhatsApp text + wa.me
+ * link for this order, rendered from the SAME template the bridge would send.
+ * Lets the order page show a copy-and-send box so the admin forwards it by hand
+ * when the automatic WhatsApp delivery to drivers is failing. Optional
+ * ?status= picks the stage (default DRIVER_ASSIGNED — the assignment message).
+ */
+if ($method === 'GET' && preg_match('#^/admin/orders/([^/]+)/driver-message$#', $path, $m)) {
+    $u = authUser(); if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
+    $o = orderForMessages($m[1]);
+    if (!$o) jsonErr('الطلب غير موجود', 404, 'NOT_FOUND');
+    $status = strtoupper(trim((string) ($_GET['status'] ?? 'DRIVER_ASSIGNED')));
+    if (!in_array($status, ['DRIVER_ASSIGNED', 'PICKED_UP', 'IN_ROUTE', 'DELIVERED', 'CANCELLED'], true)) {
+        $status = 'DRIVER_ASSIGNED';
+    }
+    jsonOk(driverMessagePayload($o, $status));
 }
 
 /*
@@ -8159,8 +8246,13 @@ if ($method === 'POST' && $path === '/auth/otp/request') {
         jsonErr('طلبات كتير من نفس الشبكة — جرّب بعد شوية', 429, 'TOO_MANY');
     }
     $code = str_pad((string) random_int(0, 999999), 6, '0', STR_PAD_LEFT);
-    db()->prepare("INSERT INTO `OtpCode` (id, phone, codeHash, purpose, attempts, expiresAt, createdAt) VALUES (?,?,?,'VERIFY',0,DATE_ADD(NOW(3), INTERVAL 5 MINUTE),NOW(3))")
-        ->execute([newId(), $phone, hash('sha256', $code)]);
+    // Plaintext is kept alongside the hash ON PURPOSE: a short-lived (5-min),
+    // single-use support fallback so the admin can read the code to a customer
+    // over the phone when WhatsApp didn't deliver (/admin/otp-lookup). It is
+    // gone the moment the row expires or is swept. Verification still uses the
+    // hash — the plaintext is never trusted as the credential.
+    db()->prepare("INSERT INTO `OtpCode` (id, phone, codeHash, codePlain, purpose, attempts, expiresAt, createdAt) VALUES (?,?,?,?,'VERIFY',0,DATE_ADD(NOW(3), INTERVAL 5 MINUTE),NOW(3))")
+        ->execute([newId(), $phone, hash('sha256', $code), $code]);
     waEnqueue($phone, "تميم للتوصيل 🚚\nكود تفعيل حسابك: *$code*\nصالح لمدة 5 دقائق.");
     jsonOk(['sent' => true, 'channel' => 'WHATSAPP']);
 }
@@ -8189,6 +8281,41 @@ if ($method === 'POST' && $path === '/auth/otp/verify') {
     // persists this object as the session user and RootNavigator switches on
     // user.role, so omitting it would strand a fresh signup on a blank stack.
     jsonOk(['user' => ['id' => $u['id'], 'name' => $u['name'], 'phone' => $u['phone'], 'role' => $u['role']], 'tokens' => issueTokens($u['id'], (string) $u['role'])]);
+}
+
+/*
+ * GET /admin/otp-lookup?phone=… — the latest login/verify code for a phone, so
+ * support can read it to a customer when WhatsApp failed to deliver. Admin-only
+ * and audited. The code is exactly what was generated: short-lived (5 min) and
+ * single-use, so reading it out is no weaker than the WhatsApp message would
+ * have been. Rows created before the codePlain column existed return
+ * codeMissing=true (ask the customer to request a fresh code).
+ */
+if ($method === 'GET' && $path === '/admin/otp-lookup') {
+    $u = authUser(); if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
+    $phone = normPhoneEg((string) ($_GET['phone'] ?? ''));
+    if (!$phone) jsonErr('رقم هاتف مصري غير صحيح', 422, 'VALIDATION_ERROR');
+    $st = db()->prepare(
+        "SELECT codePlain, attempts, consumedAt, expiresAt, createdAt, (expiresAt > NOW(3)) AS notExpired
+           FROM `OtpCode` WHERE phone = ? ORDER BY createdAt DESC LIMIT 1"
+    );
+    $st->execute([$phone]);
+    $row = $st->fetch();
+    error_log('[api.php] otp-lookup by admin ' . ($u['sub'] ?? '?') . ' for ' . $phone);
+    if (!$row) { jsonOk(['phone' => $phone, 'found' => false]); }
+    $plain = (string) ($row['codePlain'] ?? '');
+    jsonOk([
+        'phone' => $phone,
+        'found' => true,
+        'code' => $plain !== '' ? $plain : null,
+        'codeMissing' => $plain === '',
+        'consumed' => $row['consumedAt'] !== null,
+        'expired' => (int) $row['notExpired'] !== 1,
+        'active' => (int) $row['notExpired'] === 1 && $row['consumedAt'] === null,
+        'attempts' => (int) $row['attempts'],
+        'expiresAt' => isoZ($row['expiresAt']),
+        'createdAt' => isoZ($row['createdAt']),
+    ]);
 }
 
 if ($method === 'POST' && $path === '/auth/forgot-password') {

@@ -39,6 +39,7 @@ import { GatePage } from './routes/gate.js';
 import { SettingsPage } from './routes/settings.js';
 import { SupervisorsPage } from './routes/supervisors.js';
 import { NotificationTemplatesPage } from './routes/notification-templates.js';
+import { OtpSupportPage } from './routes/otp-support.js';
 import { WhatsAppPage } from './routes/whatsapp.js';
 
 import { MerchantLoginPage } from './routes/merchant-login.js';
@@ -135,6 +136,7 @@ const routes: RouteObject[] = [
           { path: 'alerts', element: <AlertsPage /> },
           { path: 'whatsapp', element: <WhatsAppPage /> },
           { path: 'whatsapp/templates', element: <NotificationTemplatesPage /> },
+          { path: 'otp-support', element: <OtpSupportPage /> },
           { path: 'broadcast', element: <BroadcastPage /> },
           { path: 'supervisors', element: <SupervisorsPage /> },
           { path: 'admins', element: <AdminsPage /> },
