@@ -12102,44 +12102,17 @@ if ($method === 'POST' && $path === '/auth/login') {
     if (!(int) $user['isActive']) jsonErr('الحساب غير مفعّل', 403, 'INACTIVE');
 
     $role = (string) $user['role'];
-    // Admin → OTP flow. Everyone else → direct tokens.
+    // Admin login WITHOUT OTP — issue tokens directly with the admin session
+    // TTL (issueTokens handles ADMIN vs mobile TTL). The OTP step was removed
+    // on request; /auth/admin/otp/verify is kept only for older clients.
     if ($role === 'ADMIN' || $role === 'SUPER_ADMIN') {
-        otpSweep();
-        $code = str_pad((string) random_int(0, 999999), 6, '0', STR_PAD_LEFT);
-        $token = rtrim(strtr(base64_encode(random_bytes(24)), '+/', '-_'), '=');
-        $ttlMin = (int) env('ADMIN_OTP_TTL_MINUTES', '5');
-        otpStore($token, [
-            'userId' => $user['id'],
-            'role' => $role,
-            'identifier' => $identifier,
-            'code' => $code,
-            'expiresAt' => time() + ($ttlMin * 60),
-            'attempts' => 0,
-        ]);
-        $recipients = array_filter(array_map('trim', explode(',',
-            env('ADMIN_OTP_RECIPIENTS', 'info@deliverytamem.com,DeliveryTamemQift@gmail.com'))));
-        $subject = "[تميم] رمز الدخول للوحة التحكم: $code";
-        $text = "رمز الدخول للوحة تحكم تميم:\n\n    $code\n\nصالح لمدة {$ttlMin} دقائق.\nطلب الدخول: {$identifier}\nوقت الطلب: " . gmdate('Y-m-d H:i:s') . " UTC\n\nلو مش انت اللي طلبت الدخول، تجاهل الرسالة وغيّر كلمة المرور فوراً.";
-        $html = '<!doctype html><html lang="ar" dir="rtl"><body style="font-family:Tahoma,Arial;padding:20px;background:#f5f6f8">'
-            . '<div style="max-width:520px;margin:auto;background:#fff;border:1px solid #ddd;border-radius:12px;padding:28px">'
-            . '<h2 style="color:#E0301E;margin:0 0 8px">رمز الدخول للوحة تحكم تميم</h2>'
-            . '<p style="color:#555;margin:0 0 20px">استخدم الرمز التالي لإكمال تسجيل الدخول:</p>'
-            . '<div style="font-family:monospace;font-size:36px;font-weight:800;letter-spacing:8px;text-align:center;background:#241310;color:#F2A93B;padding:20px;border-radius:10px;margin:10px 0">'
-            . htmlspecialchars($code) . '</div>'
-            . '<p style="color:#666;font-size:13px;margin-top:20px">صالح لمدة <b>' . $ttlMin . ' دقائق</b>.<br>طلب الدخول: <span style="direction:ltr;display:inline-block">' . htmlspecialchars($identifier) . '</span></p>'
-            . '<hr style="border:none;border-top:1px solid #eee;margin:20px 0">'
-            . '<p style="color:#999;font-size:12px;text-align:center">لو مش انت اللي طلبت الدخول، تجاهل الرسالة وغيّر كلمة المرور فوراً.</p>'
-            . '</div></body></html>';
-        $sendRes = smtpSend($recipients, $subject, $text, $html);
-        // Even if SMTP failed we still return requiresOtp so the admin can
-        // ask us for the code out-of-band; but log the failure server-side.
-        if (!$sendRes['ok']) error_log('[api.php] SMTP send failed: ' . json_encode($sendRes));
-
         jsonOk([
-            'requiresOtp' => true,
-            'pendingToken' => $token,
-            'expiresInSec' => $ttlMin * 60,
-            'otpRecipientsCount' => count($recipients),
+            'requiresOtp' => false,
+            'user' => [
+                'id' => $user['id'], 'name' => $user['name'],
+                'phone' => $user['phone'], 'email' => $user['email'], 'role' => $role,
+            ],
+            'tokens' => issueTokens($user['id'], $role),
         ]);
     }
 
