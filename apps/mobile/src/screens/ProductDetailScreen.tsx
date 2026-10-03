@@ -19,6 +19,7 @@ import {
   Dimensions,
   FlatList,
   Pressable,
+  RefreshControl,
   ScrollView,
   StyleSheet,
   Text,
@@ -97,7 +98,7 @@ export function ProductDetailScreen() {
   const [variantId, setVariantId] = useState<string | null>(null);
   const [addonIds, setAddonIds] = useState<string[]>([]);
 
-  const { data, isLoading, error, refetch } = useQuery<ProductDetail>({
+  const { data, isLoading, isFetching, error, refetch } = useQuery<ProductDetail>({
     queryKey: ['product', productId],
     queryFn: () => api.raw.get(`/products/${productId}`).then((r) => r.data.data),
     // Always-fresh on focus so price/availability stay current after admin
@@ -273,6 +274,14 @@ export function ProductDetailScreen() {
         style={{ flex: 1 }}
         showsVerticalScrollIndicator={false}
         contentContainerStyle={{ paddingBottom: spacing.lg }}
+        /* A cached product page can be showing yesterday's price. */
+        refreshControl={
+          <RefreshControl
+            refreshing={isFetching && !isLoading}
+            onRefresh={() => void refetch()}
+            tintColor={colors.brand.red}
+          />
+        }
       >
         {/* ─────── Big image + back button ─────── */}
         <View style={styles.imageWrap}>
@@ -554,8 +563,13 @@ export function ProductDetailScreen() {
               style={styles.addBar}
             >
               {canAdd && <ShoppingCart size={18} color={colors.white} />}
-              <Text style={styles.addLabel} numberOfLines={1}>
-                {!productInStock ? 'غير متاح' : !merchantOpen ? 'المتجر مغلق' : 'أضف إلى السلة'}
+              <Text
+                style={styles.addLabel}
+                numberOfLines={1}
+                adjustsFontSizeToFit
+                minimumFontScale={0.85}
+              >
+                {!productInStock ? 'غير متاح' : !merchantOpen ? 'المتجر مغلق' : 'أضف للسلة'}
               </Text>
               {canAdd && (
                 <Text style={styles.addPrice}>
@@ -879,7 +893,9 @@ const styles = StyleSheet.create({
     gap: spacing.sm,
     height: 56,
     borderRadius: radii.lg,
-    paddingHorizontal: spacing.lg,
+    // lg left the label ~70dp on a 6" phone and "أضف إلى السلة" clipped to
+    // "أضف إلى ال…". The icon and the price already frame the button.
+    paddingHorizontal: spacing.md,
   },
   addLabel: {
     flex: 1,
@@ -893,6 +909,7 @@ const styles = StyleSheet.create({
     includeFontPadding: false,
   },
   addPrice: {
+    flexShrink: 0,
     color: colors.white,
     fontSize: fontSizes.md,
     fontFamily: fontFamilies.bodyExtraBold,

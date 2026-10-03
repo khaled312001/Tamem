@@ -11,12 +11,14 @@ import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useQuery } from '@tanstack/react-query';
 import { Minus, Package, Plus, ShoppingBag, Store, Trash2 } from 'lucide-react-native';
 import { useMemo } from 'react';
-import { Image, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Image } from '../components/ui/CachedImage';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { ScreenHeader } from '../components/ScreenHeader';
 import { EmptyState, MoneyText, PrimaryButton } from '../components/ui';
 import { api } from '../lib/api';
+import { merchantsCount } from '../lib/arabicCount';
 import { confirm } from '../lib/confirm';
 import { haptic } from '../lib/haptics';
 import type { HomeStackParamList } from '../navigation/HomeStack';
@@ -116,7 +118,7 @@ export function CartScreen() {
         title="سلتي"
         subtitle={
           groups.length > 1
-            ? `منتجات من ${groups.length} تجار`
+            ? `منتجات من ${merchantsCount(groups.length)}`
             : groups[0]
               ? `من ${groups[0].merchantNameAr}`
               : undefined
@@ -210,7 +212,7 @@ export function CartScreen() {
                         setItemQuantity(item.lineId, item.quantity - 1, item.merchantId);
                       }
                     }}
-                    hitSlop={4}
+                    hitSlop={8}
                     style={({ pressed }) => [styles.stepBtn, pressed && { opacity: 0.7 }]}
                     accessibilityLabel="نقصان"
                   >
@@ -226,7 +228,7 @@ export function CartScreen() {
                       haptic.tap();
                       setItemQuantity(item.lineId, item.quantity + 1, item.merchantId);
                     }}
-                    hitSlop={4}
+                    hitSlop={8}
                     style={({ pressed }) => [styles.stepBtn, pressed && { opacity: 0.7 }]}
                     accessibilityLabel="زيادة"
                   >

@@ -34,11 +34,11 @@ import {
   shadows,
   spacing,
 } from '../theme/tokens';
+import { useContacts, waLink } from '../lib/contacts';
 
 const TAMEM_PHONE = '+201070750167';
 const TAMEM_EMAIL = 'info@deliverytamem.com';
 const TAMEM_SITE = 'https://deliverytamem.com';
-const TAMEM_WHATSAPP = process.env.EXPO_PUBLIC_TAMEM_WHATSAPP ?? TAMEM_PHONE;
 
 interface Pillar {
   Icon: LucideIcon;
@@ -83,11 +83,12 @@ async function openURL(url: string): Promise<void> {
 }
 
 export function AboutScreen() {
+  // الأرقام من السيرفر (config/contact احتياطي أوفلاين)، فتغييرها مايحتاجش بناء.
+  const { primaryPhone, supportWhatsapp } = useContacts();
   const onWhatsApp = () => {
-    const msg = encodeURIComponent('السلام عليكم، عاوز أسأل عن تَميم:');
-    void openURL(`https://wa.me/${TAMEM_WHATSAPP.replace(/\D/g, '')}?text=${msg}`);
+    void openURL(waLink(supportWhatsapp, 'السلام عليكم، عاوز أسأل عن تَميم:'));
   };
-  const onCall = () => void openURL(`tel:${TAMEM_PHONE}`);
+  const onCall = () => void openURL(`tel:${primaryPhone || TAMEM_PHONE}`);
   const onEmail = () =>
     void openURL(`mailto:${TAMEM_EMAIL}?subject=${encodeURIComponent('استفسار من تطبيق تميم')}`);
   const onSite = () => void Linking.openURL(TAMEM_SITE);

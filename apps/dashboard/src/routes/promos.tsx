@@ -299,12 +299,7 @@ function UsagesDialog({ rule, onClose }: { rule: Rule; onClose: () => void }) {
   const fmt = (iso: string) =>
     new Date(iso).toLocaleString('ar-EG', { dateStyle: 'short', timeStyle: 'short' });
   return (
-    <Dialog
-      open
-      onOpenChange={(o) => !o && onClose()}
-      title={`مين استخدم «${rule.nameAr}»`}
-      size="lg"
-    >
+    <Dialog open onOpenChange={(o) => !o && onClose()} title={`مين استخدم «${rule.nameAr}»`} size="lg">
       {isLoading ? (
         <p className="p-4 text-sm text-muted-foreground">جاري التحميل…</p>
       ) : !data ? null : (
@@ -353,9 +348,7 @@ function UsagesDialog({ rule, onClose }: { rule: Rule; onClose: () => void }) {
                         <td className="px-2 py-2">
                           <span
                             className={`rounded px-1.5 py-0.5 text-[10px] font-bold ${
-                              cancelled
-                                ? 'bg-red-100 text-red-700'
-                                : 'bg-emerald-100 text-emerald-700'
+                              cancelled ? 'bg-red-100 text-red-700' : 'bg-emerald-100 text-emerald-700'
                             }`}
                           >
                             {STATUS[u.status] ?? u.status}

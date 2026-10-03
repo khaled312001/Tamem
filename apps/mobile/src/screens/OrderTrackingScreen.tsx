@@ -53,6 +53,7 @@ import {
   StatusPill,
 } from '../components/ui';
 import { api } from '../lib/api';
+import { useSupportWhatsapp } from '../lib/contacts';
 import { subscribeToOrder, unsubscribeFromOrder } from '../lib/socket';
 import { useSocketEvents } from '../lib/useSocketEvents';
 import { shareReceipt } from '../lib/receipt';
@@ -151,9 +152,6 @@ interface OrderDetail {
     items: Array<{ productNameSnapshot: string; quantity: number }>;
   }>;
 }
-
-const SUPPORT_WHATSAPP =
-  (typeof process !== 'undefined' && process.env?.EXPO_PUBLIC_TAMEM_WHATSAPP) || '+201070750167';
 
 // Shipping option labels — the customer chose these; the app has to echo them
 // back or the shipment reads as "just a photo + two addresses".
@@ -298,7 +296,7 @@ const CANCEL_LOCKED_BUT_ACTIVE: OrderStatus[] = [
   'IN_ROUTE',
 ];
 
-/** Mask middle digits of a phone for display, e.g. 01010254819 → 010 *** 4819. */
+/** Mask middle digits of a phone for display, e.g. 01012345678 → 010 *** 5678. */
 function maskPhone(phone: string): string {
   const digits = phone.replace(/\D/g, '');
   if (digits.length < 7) return phone;
@@ -323,9 +321,11 @@ export function OrderTrackingScreen() {
   const { orderId, justCreated } = route.params;
   const [showWaBanner, setShowWaBanner] = useState(!!justCreated);
   const [driverLoc, setDriverLoc] = useState<DriverLocation | null>(null);
+  // من السيرفر، عشان تغيير الرقم مايحتاجش نسخة جديدة على المتجر.
+  const supportWhatsapp = useSupportWhatsapp();
 
   const openWhatsApp = (msg: string) => {
-    const num = SUPPORT_WHATSAPP.replace(/\D/g, '');
+    const num = supportWhatsapp.replace(/\D/g, '');
     const url = `https://wa.me/${num}?text=${encodeURIComponent(msg)}`;
     if (Platform.OS === 'web') window.open(url, '_blank');
     else void Linking.openURL(url);

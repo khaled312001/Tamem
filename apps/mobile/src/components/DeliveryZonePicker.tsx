@@ -38,6 +38,15 @@ export interface DeliveryZoneSelection {
   quoteStatus?: 'pending' | 'ok' | 'error';
   /** The Arabic reason the quote failed, when `quoteStatus === 'error'`. */
   quoteError?: string | null;
+  /**
+   * The server says this customer is owed «أول توصيلة مجانًا» and is only
+   * missing the WhatsApp code on their number.
+   *
+   * Without telling them, they just see the full fee with no explanation after
+   * the app advertised a free first delivery — which reads as a lie. The
+   * checkout turns this into one tap that goes to the code screen.
+   */
+  verifyPhoneForFreeDelivery?: boolean;
 }
 
 interface ZoneOption {
@@ -89,6 +98,7 @@ interface QuoteResponse {
   note?: string | null;
   /** Every journey the basket needs — present once the caller sends the stores. */
   groups?: QuoteGroup[];
+  verifyPhoneForFreeDelivery?: boolean;
 }
 
 interface DeliveryZonePickerProps {
@@ -201,7 +211,8 @@ export function DeliveryZonePicker({
       if (
         value.deliveryFee !== price ||
         value.priceSource !== q.source ||
-        value.quoteStatus !== 'ok'
+        value.quoteStatus !== 'ok' ||
+        value.verifyPhoneForFreeDelivery !== !!q.verifyPhoneForFreeDelivery
       ) {
         onChange({
           ...value,
@@ -209,6 +220,7 @@ export function DeliveryZonePicker({
           priceSource: q.source,
           quoteStatus: 'ok',
           quoteError: null,
+          verifyPhoneForFreeDelivery: !!q.verifyPhoneForFreeDelivery,
         });
       }
     },

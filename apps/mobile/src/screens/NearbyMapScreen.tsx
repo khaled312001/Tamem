@@ -259,7 +259,12 @@ export function NearbyMapScreen() {
         </MapView>
 
         {/* Recenter FAB */}
-        <Pressable onPress={recenter} style={styles.recenterBtn}>
+        <Pressable
+          onPress={recenter}
+          style={styles.recenterBtn}
+          accessibilityRole="button"
+          accessibilityLabel="الرجوع لموقعي على الخريطة"
+        >
           <Crosshair size={20} color={colors.brand.red} />
         </Pressable>
       </View>

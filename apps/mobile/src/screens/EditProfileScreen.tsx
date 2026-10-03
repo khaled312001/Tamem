@@ -6,7 +6,6 @@ import { useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
-  Image,
   KeyboardAvoidingView,
   Linking,
   Platform,
@@ -16,12 +15,14 @@ import {
   Text,
   View,
 } from 'react-native';
+import { Image } from '../components/ui/CachedImage';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { GradientButton } from '../components/GradientButton';
 import { IconField } from '../components/IconField';
 import { ScreenHeader } from '../components/ScreenHeader';
 import { api } from '../lib/api';
+import { useSupportWhatsapp, waLink } from '../lib/contacts';
 import { uploadFile } from '../lib/uploadFile';
 import { useAuth } from '../stores/auth';
 import { colors, fontFamilies, fontSizes, radii, spacing } from '../theme/tokens';
@@ -39,6 +40,7 @@ interface UserExt {
  */
 export function EditProfileScreen() {
   const navigation = useNavigation();
+  const supportWhatsapp = useSupportWhatsapp();
   const user = useAuth((s) => s.user) as (UserExt & { id: string }) | null;
   const setUser = useAuth((s) => s.setUser);
 
@@ -194,11 +196,9 @@ export function EditProfileScreen() {
 
           <Pressable
             onPress={() => {
-              const msg = encodeURIComponent('السلام عليكم، أرغب في تغيير رقم هاتفي المسجَّل:');
-              const phone =
-                (typeof process !== 'undefined' && process.env?.EXPO_PUBLIC_TAMEM_WHATSAPP) ||
-                '+201070750167';
-              void Linking.openURL(`https://wa.me/${phone.replace(/\D/g, '')}?text=${msg}`);
+              void Linking.openURL(
+                waLink(supportWhatsapp, 'السلام عليكم، أرغب في تغيير رقم هاتفي المسجَّل:'),
+              );
             }}
           >
             <Text style={styles.hint}>

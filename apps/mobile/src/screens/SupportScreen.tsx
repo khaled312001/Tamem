@@ -12,7 +12,8 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { ScreenHeader } from '../components/ScreenHeader';
-import { DEFAULT_CONTACTS, TAMEM_ADDRESS_AR } from '../config/contact';
+import { TAMEM_ADDRESS_AR } from '../config/contact';
+import { useContacts } from '../lib/contacts';
 import { colors, fontFamilies, fontSizes, radii, spacing } from '../theme/tokens';
 
 const SUPPORT_EMAIL = 'info@deliverytamem.com';
@@ -50,6 +51,8 @@ const FAQS = [
 ];
 
 export function SupportScreen() {
+  // خطوط التواصل من السيرفر، عشان تتغير من الداشبورد من غير نسخة جديدة.
+  const { lines } = useContacts();
   const onEmail = () =>
     openURL(`mailto:${SUPPORT_EMAIL}?subject=${encodeURIComponent('استفسار من تطبيق تميم')}`);
 
@@ -64,7 +67,7 @@ export function SupportScreen() {
         {/* Per-service direct lines — each card opens WhatsApp on tap with a
             pre-filled message; the inline phone number is a tel: link for
             customers who prefer to call instead. */}
-        {DEFAULT_CONTACTS.map((c) => (
+        {lines.map((c) => (
           <View key={c.key} style={styles.lineCard}>
             <View style={styles.lineHead}>
               <View
@@ -146,7 +149,7 @@ export function SupportScreen() {
           <View style={{ flex: 1 }}>
             <Text style={styles.devLabel}>تطوير وتنفيذ</Text>
             <Text style={styles.devName}>شركة برمجلي</Text>
-            <Text style={styles.devLink}>barmagly.tech · +201010254819</Text>
+            <Text style={styles.devLink}>barmagly.tech</Text>
           </View>
         </Pressable>
       </ScrollView>

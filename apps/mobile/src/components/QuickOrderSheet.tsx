@@ -23,7 +23,6 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Animated,
   Easing,
-  Image,
   KeyboardAvoidingView,
   Modal,
   Platform,
@@ -34,6 +33,7 @@ import {
   TextInput,
   View,
 } from 'react-native';
+import { Image } from './ui/CachedImage';
 
 import { createRecorder, formatDuration, type Recorder } from '../lib/audioRecorder';
 import { api } from '../lib/api';
@@ -979,11 +979,23 @@ function ProductsMode({
                   </Pressable>
                 ) : (
                   <View style={styles.qtyRow}>
-                    <Pressable onPress={() => dec(p.id)} style={styles.qtyBtn} hitSlop={6}>
+                    <Pressable
+                      onPress={() => dec(p.id)}
+                      style={styles.qtyBtn}
+                      hitSlop={10}
+                      accessibilityRole="button"
+                      accessibilityLabel="تقليل الكمية"
+                    >
                       <Minus size={14} color={colors.brand.red} />
                     </Pressable>
                     <Text style={styles.qtyText}>{qty}</Text>
-                    <Pressable onPress={() => inc(p.id)} style={styles.qtyBtn} hitSlop={6}>
+                    <Pressable
+                      onPress={() => inc(p.id)}
+                      style={styles.qtyBtn}
+                      hitSlop={10}
+                      accessibilityRole="button"
+                      accessibilityLabel="زيادة الكمية"
+                    >
                       <Plus size={14} color={colors.brand.red} />
                     </Pressable>
                   </View>

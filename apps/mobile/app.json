@@ -16,21 +16,34 @@
     "assetBundlePatterns": ["**/*"],
     "ios": {
       "supportsTablet": false,
-      "bundleIdentifier": "com.tamem.delivery"
+      "bundleIdentifier": "com.tamem.delivery",
+      "buildNumber": "30",
+      "infoPlist": {
+        "NSLocationWhenInUseUsageDescription": "نستخدم موقعك عشان نحدد عنوان التوصيل بدقة ونوصّل لك الطلب بسرعة.",
+        "NSCameraUsageDescription": "نحتاج الكاميرا عشان تصوّر طلبك أو الروشتة وترفقها مع الطلب.",
+        "NSPhotoLibraryUsageDescription": "نحتاج الصور عشان ترفق صورة لطلبك أو تغيّر صورة حسابك.",
+        "NSPhotoLibraryAddUsageDescription": "عشان نحفظ صورة إيصال الطلب في ألبوم صورك.",
+        "NSMicrophoneUsageDescription": "نحتاج الميكروفون عشان تسجّل طلبك بصوتك بدل ما تكتبه.",
+        "ITSAppUsesNonExemptEncryption": false
+      },
+      "config": {
+        "usesNonExemptEncryption": false
+      }
     },
     "android": {
       "package": "com.tamem.delivery",
-      "versionCode": 28,
+      "versionCode": 30,
       "googleServicesFile": "./google-services.json",
       "adaptiveIcon": {
         "foregroundImage": "./src/assets/icon.png",
         "backgroundColor": "#E0301E"
       },
       "permissions": [
-        "ACCESS_FINE_LOCATION",
-        "ACCESS_COARSE_LOCATION",
-        "CAMERA",
-        "POST_NOTIFICATIONS"
+        "android.permission.ACCESS_FINE_LOCATION",
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.CAMERA",
+        "android.permission.POST_NOTIFICATIONS",
+        "android.permission.RECORD_AUDIO"
       ],
       "blockedPermissions": [
         "android.permission.READ_MEDIA_IMAGES",
@@ -69,11 +82,12 @@
     "extra": {
       "forceRTL": true,
       "eas": {
-        "projectId": ""
+        "projectId": "1d399315-69df-4baf-b6e5-f5d41e65f3e9"
       }
     },
     "experiments": {
       "typedRoutes": false
-    }
+    },
+    "owner": "delivery-tamem"
   }
 }

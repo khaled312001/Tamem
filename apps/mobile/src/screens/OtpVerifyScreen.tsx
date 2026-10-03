@@ -19,6 +19,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { PrimaryButton } from '../components/ui';
 import { BackChevron } from '../theme/rtl';
 import { api } from '../lib/api';
+import { showToast } from '../lib/toast';
 import type { AuthStackParamList } from '../navigation/AuthStack';
 import { useAuth } from '../stores/auth';
 import {
@@ -42,6 +43,14 @@ export function OtpVerifyScreen() {
   const route = useRoute<RouteParam>();
   const phone = route.params.phone;
   const setSession = useAuth((s) => s.setSession);
+  /*
+   * The same screen serves two jobs: finishing a sign-up (no session yet — the
+   * navigator swaps to the app stack on its own) and confirming the number of
+   * somebody already inside the app (a Google sign-in, or an account made
+   * before confirmation was required). In the second case nothing swaps, so
+   * the screen has to dismiss itself or the customer is stranded on it.
+   */
+  const alreadySignedIn = useRef(!!useAuth.getState().user).current;
 
   const [digits, setDigits] = useState<string[]>(Array(OTP_LENGTH).fill(''));
   const [loading, setLoading] = useState(false);
@@ -126,6 +135,14 @@ export function OtpVerifyScreen() {
       const res = await api.raw.post('/auth/otp/verify', { phone, code });
       const { user, tokens } = res.data.data;
       await setSession(user, tokens);
+      if (alreadySignedIn) {
+        showToast({
+          title: 'تم تأكيد رقمك ✅',
+          message: 'دلوقتي تقدر تستفيد من العروض المربوطة بالرقم',
+          tone: 'success',
+        });
+        if (navigation.canGoBack()) navigation.goBack();
+      }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'كود التحقق غير صحيح';
       Alert.alert('خطأ', msg);
