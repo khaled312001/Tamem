@@ -5,6 +5,8 @@
 # server subscription or hPanel cron.
 SUP=/home/u748721963/whatsapp/run-forever.sh
 WATCH=/home/u748721963/whatsapp/watchdog.sh
+SUP_PID=/home/u748721963/whatsapp/.supervisor.pid
+WATCH_PID=/home/u748721963/whatsapp/.watchdog.pid
 LOG=/home/u748721963/whatsapp/bridge.log
 STATUS=/home/u748721963/domains/deliverytamem.com/public_html/backendtamem/uploads/.wa/status.json
 GATE=/home/u748721963/whatsapp/.keepalive.lock
@@ -20,15 +22,22 @@ if [ -f "$LOG" ] && [ "$(stat -c%s "$LOG" 2>/dev/null || echo 0)" -gt 3145728 ];
   echo "[keepalive $(date -u '+%F %T')] log rotated" >> "$LOG"
 fi
 
+# Liveness by pid file. `pgrep -f run-forever.sh` matches any command line that
+# merely contains the path — including the `bash -c` wrapper this script is
+# invoked through from CI — so it reported both as running when neither was.
+alive() {
+  [ -f "$1" ] && kill -0 "$(cat "$1" 2>/dev/null)" 2>/dev/null
+}
+
 # 1) Watchdog alive? It restarts the supervisor on its own, within 20s, which is
 # what makes recovery independent of whatever schedule is calling this script.
-if ! pgrep -f "[w]atchdog.sh" >/dev/null 2>&1; then
+if ! alive "$WATCH_PID"; then
   echo "[keepalive $(date -u '+%F %T')] watchdog down — starting" >> "$LOG"
   setsid /bin/bash "$WATCH" >/dev/null 2>&1 </dev/null &
 fi
 
 # 2) Supervisor alive? (it owns the node loop)
-if ! pgrep -f "run-forever.sh" >/dev/null 2>&1; then
+if ! alive "$SUP_PID"; then
   echo "[keepalive $(date -u '+%F %T')] supervisor down — starting" >> "$LOG"
   setsid /bin/bash "$SUP" >/dev/null 2>&1 </dev/null &
   exit 0

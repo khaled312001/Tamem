@@ -33,8 +33,16 @@ jobs:
             echo "### status"
             cat "$WA/status.json" 2>/dev/null | head -c 600; echo
 
-            echo "### processes — supervisor, watchdog and bridge should all be here"
-            pgrep -af 'watchdog.sh|run-forever.sh|wa-bridge.js' | grep -v 'bash -c' || echo "(none)"
+            echo "### keep-alive layers (pid files are the source of truth)"
+            for n in supervisor watchdog; do
+              f="$BASE/.$n.pid"
+              if [ -f "$f" ] && kill -0 "$(cat "$f" 2>/dev/null)" 2>/dev/null; then
+                echo "$n: up (pid $(cat "$f"))"
+              else
+                echo "$n: DOWN"
+              fi
+            done
+            pgrep -af 'watchdog.sh|run-forever.sh|wa-bridge.js' | grep -v 'bash -c' || echo "(no processes)"
 
             echo "### what is actually in each IPC dir, by extension"
             for d in queue dead control dedupe; do
@@ -42,6 +50,10 @@ jobs:
               n=$(ls -1A "$WA/$d" 2>/dev/null | wc -l)
               echo "$d: $n entries"
               ls -1A "$WA/$d" 2>/dev/null | sed 's/^.*\.//' | sort | uniq -c | sort -rn | head -6 | sed 's/^/    /'
+              # Names are random hex, so they are safe to show and tell us which
+              # component wrote them — nothing in the repo writes queue/*.ok,
+              # which means the api.php on the server is not the one in git.
+              ls -1At "$WA/$d" 2>/dev/null | head -3 | sed 's/^/    e.g. /'
             done
 
             echo "### parked messages — why (no content)"

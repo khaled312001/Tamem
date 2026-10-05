@@ -14,15 +14,23 @@
 # re-checks both. Each one is flock-guarded, so none can ever run twice.
 BASE=/home/u748721963/whatsapp
 SUP="$BASE/run-forever.sh"
+SUP_PID="$BASE/.supervisor.pid"
 LOG="$BASE/bridge.log"
 STATUS=/home/u748721963/domains/deliverytamem.com/public_html/backendtamem/uploads/.wa/status.json
 LOCK="$BASE/.watchdog.lock"
+PID_FILE="$BASE/.watchdog.pid"
 exec 7>"$LOCK" || exit 0
 flock -n 7 || exit 0          # exactly one watchdog, ever
+# Liveness is checked by pid, not by `pgrep -f watchdog.sh`: pgrep matches whole
+# command lines, so any shell whose command line merely MENTIONS the path — a
+# `bash -c` wrapper, this script's own launcher — reads as a running watchdog.
+# That is not a hypothetical: it is why nothing started the watchdog for hours.
+echo $$ > "$PID_FILE"
+trap 'rm -f "$PID_FILE"' EXIT
 
 while true; do
   # 1) Supervisor reaped? It owns the node loop, so nothing sends without it.
-  if ! pgrep -f "[r]un-forever.sh" >/dev/null 2>&1; then
+  if ! { [ -f "$SUP_PID" ] && kill -0 "$(cat "$SUP_PID" 2>/dev/null)" 2>/dev/null; }; then
     echo "[watchdog $(date -u '+%F %T')] supervisor down — starting" >> "$LOG"
     setsid /bin/bash "$SUP" >/dev/null 2>&1 </dev/null &
   fi

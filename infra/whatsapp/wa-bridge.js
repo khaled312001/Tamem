@@ -364,6 +364,27 @@ async function connect() {
             code +
             ') — reconnecting',
         );
+        // 440 = connectionReplaced: another session took this one's place.
+        // Reconnecting is a declaration of war — we replace them, they replace
+        // us, every three seconds, and in between nothing gets sent. The log
+        // held 1199 of these. Exit instead: the supervisor starts exactly one
+        // bridge (the PID lock guarantees one), and a lone instance is not
+        // replaced by anybody. The 5s delay keeps a persistent 440 from
+        // becoming a hot exit/respawn loop with the supervisor's own 3s.
+        if (code === (DisconnectReason && DisconnectReason.connectionReplaced)) {
+          console.log(
+            '[bridge ' +
+              new Date().toISOString() +
+              '] session replaced (440) — exiting so one clean instance restarts',
+          );
+          writeStatus({
+            status: 'connecting',
+            qrDataUrl: null,
+            lastError: 'الجلسة اتبدلت من مكان تاني — بيعاد التشغيل',
+          });
+          setTimeout(() => process.exit(0), 5000);
+          return;
+        }
         const loggedOut = code === (DisconnectReason && DisconnectReason.loggedOut);
         if (loggedOut) {
           try {
@@ -610,23 +631,37 @@ setInterval(() => writeStatus({}), 15000);
 // Node is not restricted, and both scripts are flock-guarded, so a redundant
 // start is a harmless no-op.
 const { spawn } = require('child_process');
-const WATCHDOG_SH = path.join(BASE, 'watchdog.sh');
-const SUPERVISOR_SH = path.join(BASE, 'run-forever.sh');
-const OPS_CHECK =
-  'pgrep -f "[w]atchdog.sh" >/dev/null 2>&1 || ' +
-  'setsid /bin/bash ' +
-  WATCHDOG_SH +
-  ' >/dev/null 2>&1 </dev/null & ' +
-  'pgrep -f "[r]un-forever.sh" >/dev/null 2>&1 || ' +
-  'setsid /bin/bash ' +
-  SUPERVISOR_SH +
-  ' >/dev/null 2>&1 </dev/null &';
-setInterval(() => {
+// Liveness is read from a pid file, not probed with `pgrep -f`. pgrep matches
+// whole command lines, so the launch command — which necessarily contains the
+// plain path watchdog.sh — matched the very pattern [w]atchdog.sh meant to
+// exclude it. The check therefore always decided the watchdog was up, and in
+// three minutes of watching it never started one. A pid plus signal 0 cannot
+// be fooled that way, and needs no subprocess at all.
+function opsAlive(pidFile) {
   try {
-    spawn('/bin/sh', ['-c', OPS_CHECK], { detached: true, stdio: 'ignore' }).unref();
+    const pid = parseInt(fs.readFileSync(pidFile, 'utf8').trim(), 10);
+    if (!pid) return false;
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+function ensureOpsProcess(pidFile, script) {
+  if (opsAlive(pidFile)) return;
+  try {
+    console.log('[bridge ' + new Date().toISOString() + '] starting ' + path.basename(script));
+    spawn('/bin/sh', ['-c', 'setsid /bin/bash ' + script + ' >/dev/null 2>&1 </dev/null &'], {
+      detached: true,
+      stdio: 'ignore',
+    }).unref();
   } catch (e) {
     /* best-effort; a failure here must never take the bridge down */
   }
+}
+setInterval(() => {
+  ensureOpsProcess(path.join(BASE, '.watchdog.pid'), path.join(BASE, 'watchdog.sh'));
+  ensureOpsProcess(path.join(BASE, '.supervisor.pid'), path.join(BASE, 'run-forever.sh'));
 }, 60000);
 
 writeStatus({ status: 'connecting', startedAt: Date.now(), lastError: null });
