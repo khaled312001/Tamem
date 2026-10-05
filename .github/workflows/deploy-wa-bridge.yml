@@ -90,6 +90,8 @@ jobs:
             rm -f "$BASE"/.supervisor.pid "$BASE"/.watchdog.pid "$BASE"/bridge.pid \
                   "$BASE"/.supervisor.lock "$BASE"/.watchdog.lock "$BASE"/.keepalive.lock
             echo "stopped"
+        env:
+          FORCE: ${{ inputs.restart_layer }}
 
       - name: Start the new keep-alive layer
         uses: appleboy/ssh-action@v1.2.0
@@ -101,11 +103,22 @@ jobs:
           script: |
             BASE=/home/u748721963/whatsapp
             up() { [ -f "$1" ] && kill -0 "$(cat "$1" 2>/dev/null)" 2>/dev/null; }
-            up "$BASE/.supervisor.pid" && up "$BASE/.watchdog.pid" && {
-              echo "both already up — nothing to start"; exit 0; }
-            # Clear a gate left held by something that is now gone, or keepalive
-            # exits here without doing anything.
-            rm -f "$BASE/.keepalive.lock"
+            gate_free() { ( exec 8>"$BASE/.keepalive.lock"; flock -n 8 ); }
+            # Healthy pids are not enough. If a process launched the old way is
+            # still holding the keepalive gate, the per-minute cron goes on
+            # exiting at it and nothing is watching anything.
+            if up "$BASE/.supervisor.pid" && up "$BASE/.watchdog.pid" && gate_free; then
+              echo "both up and the gate is free — nothing to start"
+              exit 0
+            fi
+            gate_free || echo "keepalive gate is held — restarting the layer to release it"
+            if ! gate_free; then
+              for f in "$BASE/.supervisor.pid" "$BASE/.watchdog.pid" "$BASE/bridge.pid"; do
+                [ -f "$f" ] && kill "$(cat "$f" 2>/dev/null)" 2>/dev/null
+              done
+              sleep 3
+              rm -f "$BASE"/.supervisor.pid "$BASE"/.watchdog.pid "$BASE"/bridge.pid                     "$BASE"/.supervisor.lock "$BASE"/.watchdog.lock "$BASE"/.keepalive.lock
+            fi
             bash "$BASE/keepalive.sh" || true
             sleep 8
             # keepalive returns as soon as it has started the supervisor, and the
@@ -116,7 +129,7 @@ jobs:
               setsid /bin/bash "$BASE/watchdog.sh" >/dev/null 2>&1 </dev/null &
               sleep 5
             }
-            if ( exec 8>"$BASE/.keepalive.lock"; flock -n 8 ); then
+            if gate_free; then
               echo "keepalive gate: free — the per-minute cron can do its job"
             else
               echo "::error::keepalive gate is HELD — the cron will keep exiting at it"
