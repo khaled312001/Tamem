@@ -235,11 +235,13 @@ function toJid(num) {
 // found" — the exact reason a message reaches every phone but NOT the group in
 // the seconds after a reconnect. The send loop waits on this instead of firing
 // blind and burning retries.
-let groupsReady = false;
+// Groups whose metadata Baileys has, so a send to them will not fail with
+// "group metadata not found". Cleared on disconnect — the cache goes with the
+// socket. One entry per group, primed on demand.
+const primedGroups = new Set();
 
 // Publish the groups this account is a member of, so the dashboard can offer a
-// picker — and, as a side effect, warm Baileys' group-metadata cache so group
-// sends work. Best-effort: a failure here must never take the bridge down.
+// picker. Best-effort: a failure here must never take the bridge down.
 async function refreshGroups() {
   try {
     if (!sock) return false;
@@ -248,23 +250,35 @@ async function refreshGroups() {
       .map((g) => ({ id: g.id, name: g.subject || g.id, size: (g.participants || []).length }))
       .sort((a, b) => a.name.localeCompare(b.name, 'ar'));
     fs.writeFileSync(GROUPS_FILE, JSON.stringify({ groups: list, ts: Date.now() }));
-    groupsReady = true; // cache is now warm — group sends will succeed
+    for (const g of list) primedGroups.add(g.id); // free side effect: all primed
     return true;
   } catch (e) {
     // leave the previous groups.json in place; log only
     console.log('refreshGroups failed:', (e && e.message) || e);
+    return String((e && e.message) || e).includes('rate-overlimit') ? 'rate' : false;
+  }
+}
+
+// Make ONE group sendable. groupFetchAllParticipating() pulls every group the
+// account is in and is what WhatsApp answers with "rate-overlimit"; a single
+// groupMetadata() call is cheap by comparison. Group messages used to wait on
+// the full fetch, so once it started getting rate-limited — which it does, and
+// every bridge restart asks again — nothing ever reached the group at all.
+async function primeGroup(jid) {
+  if (primedGroups.has(jid)) return true;
+  try {
+    await withTimeout(sock.groupMetadata(jid), 20000);
+    primedGroups.add(jid);
+    return true;
+  } catch (e) {
+    console.log('primeGroup ' + jid + ' failed:', (e && e.message) || e);
     return false;
   }
 }
 
-// After connecting, keep trying to warm the group cache until it succeeds, so
-// group sends become available as soon as possible (not on a fixed 4s guess
-// that can miss under load).
-//
-// It used to give up after 11 tries (~30s). Group sends wait on groupsReady,
-// so one bad stretch at connect time left every group message sitting in the
-// queue until the next reconnect, which could be days. Fast tries first, then
-// one a minute until it works. One retry chain at a time.
+// Keep groups.json current for the dashboard picker. Nothing waits on this any
+// more, so it can afford to be patient — and it must be: retrying a
+// rate-overlimit every minute is how a soft limit becomes a hard one.
 let warmTimer = null;
 function warmGroups(attempt = 0) {
   if (warmTimer) clearTimeout(warmTimer);
@@ -272,8 +286,10 @@ function warmGroups(attempt = 0) {
   // Disconnected: stop here. The next 'open' starts a fresh chain.
   if (readStatus().status !== 'connected') return;
   refreshGroups().then((ok) => {
-    if (ok) return;
-    warmTimer = setTimeout(() => warmGroups(attempt + 1), attempt < 10 ? 3000 : 60000);
+    if (ok === true) return;
+    // Rate-limited: stand well back. Otherwise ramp 3s -> 1m -> 10m.
+    const delay = ok === 'rate' ? 600000 : attempt < 5 ? 3000 : attempt < 15 ? 60000 : 600000;
+    warmTimer = setTimeout(() => warmGroups(attempt + 1), delay);
   });
 }
 
@@ -331,12 +347,12 @@ async function connect() {
         // Group metadata isn't ready the instant we connect. Warm it (with
         // retries) before allowing group sends, so a message never lands on
         // every phone but skips the group during the reconnect window.
-        groupsReady = false;
+        primedGroups.clear(); // the metadata cache went with the old socket
         setTimeout(() => warmGroups(0), 1500);
       }
       if (connection === 'close') {
         connecting = false;
-        groupsReady = false;
+        primedGroups.clear();
         const code =
           lastDisconnect && lastDisconnect.error && lastDisconnect.error.output
             ? lastDisconnect.error.output.statusCode
@@ -480,10 +496,16 @@ async function ipcTick() {
       }
       // per-message backoff: skip until its retry time is due
       if (msg.nextAt && Date.now() < msg.nextAt) continue;
-      // A group send before the metadata cache is warm fails at the Baileys
-      // layer. Wait (without burning an attempt) — warmGroups() flips this on
-      // within a few seconds of connecting, then the message goes out cleanly.
-      if (String(msg.to).includes('@g.us') && !groupsReady) continue;
+      // A group send with no metadata fails at the Baileys layer, so fetch it
+      // for THIS group first. Retry in 15s without burning an attempt: it is
+      // almost always a cold cache right after connecting, not a bad message.
+      if (String(msg.to).includes('@g.us') && !(await primeGroup(toJid(msg.to)))) {
+        msg.nextAt = Date.now() + 15000;
+        try {
+          fs.writeFileSync(full, JSON.stringify(msg));
+        } catch {}
+        continue;
+      }
 
       const jid = toJid(msg.to);
       const now = Date.now();

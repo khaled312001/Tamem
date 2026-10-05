@@ -118,6 +118,22 @@ jobs:
           script: |
             WA=/home/u748721963/domains/deliverytamem.com/public_html/backendtamem/uploads/.wa
             echo "--- status.json ---"; cat "$WA/status.json" 2>/dev/null | head -c 600; echo
-            echo "--- queue: $(ls -1 "$WA/queue" 2>/dev/null | wc -l) waiting, dead: $(ls -1 "$WA/dead" 2>/dev/null | wc -l) ---"
-            echo "--- processes ---"; pgrep -af 'run-forever.sh|wa-bridge.js' || echo "(none)"
-            echo "--- last log ---"; tail -n 25 /home/u748721963/whatsapp/bridge.log 2>/dev/null
+            # Counts and reasons only. This log is public: no phone numbers, no
+            # message text. `ls | wc -l` counted every entry including markers,
+            # which read as a 79-message backlog when the real queue was empty.
+            echo "--- queue breakdown ---"
+            for d in queue dead control; do
+              j=$(ls -1A "$WA/$d"/*.json 2>/dev/null | wc -l)
+              g=$(ls -1A "$WA/$d"/*.sending 2>/dev/null | wc -l)
+              k=$(find "$WA/$d" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l)
+              a=$(ls -1A "$WA/$d" 2>/dev/null | wc -l)
+              echo "$d: $a entries ($j .json, $g .sending, $k dirs)"
+            done
+            echo "--- why messages were parked (reasons only) ---"
+            grep -ho '"reason":"[^"]*"' "$WA"/dead/*.json 2>/dev/null | sort | uniq -c | sort -rn | head
+            echo "--- oldest parked ---"
+            ls -1t "$WA"/dead/*.json 2>/dev/null | tail -3 | xargs -r stat -c '%y %n' 2>/dev/null | sed 's#.*/#... #'
+            echo "--- processes (all three layers should be here) ---"
+            pgrep -af 'watchdog.sh|run-forever.sh|wa-bridge.js' | grep -v 'bash -c' || echo "(none)"
+            echo "--- last log (bridge/supervisor/watchdog lines only) ---"
+            grep -hE '^\[(bridge|supervisor|watchdog|keepalive) ' /home/u748721963/whatsapp/bridge.log 2>/dev/null | tail -n 20
