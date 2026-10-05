@@ -6708,6 +6708,33 @@ if ($method === 'DELETE' && preg_match('#^/admin/supervisors/([^/]+)$#', $path, 
     jsonOk(['deleted' => true]);
 }
 
+// `contacts` is NOT a Setting key — the numbers live in `contact_lines`
+// and need their own shape. This MUST stay above the generic
+// /admin/settings/:key handler below, which otherwise matched first and
+// wrote Setting['contacts'] = "null" on every save while the dashboard
+// showed a green toast.
+if ($method === 'PUT' && $path === '/admin/settings/contacts') {
+    $u = authUser();
+    if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
+    $b = readJsonBody();
+    $clean = [];
+    foreach ((array) ($b['lines'] ?? []) as $l) {
+        if (!is_array($l)) continue;
+        $phone = preg_replace('/[^\d+]/', '', (string) ($l['phone'] ?? '')) ?? '';
+        if ($phone === '') continue;
+        $clean[] = [
+            'key' => trim((string) ($l['key'] ?? '')) ?: ('line' . (count($clean) + 1)),
+            'phone' => $phone,
+            'labelAr' => trim((string) ($l['labelAr'] ?? '')) ?: 'خط تواصل',
+            'descAr' => trim((string) ($l['descAr'] ?? '')),
+        ];
+    }
+    if (!$clean) jsonErr('لازم رقم واحد على الأقل', 422, 'EMPTY');
+    db()->prepare('INSERT INTO `Setting` (`key`,`value`,`description`,`updatedAt`,`updatedById`) VALUES (?,?,NULL,NOW(3),?) ON DUPLICATE KEY UPDATE `value`=VALUES(`value`), `updatedAt`=VALUES(`updatedAt`), `updatedById`=VALUES(`updatedById`)')
+        ->execute(['contact_lines', json_encode($clean, JSON_UNESCAPED_UNICODE), $u['sub'] ?? null]);
+    jsonOk(['lines' => $clean]);
+}
+
 // PUT /admin/settings/:key — upsert one Setting.
 if ($method === 'PUT' && preg_match('#^/admin/settings/([^/]+)$#', $path, $m)) {
     $u = authUser();
@@ -11478,27 +11505,6 @@ if ($method === 'GET' && $path === '/settings/contacts') {
         'addressAr' => 'المقر الرئيسي — مدينة قفط، محافظة قنا',
         'email' => 'info@deliverytamem.com',
     ]);
-}
-if ($method === 'PUT' && $path === '/admin/settings/contacts') {
-    $u = authUser();
-    if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
-    $b = readJsonBody();
-    $clean = [];
-    foreach ((array) ($b['lines'] ?? []) as $l) {
-        if (!is_array($l)) continue;
-        $phone = preg_replace('/[^\d+]/', '', (string) ($l['phone'] ?? '')) ?? '';
-        if ($phone === '') continue;
-        $clean[] = [
-            'key' => trim((string) ($l['key'] ?? '')) ?: ('line' . (count($clean) + 1)),
-            'phone' => $phone,
-            'labelAr' => trim((string) ($l['labelAr'] ?? '')) ?: 'خط تواصل',
-            'descAr' => trim((string) ($l['descAr'] ?? '')),
-        ];
-    }
-    if (!$clean) jsonErr('لازم رقم واحد على الأقل', 422, 'EMPTY');
-    db()->prepare('INSERT INTO `Setting` (`key`,`value`,`description`,`updatedAt`,`updatedById`) VALUES (?,?,NULL,NOW(3),?) ON DUPLICATE KEY UPDATE `value`=VALUES(`value`), `updatedAt`=VALUES(`updatedAt`), `updatedById`=VALUES(`updatedById`)')
-        ->execute(['contact_lines', json_encode($clean, JSON_UNESCAPED_UNICODE), $u['sub'] ?? null]);
-    jsonOk(['lines' => $clean]);
 }
 
 /**
