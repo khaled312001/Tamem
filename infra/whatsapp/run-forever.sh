@@ -22,13 +22,20 @@ ensure_watchdog() {
     return
   fi
   echo "[supervisor $(date -u '+%F %T')] watchdog down — starting" >> "$LOG"
-  setsid /bin/bash /home/u748721963/whatsapp/watchdog.sh >/dev/null 2>&1 </dev/null &
+  setsid /bin/bash /home/u748721963/whatsapp/watchdog.sh >/dev/null 2>&1 </dev/null 9>&- &
 }
 
 while true; do
   ensure_watchdog               # also covers the first launch
   echo "[supervisor $(date -u '+%F %T')] launching bridge" >> "$LOG"
-  "$NODE" wa-bridge.js >> "$LOG" 2>&1 </dev/null
+  # Children must NOT inherit the lock fd. flock is held as long as ANY open file
+  # descriptor refers to it, and a child inherits them: node, launched by the
+  # supervisor, kept .supervisor.lock held. So when the host reaped the supervisor
+  # and left node running, every attempt to start a replacement failed `flock -n`
+  # and exited silently. Nothing supervised the bridge from then on, and when node
+  # finally died there was nobody to restart it — hours of no WhatsApp, with every
+  # order message queued. `9>&-` (and 7, 8) closes the fd in the child.
+  "$NODE" wa-bridge.js >> "$LOG" 2>&1 </dev/null 9>&-
   echo "[supervisor $(date -u '+%F %T')] bridge exited (code $?) — restart in 3s" >> "$LOG"
   sleep 3
 done

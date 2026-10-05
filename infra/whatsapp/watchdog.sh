@@ -32,7 +32,7 @@ while true; do
   # 1) Supervisor reaped? It owns the node loop, so nothing sends without it.
   if ! { [ -f "$SUP_PID" ] && kill -0 "$(cat "$SUP_PID" 2>/dev/null)" 2>/dev/null; }; then
     echo "[watchdog $(date -u '+%F %T')] supervisor down — starting" >> "$LOG"
-    setsid /bin/bash "$SUP" >/dev/null 2>&1 </dev/null &
+    setsid /bin/bash "$SUP" >/dev/null 2>&1 </dev/null 7>&- &
   fi
 
   # 2) Supervisor up but the bridge is wedged on a dead socket. The bridge beats

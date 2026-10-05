@@ -29,17 +29,25 @@ alive() {
   [ -f "$1" ] && kill -0 "$(cat "$1" 2>/dev/null)" 2>/dev/null
 }
 
+# Children must NOT inherit the lock fd. flock is held as long as ANY open file
+# descriptor refers to it, and a child inherits them: node, launched by the
+# supervisor, kept .supervisor.lock held. So when the host reaped the supervisor
+# and left node running, every attempt to start a replacement failed `flock -n`
+# and exited silently. Nothing supervised the bridge from then on, and when node
+# finally died there was nobody to restart it — hours of no WhatsApp, with every
+# order message queued. `9>&-` (and 7, 8) closes the fd in the child.
+
 # 1) Watchdog alive? It restarts the supervisor on its own, within 20s, which is
 # what makes recovery independent of whatever schedule is calling this script.
 if ! alive "$WATCH_PID"; then
   echo "[keepalive $(date -u '+%F %T')] watchdog down — starting" >> "$LOG"
-  setsid /bin/bash "$WATCH" >/dev/null 2>&1 </dev/null &
+  setsid /bin/bash "$WATCH" >/dev/null 2>&1 </dev/null 8>&- &
 fi
 
 # 2) Supervisor alive? (it owns the node loop)
 if ! alive "$SUP_PID"; then
   echo "[keepalive $(date -u '+%F %T')] supervisor down — starting" >> "$LOG"
-  setsid /bin/bash "$SUP" >/dev/null 2>&1 </dev/null &
+  setsid /bin/bash "$SUP" >/dev/null 2>&1 </dev/null 8>&- &
   exit 0
 fi
 

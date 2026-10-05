@@ -47,16 +47,18 @@ jobs:
           strip_components: 2
           overwrite: true
 
-      # The supervisor that is already running predates the pid files, so it will
-      # never publish one — and the bridge, finding none, would launch a doomed
-      # replacement every 60 seconds (flock makes it exit at once). Migrate it
-      # once: tear the layer down and let keepalive bring up the new scripts.
-      # Only fires while the pid file is missing, so it is a no-op afterwards.
+      # The supervisor already running predates the pid files, so it will never
+      # publish one — and the bridge, finding none, would launch a replacement
+      # every 60 seconds that flock kills instantly, forever. Migrate it once.
+      # Both steps skip themselves as soon as the pid file is live, so they are
+      # no-ops from the next deploy on.
       #
-      # Every pattern below is bracketed, and the plain process names are never
-      # written out. `pkill -f run-forever.sh` would match THIS script's own
-      # command line and kill the SSH session mid-deploy.
-      - name: Migrate the keep-alive layer to pid files (no-op once done)
+      # Stopping and starting are DELIBERATELY two steps. `pkill -f` matches
+      # whole command lines, and ssh-action runs the whole script as one
+      # `bash -c "<script>"` — so a script that both pkills a pattern and names
+      # that process plainly anywhere else kills its own SSH session mid-deploy.
+      # The stop step names nothing plainly; the start step runs no pkill.
+      - name: Stop the old keep-alive layer (no-op once migrated)
         uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ secrets.HOSTINGER_SSH_HOST }}
@@ -69,20 +71,48 @@ jobs:
               echo "pid file present and live — nothing to migrate"
               exit 0
             fi
-            echo "migrating: stopping the old layer"
+            echo "stopping the old layer"
             pkill -f '[r]un-forever\.sh' || true
             pkill -f '[w]a-bridge\.js' || true
             pkill -f '[w]atchdog\.sh' || true
             sleep 2
-            rm -f "$BASE/.supervisor.pid" "$BASE/.watchdog.pid" "$BASE/bridge.pid"
+            # Clear the locks too. A lock held by a surviving child is precisely
+            # what blocked restarts; with every holder killed, nothing needs them.
+            rm -f "$BASE"/.supervisor.pid "$BASE"/.watchdog.pid "$BASE"/bridge.pid \
+                  "$BASE"/.supervisor.lock "$BASE"/.watchdog.lock "$BASE"/.keepalive.lock
+            echo "stopped"
+
+      - name: Start the new keep-alive layer
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.HOSTINGER_SSH_HOST }}
+          port: ${{ secrets.HOSTINGER_SSH_PORT }}
+          username: ${{ secrets.HOSTINGER_SSH_USER }}
+          password: ${{ secrets.HOSTINGER_SSH_PASS }}
+          script: |
+            BASE=/home/u748721963/whatsapp
+            up() { [ -f "$1" ] && kill -0 "$(cat "$1" 2>/dev/null)" 2>/dev/null; }
+            up "$BASE/.supervisor.pid" && up "$BASE/.watchdog.pid" && {
+              echo "both already up — nothing to start"; exit 0; }
             bash "$BASE/keepalive.sh" || true
-            sleep 10
+            sleep 8
+            # keepalive returns as soon as it has started the supervisor, and the
+            # supervisor starts the watchdog on its next loop — nudge it rather
+            # than calling that a failure.
+            up "$BASE/.watchdog.pid" || {
+              echo "watchdog not up yet — starting it directly"
+              setsid /bin/bash "$BASE/watchdog.sh" >/dev/null 2>&1 </dev/null &
+              sleep 5
+            }
             for n in supervisor watchdog; do
-              f="$BASE/.$n.pid"
-              if [ -f "$f" ] && kill -0 "$(cat "$f" 2>/dev/null)" 2>/dev/null; then
-                echo "$n: up (pid $(cat "$f"))"
+              if up "$BASE/.$n.pid"; then
+                echo "$n: up (pid $(cat "$BASE/.$n.pid"))"
               else
                 echo "::error::$n did not come up"
+                echo "--- pid / lock files ---"
+                ls -la "$BASE"/.*.pid "$BASE"/.*.lock 2>/dev/null
+                echo "--- last log ---"
+                tail -n 15 "$BASE/bridge.log" 2>/dev/null
                 exit 1
               fi
             done
