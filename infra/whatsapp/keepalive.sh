@@ -4,6 +4,7 @@
 # few minutes, so the service survives even a full OS reap without any paid
 # server subscription or hPanel cron.
 SUP=/home/u748721963/whatsapp/run-forever.sh
+WATCH=/home/u748721963/whatsapp/watchdog.sh
 LOG=/home/u748721963/whatsapp/bridge.log
 STATUS=/home/u748721963/domains/deliverytamem.com/public_html/backendtamem/uploads/.wa/status.json
 GATE=/home/u748721963/whatsapp/.keepalive.lock
@@ -19,14 +20,21 @@ if [ -f "$LOG" ] && [ "$(stat -c%s "$LOG" 2>/dev/null || echo 0)" -gt 3145728 ];
   echo "[keepalive $(date -u '+%F %T')] log rotated" >> "$LOG"
 fi
 
-# 1) Supervisor alive? (it owns the node loop)
+# 1) Watchdog alive? It restarts the supervisor on its own, within 20s, which is
+# what makes recovery independent of whatever schedule is calling this script.
+if ! pgrep -f "[w]atchdog.sh" >/dev/null 2>&1; then
+  echo "[keepalive $(date -u '+%F %T')] watchdog down — starting" >> "$LOG"
+  setsid /bin/bash "$WATCH" >/dev/null 2>&1 </dev/null &
+fi
+
+# 2) Supervisor alive? (it owns the node loop)
 if ! pgrep -f "run-forever.sh" >/dev/null 2>&1; then
   echo "[keepalive $(date -u '+%F %T')] supervisor down — starting" >> "$LOG"
   setsid /bin/bash "$SUP" >/dev/null 2>&1 </dev/null &
   exit 0
 fi
 
-# 2) Supervisor up but heartbeat wedged (hung socket)? bounce node; supervisor
+# 3) Supervisor up but heartbeat wedged (hung socket)? bounce node; supervisor
 # respawns it. 90s: the bridge beats every 15s, so 6 missed beats is safely dead
 # without false-positiving a brief GC pause. (Was 180s — half the recovery time.)
 if [ -f "$STATUS" ]; then

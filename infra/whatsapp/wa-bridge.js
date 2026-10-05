@@ -579,5 +579,33 @@ async function ipcTick() {
 // heartbeat so PHP can detect a dead bridge (stale ts)
 setInterval(() => writeStatus({}), 15000);
 
+// Third leg of the keep-alive triangle: run-forever.sh watches this process,
+// watchdog.sh watches run-forever.sh, and this — the longest-lived process on
+// the box — re-checks both. It matters because nothing else here can: PHP has
+// exec/shell_exec/proc_open in disable_functions, and the host has no crontab
+// CLI, so a server-side cron must be added by hand in hPanel. Without this,
+// recovery waited on a GitHub Actions schedule that fires every ~5 HOURS.
+// Node is not restricted, and both scripts are flock-guarded, so a redundant
+// start is a harmless no-op.
+const { spawn } = require('child_process');
+const WATCHDOG_SH = path.join(BASE, 'watchdog.sh');
+const SUPERVISOR_SH = path.join(BASE, 'run-forever.sh');
+const OPS_CHECK =
+  'pgrep -f "[w]atchdog.sh" >/dev/null 2>&1 || ' +
+  'setsid /bin/bash ' +
+  WATCHDOG_SH +
+  ' >/dev/null 2>&1 </dev/null & ' +
+  'pgrep -f "[r]un-forever.sh" >/dev/null 2>&1 || ' +
+  'setsid /bin/bash ' +
+  SUPERVISOR_SH +
+  ' >/dev/null 2>&1 </dev/null &';
+setInterval(() => {
+  try {
+    spawn('/bin/sh', ['-c', OPS_CHECK], { detached: true, stdio: 'ignore' }).unref();
+  } catch (e) {
+    /* best-effort; a failure here must never take the bridge down */
+  }
+}, 60000);
+
 writeStatus({ status: 'connecting', startedAt: Date.now(), lastError: null });
 connect();

@@ -32,7 +32,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # The supervisor and the keepalive script are plain bash and are not
+      # The supervisor, watchdog and keepalive scripts are plain bash and are not
       # touched by the python deploy, so copy them first — the deploy's own
       # recovery path calls keepalive.sh and should be running the current one.
       - name: Upload supervisor + keepalive scripts
@@ -42,7 +42,7 @@ jobs:
           port: ${{ secrets.HOSTINGER_SSH_PORT }}
           username: ${{ secrets.HOSTINGER_SSH_USER }}
           password: ${{ secrets.HOSTINGER_SSH_PASS }}
-          source: 'infra/whatsapp/keepalive.sh,infra/whatsapp/run-forever.sh'
+          source: 'infra/whatsapp/keepalive.sh,infra/whatsapp/run-forever.sh,infra/whatsapp/watchdog.sh'
           target: /home/u748721963/whatsapp
           strip_components: 2
           overwrite: true
@@ -71,13 +71,23 @@ jobs:
           username: ${{ secrets.HOSTINGER_SSH_USER }}
           password: ${{ secrets.HOSTINGER_SSH_PASS }}
           script: |
-            chmod +x /home/u748721963/whatsapp/keepalive.sh /home/u748721963/whatsapp/run-forever.sh
+            chmod +x /home/u748721963/whatsapp/keepalive.sh /home/u748721963/whatsapp/run-forever.sh /home/u748721963/whatsapp/watchdog.sh
             LINE='* * * * * /bin/bash /home/u748721963/whatsapp/keepalive.sh >/dev/null 2>&1'
             if ! command -v crontab >/dev/null 2>&1; then
-              echo "::error::No crontab CLI on this host. Add this line by hand in"
-              echo "::error::hPanel > Advanced > Cron Jobs, then re-run this workflow:"
-              echo "::error::$LINE"
-              exit 1
+              # Verified on this host: shared hosting ships no crontab CLI, so a
+              # cron can only be added through hPanel. Not fatal — watchdog.sh
+              # and run-forever.sh resurrect each other without any cron. The
+              # hPanel entry is still worth adding: it is the only layer that
+              # survives everything being reaped at once.
+              # These echoes land in the Actions log, not a step summary: this
+              # script runs on the HOST over SSH, where $GITHUB_STEP_SUMMARY
+              # does not exist.
+              echo "::warning::No crontab CLI on this host — add this in hPanel > Advanced > Cron Jobs:"
+              echo "::warning::$LINE"
+              # Make sure the pair is actually up right now.
+              bash /home/u748721963/whatsapp/keepalive.sh || true
+              pgrep -af 'watchdog.sh|run-forever.sh' || echo "(nothing running yet)"
+              exit 0
             fi
             crontab -l 2>/dev/null > /tmp/ct.now || true
             if ! grep -Fq 'whatsapp/keepalive.sh' /tmp/ct.now; then
