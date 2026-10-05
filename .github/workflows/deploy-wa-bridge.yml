@@ -74,21 +74,29 @@ jobs:
             chmod +x /home/u748721963/whatsapp/keepalive.sh /home/u748721963/whatsapp/run-forever.sh
             LINE='* * * * * /bin/bash /home/u748721963/whatsapp/keepalive.sh >/dev/null 2>&1'
             if ! command -v crontab >/dev/null 2>&1; then
-              echo "NO crontab CLI on this host — add the line below in hPanel > Advanced > Cron Jobs:"
-              echo "$LINE"
-            else
-              crontab -l 2>/dev/null > /tmp/ct.now || true
-              if grep -Fq 'whatsapp/keepalive.sh' /tmp/ct.now; then
-                echo "cron entry already present:"
-                grep -F 'whatsapp/keepalive.sh' /tmp/ct.now
-              else
-                cp /tmp/ct.now /tmp/ct.next
-                echo "$LINE" >> /tmp/ct.next
-                crontab /tmp/ct.next && echo "cron entry installed"
-              fi
-              echo "--- crontab now ---"
-              crontab -l 2>/dev/null || echo "(crontab -l failed)"
+              echo "::error::No crontab CLI on this host. Add this line by hand in"
+              echo "::error::hPanel > Advanced > Cron Jobs, then re-run this workflow:"
+              echo "::error::$LINE"
+              exit 1
             fi
+            crontab -l 2>/dev/null > /tmp/ct.now || true
+            if ! grep -Fq 'whatsapp/keepalive.sh' /tmp/ct.now; then
+              cp /tmp/ct.now /tmp/ct.next
+              echo "$LINE" >> /tmp/ct.next
+              crontab /tmp/ct.next && echo "cron entry installed"
+            fi
+            echo "--- crontab now ---"
+            crontab -l 2>/dev/null || echo "(crontab -l failed)"
+            # Assert, do not assume. A deploy that leaves no recovery layer is
+            # broken: that is precisely the state that caused hours-long
+            # outages, because GitHub's '*/5' schedule actually fires about
+            # every 5 HOURS (measured: median 291 min over 39 runs), so a
+            # reaped supervisor went unnoticed until the next lucky fire.
+            crontab -l 2>/dev/null | grep -Fq 'whatsapp/keepalive.sh' || {
+              echo "::error::cron entry is NOT in the crontab after install"
+              exit 1
+            }
+            echo "verified: per-minute keepalive cron is in the crontab"
 
       - name: Report bridge state
         uses: appleboy/ssh-action@v1.2.0

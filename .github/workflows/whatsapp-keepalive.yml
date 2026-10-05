@@ -12,13 +12,19 @@ name: WhatsApp bridge keepalive
 #   Layer 1 (on the server): run-forever.sh supervises the node bridge in a
 #           restart loop, so a crash / WhatsApp drop / node reap recovers in a
 #           few seconds on its own.
-#   Layer 2 (this workflow): a free scheduled Action SSHes in every few minutes
-#           and runs keepalive.sh, which relaunches the SUPERVISOR itself if the
-#           host reaped it. GitHub Actions is free and unlimited on public repos.
+#   Layer 2 (on the server): a per-minute cron running keepalive.sh, installed
+#           by .github/workflows/deploy-wa-bridge.yml, which relaunches the
+#           SUPERVISOR itself if the host reaped it.
+#   Layer 3 (this workflow): the same keepalive over SSH, as a backstop for the
+#           case where the crontab itself is wiped.
 #
-# GitHub only schedules cron on a best-effort basis (a "*/5" job can be delayed
-# 10-30 min under load), but that is fine: Layer 1 handles the frequent, fast
-# failures; this workflow only has to catch the rare full-supervisor reap.
+# Layer 2 exists because this workflow cannot be relied on for recovery. The
+# schedule below asks for every 5 minutes; measured over 39 scheduled runs it
+# actually fired every 291 minutes (median; min 148, max 499). A reaped
+# supervisor therefore went unnoticed for HOURS, and every order message piled
+# up in the queue until some later fire happened to revive it — that is what
+# "WhatsApp messages arrive late" was. GitHub schedules cron on a best-effort
+# basis only, and on a busy public repo "best effort" means hours, not minutes.
 #
 # One-time setup — add these repository secrets (Settings → Secrets and
 # variables → Actions):
