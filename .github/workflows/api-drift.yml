@@ -1,0 +1,86 @@
+name: API drift
+
+# The api.php running in production is NOT the one in git — queue files named
+# *.ok appear on the server and nothing in this repo writes them. Deploying the
+# repo copy over it would silently revert whatever that difference is, so
+# measure it first.
+#
+# Read-only by default. It prints route names, function names and counts, never
+# file content: this repo is public.
+
+on:
+  workflow_dispatch:
+    inputs:
+      deploy:
+        description: 'Deploy the repo api.php over the live one (after reading the drift!)'
+        type: boolean
+        default: false
+
+concurrency:
+  group: api-deploy
+  cancel-in-progress: false
+
+jobs:
+  drift:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Upload the repo copy for comparison (not into the web root)
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.HOSTINGER_SSH_HOST }}
+          port: ${{ secrets.HOSTINGER_SSH_PORT }}
+          username: ${{ secrets.HOSTINGER_SSH_USER }}
+          password: ${{ secrets.HOSTINGER_SSH_PASS }}
+          source: 'apps/backend/dist-bundle/api.php'
+          target: /home/u748721963/api-drift
+          strip_components: 3
+          overwrite: true
+
+      - name: Compare
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.HOSTINGER_SSH_HOST }}
+          port: ${{ secrets.HOSTINGER_SSH_PORT }}
+          username: ${{ secrets.HOSTINGER_SSH_USER }}
+          password: ${{ secrets.HOSTINGER_SSH_PASS }}
+          script: |
+            set -e
+            REPO=/home/u748721963/api-drift/api.php
+            LIVE=$(find ~/domains ~/public_html -maxdepth 5 -name api.php -not -path '*/api-drift/*' 2>/dev/null | head -1)
+            echo "live: $LIVE"
+            echo "size  live=$(stat -c%s "$LIVE")  repo=$(stat -c%s "$REPO")"
+            echo "lines live=$(wc -l < "$LIVE")  repo=$(wc -l < "$REPO")"
+            echo "md5   live=$(md5sum "$LIVE" | cut -c1-12)  repo=$(md5sum "$REPO" | cut -c1-12)"
+            echo "--- changed line counts ---"
+            echo "only in live: $(diff "$REPO" "$LIVE" | grep -c '^>' || true)"
+            echo "only in repo: $(diff "$REPO" "$LIVE" | grep -c '^<' || true)"
+            echo "--- routes only in LIVE (would be LOST by a deploy) ---"
+            grep -ohE "'/[a-zA-Z0-9/_{}.-]+'" "$LIVE" | sort -u > /tmp/r.live
+            grep -ohE "'/[a-zA-Z0-9/_{}.-]+'" "$REPO" | sort -u > /tmp/r.repo
+            comm -23 /tmp/r.live /tmp/r.repo | head -40
+            echo "--- routes only in REPO (would be ADDED) ---"
+            comm -13 /tmp/r.live /tmp/r.repo | head -40
+            echo "--- functions only in LIVE ---"
+            grep -ohE "^function [a-zA-Z_][a-zA-Z0-9_]*" "$LIVE" | sort -u > /tmp/f.live
+            grep -ohE "^function [a-zA-Z_][a-zA-Z0-9_]*" "$REPO" | sort -u > /tmp/f.repo
+            comm -23 /tmp/f.live /tmp/f.repo | head -30
+            echo "--- functions only in REPO ---"
+            comm -13 /tmp/f.live /tmp/f.repo | head -30
+            echo "--- who writes queue/*.ok ---"
+            grep -c "\.ok" "$LIVE" || echo "0 in live"
+            grep -c "\.ok" "$REPO" || echo "0 in repo"
+
+      - uses: actions/setup-python@v5
+        if: ${{ inputs.deploy }}
+        with:
+          python-version: '3.12'
+      - run: python -m pip install --quiet paramiko
+        if: ${{ inputs.deploy }}
+      - name: Deploy (syntax-checked, backed up, rolled back on failure)
+        if: ${{ inputs.deploy }}
+        env:
+          TAMEM_SSH_PASS: ${{ secrets.HOSTINGER_SSH_PASS }}
+        run: python scripts/deploy-api.py
