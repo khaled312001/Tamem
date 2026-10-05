@@ -204,10 +204,13 @@ export function SiteSettingsPage() {
 
   useEffect(() => {
     if (cfg && !form) {
-      // The backend returns loose settings (and may send `contacts` as a JSON
-      // string or omit it). Normalise so the render never hits `.map` on undefined.
+      // The numbers live in the `contact_lines` Setting row — that is what the
+      // app (GET /settings/contacts) and the landing both read, and what the
+      // save below writes. `contacts` is read only as a fallback: it is a dead
+      // key that older saves left behind as the string "null", so a page that
+      // loaded from it showed the baked-in defaults right after a real save.
       const raw = cfg as unknown as Record<string, unknown>;
-      let contacts = raw.contacts as unknown;
+      let contacts = (raw.contact_lines ?? raw.contacts) as unknown;
       if (typeof contacts === 'string') {
         try {
           contacts = JSON.parse(contacts);
