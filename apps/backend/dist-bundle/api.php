@@ -7795,18 +7795,6 @@ if ($method === 'PUT' && preg_match('#^/admin/merchants/([^/]+)/permissions$#', 
     jsonOk(['merchantId' => $m[1], 'permissions' => $out]);
 }
 
-// Generic admin mutation fallback — instead of a red 503 toast, silently
-// echo the input back as if it were saved.  Real persistence for these
-// endpoints kicks in the moment the Node.js backend is enabled in hPanel.
-if (in_array($method, ['POST', 'PATCH', 'PUT', 'DELETE'], true) && str_starts_with($path, '/admin/')) {
-    authUser();
-    $b = readJsonBody();
-    $echo = is_array($b) ? $b : [];
-    if (!isset($echo['id'])) $echo['id'] = newId();
-    $echo['_note'] = 'shim: not persisted';
-    jsonOk($echo);
-}
-
 // ═══════════════════════════════════════════════════════════════════════
 //  CUSTOMER / MOBILE API
 //  Ported from apps/backend/src/modules/** so the Android app works against
@@ -12636,6 +12624,25 @@ if ($method === 'POST' && $path === '/auth/admin/passcode') {
         ],
         'tokens' => ['accessToken' => $access, 'refreshToken' => $refresh],
     ]);
+}
+
+// Generic admin mutation fallback — instead of a red 503 toast, silently
+// echo the input back as if it were saved.  Real persistence for these
+// endpoints kicks in the moment the Node.js backend is enabled in hPanel.
+//
+// IT MUST BE THE LAST /admin/ HANDLER IN THE FILE. It sat in the middle of
+// the admin section for a long time and swallowed every real handler written
+// below it — PUT /admin/settings/contacts and PUT /admin/shipping-prices both
+// answered 200 with `_note: shim: not persisted` and saved nothing, so the
+// dashboard showed a green toast while the numbers never changed. Add new
+// admin routes ABOVE this, never below.
+if (in_array($method, ['POST', 'PATCH', 'PUT', 'DELETE'], true) && str_starts_with($path, '/admin/')) {
+    authUser();
+    $b = readJsonBody();
+    $echo = is_array($b) ? $b : [];
+    if (!isset($echo['id'])) $echo['id'] = newId();
+    $echo['_note'] = 'shim: not persisted';
+    jsonOk($echo);
 }
 
 // Unknown route
