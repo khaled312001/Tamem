@@ -41,7 +41,6 @@ import { refuseIfOffline } from '../lib/offline';
 import { showToast } from '../lib/toast';
 import { uploadFile } from '../lib/uploadFile';
 import type { HomeStackParamList } from '../navigation/HomeStack';
-import { useAuth } from '../stores/auth';
 import { clearCart, getMerchantGroups, groupAddonLabel, useCart } from '../stores/cart';
 import { palette, typography } from '../theme/tokens';
 import { colors, fontFamilies, fontSizes, radii, shadows, spacing } from '../theme/tokens';
@@ -60,7 +59,6 @@ const SCHEDULING_ENABLED = false;
 
 export function CartCheckoutScreen() {
   const navigation = useNavigation<NavProp>();
-  const user = useAuth((st) => st.user);
   const cart = useCart();
   const groups = useMemo(() => getMerchantGroups(cart), [cart]);
 
@@ -191,7 +189,6 @@ export function CartCheckoutScreen() {
   const blockedByQuote = quoteStatus === 'pending' || quoteStatus === 'error';
   // The server worked out that this customer is owed a free first delivery and
   // is only missing the WhatsApp code on their number.
-  const needsPhoneVerify = !!address?.zone?.verifyPhoneForFreeDelivery;
 
   if (cart.items.length === 0) {
     return (
@@ -440,19 +437,6 @@ export function CartCheckoutScreen() {
                 </Text>
               )}
             </View>
-            {needsPhoneVerify && user?.phone ? (
-              <Pressable
-                onPress={() => navigation.navigate('VerifyPhone', { phone: user.phone! })}
-                accessibilityRole="button"
-                accessibilityLabel="أكّد رقمك واستلم أول توصيلة مجانًا"
-                style={({ pressed }) => [styles.verifyNudge, pressed && { opacity: 0.85 }]}
-              >
-                <Text style={styles.verifyNudgeText}>
-                  🎉 أول توصيلة مجانًا — أكّد رقمك بكود واتساب
-                </Text>
-                <Text style={styles.verifyNudgeCta}>تأكيد الآن</Text>
-              </Pressable>
-            ) : null}
             <View style={styles.totalDivider} />
             <View style={styles.totalLine}>
               <Text style={styles.grandTotalLabel}>الإجمالي الكلي</Text>
@@ -676,33 +660,6 @@ const styles = StyleSheet.create({
     flexShrink: 1,
   },
   totalDivider: { height: 1, backgroundColor: colors.line, marginVertical: spacing.xs },
-  verifyNudge: {
-    marginTop: spacing.sm,
-    borderRadius: radii.md,
-    backgroundColor: palette.green[50],
-    borderWidth: 1,
-    borderColor: palette.green[100],
-    paddingVertical: spacing.sm,
-    paddingHorizontal: spacing.md,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: spacing.sm,
-    // 44pt is the smallest reliably tappable target on both platforms.
-    minHeight: 44,
-  },
-  verifyNudgeText: {
-    flex: 1,
-    fontFamily: fontFamilies.bodyBold,
-    fontSize: fontSizes.sm,
-    color: palette.green[700],
-  },
-  verifyNudgeCta: {
-    fontFamily: fontFamilies.bodyBold,
-    fontSize: fontSizes.sm,
-    color: palette.green[600],
-    textDecorationLine: 'underline',
-  },
   totalPlaceholder: {
     fontFamily: fontFamilies.bodyBold,
     color: colors.text.muted,

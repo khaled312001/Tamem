@@ -2,6 +2,7 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import { useNavigation, useRoute, type RouteProp } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { LinearGradient } from 'expo-linear-gradient';
+import * as Linking from 'expo-linking';
 import {
   AlertCircle,
   Lock,
@@ -16,7 +17,6 @@ import { Controller, useForm, type Resolver } from 'react-hook-form';
 import {
   Alert,
   KeyboardAvoidingView,
-  Modal,
   Platform,
   Pressable,
   ScrollView,
@@ -35,6 +35,7 @@ import { PasswordField } from '../components/PasswordField';
 import { PrimaryButton } from '../components/ui';
 import { api } from '../lib/api';
 import { authErrorMessage } from '../lib/authErrors';
+import { useSupportWhatsapp, waLink } from '../lib/contacts';
 import type { AuthStackParamList } from '../navigation/AuthStack';
 import { useAuth, type SignupRole } from '../stores/auth';
 import {
@@ -55,10 +56,6 @@ type LoginFormValues = z.input<typeof loginSchema>;
 
 // Errors now go through the shared lib/authErrors helper.
 
-// إخفاء رابط «أنشئ حساب جديد» مؤقتًا فقط — الدخول بالهاتف/كلمة المرور وجوجل
-// كلهم شغّالين زي ما هم. رجّعه false عشان الرابط يظهر تاني.
-const HIDE_REGISTER = true;
-
 export function LoginScreen() {
   const navigation = useNavigation<NavProp>();
   const route = useRoute<LoginRouteProp>();
@@ -69,28 +66,12 @@ export function LoginScreen() {
   // via Alert.alert — web's RN Alert sometimes flashes too quickly to read,
   // so the inline banner is the reliable channel.
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
-  // ─────── Google sign-in role chooser ───────
-  // Google sign-in can be a signup OR a login — we don't know upfront whether
-  // the user already exists. To cover both cases we pop a modal asking for
-  // role choice when the user has no `initialRole` set (i.e. they reached
-  // login directly without going through RoleChoice). The backend ignores
-  // role on returning users, so a wrong tap on a returning customer is safe.
-  const [rolePickerOpen, setRolePickerOpen] = useState(false);
-  const [pendingResolve, setPendingResolve] = useState<((role: SignupRole | null) => void) | null>(
-    null,
-  );
-
+  const supportWhatsapp = useSupportWhatsapp();
   /** The role to sign up new Google users as. Default customer — the app no
    *  longer asks "عميل أم تاجر؟" up front; merchants sign up via the merchant
    *  link. The backend ignores role for returning users, so this is safe. */
   const resolveGoogleRole = (): Promise<SignupRole | null | undefined> => {
     return Promise.resolve(initialRole ?? 'CUSTOMER');
-  };
-
-  const handleRolePicked = (role: SignupRole | null) => {
-    setRolePickerOpen(false);
-    pendingResolve?.(role);
-    setPendingResolve(null);
   };
 
   // loginSchema ends in a .transform() that folds `phone` into `identifier`, so
@@ -112,6 +93,30 @@ export function LoginScreen() {
     resolver: zodResolver(loginSchema) as unknown as Resolver<LoginFormValues, unknown, LoginInput>,
     defaultValues: { phone: '', password: '' },
   });
+
+  // No reset code — there is no OTP left anywhere in the app. A password is
+  // changed by the office, so say that plainly and offer the one tap that
+  // actually gets it done rather than a dead end.
+  const onForgotPassword = () => {
+    Alert.alert(
+      'نسيت كلمة المرور؟',
+      'كلمة المرور بتتغيّر عن طريق الإدارة. كلّمنا على واتساب وهنعدّلها لك على طول.',
+      [
+        { text: 'إلغاء', style: 'cancel' },
+        {
+          text: 'مراسلة الإدارة',
+          onPress: () => {
+            void Linking.openURL(
+              waLink(
+                supportWhatsapp,
+                'السلام عليكم، نسيت كلمة مرور حسابي في تطبيق تميم ومحتاج تعديلها.',
+              ),
+            );
+          },
+        },
+      ],
+    );
+  };
 
   const onSubmit = async (values: LoginInput) => {
     setLoading(true);
@@ -194,7 +199,7 @@ export function LoginScreen() {
 
             <View style={styles.fieldHeader}>
               <Text style={styles.fieldLabel}>كلمة المرور</Text>
-              <Pressable onPress={() => navigation.navigate('ForgotPassword')} hitSlop={8}>
+              <Pressable onPress={onForgotPassword} hitSlop={8}>
                 <Text style={styles.forgotText}>نسيت كلمة المرور؟</Text>
               </Pressable>
             </View>
@@ -245,58 +250,8 @@ export function LoginScreen() {
               onError={(msg) => Alert.alert('خطأ', msg)}
             />
           </View>
-
-          {!HIDE_REGISTER && (
-            <Pressable
-              // Forward the role choice so the Register screen lands on the same
-              // tile the user picked back on RoleChoice. They can still swap
-              // tiles on the Register screen if they change their mind.
-              onPress={() => navigation.navigate('Register', { initialRole })}
-              style={({ pressed }) => [styles.registerLink, pressed && { opacity: 0.8 }]}
-            >
-              <Text style={styles.registerText}>
-                ليس لديك حساب؟ <Text style={styles.registerCta}>أنشئ حساب جديد</Text>
-              </Text>
-            </Pressable>
-          )}
         </ScrollView>
       </KeyboardAvoidingView>
-
-      {/* Google sign-in role chooser modal */}
-      <Modal
-        visible={rolePickerOpen}
-        transparent
-        animationType="fade"
-        onRequestClose={() => handleRolePicked(null)}
-      >
-        <View style={styles.modalBackdrop}>
-          <View style={styles.modalSheet}>
-            <Text style={styles.modalTitle}>هل أنت عميل أم تاجر؟</Text>
-            <Text style={styles.modalSubtitle}>
-              اختر نوع حسابك للمتابعة بتسجيل الدخول بحساب جوجل
-            </Text>
-            <View style={styles.modalTilesRow}>
-              <Pressable
-                style={({ pressed }) => [styles.modalTile, pressed && styles.modalTileActive]}
-                onPress={() => handleRolePicked('CUSTOMER')}
-              >
-                <UserIcon size={28} color={colors.brand.red} />
-                <Text style={styles.modalTileLabel}>عميل</Text>
-              </Pressable>
-              <Pressable
-                style={({ pressed }) => [styles.modalTile, pressed && styles.modalTileActive]}
-                onPress={() => handleRolePicked('MERCHANT')}
-              >
-                <Store size={28} color={colors.brand.red} />
-                <Text style={styles.modalTileLabel}>تاجر / مورد</Text>
-              </Pressable>
-            </View>
-            <Pressable onPress={() => handleRolePicked(null)} hitSlop={8}>
-              <Text style={styles.modalCancel}>إلغاء</Text>
-            </Pressable>
-          </View>
-        </View>
-      </Modal>
     </SafeAreaView>
   );
 }
@@ -399,13 +354,6 @@ const styles = StyleSheet.create({
     fontSize: fontSizes.xs,
     fontFamily: fontFamilies.body,
   },
-  registerLink: { alignItems: 'center', marginTop: spacing.xl },
-  registerText: {
-    color: colors.text.secondary,
-    fontSize: fontSizes.sm,
-    fontFamily: fontFamilies.body,
-  },
-  registerCta: { color: colors.brand.red, fontFamily: fontFamilies.bodyExtraBold },
   roleBadge: {
     marginTop: spacing.md,
     flexDirection: 'row',
@@ -422,67 +370,5 @@ const styles = StyleSheet.create({
     color: colors.white,
     fontSize: fontSizes.xs,
     fontFamily: fontFamilies.bodyExtraBold,
-  },
-  // ─────── Google role picker modal ───────
-  modalBackdrop: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.45)',
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: spacing.lg,
-  },
-  modalSheet: {
-    width: '100%',
-    maxWidth: 420,
-    backgroundColor: colors.white,
-    borderRadius: radii.xl,
-    padding: spacing.lg,
-    alignItems: 'center',
-  },
-  modalTitle: {
-    fontFamily: fontFamilies.headingBlack,
-    fontSize: fontSizes.lg,
-    color: colors.ink,
-    marginBottom: 6,
-    textAlign: 'center',
-  },
-  modalSubtitle: {
-    fontFamily: fontFamilies.body,
-    fontSize: fontSizes.sm,
-    color: colors.text.secondary,
-    textAlign: 'center',
-    marginBottom: spacing.lg,
-    lineHeight: 20,
-  },
-  modalTilesRow: {
-    flexDirection: 'row',
-    gap: spacing.md,
-    width: '100%',
-    marginBottom: spacing.lg,
-  },
-  modalTile: {
-    flex: 1,
-    borderWidth: 2,
-    borderColor: colors.line,
-    borderRadius: radii.lg,
-    paddingVertical: spacing.lg,
-    paddingHorizontal: spacing.sm,
-    alignItems: 'center',
-    gap: 8,
-  },
-  modalTileActive: {
-    borderColor: colors.brand.red,
-    backgroundColor: colors.brand.redLight,
-  },
-  modalTileLabel: {
-    fontFamily: fontFamilies.bodyExtraBold,
-    fontSize: fontSizes.sm,
-    color: colors.ink,
-  },
-  modalCancel: {
-    fontFamily: fontFamilies.bodyBold,
-    fontSize: fontSizes.sm,
-    color: colors.text.secondary,
-    paddingVertical: spacing.sm,
   },
 });
