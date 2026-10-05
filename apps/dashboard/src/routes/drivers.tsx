@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   IdCard,
   ImagePlus,
+  KeyRound,
   Loader2,
   MessageSquare,
   Pencil,
@@ -17,6 +18,7 @@ import { useEffect, useId, useState } from 'react';
 import type { ReactNode } from 'react';
 import { toast } from 'sonner';
 
+import { SetPasswordDialog, type PasswordTarget } from '../components/SetPasswordDialog.js';
 import { DriverStatusBadge } from '../components/ui/Badge.js';
 import { Button } from '../components/ui/Button.js';
 import { Dialog } from '../components/ui/Dialog.js';
@@ -142,6 +144,9 @@ export function DriversPage() {
   const qc = useQueryClient();
   const [createOpen, setCreateOpen] = useState(false);
   const [editing, setEditing] = useState<Row | null>(null);
+  // A driver who forgets their password has no self-service route any more, so
+  // the office sets it. See SetPasswordDialog.
+  const [passwordFor, setPasswordFor] = useState<PasswordTarget | null>(null);
   const [viewingReviews, setViewingReviews] = useState<Row | null>(null);
   const [viewingStats, setViewingStats] = useState<Row | null>(null);
 
@@ -312,6 +317,12 @@ export function DriversPage() {
                   <Truck className="w-3 h-3" /> الإحصائيات
                 </button>
                 <button
+                  onClick={() => setPasswordFor({ id: d.id, name: d.name, phone: d.phone })}
+                  className="inline-flex items-center gap-1 text-xs text-brand-dark hover:underline"
+                >
+                  <KeyRound className="w-3 h-3" /> كلمة المرور
+                </button>
+                <button
                   onClick={() => {
                     if (confirm(`حذف السائق "${d.name}"؟`)) deleteMut.mutate(d.id);
                   }}
@@ -338,6 +349,7 @@ export function DriversPage() {
 
       {createOpen && <CreateDriverDialog onClose={() => setCreateOpen(false)} />}
       {editing && <EditDriverDialog driver={editing} onClose={() => setEditing(null)} />}
+      <SetPasswordDialog target={passwordFor} onClose={() => setPasswordFor(null)} />
       {viewingReviews && (
         <DriverReviewsDialog driver={viewingReviews} onClose={() => setViewingReviews(null)} />
       )}

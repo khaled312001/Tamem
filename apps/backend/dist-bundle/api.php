@@ -5921,6 +5921,37 @@ if ($method === 'DELETE' && preg_match('#^/admin/zones/areas/([^/]+)$#', $path, 
 // Distinct customer cities — so the customers-page city filter offers EVERY
 // city, not just the ones on the current page. MUST come before the
 // /admin/customers/:id catch below (which would otherwise swallow "cities").
+// POST /admin/users/:id/password — the office sets someone's password.
+//
+// «نسيت كلمة المرور» in the app no longer sends a reset code: it tells the
+// customer to ask the office, so the office has to actually be able to do it.
+// The generic admin field writer refuses passwordHash on purpose — a blanket
+// updater must never touch credentials — so this is the one explicit door, and
+// it is narrow: an ADMIN cannot reset another admin's password, which would be
+// a straight privilege escalation. Only a SUPER_ADMIN can.
+if ($method === 'POST' && preg_match('#^/admin/users/([^/]+)/password$#', $path, $m)) {
+    $u = authUser();
+    if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
+    $uid = $m[1];
+    $b = readJsonBody();
+    $new = (string) ($b['password'] ?? '');
+    if (strlen($new) < 8) jsonErr('كلمة المرور لازم تكون 8 أحرف على الأقل', 422, 'WEAK_PASSWORD');
+    $st = db()->prepare("SELECT id, name, phone, role FROM `User` WHERE id = ? LIMIT 1");
+    $st->execute([$uid]);
+    $target = $st->fetch();
+    if (!$target) jsonErr('المستخدم غير موجود', 404, 'NOT_FOUND');
+    if (in_array((string) $target['role'], ['ADMIN', 'SUPER_ADMIN'], true)
+        && ($u['role'] ?? '') !== 'SUPER_ADMIN') {
+        jsonErr('فقط مدير النظام يقدر يغيّر كلمة مرور مسؤول', 403, 'FORBIDDEN');
+    }
+    // Clearing the reset fields matters: a pending reset left behind would let
+    // whoever holds that old code overwrite what the office just set.
+    db()->prepare('UPDATE `User` SET passwordHash = ?, passwordResetHash = NULL, passwordResetExpiresAt = NULL, updatedAt = NOW(3) WHERE id = ?')
+        ->execute([password_hash($new, PASSWORD_BCRYPT), $uid]);
+    error_log('[api.php] password set for user ' . $uid . ' by ' . (string) ($u['sub'] ?? '?'));
+    jsonOk(['ok' => true, 'user' => ['id' => $target['id'], 'name' => $target['name']]]);
+}
+
 if ($method === 'GET' && $path === '/admin/customers/cities') {
     authUser();
     $rows = db()->query("SELECT DISTINCT city FROM `User` WHERE role = 'CUSTOMER' AND city IS NOT NULL AND city <> '' ORDER BY city")->fetchAll(PDO::FETCH_COLUMN);

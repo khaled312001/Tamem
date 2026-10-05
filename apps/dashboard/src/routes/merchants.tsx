@@ -6,11 +6,11 @@ import {
   CheckCircle2,
   Clock,
   Copy,
-  ShieldCheck,
   Download,
   Eye,
   EyeOff,
   ImagePlus,
+  KeyRound,
   LayoutGrid,
   List,
   Loader2,
@@ -25,6 +25,7 @@ import {
   RefreshCw,
   Save,
   Search,
+  ShieldCheck,
   Store,
   Trash2,
   Unplug,
@@ -40,6 +41,7 @@ import { MerchantExportDialog, MerchantImportDialog } from '../components/Mercha
 import { MerchantLogo } from '../components/MerchantLogo.js';
 import { Button } from '../components/ui/Button.js';
 import { ConfirmDialog } from '../components/ui/ConfirmDialog.js';
+import { SetPasswordDialog, type PasswordTarget } from '../components/SetPasswordDialog.js';
 import { Dialog } from '../components/ui/Dialog.js';
 import { Field, Input, Textarea } from '../components/ui/Input.js';
 import { PageHeader } from '../components/ui/PageHeader.js';
@@ -97,6 +99,9 @@ export function MerchantsPage() {
   const [pageSize, setPageSize] = useState(25);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [confirmDel, setConfirmDel] = useState<Row | null>(null);
+  // A merchant who forgets their password has no self-service route any more,
+  // so the office sets it. See SetPasswordDialog.
+  const [passwordFor, setPasswordFor] = useState<PasswordTarget | null>(null);
   const [importOpen, setImportOpen] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
 
@@ -726,7 +731,18 @@ export function MerchantsPage() {
                         >
                           <Pencil className="w-4 h-4" />
                         </button>
-                        <MerchantMenu merchant={m} onDelete={() => setConfirmDel(m)} />
+                        <MerchantMenu
+                          merchant={m}
+                          onDelete={() => setConfirmDel(m)}
+                          onSetPassword={() =>
+                            // m.id is the MerchantProfile; the login lives on the User.
+                            setPasswordFor({
+                              id: m.user?.id ?? m.userId,
+                              name: m.user?.name ?? m.storeNameAr ?? m.storeName,
+                              phone: m.user?.phone ?? m.phone,
+                            })
+                          }
+                        />
                       </div>
                     </td>
                   </tr>
@@ -823,7 +839,18 @@ export function MerchantsPage() {
                   >
                     <Pencil className="w-4 h-4" />
                   </button>
-                  <MerchantMenu merchant={m} onDelete={() => setConfirmDel(m)} />
+                  <MerchantMenu
+                    merchant={m}
+                    onDelete={() => setConfirmDel(m)}
+                    onSetPassword={() =>
+                      // m.id is the MerchantProfile; the login lives on the User.
+                      setPasswordFor({
+                        id: m.user?.id ?? m.userId,
+                        name: m.user?.name ?? m.storeNameAr ?? m.storeName,
+                        phone: m.user?.phone ?? m.phone,
+                      })
+                    }
+                  />
                 </div>
               </div>
             </div>
@@ -893,6 +920,8 @@ export function MerchantsPage() {
       )}
       {createOpen && <CreateMerchantDialog onClose={() => setCreateOpen(false)} />}
       {editing && <EditMerchantDialog merchant={editing} onClose={() => setEditing(null)} />}
+      <SetPasswordDialog target={passwordFor} onClose={() => setPasswordFor(null)} />
+
       <ConfirmDialog
         open={!!confirmDel}
         onOpenChange={(o) => !o && setConfirmDel(null)}
@@ -974,7 +1003,15 @@ function ActiveToggle({ on, onChange }: { on: boolean; onChange: () => void }) {
   );
 }
 
-function MerchantMenu({ merchant, onDelete }: { merchant: Row; onDelete: () => void }) {
+function MerchantMenu({
+  merchant,
+  onDelete,
+  onSetPassword,
+}: {
+  merchant: Row;
+  onDelete: () => void;
+  onSetPassword: () => void;
+}) {
   const [open, setOpen] = useState(false);
   return (
     <div className="relative">
@@ -1011,6 +1048,15 @@ function MerchantMenu({ merchant, onDelete }: { merchant: Row; onDelete: () => v
             >
               <Plug className="w-4 h-4" /> ربط API
             </Link>
+            <button
+              onClick={() => {
+                setOpen(false);
+                onSetPassword();
+              }}
+              className="w-full text-start px-3 py-2 hover:bg-muted flex items-center gap-2"
+            >
+              <KeyRound className="w-4 h-4" /> تغيير كلمة المرور
+            </button>
             <button
               onClick={() => {
                 setOpen(false);

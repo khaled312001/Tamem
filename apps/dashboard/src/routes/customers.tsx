@@ -8,6 +8,7 @@ import {
   Filter,
   Loader2,
   MapPin,
+  KeyRound,
   Pencil,
   Phone,
   Plus,
@@ -27,6 +28,7 @@ import { toast } from 'sonner';
 
 import { StatusBadge } from '../components/ui/Badge.js';
 import { Button } from '../components/ui/Button.js';
+import { SetPasswordDialog, type PasswordTarget } from '../components/SetPasswordDialog.js';
 import { ConfirmDialog } from '../components/ui/ConfirmDialog.js';
 import { Dialog } from '../components/ui/Dialog.js';
 import { Input } from '../components/ui/Input.js';
@@ -210,6 +212,9 @@ export function CustomersPage() {
   // Confirmation state for the destructive/impactful actions.
   const [confirmDisable, setConfirmDisable] = useState<Row | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<Row | null>(null);
+  // The app tells customers who forget their password to ask the office, so the
+  // office needs a way to set one. See SetPasswordDialog.
+  const [passwordFor, setPasswordFor] = useState<PasswordTarget | null>(null);
   // What this deletion actually destroys. The dialog used to say only "لا يمكن
   // التراجع" — clearing a duplicate contact and wiping a customer with 77
   // orders were the same button.
@@ -673,6 +678,15 @@ export function CustomersPage() {
                             <Pencil className="w-4 h-4" />
                           </IconBtn>
                           <IconBtn
+                            title="تغيير كلمة المرور"
+                            onClick={() =>
+                              setPasswordFor({ id: c.id, name: c.name, phone: c.phone })
+                            }
+                            className="text-brand-dark"
+                          >
+                            <KeyRound className="w-4 h-4" />
+                          </IconBtn>
+                          <IconBtn
                             title="حذف"
                             onClick={() => setConfirmDelete(c)}
                             className="text-destructive"
@@ -705,6 +719,8 @@ export function CustomersPage() {
       )}
 
       {/* ── Confirmations ── */}
+      <SetPasswordDialog target={passwordFor} onClose={() => setPasswordFor(null)} />
+
       <ConfirmDialog
         open={!!confirmDisable}
         onOpenChange={(o) => !o && setConfirmDisable(null)}
