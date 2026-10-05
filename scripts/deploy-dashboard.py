@@ -48,6 +48,16 @@ DRY_RUN = "--dry-run" in sys.argv
 
 
 def read_password() -> str:
+    """The SSH password, from the environment or HANDOFF.md. Never echoed.
+
+    TAMEM_SSH_PASS comes first so this can run from GitHub Actions: HANDOFF.md's
+    copy is stale and SSH from the dev machine fails, so CI is the only route
+    to the host that still works.
+    """
+    if os.environ.get("TAMEM_SSH_PASS"):
+        return os.environ["TAMEM_SSH_PASS"]
+    if not os.path.exists(HANDOFF):
+        sys.exit("No SSH password: set TAMEM_SSH_PASS or add it under 'SSH / SFTP' in HANDOFF.md")
     txt = open(HANDOFF, encoding="utf-8").read()
     i = txt.find("SSH / SFTP")
     if i == -1:
