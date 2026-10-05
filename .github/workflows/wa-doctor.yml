@@ -48,14 +48,17 @@ jobs:
             # exited at this gate every time, because the supervisor inherited
             # the lock fd and held it. Probing the gate is the only direct
             # evidence that recovery can actually happen.
-            echo "### lock gates — HELD by a survivor means recovery is blocked"
+            # supervisor and watchdog SHOULD hold their own locks — that is what
+            # makes them single. The keepalive gate is the one that must be free:
+            # held, every per-minute cron run exits at it having done nothing.
+            echo "### lock gates"
             for l in keepalive supervisor watchdog; do
               f="$BASE/.$l.lock"
               [ -f "$f" ] || { echo "$l: (no lock file)"; continue; }
               if ( exec 8>"$f"; flock -n 8 ); then
-                echo "$l: free"
+                [ "$l" = keepalive ] && echo "keepalive: free (cron works)" || echo "$l: free — NOT running"
               else
-                echo "$l: HELD"
+                [ "$l" = keepalive ] && echo "keepalive: HELD — cron is doing nothing" || echo "$l: held (correct, it is running)"
               fi
             done
             echo "### the other cron job's target"

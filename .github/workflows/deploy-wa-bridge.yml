@@ -19,7 +19,12 @@ on:
     paths:
       - 'infra/whatsapp/**'
       - '.github/workflows/deploy-wa-bridge.yml'
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      restart_layer:
+        description: 'Force-restart supervisor + watchdog (needed after changing how they are launched)'
+        type: boolean
+        default: false
 
 concurrency:
   group: whatsapp-deploy
@@ -65,9 +70,13 @@ jobs:
           port: ${{ secrets.HOSTINGER_SSH_PORT }}
           username: ${{ secrets.HOSTINGER_SSH_USER }}
           password: ${{ secrets.HOSTINGER_SSH_PASS }}
+          envs: FORCE
           script: |
             BASE=/home/u748721963/whatsapp
-            if [ -f "$BASE/.supervisor.pid" ] && kill -0 "$(cat "$BASE/.supervisor.pid")" 2>/dev/null; then
+            # A running supervisor keeps whatever file descriptors it was
+            # launched with, so changing HOW it is launched (closing the lock fd)
+            # only takes effect once it is restarted. That is what FORCE is for.
+            if [ "$FORCE" != "true" ] && [ -f "$BASE/.supervisor.pid" ] && kill -0 "$(cat "$BASE/.supervisor.pid")" 2>/dev/null; then
               echo "pid file present and live — nothing to migrate"
               exit 0
             fi
@@ -94,6 +103,9 @@ jobs:
             up() { [ -f "$1" ] && kill -0 "$(cat "$1" 2>/dev/null)" 2>/dev/null; }
             up "$BASE/.supervisor.pid" && up "$BASE/.watchdog.pid" && {
               echo "both already up — nothing to start"; exit 0; }
+            # Clear a gate left held by something that is now gone, or keepalive
+            # exits here without doing anything.
+            rm -f "$BASE/.keepalive.lock"
             bash "$BASE/keepalive.sh" || true
             sleep 8
             # keepalive returns as soon as it has started the supervisor, and the
@@ -104,6 +116,12 @@ jobs:
               setsid /bin/bash "$BASE/watchdog.sh" >/dev/null 2>&1 </dev/null &
               sleep 5
             }
+            if ( exec 8>"$BASE/.keepalive.lock"; flock -n 8 ); then
+              echo "keepalive gate: free — the per-minute cron can do its job"
+            else
+              echo "::error::keepalive gate is HELD — the cron will keep exiting at it"
+              exit 1
+            fi
             for n in supervisor watchdog; do
               if up "$BASE/.$n.pid"; then
                 echo "$n: up (pid $(cat "$BASE/.$n.pid"))"
