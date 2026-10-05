@@ -20,23 +20,25 @@ export default defineConfig({
   build: {
     outDir: 'dist',
     sourcemap: true,
-    // The default 500kB warning fires on the main bundle; we explicitly split
-    // the heavy libraries below so the initial JS the admin downloads is a lot
-    // smaller and the rest streams in as needed.
+    // Charts (recharts) and maps (leaflet) are deliberately NOT listed below:
+    // they are reached only through React.lazy routes, so Rollup gives them
+    // async chunks that load on demand instead of being preloaded up front.
     chunkSizeWarningLimit: 700,
     rollupOptions: {
       output: {
         manualChunks: {
           // React core — loaded by everything, so keep it together.
           'react-vendor': ['react', 'react-dom', 'react-router-dom'],
-          // Charts only used on /overview + /reports
-          recharts: ['recharts'],
-          // Leaflet only used on /orders?view=map and /merchants
-          leaflet: ['leaflet'],
           // tanstack query — touched on every page but big enough to isolate
           query: ['@tanstack/react-query'],
           // axios + the api client
           'api-client': ['axios', '@tamem/api-client'],
+          // cn() is in the entry and clsx/tailwind-merge are also recharts
+          // dependencies. Without this chunk Rollup folded clsx into recharts,
+          // so the entry statically imported it and the browser modulepreloaded
+          // all 412 kB of charts on every page. Keep the tiny shared utilities
+          // in a chunk of their own and recharts stays off the first paint.
+          'ui-utils': ['clsx', 'tailwind-merge', 'class-variance-authority'],
         },
       },
     },
