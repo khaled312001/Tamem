@@ -143,19 +143,36 @@ def main() -> None:
     print(run("ln -sfn super_admin /home/u748721963/domains/deliverytamem.com/public_html/merchant && echo 'Created/updated symlink /merchant -> super_admin'"))
 
     time.sleep(2)
+    # Verify ON THE SERVER first. Hostinger's bot protection answers 403 to
+    # datacenter IPs, so the public URL check fails from a GitHub runner even
+    # when the deploy is perfect — it rolled back a good build on exactly that.
+    # Asking the host itself also tests more: that index.html is there AND that
+    # the hashed bundle it points at was actually uploaded. An index.html
+    # referencing a missing asset is a white page, and a plain 200 would miss it.
+    probe = run(
+        f"set -e; cd '{REMOTE_DIR}'; "
+        "test -s index.html || { echo 'MISSING index.html'; exit 1; }; "
+        r"a=$(grep -oE 'assets/[A-Za-z0-9_.-]+\.js' index.html | head -1); "
+        "test -n \"$a\" || { echo 'index.html references no bundle'; exit 1; }; "
+        "test -s \"$a\" || { echo \"missing bundle $a\"; exit 1; }; "
+        "echo \"server check ok: index.html -> $a\""
+    )
+    print(probe.strip())
+    ok = "server check ok" in probe
+
+    # The public URL is still worth a look, but only as information: a 403 here
+    # is the WAF talking to the runner, not a broken dashboard.
     try:
         with urllib.request.urlopen(URL, timeout=25) as r:
-            ok = r.status == 200
-            print(f"check: HTTP {r.status}")
+            print(f"public check: HTTP {r.status}")
     except Exception as exc:  # noqa: BLE001
-        ok = False
-        print("check raised:", exc)
+        print(f"public check (advisory, not a failure): {exc}")
 
     if not ok:
         run(f"rm -rf '{REMOTE_DIR}'")
         print(run(f"mv '{backup}' '{REMOTE_DIR}' && echo 'ROLLED BACK'"))
         cli.close()
-        sys.exit("Deploy rolled back — the dashboard did not answer after the swap.")
+        sys.exit("Deploy rolled back — the files on the server did not check out after the swap.")
 
     print(f"\nDeployed. Previous build kept at {backup}")
     cli.close()
