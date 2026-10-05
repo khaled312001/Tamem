@@ -1,5 +1,5 @@
-import { Box, LogOut, Menu, Store, X } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { Box, Loader2, LogOut, Menu, Store, X } from 'lucide-react';
+import { Suspense, useEffect, useState } from 'react';
 import { NavLink, Navigate, Outlet, useLocation } from 'react-router-dom';
 
 import { Logo } from '../components/Logo.js';
@@ -157,7 +157,15 @@ export function MerchantLayout() {
 
         {/* Page Container */}
         <main className="flex-1 p-4 md:p-6 lg:p-8 overflow-auto bg-muted/20">
-          <Outlet />
+          <Suspense
+            fallback={
+              <div className="flex items-center justify-center py-20">
+                <Loader2 className="w-6 h-6 animate-spin text-brand-red" />
+              </div>
+            }
+          >
+            <Outlet />
+          </Suspense>
         </main>
       </div>
     </div>

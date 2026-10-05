@@ -1,49 +1,128 @@
+import { lazy } from 'react';
 import { createBrowserRouter, Navigate, type RouteObject } from 'react-router-dom';
 
 import { useAuth } from './lib/auth.js';
 import { DashboardLayout } from './routes/_layout.js';
-import { AdminsPage } from './routes/admins.js';
-import { AlertsPage } from './routes/alerts.js';
-import { BroadcastPage } from './routes/broadcast.js';
-import { CustomersPage } from './routes/customers.js';
-import { DriversPage } from './routes/drivers.js';
-import { HomeSettingsPage } from './routes/home-settings.js';
 import { LoginPage } from './routes/login.js';
-import { MerchantHoursPage } from './routes/merchant-hours.js';
-import { MerchantProductsApiPage } from './routes/merchant-products-api.js';
-import { MerchantsPage } from './routes/merchants.js';
 import { NotFoundPage } from './routes/not-found.js';
-import { OrderDetailPage } from './routes/order-detail.js';
-import { OrdersPage } from './routes/orders.js';
-import { OverviewPage } from './routes/overview.js';
-import { IntercityRatesPage } from './routes/intercity-rates.js';
-import { PaymentGatewayPage } from './routes/payment-gateway.js';
-import { PaymentsPage } from './routes/payments.js';
-import { PricingPage } from './routes/pricing.js';
-import { CategoriesPage } from './routes/categories.js';
-import { ProductSectionsPage } from './routes/product-sections.js';
-import { MerchantRequestsPage } from './routes/merchant-requests.js';
-import { DealsPage } from './routes/deals.js';
-import { ImportHistoryPage } from './routes/import-history.js';
-import { ProductsPage } from './routes/products.js';
-import { ReportsPage } from './routes/reports.js';
-import { RevenueReportPage } from './routes/revenue-report.js';
-import { ReviewsPage } from './routes/reviews.js';
-import { ServiceEditPage } from './routes/service-edit.js';
-import { ServicesPage } from './routes/services.js';
-import { SiteSettingsPage } from './routes/site-settings.js';
-import { CouponsPage } from './routes/coupons.js';
-import { PromosPage } from './routes/promos.js';
-import { PartnerSettlementPage } from './routes/partner-settlement.js';
-import { GatePage } from './routes/gate.js';
-import { SettingsPage } from './routes/settings.js';
-import { SupervisorsPage } from './routes/supervisors.js';
-import { NotificationTemplatesPage } from './routes/notification-templates.js';
-import { WhatsAppPage } from './routes/whatsapp.js';
 
 import { MerchantLoginPage } from './routes/merchant-login.js';
 import { MerchantLayout } from './routes/_merchant-layout.js';
-import { MerchantPanelPage } from './routes/merchant-panel.js';
+
+// Every page used to be imported statically, which put all 44 of them — and
+// everything they pull in, recharts and leaflet included — into one 1,046 kB
+// bundle that had to download before the login screen could paint. Each page is
+// its own chunk now, fetched when it is first opened. <Suspense> lives around
+// the <Outlet/> in both layouts.
+const AdminsPage = lazy(() =>
+  import('./routes/admins.js').then((m) => ({ default: m.AdminsPage })),
+);
+const AlertsPage = lazy(() =>
+  import('./routes/alerts.js').then((m) => ({ default: m.AlertsPage })),
+);
+const BroadcastPage = lazy(() =>
+  import('./routes/broadcast.js').then((m) => ({ default: m.BroadcastPage })),
+);
+const CategoriesPage = lazy(() =>
+  import('./routes/categories.js').then((m) => ({ default: m.CategoriesPage })),
+);
+const CouponsPage = lazy(() =>
+  import('./routes/coupons.js').then((m) => ({ default: m.CouponsPage })),
+);
+const CustomersPage = lazy(() =>
+  import('./routes/customers.js').then((m) => ({ default: m.CustomersPage })),
+);
+const DealsPage = lazy(() => import('./routes/deals.js').then((m) => ({ default: m.DealsPage })));
+const DriversPage = lazy(() =>
+  import('./routes/drivers.js').then((m) => ({ default: m.DriversPage })),
+);
+const GatePage = lazy(() => import('./routes/gate.js').then((m) => ({ default: m.GatePage })));
+const HomeSettingsPage = lazy(() =>
+  import('./routes/home-settings.js').then((m) => ({ default: m.HomeSettingsPage })),
+);
+const ImportHistoryPage = lazy(() =>
+  import('./routes/import-history.js').then((m) => ({ default: m.ImportHistoryPage })),
+);
+const IntercityRatesPage = lazy(() =>
+  import('./routes/intercity-rates.js').then((m) => ({ default: m.IntercityRatesPage })),
+);
+const MerchantHoursPage = lazy(() =>
+  import('./routes/merchant-hours.js').then((m) => ({ default: m.MerchantHoursPage })),
+);
+const MerchantPanelPage = lazy(() =>
+  import('./routes/merchant-panel.js').then((m) => ({ default: m.MerchantPanelPage })),
+);
+const MerchantProductsApiPage = lazy(() =>
+  import('./routes/merchant-products-api.js').then((m) => ({ default: m.MerchantProductsApiPage })),
+);
+const MerchantRequestsPage = lazy(() =>
+  import('./routes/merchant-requests.js').then((m) => ({ default: m.MerchantRequestsPage })),
+);
+const MerchantsPage = lazy(() =>
+  import('./routes/merchants.js').then((m) => ({ default: m.MerchantsPage })),
+);
+const NotificationTemplatesPage = lazy(() =>
+  import('./routes/notification-templates.js').then((m) => ({
+    default: m.NotificationTemplatesPage,
+  })),
+);
+const OrderDetailPage = lazy(() =>
+  import('./routes/order-detail.js').then((m) => ({ default: m.OrderDetailPage })),
+);
+const OrdersPage = lazy(() =>
+  import('./routes/orders.js').then((m) => ({ default: m.OrdersPage })),
+);
+const OverviewPage = lazy(() =>
+  import('./routes/overview.js').then((m) => ({ default: m.OverviewPage })),
+);
+const PartnerSettlementPage = lazy(() =>
+  import('./routes/partner-settlement.js').then((m) => ({ default: m.PartnerSettlementPage })),
+);
+const PaymentGatewayPage = lazy(() =>
+  import('./routes/payment-gateway.js').then((m) => ({ default: m.PaymentGatewayPage })),
+);
+const PaymentsPage = lazy(() =>
+  import('./routes/payments.js').then((m) => ({ default: m.PaymentsPage })),
+);
+const PricingPage = lazy(() =>
+  import('./routes/pricing.js').then((m) => ({ default: m.PricingPage })),
+);
+const ProductSectionsPage = lazy(() =>
+  import('./routes/product-sections.js').then((m) => ({ default: m.ProductSectionsPage })),
+);
+const ProductsPage = lazy(() =>
+  import('./routes/products.js').then((m) => ({ default: m.ProductsPage })),
+);
+const PromosPage = lazy(() =>
+  import('./routes/promos.js').then((m) => ({ default: m.PromosPage })),
+);
+const ReportsPage = lazy(() =>
+  import('./routes/reports.js').then((m) => ({ default: m.ReportsPage })),
+);
+const RevenueReportPage = lazy(() =>
+  import('./routes/revenue-report.js').then((m) => ({ default: m.RevenueReportPage })),
+);
+const ReviewsPage = lazy(() =>
+  import('./routes/reviews.js').then((m) => ({ default: m.ReviewsPage })),
+);
+const ServiceEditPage = lazy(() =>
+  import('./routes/service-edit.js').then((m) => ({ default: m.ServiceEditPage })),
+);
+const ServicesPage = lazy(() =>
+  import('./routes/services.js').then((m) => ({ default: m.ServicesPage })),
+);
+const SettingsPage = lazy(() =>
+  import('./routes/settings.js').then((m) => ({ default: m.SettingsPage })),
+);
+const SiteSettingsPage = lazy(() =>
+  import('./routes/site-settings.js').then((m) => ({ default: m.SiteSettingsPage })),
+);
+const SupervisorsPage = lazy(() =>
+  import('./routes/supervisors.js').then((m) => ({ default: m.SupervisorsPage })),
+);
+const WhatsAppPage = lazy(() =>
+  import('./routes/whatsapp.js').then((m) => ({ default: m.WhatsAppPage })),
+);
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
   const user = useAuth((s) => s.user);

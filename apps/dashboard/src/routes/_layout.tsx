@@ -1,24 +1,25 @@
 import { useQuery } from '@tanstack/react-query';
 import {
-  Bell,
   AlertTriangle,
-  ClipboardList,
   BarChart3,
+  Bell,
   Box,
-  LayoutList,
   ChevronLeft,
   ChevronsLeft,
   ChevronsRight,
+  ClipboardList,
   DollarSign,
-  Route,
   Globe,
   History,
   Home,
+  LayoutList,
+  Loader2,
   Megaphone,
   Menu,
   MessageCircle,
   Package,
   Percent,
+  Route,
   Settings,
   ShieldCheck,
   Smartphone,
@@ -34,7 +35,7 @@ import {
   VolumeX,
   X,
 } from 'lucide-react';
-import { useEffect, useMemo, useState } from 'react';
+import { Suspense, useEffect, useMemo, useState } from 'react';
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 
 import { Logo } from '../components/Logo.js';
@@ -413,7 +414,15 @@ export function DashboardLayout() {
 
           <div className="flex-1 overflow-y-auto flex flex-col">
             <div className="flex-1 p-3 md:p-6 animate-in fade-in slide-in-from-bottom-1 duration-300">
-              <Outlet />
+              <Suspense
+                fallback={
+                  <div className="flex items-center justify-center py-20">
+                    <Loader2 className="w-6 h-6 animate-spin text-brand-red" />
+                  </div>
+                }
+              >
+                <Outlet />
+              </Suspense>
             </div>
 
             {/* Main-content footer — version + Barmagly credit (compact) */}

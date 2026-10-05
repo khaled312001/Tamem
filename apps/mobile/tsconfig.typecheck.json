@@ -1,0 +1,23 @@
+{
+  // Typechecking only. Metro reads tsconfig.json's `paths` and aliases modules
+  // at RUNTIME with them, so a mapping that is right for tsc can be fatal for
+  // the bundler: pointing "react" at @types/react made Metro resolve the app's
+  // react import to a types-only package, and `bundleRelease` failed with
+  // "package specifies a main module field that could not be resolved". The
+  // mapping lives here, where only tsc sees it.
+  //
+  // Why it is needed at all: node-linker=hoisted copies packages instead of
+  // symlinking them, so @types/react@19.1.17 exists twice on disk — once under
+  // apps/mobile and once under node_modules/react-native (the root copy is @18,
+  // for the dashboard). Two physical copies of the same declarations are two
+  // distinct types to tsc, which reported every <View> as "not a valid JSX
+  // element type": 2157 errors that buried every real one.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "paths": {
+      "@/*": ["src/*"],
+      "react": ["./node_modules/@types/react"],
+      "react/*": ["./node_modules/@types/react/*"]
+    }
+  }
+}

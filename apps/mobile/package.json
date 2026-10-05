@@ -16,7 +16,7 @@
     "build:android-prod": "eas build --platform android --profile production",
     "release:android": "cd android && gradlew.bat assembleRelease",
     "lint": "eslint src --max-warnings=0",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit -p tsconfig.typecheck.json",
     "clean": "rimraf .expo .turbo node_modules/.cache",
     "clean:android": "cd android && gradlew.bat clean",
     "clean:all": "npm run clean && npm run clean:android"
