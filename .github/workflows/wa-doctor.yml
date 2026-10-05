@@ -44,6 +44,23 @@ jobs:
             done
             pgrep -af 'watchdog.sh|run-forever.sh|wa-bridge.js' | grep -v 'bash -c' || echo "(no processes)"
 
+            # The per-minute hPanel cron has always run keepalive.sh; it just
+            # exited at this gate every time, because the supervisor inherited
+            # the lock fd and held it. Probing the gate is the only direct
+            # evidence that recovery can actually happen.
+            echo "### lock gates — HELD by a survivor means recovery is blocked"
+            for l in keepalive supervisor watchdog; do
+              f="$BASE/.$l.lock"
+              [ -f "$f" ] || { echo "$l: (no lock file)"; continue; }
+              if ( exec 8>"$f"; flock -n 8 ); then
+                echo "$l: free"
+              else
+                echo "$l: HELD"
+              fi
+            done
+            echo "### the other cron job's target"
+            ls -la "$BASE/start.sh" 2>/dev/null || echo "start.sh: not present"
+
             echo "### what is actually in each IPC dir, by extension"
             for d in queue dead control dedupe; do
               [ -d "$WA/$d" ] || { echo "$d: (no such dir)"; continue; }
