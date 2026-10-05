@@ -9,6 +9,7 @@
  * Sections: header · search · active order · offers · services · stores ·
  * categories · quick actions · benefits · quick-order lamp.
  */
+import { AnnouncementBanner } from '../../components/AnnouncementBanner';
 import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { Heart, Package, ShoppingBag, Ticket, Truck, Wallet } from 'lucide-react-native';
@@ -462,6 +463,9 @@ export function HomeV2Screen() {
             setVoiceOpen(true);
           }}
         />
+
+        {/* إعلان الإدارة — فوق كل حاجة، وبيختفي لوحده وهو مقفول. */}
+        <AnnouncementBanner />
 
         {isError && (
           <View style={[styles.section, styles.errorBox]}>

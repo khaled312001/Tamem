@@ -9,6 +9,7 @@ import {
   ChevronsRight,
   ClipboardList,
   DollarSign,
+  FileText,
   Globe,
   History,
   Home,
@@ -136,6 +137,7 @@ const NAV_SECTIONS: NavSection[] = [
     title: 'المحتوى',
     items: [
       { to: '/home-settings', icon: Smartphone, label: 'صفحة التطبيق', perm: 'home-settings' },
+      { to: '/app-content', icon: FileText, label: 'محتوى التطبيق', perm: 'home-settings' },
       { to: '/site-settings', icon: Globe, label: 'صفحة الموقع', perm: 'site-settings' },
     ],
   },

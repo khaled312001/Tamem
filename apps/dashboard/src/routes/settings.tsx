@@ -38,6 +38,10 @@ const ADVANCED_LABELS: Record<
     hint: 'بيتكتب تلقائياً — متعدلوش',
     internal: true,
   },
+  app_content: {
+    label: 'محتوى التطبيق',
+    managedAt: { to: '/app-content', name: 'محتوى التطبيق' },
+  },
   default_commission_pct: {
     label: 'نسبة العمولة الافتراضية',
     hint: 'بتتطبق على أي تاجر ملهوش نسبة خاصة (%)',

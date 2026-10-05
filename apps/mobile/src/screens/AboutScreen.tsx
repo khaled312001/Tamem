@@ -34,40 +34,17 @@ import {
   shadows,
   spacing,
 } from '../theme/tokens';
+import { useAppContent } from '../lib/appContent';
 import { useContacts, waLink } from '../lib/contacts';
 
 const TAMEM_PHONE = '+201070750167';
-const TAMEM_EMAIL = 'info@deliverytamem.com';
-const TAMEM_SITE = 'https://deliverytamem.com';
 
-interface Pillar {
-  Icon: LucideIcon;
-  title: string;
-  body: string;
-}
-
-const PILLARS: Pillar[] = [
-  {
-    Icon: Truck,
-    title: 'سرعة موثوقة',
-    body: 'توصيل داخل قفط خلال 30 دقيقة، وشحن بين المحافظات في يومه. نختار أقرب سائق متاح لطلبك تلقائياً.',
-  },
-  {
-    Icon: Shield,
-    title: 'أمان وضمان',
-    body: 'كل طلب مؤمَّن بالكامل. السائقون موثّقون بهويات وطنية، وفي حالة أي مشكلة الإدارة جاهزة على واتساب.',
-  },
-  {
-    Icon: Award,
-    title: 'مكافآت الولاء',
-    body: 'احصل على 5% من قيمة كل طلب في محفظتك كنقاط ولاء، تُستخدم في طلباتك القادمة.',
-  },
-  {
-    Icon: Sparkles,
-    title: 'تجربة عربية أصيلة',
-    body: 'صُمِّم التطبيق من الصفر للمستخدم العربي — لا ترجمة، لا اقتباس. واجهة سلسة وردود إدارة بلهجتك.',
-  },
-];
+/**
+ * الأيقونات مربوطة بالترتيب، مش بالنص — الإدارة بتعدّل العناوين والشرح من
+ * اللوحة والأيقونة بتفضل حسب مكان المحور. محور زيادة بياخد أيقونة من اللستة
+ * بالدور.
+ */
+const PILLAR_ICONS: LucideIcon[] = [Truck, Shield, Award, Sparkles];
 
 async function openURL(url: string): Promise<void> {
   try {
@@ -85,17 +62,19 @@ async function openURL(url: string): Promise<void> {
 export function AboutScreen() {
   // الأرقام من السيرفر (config/contact احتياطي أوفلاين)، فتغييرها مايحتاجش بناء.
   const { primaryPhone, supportWhatsapp } = useContacts();
+  // والنصوص كذلك — المحاور والبريد ورابط الموقع من GET /app-content.
+  const { pillars, aboutTaglineAr, supportEmail, websiteUrl } = useAppContent();
   const onWhatsApp = () => {
     void openURL(waLink(supportWhatsapp, 'السلام عليكم، عاوز أسأل عن تَميم:'));
   };
   const onCall = () => void openURL(`tel:${primaryPhone || TAMEM_PHONE}`);
   const onEmail = () =>
-    void openURL(`mailto:${TAMEM_EMAIL}?subject=${encodeURIComponent('استفسار من تطبيق تميم')}`);
-  const onSite = () => void Linking.openURL(TAMEM_SITE);
+    void openURL(`mailto:${supportEmail}?subject=${encodeURIComponent('استفسار من تطبيق تميم')}`);
+  const onSite = () => void Linking.openURL(websiteUrl);
 
   return (
     <SafeAreaView edges={['top']} style={styles.container}>
-      <ScreenHeader title="عن تَميم" subtitle="منصة التوصيل والشحن في قفط" />
+      <ScreenHeader title="عن تَميم" subtitle={aboutTaglineAr} />
 
       <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
         {/* Hero */}
@@ -124,18 +103,21 @@ export function AboutScreen() {
           </Text>
         </View>
 
-        {/* Pillars */}
-        <Text style={styles.sectionTitle}>ليه تَميم؟</Text>
+        {/* Pillars — text from the dashboard, icon by position. */}
+        {pillars.length > 0 && <Text style={styles.sectionTitle}>ليه تَميم؟</Text>}
         <View style={styles.pillarsGrid}>
-          {PILLARS.map((p) => (
-            <View key={p.title} style={[styles.pillarCard, shadows.sm]}>
-              <View style={styles.pillarIconWrap}>
-                <p.Icon size={20} color={colors.brand.red} />
+          {pillars.map((pillar, i) => {
+            const Icon = PILLAR_ICONS[i % PILLAR_ICONS.length]!;
+            return (
+              <View key={pillar.titleAr} style={[styles.pillarCard, shadows.sm]}>
+                <View style={styles.pillarIconWrap}>
+                  <Icon size={20} color={colors.brand.red} />
+                </View>
+                <Text style={styles.pillarTitle}>{pillar.titleAr}</Text>
+                <Text style={styles.pillarBody}>{pillar.bodyAr}</Text>
               </View>
-              <Text style={styles.pillarTitle}>{p.title}</Text>
-              <Text style={styles.pillarBody}>{p.body}</Text>
-            </View>
-          ))}
+            );
+          })}
         </View>
 
         {/* Stats */}
@@ -201,28 +183,28 @@ export function AboutScreen() {
           </View>
           <View style={{ flex: 1 }}>
             <Text style={styles.infoTitle}>الموقع الإلكتروني</Text>
-            <Text style={styles.infoLink}>{TAMEM_SITE.replace('https://', '')}</Text>
+            <Text style={styles.infoLink}>{websiteUrl.replace(/^https?:\/\//, '')}</Text>
           </View>
         </Pressable>
 
         {/* Legal documents — required for store policies and merchant payouts. */}
         <Text style={styles.sectionTitle}>المستندات القانونية</Text>
         <Pressable
-          onPress={() => void Linking.openURL(TAMEM_SITE + '/terms')}
+          onPress={() => void Linking.openURL(websiteUrl + '/terms')}
           style={({ pressed }) => [styles.legalRow, shadows.sm, pressed && { opacity: 0.85 }]}
         >
           <Text style={styles.legalText}>الشروط والأحكام</Text>
           <Text style={styles.legalLink}>عرض</Text>
         </Pressable>
         <Pressable
-          onPress={() => void Linking.openURL(TAMEM_SITE + '/privacy')}
+          onPress={() => void Linking.openURL(websiteUrl + '/privacy')}
           style={({ pressed }) => [styles.legalRow, shadows.sm, pressed && { opacity: 0.85 }]}
         >
           <Text style={styles.legalText}>سياسة الخصوصية</Text>
           <Text style={styles.legalLink}>عرض</Text>
         </Pressable>
         <Pressable
-          onPress={() => void Linking.openURL(TAMEM_SITE + '/refund')}
+          onPress={() => void Linking.openURL(websiteUrl + '/refund')}
           style={({ pressed }) => [styles.legalRow, shadows.sm, pressed && { opacity: 0.85 }]}
         >
           <Text style={styles.legalText}>سياسة الاسترجاع</Text>

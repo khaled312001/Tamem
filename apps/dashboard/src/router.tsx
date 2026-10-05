@@ -37,6 +37,9 @@ const DriversPage = lazy(() =>
   import('./routes/drivers.js').then((m) => ({ default: m.DriversPage })),
 );
 const GatePage = lazy(() => import('./routes/gate.js').then((m) => ({ default: m.GatePage })));
+const AppContentPage = lazy(() =>
+  import('./routes/app-content.js').then((m) => ({ default: m.AppContentPage })),
+);
 const HomeSettingsPage = lazy(() =>
   import('./routes/home-settings.js').then((m) => ({ default: m.HomeSettingsPage })),
 );
@@ -221,6 +224,7 @@ const routes: RouteObject[] = [
           { path: 'promos', element: <PromosPage /> },
           { path: 'settings', element: <SettingsPage /> },
           { path: 'home-settings', element: <HomeSettingsPage /> },
+          { path: 'app-content', element: <AppContentPage /> },
           { path: 'site-settings', element: <SiteSettingsPage /> },
           { path: '*', element: <NotFoundPage /> },
         ],

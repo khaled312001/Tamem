@@ -13,10 +13,9 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { ScreenHeader } from '../components/ScreenHeader';
 import { TAMEM_ADDRESS_AR } from '../config/contact';
+import { useAppContent } from '../lib/appContent';
 import { useContacts } from '../lib/contacts';
 import { colors, fontFamilies, fontSizes, radii, spacing } from '../theme/tokens';
-
-const SUPPORT_EMAIL = 'info@deliverytamem.com';
 
 async function openURL(url: string) {
   try {
@@ -31,30 +30,13 @@ async function openURL(url: string) {
   }
 }
 
-const FAQS = [
-  {
-    q: 'كم يستغرق الطلب للوصول؟',
-    a: 'الطلبات الداخل قفط بتوصل خلال 30-45 دقيقة. الشحن بين المناطق ياخد من 2-6 ساعات حسب المسافة.',
-  },
-  {
-    q: 'إيه طرق الدفع المتاحة؟',
-    a: 'كاش عند الاستلام، فودافون كاش، إنستا باي. الدفع بالبطاقة قريباً.',
-  },
-  {
-    q: 'هل أقدر ألغي الطلب؟',
-    a: 'تقدر تلغي الطلب طول ما لسه ما اتأكدش من السائق. بعد كده تواصل مع الإدارة.',
-  },
-  {
-    q: 'إزاي أتابع طلبي؟',
-    a: 'افتح "طلباتي" واضغط على الطلب — هتشوف الحالة الحالية وكل التحديثات.',
-  },
-];
-
 export function SupportScreen() {
   // خطوط التواصل من السيرفر، عشان تتغير من الداشبورد من غير نسخة جديدة.
   const { lines } = useContacts();
+  // والنصوص كذلك — الأسئلة الشائعة ومواعيد الدعم من GET /app-content.
+  const { faqs, supportHoursAr, workingHoursAr, supportEmail } = useAppContent();
   const onEmail = () =>
-    openURL(`mailto:${SUPPORT_EMAIL}?subject=${encodeURIComponent('استفسار من تطبيق تميم')}`);
+    openURL(`mailto:${supportEmail}?subject=${encodeURIComponent('استفسار من تطبيق تميم')}`);
 
   return (
     <SafeAreaView edges={['top']} style={styles.container}>
@@ -62,7 +44,7 @@ export function SupportScreen() {
 
       <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
         <Text style={styles.heroTitle}>إزاي نقدر نساعدك؟</Text>
-        <Text style={styles.heroSub}>فريق تميم متاح يومياً من 10 ص حتى 1 بعد منتصف الليل</Text>
+        <Text style={styles.heroSub}>{supportHoursAr}</Text>
 
         {/* Per-service direct lines — each card opens WhatsApp on tap with a
             pre-filled message; the inline phone number is a tel: link for
@@ -105,7 +87,7 @@ export function SupportScreen() {
             <Text style={styles.hoursTitle}>{TAMEM_ADDRESS_AR}</Text>
             <Pressable onPress={onEmail}>
               <Text style={styles.addressEmail}>
-                <Mail size={12} color={colors.text.muted} /> {SUPPORT_EMAIL}
+                <Mail size={12} color={colors.text.muted} /> {supportEmail}
               </Text>
             </Pressable>
           </View>
@@ -116,13 +98,13 @@ export function SupportScreen() {
           <Clock size={18} color={colors.brand.red} />
           <View style={{ flex: 1 }}>
             <Text style={styles.hoursTitle}>ساعات العمل</Text>
-            <Text style={styles.hoursBody}>كل يوم من 10 صباحاً إلى 1 بعد منتصف الليل</Text>
+            <Text style={styles.hoursBody}>{workingHoursAr}</Text>
           </View>
         </View>
 
-        {/* FAQs */}
-        <Text style={styles.sectionTitle}>الأسئلة الشائعة</Text>
-        {FAQS.map(({ q, a }) => (
+        {/* FAQs — the admin can empty the list, so the heading goes with it. */}
+        {faqs.length > 0 && <Text style={styles.sectionTitle}>الأسئلة الشائعة</Text>}
+        {faqs.map(({ q, a }) => (
           <View key={q} style={styles.faqCard}>
             <View style={styles.faqHead}>
               <HelpCircle size={16} color={colors.brand.red} />
@@ -132,7 +114,7 @@ export function SupportScreen() {
           </View>
         ))}
 
-        <Text style={styles.footnote}>{SUPPORT_EMAIL}</Text>
+        <Text style={styles.footnote}>{supportEmail}</Text>
 
         {/* Developer credit — شركة برمجلي */}
         <Pressable

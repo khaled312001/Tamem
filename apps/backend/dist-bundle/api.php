@@ -11513,6 +11513,155 @@ if ($method === 'PUT' && $path === '/admin/settings/contacts') {
     jsonOk(['lines' => $clean]);
 }
 
+/**
+ * Copy the apps show but the admin must be able to change without a store
+ * release: support hours, the FAQ list, the About pillars and an ops
+ * announcement banner. Stored as one JSON row in `Setting` under `app_content`.
+ *
+ * The defaults here are authoritative — a fresh database still serves real
+ * Arabic copy, and the mobile fallbacks in src/config/appContent.ts mirror
+ * them for the offline case.
+ */
+function appContentDefaults(): array {
+    return [
+        'supportHoursAr' => 'فريق تميم متاح يومياً من 10 ص حتى 1 بعد منتصف الليل',
+        'workingHoursAr' => 'كل يوم من 10 صباحاً إلى 1 بعد منتصف الليل',
+        'supportEmail' => 'info@deliverytamem.com',
+        'websiteUrl' => 'https://deliverytamem.com',
+        'aboutTaglineAr' => 'منصة التوصيل والشحن في قفط',
+        'faqs' => [
+            ['q' => 'كم يستغرق الطلب للوصول؟', 'a' => 'الطلبات الداخل قفط بتوصل خلال 30-45 دقيقة. الشحن بين المناطق ياخد من 2-6 ساعات حسب المسافة.'],
+            ['q' => 'إيه طرق الدفع المتاحة؟', 'a' => 'كاش عند الاستلام، فودافون كاش، إنستا باي. الدفع بالبطاقة قريباً.'],
+            ['q' => 'هل أقدر ألغي الطلب؟', 'a' => 'تقدر تلغي الطلب طول ما لسه ما اتأكدش من السائق. بعد كده تواصل مع الإدارة.'],
+            ['q' => 'إزاي أتابع طلبي؟', 'a' => 'افتح «طلباتي» واضغط على الطلب — هتشوف الحالة الحالية وكل التحديثات.'],
+        ],
+        'pillars' => [
+            ['titleAr' => 'سرعة موثوقة', 'bodyAr' => 'توصيل داخل قفط خلال 30 دقيقة، وشحن بين المحافظات في يومه. نختار أقرب سائق متاح لطلبك تلقائياً.'],
+            ['titleAr' => 'أمان وضمان', 'bodyAr' => 'كل طلب مؤمَّن بالكامل. السائقون موثّقون بهويات وطنية، وفي حالة أي مشكلة الإدارة جاهزة على واتساب.'],
+            ['titleAr' => 'مكافآت الولاء', 'bodyAr' => 'احصل على 5% من قيمة كل طلب في محفظتك كنقاط ولاء، تُستخدم في طلباتك القادمة.'],
+            ['titleAr' => 'تجربة عربية أصيلة', 'bodyAr' => 'صُمِّم التطبيق من الصفر للمستخدم العربي — لا ترجمة، لا اقتباس. واجهة سلسة وردود إدارة بلهجتك.'],
+        ],
+        'announcement' => ['enabled' => false, 'titleAr' => '', 'bodyAr' => '', 'variant' => 'info'],
+    ];
+}
+
+/** Merge the stored row over the defaults, one level deep, dropping junk. */
+function appContentMerged(): array {
+    $out = appContentDefaults();
+    try {
+        $st = db()->prepare('SELECT `value` FROM `Setting` WHERE `key` = ? LIMIT 1');
+        $st->execute(['app_content']);
+        $raw = $st->fetchColumn();
+    } catch (Throwable $e) {
+        return $out;
+    }
+    $saved = is_string($raw) ? json_decode($raw, true) : null;
+    if (!is_array($saved)) return $out;
+    foreach (['supportHoursAr', 'workingHoursAr', 'supportEmail', 'websiteUrl', 'aboutTaglineAr'] as $k) {
+        if (isset($saved[$k]) && is_string($saved[$k]) && trim($saved[$k]) !== '') $out[$k] = trim($saved[$k]);
+    }
+    foreach (['faqs' => ['q', 'a'], 'pillars' => ['titleAr', 'bodyAr']] as $k => $fields) {
+        if (!isset($saved[$k]) || !is_array($saved[$k])) continue;
+        $rows = [];
+        foreach ($saved[$k] as $r) {
+            if (!is_array($r)) continue;
+            $one = [];
+            foreach ($fields as $f) $one[$f] = trim((string) ($r[$f] ?? ''));
+            if ($one[$fields[0]] === '') continue;   // no question/title = no row
+            $rows[] = $one;
+        }
+        // An admin who deletes every row means it: an empty list is a valid
+        // answer and both screens already collapse the section.
+        $out[$k] = $rows;
+    }
+    if (isset($saved['announcement']) && is_array($saved['announcement'])) {
+        $a = $saved['announcement'];
+        $out['announcement'] = [
+            'enabled' => !empty($a['enabled']),
+            'titleAr' => trim((string) ($a['titleAr'] ?? '')),
+            'bodyAr' => trim((string) ($a['bodyAr'] ?? '')),
+            'variant' => in_array(($a['variant'] ?? ''), ['info', 'warn'], true) ? $a['variant'] : 'info',
+        ];
+        // An enabled banner with no title would render an empty strip.
+        if ($out['announcement']['titleAr'] === '') $out['announcement']['enabled'] = false;
+    }
+    return $out;
+}
+
+if ($method === 'GET' && $path === '/app-content') {
+    // CACHED for the same reason /site-config is: every app launch asks for
+    // this, and uncached that is one MySQL connection per launch against the
+    // 500/hour the shared plan allows. The PUT below drops the file so a save
+    // shows up immediately.
+    $ccFile = sys_get_temp_dir() . '/tamem_app_content.json';
+    if (is_file($ccFile) && (time() - (int) @filemtime($ccFile)) < 300) {
+        $cached = @file_get_contents($ccFile);
+        if ($cached !== false && $cached !== '') {
+            header('Content-Type: application/json; charset=utf-8');
+            header('X-Cache: HIT');
+            http_response_code(200);
+            echo $cached;
+            exit;
+        }
+    }
+    $payload = json_encode(['data' => appContentMerged()], JSON_UNESCAPED_UNICODE);
+    @file_put_contents($ccFile, $payload);
+    header('Content-Type: application/json; charset=utf-8');
+    header('X-Cache: MISS');
+    http_response_code(200);
+    echo $payload;
+    exit;
+}
+
+if ($method === 'GET' && $path === '/admin/app-content') {
+    authUser();
+    jsonOk(appContentMerged());
+}
+
+if ($method === 'PUT' && $path === '/admin/app-content') {
+    $u = authUser();
+    if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
+    $b = readJsonBody();
+    $clean = [];
+    foreach (['supportHoursAr', 'workingHoursAr', 'supportEmail', 'websiteUrl', 'aboutTaglineAr'] as $k) {
+        if (array_key_exists($k, $b)) $clean[$k] = trim((string) $b[$k]);
+    }
+    if (!empty($clean['supportEmail']) && !filter_var($clean['supportEmail'], FILTER_VALIDATE_EMAIL)) {
+        jsonErr('البريد الإلكتروني غير صحيح', 422, 'BAD_EMAIL');
+    }
+    if (!empty($clean['websiteUrl']) && !preg_match('#^https?://#', $clean['websiteUrl'])) {
+        jsonErr('رابط الموقع لازم يبدأ بـ http:// أو https://', 422, 'BAD_URL');
+    }
+    foreach (['faqs' => ['q', 'a'], 'pillars' => ['titleAr', 'bodyAr']] as $k => $fields) {
+        if (!array_key_exists($k, $b)) continue;
+        $rows = [];
+        foreach ((array) $b[$k] as $r) {
+            if (!is_array($r)) continue;
+            $one = [];
+            foreach ($fields as $f) $one[$f] = trim((string) ($r[$f] ?? ''));
+            if ($one[$fields[0]] === '') continue;
+            $rows[] = $one;
+        }
+        $clean[$k] = $rows;
+    }
+    if (isset($b['announcement']) && is_array($b['announcement'])) {
+        $a = $b['announcement'];
+        $clean['announcement'] = [
+            'enabled' => !empty($a['enabled']),
+            'titleAr' => trim((string) ($a['titleAr'] ?? '')),
+            'bodyAr' => trim((string) ($a['bodyAr'] ?? '')),
+            'variant' => in_array(($a['variant'] ?? ''), ['info', 'warn'], true) ? $a['variant'] : 'info',
+        ];
+        if ($clean['announcement']['enabled'] && $clean['announcement']['titleAr'] === '') {
+            jsonErr('اكتب عنوان الإعلان قبل تشغيله', 422, 'EMPTY_ANNOUNCEMENT');
+        }
+    }
+    db()->prepare('INSERT INTO `Setting` (`key`,`value`,`description`,`updatedAt`,`updatedById`) VALUES (?,?,?,NOW(3),?) ON DUPLICATE KEY UPDATE `value`=VALUES(`value`), `updatedAt`=VALUES(`updatedAt`), `updatedById`=VALUES(`updatedById`)')
+        ->execute(['app_content', json_encode($clean, JSON_UNESCAPED_UNICODE), 'محتوى التطبيق (الأسئلة الشائعة، الدعم، الإعلان)', $u['sub'] ?? null]);
+    @unlink(sys_get_temp_dir() . '/tamem_app_content.json');
+    jsonOk(appContentMerged());
+}
+
 if ($method === 'GET' && $path === '/home-config') {
     $rows = db()->query('SELECT * FROM `HomeConfig` ORDER BY id ASC LIMIT 1')->fetchAll();
     $cfg = $rows[0] ?? null;
