@@ -1,0 +1,105 @@
+name: Deploy WhatsApp bridge
+
+# Ships infra/whatsapp/ to the production host and restarts the bridge.
+#
+# Why a workflow and not just running scripts/deploy-wa-bridge.py locally: the
+# SSH password lives here as a repository secret, and the dev machine's copy in
+# HANDOFF.md is stale. Actions already holds working credentials (the keepalive
+# job uses them every few minutes), so this is the one reliable route to the box.
+#
+# The heavy lifting stays in scripts/deploy-wa-bridge.py, which uploads to a
+# .new file, runs `node --check` with the SERVER's node, backs up the running
+# bridge, swaps, waits for status.json to report "connected", and rolls back if
+# it doesn't. A syntax error therefore cannot leave the supervisor respawning a
+# dead bridge every 3 seconds.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'infra/whatsapp/**'
+      - '.github/workflows/deploy-wa-bridge.yml'
+  workflow_dispatch: {}
+
+concurrency:
+  group: whatsapp-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+
+      # The supervisor and the keepalive script are plain bash and are not
+      # touched by the python deploy, so copy them first — the deploy's own
+      # recovery path calls keepalive.sh and should be running the current one.
+      - name: Upload supervisor + keepalive scripts
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.HOSTINGER_SSH_HOST }}
+          port: ${{ secrets.HOSTINGER_SSH_PORT }}
+          username: ${{ secrets.HOSTINGER_SSH_USER }}
+          password: ${{ secrets.HOSTINGER_SSH_PASS }}
+          source: 'infra/whatsapp/keepalive.sh,infra/whatsapp/run-forever.sh'
+          target: /home/u748721963/whatsapp
+          strip_components: 2
+          overwrite: true
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - run: python -m pip install --quiet paramiko
+
+      - name: Deploy bridge (checked, backed up, auto-rollback)
+        env:
+          TAMEM_SSH_PASS: ${{ secrets.HOSTINGER_SSH_PASS }}
+        run: python scripts/deploy-wa-bridge.py
+
+      # Recovery must not depend on GitHub's scheduler. A "*/5" schedule here is
+      # best-effort and routinely slips 10-30 minutes under load, and during that
+      # hole a reaped SUPERVISOR means nothing sends at all. A server-side cron
+      # closes it to one minute. keepalive.sh is flock-guarded and idempotent, so
+      # running it every minute is safe and overlapping fires are no-ops.
+      - name: Install per-minute server cron for keepalive
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.HOSTINGER_SSH_HOST }}
+          port: ${{ secrets.HOSTINGER_SSH_PORT }}
+          username: ${{ secrets.HOSTINGER_SSH_USER }}
+          password: ${{ secrets.HOSTINGER_SSH_PASS }}
+          script: |
+            chmod +x /home/u748721963/whatsapp/keepalive.sh /home/u748721963/whatsapp/run-forever.sh
+            LINE='* * * * * /bin/bash /home/u748721963/whatsapp/keepalive.sh >/dev/null 2>&1'
+            if ! command -v crontab >/dev/null 2>&1; then
+              echo "NO crontab CLI on this host — add the line below in hPanel > Advanced > Cron Jobs:"
+              echo "$LINE"
+            else
+              crontab -l 2>/dev/null > /tmp/ct.now || true
+              if grep -Fq 'whatsapp/keepalive.sh' /tmp/ct.now; then
+                echo "cron entry already present:"
+                grep -F 'whatsapp/keepalive.sh' /tmp/ct.now
+              else
+                cp /tmp/ct.now /tmp/ct.next
+                echo "$LINE" >> /tmp/ct.next
+                crontab /tmp/ct.next && echo "cron entry installed"
+              fi
+              echo "--- crontab now ---"
+              crontab -l 2>/dev/null || echo "(crontab -l failed)"
+            fi
+
+      - name: Report bridge state
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.HOSTINGER_SSH_HOST }}
+          port: ${{ secrets.HOSTINGER_SSH_PORT }}
+          username: ${{ secrets.HOSTINGER_SSH_USER }}
+          password: ${{ secrets.HOSTINGER_SSH_PASS }}
+          script: |
+            WA=/home/u748721963/domains/deliverytamem.com/public_html/backendtamem/uploads/.wa
+            echo "--- status.json ---"; cat "$WA/status.json" 2>/dev/null | head -c 600; echo
+            echo "--- queue: $(ls -1 "$WA/queue" 2>/dev/null | wc -l) waiting, dead: $(ls -1 "$WA/dead" 2>/dev/null | wc -l) ---"
+            echo "--- processes ---"; pgrep -af 'run-forever.sh|wa-bridge.js' || echo "(none)"
+            echo "--- last log ---"; tail -n 25 /home/u748721963/whatsapp/bridge.log 2>/dev/null

@@ -90,6 +90,60 @@ for (const d of [BASE, AUTH_DIR, IPC, QUEUE_DIR, CONTROL_DIR, DEAD_DIR])
 // A message that keeps failing after this many tries is parked in dead/ — never
 // silently dropped, so it can be inspected/re-queued instead of lost.
 const MAX_ATTEMPTS = 6;
+// One send may take this long before we stop waiting on it. Baileys' own query
+// timeout is 60s; past that the send is in an unknown state.
+const SEND_TIMEOUT_MS = 75 * 1000;
+
+// Sending limits. WhatsApp bans numbers that blast messages, so every send
+// goes through these (env overrides are read at start-up):
+//  - at least WA_MIN_GAP_MS between two sends
+//  - at most WA_MAX_PER_HOUR sends in any rolling hour; past that, messages
+//    wait in the queue (nothing is lost)
+//  - at most WA_MAX_PER_NUMBER sends to one customer in 10 minutes; past that
+//    the message is parked in dead/ and never sent. That is what a flood looks
+//    like: the same code twenty times, a reset button hammered. Groups and
+//    staff messages (msg.staff, set by api.php) are exempt: order alerts reach
+//    them in bursts by design.
+// 1.2s is the dominant term in how fast a backlog drains: one order fans out to
+// the customer, the driver, the group and the supervisor, so a 3s gap put the
+// last of them 12s behind the order even with an empty queue. MAX_PER_HOUR
+// still bounds the daily volume, which is what WhatsApp actually bans for.
+const MIN_GAP_MS = +process.env.WA_MIN_GAP_MS || 1200;
+const MAX_PER_HOUR = +process.env.WA_MAX_PER_HOUR || 300;
+const MAX_PER_NUMBER = +process.env.WA_MAX_PER_NUMBER || 5;
+const PER_NUMBER_WINDOW_MS = 10 * 60 * 1000;
+let lastSendAt = 0;
+const sentTimes = []; // timestamps of sends in the last hour
+const perNumber = new Map(); // jid -> timestamps of sends in the last 10 min
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// A queue file is renamed to `<name>.sending` while its send is in flight, so
+// it is claimed by exactly one send. One still here at start-up means the
+// bridge died mid-send: the message may well have been delivered, so it is
+// parked in dead/ rather than sent again. (Re-sending is how customers ended up
+// with the same code twenty times.)
+for (const f of (() => {
+  try {
+    return fs.readdirSync(QUEUE_DIR).filter((n) => n.endsWith('.sending'));
+  } catch {
+    return [];
+  }
+})()) {
+  const full = path.join(QUEUE_DIR, f);
+  try {
+    const body = JSON.parse(fs.readFileSync(full, 'utf8'));
+    fs.writeFileSync(
+      path.join(DEAD_DIR, f.replace(/\.sending$/, '')),
+      JSON.stringify({
+        ...body,
+        reason: 'interrupted mid-send — not resent (may have been delivered)',
+      }),
+    );
+  } catch {}
+  try {
+    fs.unlinkSync(full);
+  } catch {}
+}
 
 // Recently-delivered dedupe keys → expiry timestamp. Guards against re-sending a
 // message that delivered but whose sendMessage() threw (so it was requeued).
@@ -137,6 +191,21 @@ function safeList(d) {
   } catch {
     return [];
   }
+}
+// Oldest first. api.php names queue files with random hex (bin2hex(random_bytes)),
+// so plain readdir order is arbitrary — a message could watch newer ones overtake
+// it tick after tick. mtime is the only ordering we have; ties keep readdir order.
+function safeListFifo(d) {
+  return safeList(d)
+    .map((f) => {
+      let t = 0;
+      try {
+        t = fs.statSync(path.join(d, f)).mtimeMs;
+      } catch {}
+      return { f, t };
+    })
+    .sort((a, b) => a.t - b.t)
+    .map((x) => x.f);
 }
 // Move a queue file into dead/ (preserved, never lost) and remove it from the
 // live queue so it stops being retried.
@@ -191,10 +260,20 @@ async function refreshGroups() {
 // After connecting, keep trying to warm the group cache until it succeeds, so
 // group sends become available as soon as possible (not on a fixed 4s guess
 // that can miss under load).
+//
+// It used to give up after 11 tries (~30s). Group sends wait on groupsReady,
+// so one bad stretch at connect time left every group message sitting in the
+// queue until the next reconnect, which could be days. Fast tries first, then
+// one a minute until it works. One retry chain at a time.
+let warmTimer = null;
 function warmGroups(attempt = 0) {
-  if (attempt > 10) return;
+  if (warmTimer) clearTimeout(warmTimer);
+  warmTimer = null;
+  // Disconnected: stop here. The next 'open' starts a fresh chain.
+  if (readStatus().status !== 'connected') return;
   refreshGroups().then((ok) => {
-    if (!ok) setTimeout(() => warmGroups(attempt + 1), 3000);
+    if (ok) return;
+    warmTimer = setTimeout(() => warmGroups(attempt + 1), attempt < 10 ? 3000 : 60000);
   });
 }
 
@@ -295,8 +374,42 @@ async function connect() {
   }
 }
 
-// IPC loop: control commands + outgoing message queue
+// IPC loop: control commands + outgoing message queue.
+//
+// The tick is async and a single send can take a minute (the first message to
+// a new number fetches its devices and keys first). setInterval does not wait
+// for the previous tick, so without this guard every 2s tick re-read the same
+// still-queued file and sent it AGAIN while the first send was in flight — a
+// new customer's activation code arrived ~20 times. One tick at a time.
+let tickBusy = false;
 setInterval(async () => {
+  if (tickBusy) return;
+  tickBusy = true;
+  try {
+    await ipcTick();
+  } catch (e) {
+    try {
+      writeStatus({ lastError: 'queue loop: ' + String((e && e.message) || e) });
+    } catch {}
+  } finally {
+    tickBusy = false;
+  }
+}, 1000);
+
+function withTimeout(promise, ms) {
+  let t;
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => {
+      t = setTimeout(
+        () => reject(Object.assign(new Error('send timed out'), { timedOut: true })),
+        ms,
+      );
+    }),
+  ]).finally(() => clearTimeout(t));
+}
+
+async function ipcTick() {
   // control commands (logout / restart)
   for (const f of safeList(CONTROL_DIR)) {
     const full = path.join(CONTROL_DIR, f);
@@ -330,7 +443,7 @@ setInterval(async () => {
   // dead/ (kept for inspection), never deleted-and-forgotten.
   const st = readStatus();
   if (sock && st.status === 'connected') {
-    for (const f of safeList(QUEUE_DIR)) {
+    for (const f of safeListFifo(QUEUE_DIR)) {
       const full = path.join(QUEUE_DIR, f);
       let msg = null;
       try {
@@ -371,17 +484,81 @@ setInterval(async () => {
       // layer. Wait (without burning an attempt) — warmGroups() flips this on
       // within a few seconds of connecting, then the message goes out cleanly.
       if (String(msg.to).includes('@g.us') && !groupsReady) continue;
+
+      const jid = toJid(msg.to);
+      const now = Date.now();
+      while (sentTimes.length && sentTimes[0] < now - 3600 * 1000) sentTimes.shift();
+      if (sentTimes.length >= MAX_PER_HOUR) break; // hourly cap: the rest stays queued
+      // Customers only: groups and staff (drivers, supervisor, an admin's
+      // extra number) get many order messages at busy times by design.
+      //
+      // msg.staff is THREE-valued on purpose, because the bridge and api.php are
+      // deployed separately and the live api.php may predate the flag:
+      //   true      -> staff, exempt from the cap
+      //   false     -> api.php says customer: over the cap it is a flood, park it
+      //   undefined -> old api.php, we cannot tell. NEVER park: parking a
+      //                driver's order alert loses the order. Hold it until the
+      //                10-minute window frees up instead, so it still arrives.
+      const capped = !jid.endsWith('@g.us') && msg.staff !== true;
+      if (capped) {
+        const recent = (perNumber.get(jid) || []).filter((t) => t > now - PER_NUMBER_WINDOW_MS);
+        perNumber.set(jid, recent);
+        if (recent.length >= MAX_PER_NUMBER) {
+          if (msg.staff === false) {
+            park(f, full, {
+              ...msg,
+              reason: 'per-number limit (' + MAX_PER_NUMBER + ' in 10 min) — not sent',
+            });
+          } else {
+            // Retry just after the oldest send leaves the window. No attempt is
+            // burned: this is a rate limit, not a failure.
+            msg.nextAt = recent[0] + PER_NUMBER_WINDOW_MS + 1000;
+            try {
+              fs.writeFileSync(full, JSON.stringify(msg));
+            } catch {}
+          }
+          continue;
+        }
+      }
+      if (perNumber.size > 2000) {
+        for (const [k, v] of perNumber)
+          if (!v.some((t) => t > now - PER_NUMBER_WINDOW_MS)) perNumber.delete(k);
+      }
+      const wait = lastSendAt + MIN_GAP_MS - Date.now();
+      if (wait > 0) await sleep(wait);
+
+      // Claim the file before sending. If the rename fails, someone else has it.
+      const claimed = full + '.sending';
       try {
-        await sock.sendMessage(toJid(msg.to), { text: String(msg.text) });
+        fs.renameSync(full, claimed);
+      } catch {
+        continue;
+      }
+      lastSendAt = Date.now();
+      sentTimes.push(lastSendAt);
+      if (capped) perNumber.get(jid).push(lastSendAt);
+      try {
+        await withTimeout(sock.sendMessage(jid, { text: String(msg.text) }), SEND_TIMEOUT_MS);
         if (msg.dedupe) rememberSent(msg.dedupe);
         try {
-          fs.unlinkSync(full);
+          fs.unlinkSync(claimed);
         } catch {} // delivered
       } catch (e) {
-        const attempts = (msg.attempts || 0) + 1;
         msg.lastError = String((e && e.message) || e);
+        if (e && e.timedOut) {
+          // Still running in the background and may yet deliver. Retrying is
+          // how one message becomes many, so park it instead.
+          if (msg.dedupe) rememberSent(msg.dedupe);
+          park(f, claimed, {
+            ...msg,
+            reason: 'send timed out — not retried (may have been delivered)',
+          });
+          writeStatus({ lastError: 'رسالة اتأخرت ومتبعتتش تاني: ' + msg.lastError });
+          continue;
+        }
+        const attempts = (msg.attempts || 0) + 1;
         if (attempts >= MAX_ATTEMPTS) {
-          park(f, full, msg);
+          park(f, claimed, msg);
           writeStatus({ lastError: 'رسالة فشلت بعد ' + attempts + ' محاولات: ' + msg.lastError });
         } else {
           msg.attempts = attempts;
@@ -390,11 +567,14 @@ setInterval(async () => {
           try {
             fs.writeFileSync(full, JSON.stringify(msg));
           } catch {}
+          try {
+            fs.unlinkSync(claimed);
+          } catch {}
         }
       }
     }
   }
-}, 2000);
+}
 
 // heartbeat so PHP can detect a dead bridge (stale ts)
 setInterval(() => writeStatus({}), 15000);
