@@ -1,0 +1,67 @@
+name: WhatsApp doctor
+
+# Read-only look at the live bridge. Dispatch-only: it changes nothing, so it is
+# safe to run whenever something looks wrong — unlike the deploy workflow, which
+# restarts the bridge and costs a WhatsApp reconnect every time.
+#
+# Everything it prints is counts, reasons and timestamps. This repo is public, so
+# no phone numbers and no message text may appear in the log.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tail:
+        description: 'How many bridge.log lines to show'
+        default: '40'
+
+jobs:
+  doctor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - name: Inspect
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.HOSTINGER_SSH_HOST }}
+          port: ${{ secrets.HOSTINGER_SSH_PORT }}
+          username: ${{ secrets.HOSTINGER_SSH_USER }}
+          password: ${{ secrets.HOSTINGER_SSH_PASS }}
+          envs: TAIL
+          script: |
+            WA=/home/u748721963/domains/deliverytamem.com/public_html/backendtamem/uploads/.wa
+            BASE=/home/u748721963/whatsapp
+            echo "### status"
+            cat "$WA/status.json" 2>/dev/null | head -c 600; echo
+
+            echo "### processes — supervisor, watchdog and bridge should all be here"
+            pgrep -af 'watchdog.sh|run-forever.sh|wa-bridge.js' | grep -v 'bash -c' || echo "(none)"
+
+            echo "### what is actually in each IPC dir, by extension"
+            for d in queue dead control dedupe; do
+              [ -d "$WA/$d" ] || { echo "$d: (no such dir)"; continue; }
+              n=$(ls -1A "$WA/$d" 2>/dev/null | wc -l)
+              echo "$d: $n entries"
+              ls -1A "$WA/$d" 2>/dev/null | sed 's/^.*\.//' | sort | uniq -c | sort -rn | head -6 | sed 's/^/    /'
+            done
+
+            echo "### parked messages — why (no content)"
+            grep -ho '"reason":"[^"]*"' "$WA"/dead/*.json 2>/dev/null | sort | uniq -c | sort -rn
+            echo "parked with no reason recorded (hit the attempt limit):"
+            grep -l -v '"reason"' "$WA"/dead/*.json 2>/dev/null | wc -l
+
+            echo "### age of the oldest thing still queued"
+            find "$WA/queue" -name '*.json' -printf '%T+ %f\n' 2>/dev/null | sort | head -3 | cut -c1-19
+
+            echo "### disk — the log has filled the quota before"
+            du -sh "$BASE" "$WA" 2>/dev/null
+            ls -lh "$BASE/bridge.log" 2>/dev/null | awk '{print $5, $9}'
+            df -h "$BASE" 2>/dev/null | tail -1
+
+            echo "### restart / disconnect history"
+            grep -hE '^\[(bridge|supervisor|watchdog|keepalive) ' "$BASE/bridge.log" 2>/dev/null \
+              | tail -n "${TAIL:-40}"
+            echo "### recent failures (reason only)"
+            grep -hoE '(refreshGroups failed|primeGroup [^ ]+ failed|connection closed \(code [0-9]+\))[^,]{0,40}' \
+              "$BASE/bridge.log" 2>/dev/null | sed 's/[0-9]\{8,\}/<jid>/g' | sort | uniq -c | sort -rn | head
+        env:
+          TAIL: ${{ inputs.tail }}
