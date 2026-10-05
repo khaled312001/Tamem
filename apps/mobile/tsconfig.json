@@ -3,7 +3,16 @@
   "compilerOptions": {
     "baseUrl": ".",
     "paths": {
-      "@/*": ["src/*"]
+      "@/*": ["src/*"],
+
+      // node-linker=hoisted copies packages instead of symlinking them, so
+      // @types/react@19.1.17 exists twice on disk: once here and once under
+      // node_modules/react-native (the root copy is @18 for the dashboard).
+      // Two physical copies of the same declarations are two distinct types to
+      // tsc, which is why every <View> was "not a valid JSX element type" —
+      // 2157 errors that drowned out every real one. Pin the one copy.
+      "react": ["./node_modules/@types/react"],
+      "react/*": ["./node_modules/@types/react/*"]
     },
     "lib": ["ESNext", "DOM"]
   },

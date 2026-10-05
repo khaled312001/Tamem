@@ -17,7 +17,7 @@
     "ios": {
       "supportsTablet": false,
       "bundleIdentifier": "com.tamem.delivery",
-      "buildNumber": "30",
+      "buildNumber": "31",
       "infoPlist": {
         "NSLocationWhenInUseUsageDescription": "نستخدم موقعك عشان نحدد عنوان التوصيل بدقة ونوصّل لك الطلب بسرعة.",
         "NSCameraUsageDescription": "نحتاج الكاميرا عشان تصوّر طلبك أو الروشتة وترفقها مع الطلب.",
@@ -32,7 +32,7 @@
     },
     "android": {
       "package": "com.tamem.delivery",
-      "versionCode": 30,
+      "versionCode": 31,
       "googleServicesFile": "./google-services.json",
       "adaptiveIcon": {
         "foregroundImage": "./src/assets/icon.png",
