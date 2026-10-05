@@ -47,6 +47,46 @@ jobs:
           strip_components: 2
           overwrite: true
 
+      # The supervisor that is already running predates the pid files, so it will
+      # never publish one — and the bridge, finding none, would launch a doomed
+      # replacement every 60 seconds (flock makes it exit at once). Migrate it
+      # once: tear the layer down and let keepalive bring up the new scripts.
+      # Only fires while the pid file is missing, so it is a no-op afterwards.
+      #
+      # Every pattern below is bracketed, and the plain process names are never
+      # written out. `pkill -f run-forever.sh` would match THIS script's own
+      # command line and kill the SSH session mid-deploy.
+      - name: Migrate the keep-alive layer to pid files (no-op once done)
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.HOSTINGER_SSH_HOST }}
+          port: ${{ secrets.HOSTINGER_SSH_PORT }}
+          username: ${{ secrets.HOSTINGER_SSH_USER }}
+          password: ${{ secrets.HOSTINGER_SSH_PASS }}
+          script: |
+            BASE=/home/u748721963/whatsapp
+            if [ -f "$BASE/.supervisor.pid" ] && kill -0 "$(cat "$BASE/.supervisor.pid")" 2>/dev/null; then
+              echo "pid file present and live — nothing to migrate"
+              exit 0
+            fi
+            echo "migrating: stopping the old layer"
+            pkill -f '[r]un-forever\.sh' || true
+            pkill -f '[w]a-bridge\.js' || true
+            pkill -f '[w]atchdog\.sh' || true
+            sleep 2
+            rm -f "$BASE/.supervisor.pid" "$BASE/.watchdog.pid" "$BASE/bridge.pid"
+            bash "$BASE/keepalive.sh" || true
+            sleep 10
+            for n in supervisor watchdog; do
+              f="$BASE/.$n.pid"
+              if [ -f "$f" ] && kill -0 "$(cat "$f" 2>/dev/null)" 2>/dev/null; then
+                echo "$n: up (pid $(cat "$f"))"
+              else
+                echo "::error::$n did not come up"
+                exit 1
+              fi
+            done
+
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
