@@ -2938,6 +2938,10 @@ function notifyOrderParties(string $orderId, string $status, ?string $reason = n
         // decides WHETHER to send; notifChannels()['DRIVER'] decides WHERE.
         $drvMsg = $skipDriver ? null : $render('DRIVER');
         if ($drvMsg) {
+            // SAFETY NET: the store is where the driver picks up — guarantee its
+            // name is in the message whenever the order has a merchant, even if a
+            // custom template dropped the {{merchantName}} line.
+            $drvMsg = driverStoreLine($drvMsg, (string) ($ctx['merchantName'] ?? ''));
             $dch = notifChannels()['DRIVER'];
             $drvSent = false;
             if (!empty($dch['telegram'])) {
@@ -3281,7 +3285,26 @@ function renderOrderMessage(array $o, string $status, string $recipient, ?string
         }
     }
     if ($tpl === null || $tpl === '') return '';
-    return notifRender($tpl, orderMessageContext($o, $reason));
+    $ctx = orderMessageContext($o, $reason);
+    $msg = notifRender($tpl, $ctx);
+    // Same safety net as the send path: the driver always gets the store name.
+    if ($recipient === 'DRIVER') $msg = driverStoreLine($msg, (string) ($ctx['merchantName'] ?? ''));
+    return $msg;
+}
+/**
+ * Guarantee the store name is in a driver message when the order has a merchant.
+ * Inserts "🏪 المتجر: <name>" right under the header (the first thing the driver
+ * sees). No-op when the name is empty or already present, so it never dupes and
+ * survives any admin template edit that forgot {{merchantName}}.
+ */
+function driverStoreLine(string $msg, string $merchantName): string {
+    $mn = trim($merchantName);
+    if ($mn === '' || mb_strpos($msg, $mn) !== false) return $msg;
+    $line = '🏪 المتجر: ' . $mn;
+    $nl = mb_strpos($msg, "\n");
+    return $nl !== false
+        ? mb_substr($msg, 0, $nl + 1) . $line . "\n" . mb_substr($msg, $nl + 1)
+        : $msg . "\n" . $line;
 }
 /**
  * The driver's WhatsApp message for an order, plus a wa.me deep link so the
