@@ -23,6 +23,9 @@ import { api } from '../lib/api.js';
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Row = any;
 
+type Chan = { telegram: boolean; whatsapp: boolean };
+type Channels = { GROUP: Chan; DRIVER: Chan };
+
 const EVENT_LABEL: Record<string, string> = {
   ORDER_NEW: 'طلب جديد',
   ORDER_PRICED: 'بعد التسعير',
@@ -150,9 +153,9 @@ export function NotificationTemplatesPage() {
     <div className="space-y-4">
       <PageHeader
         title="قوالب الرسائل"
-        subtitle="تحكّم في نص كل رسالة واتساب ومتى تتبعت — للعميل والسائق والمشرف والجروب"
+        subtitle="تحكّم في نص كل رسالة ومتى تتبعت — افتح/اقفل الإرسال لكل حالة ولكل جهة"
         icon={Bell}
-        crumbs={[{ label: 'ربط واتساب', to: '/whatsapp' }]}
+        crumbs={[{ label: 'تلجرام', to: '/telegram' }]}
         actions={
           <button
             onClick={() => save.mutate()}
@@ -168,6 +171,17 @@ export function NotificationTemplatesPage() {
           </button>
         }
       />
+
+      <div className="rounded-lg bg-emerald-50 border border-emerald-200 p-3 text-xs text-emerald-900 leading-6">
+        <b>طريقة العمل:</b> اختر القناة لكل جهة من تحت (تلجرام و/أو واتساب) — ده بيحدد
+        <b> فين</b> تتبعت. وزر التفعيل جنب كل حالة بيحدد <b>إذا</b> تتبعت أصلاً. «العميل» بياخد
+        إشعار التطبيق + الإيميل (واتساب العميل متوقف).
+      </div>
+
+      {(() => {
+        const chans = (data as { channels?: Channels } | undefined)?.channels;
+        return chans ? <ChannelControls initial={chans} /> : null;
+      })()}
 
       <div className="rounded-lg bg-blue-50 border border-blue-200 p-3 text-xs text-blue-900 leading-6">
         استخدم المتغيرات دي جوه أي رسالة وهتتبدّل تلقائياً وقت الإرسال:
@@ -464,6 +478,69 @@ function ExtraRecipients({ event }: { event: string }) {
           ))}
         </div>
       )}
+    </div>
+  );
+}
+
+/** Per-recipient channel picker (Telegram and/or WhatsApp). Saves on each tap. */
+function ChannelControls({ initial }: { initial: Channels }) {
+  const qc = useQueryClient();
+  const [ch, setCh] = useState<Channels>(initial);
+  const save = useMutation({
+    mutationFn: (next: Channels) =>
+      api.raw.post('/admin/notification-channels', { channels: next }).then((r) => r.data.data),
+    onSuccess: () => {
+      toast.success('تم حفظ القنوات');
+      qc.invalidateQueries({ queryKey: ['admin', 'notification-templates'] });
+    },
+    onError: () => toast.error('تعذّر حفظ القنوات'),
+  });
+  const toggle = (who: keyof Channels, chan: keyof Chan) => {
+    const next: Channels = { ...ch, [who]: { ...ch[who], [chan]: !ch[who][chan] } };
+    setCh(next);
+    save.mutate(next);
+  };
+
+  const ChannelRow = ({ who, label }: { who: keyof Channels; label: string }) => (
+    <div className="flex items-center justify-between gap-3 py-2">
+      <span className="font-bold text-sm">{label}</span>
+      <div className="flex gap-2">
+        {(['telegram', 'whatsapp'] as const).map((chan) => {
+          const on = ch[who][chan];
+          const name = chan === 'telegram' ? 'تلجرام' : 'واتساب';
+          return (
+            <button
+              key={chan}
+              onClick={() => toggle(who, chan)}
+              disabled={save.isPending}
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold border transition ${
+                on
+                  ? chan === 'telegram'
+                    ? 'bg-sky-500 text-white border-sky-500'
+                    : 'bg-green-600 text-white border-green-600'
+                  : 'bg-muted text-muted-foreground border-border hover:border-foreground/30'
+              }`}
+            >
+              {on ? '✓ ' : ''}
+              {name}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+
+  return (
+    <div className="rounded-xl border border-border bg-card p-4">
+      <div className="mb-1 text-sm font-black">قنوات الإرسال</div>
+      <p className="mb-2 text-xs text-muted-foreground">
+        فين تتبعت رسايل كل جهة — شغّل الاتنين مع بعض أو واحدة بس. (المندوب على واتساب بيوصل لو لسه
+        مش رابط تلجرام.)
+      </p>
+      <div className="divide-y divide-border">
+        <ChannelRow who="GROUP" label="جروب الإدارة" />
+        <ChannelRow who="DRIVER" label="المناديب" />
+      </div>
     </div>
   );
 }

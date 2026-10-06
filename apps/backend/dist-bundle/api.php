@@ -2108,6 +2108,190 @@ function waAdminNumber(): ?string {
     return $env !== '' ? $env : null;
 }
 
+// ─── Telegram bot — the HIGH-VOLUME channel (order group + driver DMs) ───
+// Every new order goes to the work group, and each driver gets their assignment
+// DM here. Unlike the unofficial WhatsApp bridge this is the official Bot API —
+// a plain HTTPS call, no session, no bans. WhatsApp is reserved for customer OTP
+// only now (low volume). A bot can only DM a user who pressed Start, so each
+// driver links once via t.me/<bot>?start=drv_<id> (handled in /telegram/webhook).
+/** The bot token — the dashboard-saved one (Setting telegram_bot_token) wins,
+ *  so the owner can switch bots without touching .env; the .env value is the
+ *  fallback. Returns the source too so the UI can show where it came from. */
+function tgTokenInfo(): array {
+    try {
+        $t = trim((string) (notifReadSetting('telegram_bot_token')['value'] ?? ''));
+        if ($t !== '') return ['token' => $t, 'source' => 'setting'];
+    } catch (Throwable $e) { /* fall back to env */ }
+    $e = trim((string) env('TELEGRAM_BOT_TOKEN', ''));
+    return $e !== '' ? ['token' => $e, 'source' => 'env'] : ['token' => null, 'source' => null];
+}
+function tgToken(): ?string { return tgTokenInfo()['token']; }
+function tgEnabled(): bool { return tgToken() !== null; }
+
+/** One Bot API call → decoded `result` on success, else null (logged). Pass
+ *  $tokenOverride to call with a specific bot (e.g. verifying a new token). */
+function tgApi(string $method, array $params, ?string $tokenOverride = null): ?array {
+    $token = $tokenOverride ?? tgToken();
+    if ($token === null) return null;
+    $url = 'https://api.telegram.org/bot' . $token . '/' . $method;
+    $body = json_encode($params, JSON_UNESCAPED_UNICODE);
+    $raw = null; $code = 0;
+    try {
+        if (function_exists('curl_init')) {
+            $ch = curl_init($url);
+            curl_setopt_array($ch, [
+                CURLOPT_RETURNTRANSFER => true,
+                CURLOPT_HTTPHEADER => ['Content-Type: application/json'],
+                CURLOPT_POST => true, CURLOPT_POSTFIELDS => $body,
+                CURLOPT_TIMEOUT => 20, CURLOPT_SSL_VERIFYPEER => false,
+            ]);
+            $raw = curl_exec($ch); $code = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE); curl_close($ch);
+        } else {
+            $ctx = stream_context_create(['http' => ['method' => 'POST',
+                'header' => "Content-Type: application/json\r\n", 'content' => $body,
+                'timeout' => 20, 'ignore_errors' => true]]);
+            $raw = @file_get_contents($url, false, $ctx);
+        }
+    } catch (Throwable $e) { error_log('[api.php] tgApi ' . $method . ': ' . $e->getMessage()); return null; }
+    $j = json_decode((string) $raw, true);
+    if (!is_array($j) || empty($j['ok'])) {
+        error_log('[api.php] tgApi ' . $method . ' failed (' . $code . '): ' . substr((string) $raw, 0, 300));
+        return null;
+    }
+    return is_array($j['result'] ?? null) ? $j['result'] : [];
+}
+
+/** Our WhatsApp-style text (*bold*, newlines, emojis) → Telegram HTML. Escape
+ *  first so a stray <>& never breaks parsing, then turn *x* into <b>x</b>. */
+function tgHtml(string $s): string {
+    $s = htmlspecialchars($s, ENT_NOQUOTES, 'UTF-8');
+    $s = preg_replace('/\*([^*\n]+)\*/u', '<b>$1</b>', $s);
+    return (string) $s;
+}
+
+/** Send one message to a chat id (driver DM or the group). */
+function tgSend($chatId, string $text, ?array $replyMarkup = null): bool {
+    if ($chatId === null || $chatId === '' || trim($text) === '') return false;
+    $p = [
+        'chat_id' => $chatId,
+        'text' => tgHtml($text),
+        'parse_mode' => 'HTML',
+        'disable_web_page_preview' => true,
+    ];
+    if ($replyMarkup !== null) $p['reply_markup'] = $replyMarkup;
+    return tgApi('sendMessage', $p) !== null;
+}
+/**
+ * Inline action buttons for a driver's order message — tapping one advances the
+ * order and the dashboard/group update automatically. Buttons evolve with the
+ * stage; null when there is no next action (delivered / cancelled). callback_data
+ * is `o:<orderId>:<code>` (P=picked up, R=in route, D=delivered), well under 64B.
+ */
+function tgDriverKeyboard(string $orderId, string $status): ?array {
+    $btn = fn(string $t, string $code) => ['text' => $t, 'callback_data' => 'o:' . $orderId . ':' . $code];
+    if ($status === 'DRIVER_ASSIGNED') $rows = [[$btn('📦 تم الاستلام', 'P')]];
+    elseif ($status === 'PICKED_UP')   $rows = [[$btn('🛵 في الطريق', 'R'), $btn('✅ تم التوصيل', 'D')]];
+    elseif ($status === 'IN_ROUTE')    $rows = [[$btn('✅ تم التوصيل', 'D')]];
+    else return null;
+    return ['inline_keyboard' => $rows];
+}
+/** Pop the little toast on the driver's screen after they tap a button. */
+function tgAnswerCallback(string $cbId, string $text): void {
+    if ($cbId === '') return;
+    tgApi('answerCallbackQuery', ['callback_query_id' => $cbId, 'text' => $text, 'show_alert' => false]);
+}
+/**
+ * Advance an order to a new status from a driver's Telegram tap — mirrors the
+ * dashboard's PATCH /status side effects (timestamps, history, share snapshot,
+ * free the driver, fan-out) so the two paths stay identical. Idempotent.
+ */
+function tgAdvanceOrder(string $orderId, string $newStatus, ?string $actorId, ?string $reason = null): bool {
+    $ps = db()->prepare('SELECT `status` FROM `Order` WHERE id = ? LIMIT 1');
+    $ps->execute([$orderId]);
+    $prev = $ps->fetchColumn();
+    if ($prev === false) return false;
+    $prev = (string) $prev;
+    if ($prev === $newStatus) return true;
+    $sets = ['`status` = ?', '`updatedAt` = NOW(3)']; $args = [$newStatus];
+    if (in_array($newStatus, ['DELIVERED', 'COMPLETED'], true)) { $sets[] = '`completedAt` = NOW(3)'; $sets[] = '`deliveredAt` = NOW(3)'; }
+    if ($newStatus === 'CANCELLED') { $sets[] = '`cancelledAt` = NOW(3)'; if ($reason) { $sets[] = '`cancellationReason` = ?'; $args[] = $reason; } }
+    $args[] = $orderId;
+    try { db()->prepare('UPDATE `Order` SET ' . implode(',', $sets) . ' WHERE id = ?')->execute($args); }
+    catch (Throwable $e) { error_log('[api.php] tgAdvanceOrder: ' . $e->getMessage()); return false; }
+    try { orderHistory($orderId, $prev, $newStatus, $actorId, 'DRIVER', $reason); } catch (Throwable $e) {}
+    if (in_array($newStatus, ['DELIVERED', 'COMPLETED'], true)) { try { snapshotDriverShare($orderId); } catch (Throwable $e) {} }
+    if (in_array($newStatus, ['DELIVERED', 'COMPLETED', 'CANCELLED'], true)) {
+        try {
+            $dv = db()->prepare('SELECT assignedDriverId FROM `Order` WHERE id = ?'); $dv->execute([$orderId]); $did = $dv->fetchColumn();
+            if ($did) {
+                $bz = db()->prepare("SELECT COUNT(*) FROM `Order` WHERE assignedDriverId = ? AND status IN ('DRIVER_ASSIGNED','PICKED_UP','IN_ROUTE')");
+                $bz->execute([$did]);
+                if ((int) $bz->fetchColumn() === 0) db()->prepare("UPDATE `DriverProfile` SET `status` = 'AVAILABLE', `updatedAt` = NOW(3) WHERE userId = ? AND `status` = 'BUSY'")->execute([$did]);
+            }
+        } catch (Throwable $e) {}
+    }
+    notifyOrderParties($orderId, $newStatus, $reason);
+    return true;
+}
+
+/** The configured work-group chat id (Setting telegram_order_group), or null. */
+function tgGroupId() {
+    try {
+        $cfg = notifReadSetting('telegram_order_group');
+        if (!empty($cfg['enabled']) && isset($cfg['chatId']) && $cfg['chatId'] !== '') return $cfg['chatId'];
+    } catch (Throwable $e) {}
+    return null;
+}
+function tgSendGroup(string $text): bool {
+    $gid = tgGroupId();
+    return $gid === null ? false : tgSend($gid, $text);
+}
+
+/** A driver's linked Telegram chat id (DriverProfile.telegramChatId), or null. */
+function tgDriverChatId(?string $driverUserId) {
+    if (!$driverUserId || !tgEnabled()) return null;
+    try {
+        $st = db()->prepare("SELECT telegramChatId FROM `DriverProfile` WHERE userId = ? LIMIT 1");
+        $st->execute([$driverUserId]);
+        $v = $st->fetchColumn();
+        return ($v !== false && $v !== null && $v !== '') ? $v : null;
+    } catch (Throwable $e) { return null; }
+}
+
+/** Telegram chat ids of active supervisors who linked the bot — they each get
+ *  the order oversight message as a private DM (in addition to the group). */
+function tgSupervisorChats(): array {
+    if (!tgEnabled()) return [];
+    try {
+        $st = db()->query("SELECT telegramChatId FROM `Supervisor` WHERE isActive = 1 AND telegramChatId IS NOT NULL AND telegramChatId <> ''");
+        return array_values(array_filter(array_map(fn($r) => $r['telegramChatId'], $st->fetchAll())));
+    } catch (Throwable $e) { return []; }
+}
+
+/**
+ * Which CHANNEL(s) each oversight recipient uses — separate from the per-event
+ * enable toggle (that decides WHETHER to announce an event; this decides WHERE).
+ * Setting `notification_channels`. Defaults: the group goes to Telegram only,
+ * drivers to Telegram with a WhatsApp fallback. Flip WhatsApp back on here to
+ * run both channels — or WhatsApp instead — without touching any template.
+ */
+function notifChannels(): array {
+    $def = [
+        'GROUP' => ['telegram' => true, 'whatsapp' => false],
+        'DRIVER' => ['telegram' => true, 'whatsapp' => true],
+    ];
+    try {
+        $c = notifReadSetting('notification_channels');
+        foreach (['GROUP', 'DRIVER'] as $k) {
+            if (isset($c[$k]) && is_array($c[$k])) {
+                $def[$k]['telegram'] = !empty($c[$k]['telegram']);
+                $def[$k]['whatsapp'] = !empty($c[$k]['whatsapp']);
+            }
+        }
+    } catch (Throwable $e) { /* defaults */ }
+    return $def;
+}
+
 // Order-update WhatsApp fan-out. Three tailored variants per transition:
 //   • CUSTOMER — friendly journey updates about their own order
 //   • DRIVER   — only actionable stages, with pickup/delivery operational detail
@@ -2690,8 +2874,12 @@ function notifyOrderParties(string $orderId, string $status, ?string $reason = n
         };
 
         // ── CUSTOMER ──
+        // Customer order updates NO LONGER go out on WhatsApp — the volume of
+        // messages to many distinct customer numbers is what got the number
+        // banned. Customers keep the in-app push + email below; WhatsApp is now
+        // reserved for OTP only. ($custMsg is still built for the extra-recipient
+        // fallback copy further down.)
         $custMsg = $render('CUSTOMER');
-        if ($custMsg && !empty($o['cust_phone'])) { waEnqueue($o['cust_phone'], $custMsg); $sent = true; $log[] = 'واتساب العميل'; }
 
         /*
          * The order as an email, at the stages worth keeping a record of.
@@ -2722,9 +2910,26 @@ function notifyOrderParties(string $orderId, string $status, ?string $reason = n
                 ['orderId' => $orderId, 'orderNumber' => $no, 'screen' => 'OrderTracking', 'status' => $status]);
         }
 
-        // ── DRIVER ──
+        // ── DRIVER ── channel-controlled: Telegram DM (if the driver linked the
+        // bot) and/or WhatsApp. The per-event enable toggle in «قوالب الرسائل»
+        // decides WHETHER to send; notifChannels()['DRIVER'] decides WHERE.
         $drvMsg = $skipDriver ? null : $render('DRIVER');
-        if ($drvMsg && !empty($o['drv_phone'])) { waEnqueue($o['drv_phone'], $drvMsg); $sent = true; $log[] = 'واتساب المندوب'; }
+        if ($drvMsg) {
+            $dch = notifChannels()['DRIVER'];
+            $drvSent = false;
+            if (!empty($dch['telegram'])) {
+                $tgChat = tgDriverChatId($o['assignedDriverId'] ?? null);
+                // Attach the tappable action button(s) for this stage so the
+                // driver advances the order from Telegram (updates the dashboard).
+                $kb = tgDriverKeyboard($orderId, $status);
+                if ($tgChat !== null && tgSend($tgChat, $drvMsg, $kb)) { $drvSent = true; $sent = true; $log[] = 'تلجرام المندوب'; }
+            }
+            // WhatsApp when its channel is on — the primary (Telegram off) or a
+            // fallback for a driver who has not linked Telegram yet.
+            if (!$drvSent && !empty($dch['whatsapp']) && !empty($o['drv_phone'])) {
+                waEnqueue($o['drv_phone'], $drvMsg); $sent = true; $log[] = 'واتساب المندوب';
+            }
+        }
         // The driver used to get WhatsApp only — nothing reached their phone's
         // notification tray. Same push path the customer gets, carrying orderId
         // so the tap opens the order.
@@ -2748,37 +2953,58 @@ function notifyOrderParties(string $orderId, string $status, ?string $reason = n
             $txt = $done[$status] ?? "✅ اكتمل الطلب #{$no} — شكراً لمجهودك.";
             foreach (orderLegsFor($orderId) as $lg) {
                 if (empty($lg['driverId']) || $lg['driverId'] === ($o['assignedDriverId'] ?? null)) continue;
-                if (!empty($lg['driverPhone'])) { waEnqueue((string) $lg['driverPhone'], $txt . "\nالمجموعة: " . $lg['label']); $sent = true; }
+                $legTxt = $txt . "\nالمجموعة: " . $lg['label'];
+                $tgLeg = tgDriverChatId($lg['driverId']);
+                if ($tgLeg !== null && tgSend($tgLeg, $legTxt)) { $sent = true; }
+                elseif (!empty($lg['driverPhone'])) { waEnqueue((string) $lg['driverPhone'], $legTxt); $sent = true; }
                 notifyUser((string) $lg['driverId'], 'ORDER_STATUS', 'تحديث على الطلب', 'تحديث على الطلب', $txt, $txt,
                     ['orderId' => $orderId, 'orderNumber' => $no, 'screen' => 'OrderTracking', 'status' => $status]);
             }
         }
 
-        // ── SUPERVISOR ── the business / admin oversight number
+        // ── OVERSIGHT (group / supervisor / extra recipients) ──
+        // Channel-controlled per notifChannels()['GROUP']: the Telegram group
+        // and/or the WhatsApp fan-out (business number + WhatsApp group + extra
+        // numbers), INDEPENDENTLY — so WhatsApp can be switched back on alongside
+        // or instead of Telegram later. The per-event GROUP/SUPERVISOR enable
+        // toggles still decide WHETHER each event is announced.
         $supMsg = $render('SUPERVISOR');
-        $adminNo = waAdminNumber();
-        if ($supMsg && $adminNo) { waEnqueue($adminNo, $supMsg); $sent = true; $log[] = 'واتساب المشرف'; }
-
-        // ── GROUP ── the linked WhatsApp group (when one is picked + enabled)
         $grpMsg = $render('GROUP');
-        if ($grpMsg) {
-            $grp = notifReadSetting('whatsapp_order_group');
-            if (!empty($grp['enabled']) && !empty($grp['groupId'])) { waEnqueue((string) $grp['groupId'], $grpMsg); $sent = true; $log[] = 'جروب الإدارة'; }
-        }
-
-        // ── EXTRA per-event recipients ── each enabled row gets its own text,
-        // or — when left blank — the supervisor / group / customer copy.
-        if ($event) {
-            $extra = notifReadSetting('notification_recipients');
-            $n = 0;
-            foreach ((array) ($extra[$event] ?? []) as $r) {
-                $phone = trim((string) ($r['phone'] ?? ''));
-                if ($phone === '' || (array_key_exists('enabled', $r) && !$r['enabled'])) continue;
-                $txt = trim((string) ($r['text'] ?? ''));
-                $msg = $txt !== '' ? notifRender($txt, $ctx) : ($supMsg ?: ($grpMsg ?: $custMsg));
-                if ($msg) { waEnqueue($phone, $msg); $sent = true; $n++; }
+        $gch = notifChannels()['GROUP'];
+        // Telegram: the work group + a private DM to each linked supervisor.
+        if (!empty($gch['telegram'])) {
+            $tgMsg = $grpMsg ?: $supMsg;
+            if ($tgMsg) {
+                if (tgGroupId() !== null && tgSendGroup($tgMsg)) { $sent = true; $log[] = 'جروب تلجرام'; }
+                $nsup = 0;
+                foreach (tgSupervisorChats() as $sc) { if (tgSend($sc, $tgMsg)) $nsup++; }
+                if ($nsup) { $sent = true; $log[] = "مشرفين تلجرام ($nsup)"; }
             }
-            if ($n) $log[] = "أرقام إضافية ({$n})";
+        }
+        // WhatsApp oversight fan-out
+        if (!empty($gch['whatsapp'])) {
+            // ── SUPERVISOR ── the business / admin oversight number
+            $adminNo = waAdminNumber();
+            if ($supMsg && $adminNo) { waEnqueue($adminNo, $supMsg); $sent = true; $log[] = 'واتساب المشرف'; }
+            // ── GROUP ── the linked WhatsApp group (when one is picked + enabled)
+            if ($grpMsg) {
+                $grp = notifReadSetting('whatsapp_order_group');
+                if (!empty($grp['enabled']) && !empty($grp['groupId'])) { waEnqueue((string) $grp['groupId'], $grpMsg); $sent = true; $log[] = 'جروب واتساب'; }
+            }
+            // ── EXTRA per-event recipients ── each enabled row gets its own text,
+            // or — when left blank — the supervisor / group / customer copy.
+            if ($event) {
+                $extra = notifReadSetting('notification_recipients');
+                $n = 0;
+                foreach ((array) ($extra[$event] ?? []) as $r) {
+                    $phone = trim((string) ($r['phone'] ?? ''));
+                    if ($phone === '' || (array_key_exists('enabled', $r) && !$r['enabled'])) continue;
+                    $txt = trim((string) ($r['text'] ?? ''));
+                    $msg = $txt !== '' ? notifRender($txt, $ctx) : ($supMsg ?: ($grpMsg ?: $custMsg));
+                    if ($msg) { waEnqueue($phone, $msg); $sent = true; $n++; }
+                }
+                if ($n) $log[] = "أرقام إضافية ({$n})";
+            }
         }
         if ($sent) {
             try { db()->prepare("UPDATE `Order` SET `whatsappSentAt` = NOW(3) WHERE id = ?")->execute([$orderId]); } catch (Throwable $e) {}
@@ -2923,6 +3149,8 @@ function notifDefaultCatalog(): array {
         $ev('DRIVER_ASSIGNED', 'GROUP', 'جروب الإدارة', $oversight('🚚 تعيين سائق لطلب')),
         // ═══ PICKED_UP ═══
         $ev('PICKED_UP', 'CUSTOMER', 'العميل', "تميم للتوصيل 🚚\nتم استلام طلبك *#{{orderNumber}}* وهو في الطريق إليك.\nالمطلوب دفعه: *{{price}}* ({{payment}})"),
+        $ev('PICKED_UP', 'SUPERVISOR', 'المشرف', $oversight('📦 استلم السائق الطلب من المتجر')),
+        $ev('PICKED_UP', 'GROUP', 'جروب الإدارة', $oversight('📦 استلم السائق الطلب من المتجر')),
         // ═══ IN_ROUTE ═══
         $ev('IN_ROUTE', 'CUSTOMER', 'العميل', "تميم للتوصيل 🚚\nمندوبك على وشك الوصول بطلب *#{{orderNumber}}*. جهّز استلامك 😊\nالمطلوب: *{{price}}*"),
         $ev('IN_ROUTE', 'SUPERVISOR', 'المشرف', $oversight('🛵 طلب في الطريق')),
@@ -3054,7 +3282,21 @@ function driverMessagePayload(array $o, string $status = 'DRIVER_ASSIGNED'): arr
 
 if ($method === 'GET' && $path === '/admin/notification-templates') {
     $u = authUser(); if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
-    jsonOk(['templates' => notifEffectiveTemplates(), 'variables' => notifVariables()]);
+    jsonOk(['templates' => notifEffectiveTemplates(), 'variables' => notifVariables(), 'channels' => notifChannels()]);
+}
+if (in_array($method, ['PUT', 'POST'], true) && $path === '/admin/notification-channels') {
+    $u = authUser(); if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
+    $b = readJsonBody();
+    $in = is_array($b['channels'] ?? null) ? $b['channels'] : $b;
+    $out = [];
+    foreach (['GROUP', 'DRIVER'] as $k) {
+        $out[$k] = [
+            'telegram' => !empty($in[$k]['telegram']),
+            'whatsapp' => !empty($in[$k]['whatsapp']),
+        ];
+    }
+    notifWriteSetting('notification_channels', $out, $u['sub'] ?? null);
+    jsonOk(['channels' => notifChannels()]);
 }
 if (in_array($method, ['PUT', 'POST'], true) && $path === '/admin/notification-templates') {
     $u = authUser(); if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
@@ -3159,6 +3401,153 @@ if (in_array($method, ['PUT', 'POST'], true) && $path === '/admin/whatsapp/group
     $cfg = ['enabled' => $enabled, 'groupId' => $groupId, 'groupName' => $groupName];
     notifWriteSetting('whatsapp_order_group', $cfg, $u['sub'] ?? null);
     jsonOk($cfg);
+}
+
+// ─── Telegram admin: status, group binding, webhook, driver linking ─────
+// Build the public webhook URL from THIS request, so it tracks the real host
+// and the /api/v1 prefix without hard-coding either.
+function tgWebhookUrl(): string {
+    $host = (string) ($_SERVER['HTTP_HOST'] ?? 'backendtamem.deliverytamem.com');
+    $uri = strtok((string) ($_SERVER['REQUEST_URI'] ?? ''), '?');
+    $prefix = preg_replace('#/admin/telegram(?:/.*)?$#', '', (string) $uri);
+    if (!is_string($prefix)) $prefix = '';
+    return 'https://' . $host . $prefix . '/telegram/webhook';
+}
+if ($method === 'GET' && $path === '/admin/telegram') {
+    $u = authUser(); if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
+    $tokenSet = tgEnabled();
+    $tokenSource = tgTokenInfo()['source'];
+    $me = $tokenSet ? tgApi('getMe', []) : null;
+    $wh = $tokenSet ? tgApi('getWebhookInfo', []) : null;
+    $botUsername = $me['username'] ?? null;
+    $group = notifReadSetting('telegram_order_group');
+    $cand = notifReadSetting('telegram_group_candidate');
+    $drivers = [];
+    try {
+        $st = db()->query(
+            "SELECT u.id, u.name, u.phone, dp.telegramChatId, dp.telegramUsername
+               FROM `User` u JOIN `DriverProfile` dp ON dp.userId = u.id
+              WHERE u.role = 'DRIVER'
+              ORDER BY (dp.telegramChatId IS NOT NULL) DESC, u.name ASC"
+        );
+        foreach ($st->fetchAll() as $r) {
+            $drivers[] = [
+                'id' => $r['id'], 'name' => $r['name'], 'phone' => $r['phone'],
+                'linked' => !empty($r['telegramChatId']),
+                'telegramUsername' => $r['telegramUsername'] ?: null,
+                'deepLink' => $botUsername ? ('https://t.me/' . $botUsername . '?start=drv_' . $r['id']) : null,
+            ];
+        }
+    } catch (Throwable $e) { /* leave empty */ }
+    $supervisors = [];
+    try {
+        $st = db()->query(
+            "SELECT id, name, whatsappPhone, telegramChatId, telegramUsername
+               FROM `Supervisor` WHERE isActive = 1
+              ORDER BY (telegramChatId IS NOT NULL) DESC, name ASC"
+        );
+        foreach ($st->fetchAll() as $r) {
+            $supervisors[] = [
+                'id' => $r['id'], 'name' => $r['name'], 'phone' => $r['whatsappPhone'],
+                'linked' => !empty($r['telegramChatId']),
+                'telegramUsername' => $r['telegramUsername'] ?: null,
+                'deepLink' => $botUsername ? ('https://t.me/' . $botUsername . '?start=sup_' . $r['id']) : null,
+            ];
+        }
+    } catch (Throwable $e) { /* leave empty */ }
+    jsonOk([
+        'tokenSet' => $tokenSet,
+        'tokenSource' => $tokenSource,
+        'botUsername' => $botUsername,
+        'webhookUrl' => $wh['url'] ?? null,
+        'webhookExpected' => tgWebhookUrl(),
+        'webhookOk' => $tokenSet && !empty($wh['url']) && ($wh['url'] === tgWebhookUrl()),
+        'group' => [
+            'enabled' => (bool) ($group['enabled'] ?? false),
+            'chatId' => $group['chatId'] ?? null,
+            'title' => $group['title'] ?? null,
+        ],
+        'groupCandidate' => (!empty($cand['chatId'])) ? ['chatId' => $cand['chatId'], 'title' => $cand['title'] ?? ''] : null,
+        'drivers' => $drivers,
+        'linkedCount' => count(array_filter($drivers, fn($d) => $d['linked'])),
+        'driverCount' => count($drivers),
+        'supervisors' => $supervisors,
+        'supervisorLinkedCount' => count(array_filter($supervisors, fn($s) => $s['linked'])),
+        'supervisorCount' => count($supervisors),
+    ]);
+}
+if (in_array($method, ['PUT', 'POST'], true) && $path === '/admin/telegram/token') {
+    $u = authUser(); if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
+    $b = readJsonBody();
+    $token = trim((string) ($b['token'] ?? ''));
+    if ($token === '') {
+        // Clear the saved token → fall back to the .env value (if any).
+        notifWriteSetting('telegram_bot_token', ['value' => ''], $u['sub'] ?? null);
+        jsonOk(['ok' => true, 'cleared' => true]);
+    }
+    // Verify the token against Telegram BEFORE saving, so a typo can't take the
+    // bot offline. getMe also gives us the new @username.
+    $me = tgApi('getMe', [], $token);
+    if ($me === null || empty($me['username'])) jsonErr('التوكن غير صالح — راجعه من BotFather', 400, 'BAD_TOKEN');
+    notifWriteSetting('telegram_bot_token', ['value' => $token], $u['sub'] ?? null);
+    // Point the new bot at our webhook (reuse the stored secret, or make one).
+    $sec = notifReadSetting('telegram_webhook_secret');
+    $secret = trim((string) ($sec['value'] ?? ''));
+    if ($secret === '') { $secret = bin2hex(random_bytes(16)); notifWriteSetting('telegram_webhook_secret', ['value' => $secret], $u['sub'] ?? null); }
+    $wh = tgApi('setWebhook', [
+        'url' => tgWebhookUrl(), 'secret_token' => $secret,
+        'allowed_updates' => ['message', 'edited_message', 'callback_query'],
+        'drop_pending_updates' => true,
+    ], $token);
+    jsonOk(['ok' => true, 'botUsername' => $me['username'], 'webhookSet' => $wh !== null]);
+}
+if ($method === 'POST' && $path === '/admin/telegram/webhook') {
+    $u = authUser(); if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
+    if (!tgEnabled()) jsonErr('توكن البوت غير مضبوط', 400, 'NO_TOKEN');
+    $sec = notifReadSetting('telegram_webhook_secret');
+    $secret = trim((string) ($sec['value'] ?? ''));
+    if ($secret === '') { $secret = bin2hex(random_bytes(16)); notifWriteSetting('telegram_webhook_secret', ['value' => $secret], $u['sub'] ?? null); }
+    $r = tgApi('setWebhook', [
+        'url' => tgWebhookUrl(),
+        'secret_token' => $secret,
+        'allowed_updates' => ['message', 'edited_message', 'callback_query'],
+        'drop_pending_updates' => true,
+    ]);
+    if ($r === null) jsonErr('فشل تفعيل الـ webhook — راجع التوكن', 502, 'TG_FAILED');
+    jsonOk(['ok' => true, 'url' => tgWebhookUrl()]);
+}
+if (in_array($method, ['PUT', 'POST'], true) && $path === '/admin/telegram/group') {
+    $u = authUser(); if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
+    $b = readJsonBody();
+    $chatId = isset($b['chatId']) && $b['chatId'] !== '' ? $b['chatId'] : null;
+    $enabled = !empty($b['enabled']);
+    $title = trim((string) ($b['title'] ?? ''));
+    $cfg = ['enabled' => $enabled, 'chatId' => $chatId, 'title' => $title ?: null];
+    notifWriteSetting('telegram_order_group', $cfg, $u['sub'] ?? null);
+    jsonOk($cfg);
+}
+if ($method === 'POST' && $path === '/admin/telegram/test') {
+    $u = authUser(); if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
+    if (tgGroupId() === null) jsonErr('لا يوجد جروب مربوط بعد', 400, 'NO_GROUP');
+    $ok = tgSendGroup("✅ رسالة تجربة من تميم — الربط بتلجرام شغّال.");
+    if (!$ok) jsonErr('فشل الإرسال — تأكد إن البوت موجود في الجروب', 502, 'TG_FAILED');
+    jsonOk(['ok' => true]);
+}
+if ($method === 'POST' && $path === '/admin/telegram/driver-unlink') {
+    $u = authUser(); if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
+    $b = readJsonBody();
+    $drvId = trim((string) ($b['driverId'] ?? ''));
+    if ($drvId === '') jsonErr('driverId مطلوب', 422, 'VALIDATION_ERROR');
+    db()->prepare("UPDATE `DriverProfile` SET telegramChatId = NULL, telegramUsername = NULL, updatedAt = NOW(3) WHERE userId = ?")->execute([$drvId]);
+    jsonOk(['ok' => true]);
+}
+if ($method === 'POST' && $path === '/admin/telegram/supervisor-unlink') {
+    $u = authUser(); if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
+    $b = readJsonBody();
+    $supId = trim((string) ($b['supervisorId'] ?? ''));
+    if ($supId === '') jsonErr('supervisorId مطلوب', 422, 'VALIDATION_ERROR');
+    db()->prepare("UPDATE `Supervisor` SET telegramChatId = NULL, telegramUsername = NULL, updatedAt = NOW(3) WHERE id = ?")->execute([$supId]);
+    jsonOk(['ok' => true]);
 }
 
 // Payment gateway config — the page expects a fixed shape with `keys` and
@@ -8362,6 +8751,114 @@ if ($method === 'GET' && $path === '/admin/otp-lookup') {
         'expiresAt' => isoZ($row['expiresAt']),
         'createdAt' => isoZ($row['createdAt']),
     ]);
+}
+
+/*
+ * POST /telegram/webhook — Telegram pushes every bot update here. Public (no
+ * JWT): authenticated by the secret_token Telegram echoes in a header, which we
+ * set when registering the webhook. Handles two things:
+ *   • driver linking:  /start drv_<userId>  → store this chat as the driver's.
+ *   • group discovery:  any group message    → remember it as a candidate the
+ *     admin confirms on the Telegram settings page.
+ */
+if ($method === 'POST' && $path === '/telegram/webhook') {
+    $secret = trim((string) (notifReadSetting('telegram_webhook_secret')['value'] ?? ''));
+    $got = (string) ($_SERVER['HTTP_X_TELEGRAM_BOT_API_SECRET_TOKEN'] ?? '');
+    if ($secret === '' || !hash_equals($secret, $got)) jsonErr('forbidden', 403, 'FORBIDDEN');
+    $upd = readJsonBody();
+    $msg = $upd['message'] ?? $upd['edited_message'] ?? null;
+    if (is_array($msg)) {
+        $chat = is_array($msg['chat'] ?? null) ? $msg['chat'] : [];
+        $chatId = $chat['id'] ?? null;
+        $chatType = (string) ($chat['type'] ?? '');
+        $text = trim((string) ($msg['text'] ?? ''));
+        if (in_array($chatType, ['group', 'supergroup'], true) && $chatId !== null) {
+            // Remember the group so the admin can one-tap bind it.
+            notifWriteSetting('telegram_group_candidate',
+                ['chatId' => $chatId, 'title' => (string) ($chat['title'] ?? ''), 'ts' => time()], null);
+        }
+        if ($chatType === 'private' && preg_match('#^/start\s+drv_([A-Za-z0-9_-]+)#', $text, $mm)) {
+            $drvId = $mm[1];
+            $uname = trim((string) ($msg['from']['username'] ?? ''));
+            $ok = false;
+            try {
+                $st = db()->prepare("UPDATE `DriverProfile` SET telegramChatId = ?, telegramUsername = ?, updatedAt = NOW(3) WHERE userId = ?");
+                $st->execute([(string) $chatId, $uname !== '' ? $uname : null, $drvId]);
+                $ok = $st->rowCount() > 0;
+            } catch (Throwable $e) { error_log('[api.php] tg link: ' . $e->getMessage()); }
+            if ($ok) {
+                $dn = '';
+                try { $q = db()->prepare("SELECT name FROM `User` WHERE id = ? LIMIT 1"); $q->execute([$drvId]); $dn = (string) ($q->fetchColumn() ?: ''); } catch (Throwable $e) {}
+                tgSend($chatId, "تم ربط حسابك بتميم ✅\nأهلاً " . ($dn ?: 'كابتن') . " — هتوصلك طلباتك هنا على تلجرام.");
+            } else {
+                tgSend($chatId, "مش لاقيين كود الربط. تواصل مع الإدارة عشان يبعتولك اللينك الصح.");
+            }
+        } elseif ($chatType === 'private' && preg_match('#^/start\s+sup_([A-Za-z0-9_-]+)#', $text, $ms)) {
+            $supId = $ms[1];
+            $uname = trim((string) ($msg['from']['username'] ?? ''));
+            $ok = false;
+            try {
+                $st = db()->prepare("UPDATE `Supervisor` SET telegramChatId = ?, telegramUsername = ?, updatedAt = NOW(3) WHERE id = ?");
+                $st->execute([(string) $chatId, $uname !== '' ? $uname : null, $supId]);
+                $ok = $st->rowCount() > 0;
+            } catch (Throwable $e) { error_log('[api.php] tg sup link: ' . $e->getMessage()); }
+            if ($ok) {
+                $sn = '';
+                try { $q = db()->prepare("SELECT name FROM `Supervisor` WHERE id = ? LIMIT 1"); $q->execute([$supId]); $sn = (string) ($q->fetchColumn() ?: ''); } catch (Throwable $e) {}
+                tgSend($chatId, "تم ربط حسابك كمشرف في تميم ✅\nأهلاً " . ($sn ?: 'أستاذ') . " — هتوصلك الطلبات هنا على تلجرام.");
+            } else {
+                tgSend($chatId, "مش لاقيين كود الربط. تواصل مع الإدارة عشان يبعتولك اللينك الصح.");
+            }
+        } elseif ($chatType === 'private' && $text === '/start') {
+            tgSend($chatId, "أهلاً بك في بوت تميم للتوصيل 🚚\nلو إنت كابتن أو مشرف، افتح رابط الربط اللي وصلك من الإدارة عشان نربط حسابك.");
+        }
+    }
+    // ── Inline button taps: the driver advances their order from Telegram ──
+    $cb = $upd['callback_query'] ?? null;
+    if (is_array($cb)) {
+        $cbId = (string) ($cb['id'] ?? '');
+        $data = (string) ($cb['data'] ?? '');
+        $fromId = $cb['from']['id'] ?? null;
+        $cbMsg = is_array($cb['message'] ?? null) ? $cb['message'] : [];
+        $mChatId = $cbMsg['chat']['id'] ?? null;
+        $mId = $cbMsg['message_id'] ?? null;
+        if (preg_match('#^o:([^:]+):([PRD])$#', $data, $cm)) {
+            $orderId = $cm[1];
+            $target = ['P' => 'PICKED_UP', 'R' => 'IN_ROUTE', 'D' => 'DELIVERED'][$cm[2]];
+            $os = db()->prepare("SELECT o.status, o.assignedDriverId, dp.telegramChatId
+                                   FROM `Order` o LEFT JOIN `DriverProfile` dp ON dp.userId = o.assignedDriverId
+                                  WHERE o.id = ? LIMIT 1");
+            $os->execute([$orderId]); $ord = $os->fetch();
+            if (!$ord) {
+                tgAnswerCallback($cbId, 'الطلب غير موجود');
+            } elseif ((string) ($ord['telegramChatId'] ?? '') !== (string) $fromId) {
+                // Only the order's own assigned driver may move it.
+                tgAnswerCallback($cbId, 'مش مسموح — ده مش طلبك');
+            } else {
+                $cur = (string) $ord['status'];
+                $allowed = [
+                    'PICKED_UP' => ['DRIVER_ASSIGNED', 'ACCEPTED', 'NEW'],
+                    'IN_ROUTE' => ['PICKED_UP'],
+                    'DELIVERED' => ['PICKED_UP', 'IN_ROUTE'],
+                ];
+                if (in_array($cur, $allowed[$target] ?? [], true)) {
+                    tgAdvanceOrder($orderId, $target, (string) $ord['assignedDriverId']);
+                    tgAnswerCallback($cbId, $target === 'PICKED_UP' ? 'تم تسجيل الاستلام ✅' : ($target === 'IN_ROUTE' ? 'في الطريق 🛵' : 'تم التوصيل ✅ شكراً'));
+                    $nextKb = tgDriverKeyboard($orderId, $target);
+                } else {
+                    tgAnswerCallback($cbId, 'الحالة اتغيرت بالفعل');
+                    $nextKb = tgDriverKeyboard($orderId, $cur);
+                }
+                if ($mChatId !== null && $mId !== null) {
+                    tgApi('editMessageReplyMarkup', ['chat_id' => $mChatId, 'message_id' => $mId,
+                        'reply_markup' => $nextKb ?: ['inline_keyboard' => []]]);
+                }
+            }
+        } else {
+            tgAnswerCallback($cbId, '');
+        }
+    }
+    jsonOk(['ok' => true]);
 }
 
 if ($method === 'POST' && $path === '/auth/forgot-password') {

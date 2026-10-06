@@ -126,6 +126,9 @@ const SupervisorsPage = lazy(() =>
 const WhatsAppPage = lazy(() =>
   import('./routes/whatsapp.js').then((m) => ({ default: m.WhatsAppPage })),
 );
+const TelegramPage = lazy(() =>
+  import('./routes/telegram.js').then((m) => ({ default: m.TelegramPage })),
+);
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
   const user = useAuth((s) => s.user);
@@ -217,6 +220,7 @@ const routes: RouteObject[] = [
           { path: 'alerts', element: <AlertsPage /> },
           { path: 'whatsapp', element: <WhatsAppPage /> },
           { path: 'whatsapp/templates', element: <NotificationTemplatesPage /> },
+          { path: 'telegram', element: <TelegramPage /> },
           { path: 'broadcast', element: <BroadcastPage /> },
           { path: 'supervisors', element: <SupervisorsPage /> },
           { path: 'admins', element: <AdminsPage /> },

@@ -21,6 +21,7 @@ import {
   Package,
   Percent,
   Route,
+  Send,
   Settings,
   ShieldCheck,
   Smartphone,
@@ -129,6 +130,7 @@ const NAV_SECTIONS: NavSection[] = [
     items: [
       { to: '/broadcast', icon: Megaphone, label: 'إشعار جماعي', perm: 'broadcast' },
       { to: '/whatsapp', icon: MessageCircle, label: 'ربط واتساب', perm: 'whatsapp' },
+      { to: '/telegram', icon: Send, label: 'تلجرام', perm: 'whatsapp' },
       { to: '/whatsapp/templates', icon: Bell, label: 'قوالب الرسائل' },
       { to: '/reviews', icon: Star, label: 'التقييمات', perm: 'reviews' },
     ],
