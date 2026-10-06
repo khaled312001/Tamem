@@ -1,0 +1,30 @@
+name: Deploy reset page
+
+# Uploads apps/landing/public/reset/index.html to
+# https://deliverytamem.com/reset/ — the page an admin-issued password reset
+# link opens. Nothing to build; the file in the repo is the file served.
+#
+# Dispatch-only, and cheap to re-run: it is one static file and the deploy
+# renames into place, so a retry after a flaky SSH connect is safe.
+
+on:
+  workflow_dispatch: {}
+
+concurrency:
+  group: reset-page-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install paramiko
+      - name: Deploy
+        env:
+          TAMEM_SSH_PASS: ${{ secrets.HOSTINGER_SSH_PASS }}
+        run: python scripts/deploy-reset-page.py

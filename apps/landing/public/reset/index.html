@@ -1,0 +1,335 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <!-- A reset link must never be indexed, and must not leak in a referrer. -->
+    <meta name="robots" content="noindex, nofollow" />
+    <meta name="referrer" content="no-referrer" />
+    <title>تغيير كلمة المرور — تميم للتوصيل</title>
+    <link rel="icon" href="/favicon.png" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Cairo:wght@700;800;900&family=Tajawal:wght@400;500;700&display=swap"
+      rel="stylesheet"
+    />
+    <style>
+      :root {
+        --red: #e0301e;
+        --red-dark: #b82414;
+        --gold: #f2a93b;
+        --dark: #241310;
+        --ink: #2b2622;
+        --muted: #58595b;
+        --surface: #fcf8f4;
+        --border: #e8ded4;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+        padding: 20px 16px 48px;
+        background: var(--surface);
+        color: var(--ink);
+        font-family: Tajawal, system-ui, sans-serif;
+      }
+      .card {
+        width: 100%;
+        max-width: 420px;
+        background: #fff;
+        border: 1px solid var(--border);
+        border-radius: 20px;
+        overflow: hidden;
+        box-shadow: 0 10px 30px rgba(36, 19, 16, 0.08);
+      }
+      .hero {
+        background: linear-gradient(135deg, var(--red), var(--red-dark));
+        color: #fff;
+        padding: 28px 24px 24px;
+        text-align: center;
+      }
+      .hero .mark {
+        width: 56px;
+        height: 56px;
+        margin: 0 auto 12px;
+        border-radius: 50%;
+        background: rgba(255, 255, 255, 0.16);
+        display: grid;
+        place-items: center;
+        font-size: 26px;
+      }
+      h1 {
+        font-family: Cairo, sans-serif;
+        font-weight: 900;
+        font-size: 22px;
+        margin: 0 0 6px;
+      }
+      .hero p {
+        margin: 0;
+        font-size: 14px;
+        opacity: 0.9;
+      }
+      .body {
+        padding: 22px 24px 26px;
+      }
+      label {
+        display: block;
+        font-weight: 700;
+        font-size: 14px;
+        margin-bottom: 6px;
+      }
+      .field {
+        position: relative;
+        margin-bottom: 16px;
+      }
+      input {
+        width: 100%;
+        padding: 12px 14px;
+        font-family: inherit;
+        font-size: 15px;
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        background: #fff;
+        outline: none;
+        direction: ltr;
+        text-align: left;
+      }
+      input:focus {
+        border-color: var(--red);
+        box-shadow: 0 0 0 3px rgba(224, 48, 30, 0.15);
+      }
+      .peek {
+        position: absolute;
+        inset-inline-end: 8px;
+        top: 32px;
+        border: 0;
+        background: none;
+        cursor: pointer;
+        font-size: 13px;
+        color: var(--muted);
+        font-family: inherit;
+        padding: 6px;
+      }
+      button.main {
+        width: 100%;
+        padding: 14px;
+        border: 0;
+        border-radius: 12px;
+        background: var(--red);
+        color: #fff;
+        font-family: Cairo, sans-serif;
+        font-weight: 800;
+        font-size: 16px;
+        cursor: pointer;
+      }
+      button.main:disabled {
+        opacity: 0.55;
+        cursor: default;
+      }
+      .hint {
+        font-size: 13px;
+        color: var(--muted);
+        margin: 10px 0 0;
+        line-height: 1.7;
+      }
+      .msg {
+        font-size: 14px;
+        border-radius: 12px;
+        padding: 12px 14px;
+        margin-bottom: 16px;
+        line-height: 1.7;
+      }
+      .msg.err {
+        background: #fdecea;
+        color: #8c1b10;
+      }
+      .msg.ok {
+        background: #e9f7ee;
+        color: #15603a;
+      }
+      .wa {
+        display: block;
+        text-align: center;
+        margin-top: 14px;
+        padding: 12px;
+        border-radius: 12px;
+        border: 1px solid var(--border);
+        color: var(--ink);
+        text-decoration: none;
+        font-weight: 700;
+        font-size: 14px;
+      }
+      .center {
+        text-align: center;
+      }
+      .big {
+        font-size: 44px;
+        line-height: 1;
+        margin-bottom: 10px;
+      }
+      [hidden] {
+        display: none !important;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --surface: #1a1210;
+          --ink: #f5ece4;
+          --muted: #b4a79c;
+          --border: #3a2b26;
+        }
+        body {
+          background: var(--surface);
+        }
+        .card {
+          background: #241a17;
+        }
+        input {
+          background: #2e211d;
+          color: var(--ink);
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="card">
+      <div class="hero">
+        <div class="mark">🚚</div>
+        <h1>تغيير كلمة المرور</h1>
+        <p id="sub">جاري التحقق من الرابط…</p>
+      </div>
+
+      <div class="body">
+        <!-- 1. the link is being checked -->
+        <p id="loading" class="hint center">لحظة واحدة…</p>
+
+        <!-- 2. the link is dead -->
+        <section id="invalid" hidden>
+          <div class="msg err" id="invalidText"></div>
+          <a class="wa" id="waHelp" href="#">كلّم الإدارة على واتساب</a>
+        </section>
+
+        <!-- 3. the form -->
+        <form id="form" hidden>
+          <div id="formError" class="msg err" hidden></div>
+
+          <div class="field">
+            <label for="pw">كلمة المرور الجديدة</label>
+            <input id="pw" type="password" autocomplete="new-password" placeholder="8 أحرف على الأقل" />
+            <button type="button" class="peek" id="peek">إظهار</button>
+          </div>
+
+          <div class="field">
+            <label for="pw2">تأكيد كلمة المرور</label>
+            <input id="pw2" type="password" autocomplete="new-password" placeholder="اكتبها تاني" />
+          </div>
+
+          <button class="main" id="submit" type="submit">حفظ كلمة المرور</button>
+          <p class="hint">
+            الرابط ده يستخدم مرة واحدة بس. بعد الحفظ ارجع للتطبيق وسجّل دخولك برقم هاتفك وكلمة
+            المرور الجديدة.
+          </p>
+        </form>
+
+        <!-- 4. done -->
+        <section id="done" hidden class="center">
+          <div class="big">✅</div>
+          <div class="msg ok">
+            تم تغيير كلمة المرور. ارجع لتطبيق تميم وسجّل دخولك برقم هاتفك وكلمة المرور الجديدة.
+          </div>
+        </section>
+      </div>
+    </main>
+
+    <script>
+      (function () {
+        'use strict';
+        var API = 'https://backendtamem.deliverytamem.com/api/v1';
+        var SUPPORT_WA = 'https://wa.me/201070750169?text=' +
+          encodeURIComponent('السلام عليكم، رابط تغيير كلمة المرور مش شغال معايا.');
+        var DEAD = 'الرابط غير صالح أو انتهت صلاحيته — كلّم الإدارة عشان تبعتلك رابط جديد.';
+
+        var $ = function (id) { return document.getElementById(id); };
+        var token = new URLSearchParams(location.search).get('t') || '';
+        $('waHelp').href = SUPPORT_WA;
+
+        function show(which, text) {
+          $('loading').hidden = true;
+          $('invalid').hidden = which !== 'invalid';
+          $('form').hidden = which !== 'form';
+          $('done').hidden = which !== 'done';
+          if (which === 'invalid') {
+            $('invalidText').textContent = text || DEAD;
+            $('sub').textContent = 'الرابط مش شغال';
+          }
+        }
+
+        // The API answers {data:…} on success and {error:{message…}} on failure;
+        // read the Arabic message when there is one so the page never shows a
+        // code the customer cannot act on.
+        function msgOf(payload, fallback) {
+          var e = payload && payload.error;
+          return (e && (e.messageAr || e.message)) || fallback;
+        }
+
+        if (!token) { show('invalid'); return; }
+
+        fetch(API + '/auth/reset-link?t=' + encodeURIComponent(token))
+          .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
+          .then(function (res) {
+            if (!res.ok) { show('invalid', msgOf(res.j, DEAD)); return; }
+            var name = (res.j.data && res.j.data.name) || '';
+            $('sub').textContent = name ? 'أهلاً ' + name + ' — اختار كلمة مرور جديدة' : 'اختار كلمة مرور جديدة';
+            show('form');
+            $('pw').focus();
+          })
+          .catch(function () { show('invalid', 'فيه مشكلة في الاتصال — جرّب تاني بعد شوية.'); });
+
+        $('peek').addEventListener('click', function () {
+          var on = $('pw').type === 'password';
+          $('pw').type = $('pw2').type = on ? 'text' : 'password';
+          this.textContent = on ? 'إخفاء' : 'إظهار';
+        });
+
+        $('form').addEventListener('submit', function (e) {
+          e.preventDefault();
+          var pw = $('pw').value, pw2 = $('pw2').value, err = $('formError');
+          function fail(t) { err.textContent = t; err.hidden = false; }
+          err.hidden = true;
+          if (pw.length < 8) return fail('كلمة المرور لازم تكون 8 أحرف على الأقل.');
+          if (pw !== pw2) return fail('كلمتا المرور مش متطابقتين.');
+
+          $('submit').disabled = true;
+          $('submit').textContent = 'جاري الحفظ…';
+          fetch(API + '/auth/reset-link', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ token: token, password: pw }),
+          })
+            .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
+            .then(function (res) {
+              if (res.ok) { show('done'); $('sub').textContent = 'تمام'; return; }
+              // A 401 here means the link died between opening and saving, so
+              // the form is useless now — send them back to the office.
+              if (res.j && res.j.error && res.j.error.code === 'INVALID_LINK') {
+                show('invalid', msgOf(res.j, DEAD));
+                return;
+              }
+              $('submit').disabled = false;
+              $('submit').textContent = 'حفظ كلمة المرور';
+              fail(msgOf(res.j, 'تعذّر الحفظ — جرّب تاني.'));
+            })
+            .catch(function () {
+              $('submit').disabled = false;
+              $('submit').textContent = 'حفظ كلمة المرور';
+              fail('فيه مشكلة في الاتصال — جرّب تاني.');
+            });
+        });
+      })();
+    </script>
+  </body>
+</html>

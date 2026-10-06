@@ -6396,6 +6396,275 @@ if ($method === 'DELETE' && preg_match('#^/admin/zones/areas/([^/]+)$#', $path, 
 // updater must never touch credentials — so this is the one explicit door, and
 // it is narrow: an ADMIN cannot reset another admin's password, which would be
 // a straight privilege escalation. Only a SUPER_ADMIN can.
+/**
+ * Admin-issued password reset LINK.
+ *
+ * The app's «نسيت كلمة المرور» tells customers to message the office. The
+ * office can already set a password for them (POST /admin/users/:id/password),
+ * but then it has to read a password out loud and the customer never picks
+ * their own. This issues a one-time link instead: the admin sends it on
+ * WhatsApp and the customer chooses their own password in the browser.
+ *
+ * Reuses the `passwordResetHash` / `passwordResetExpiresAt` columns that the
+ * OTP reset flow used, so there is no migration — and only one reset secret can
+ * be outstanding per user, which is the behaviour we want: issuing a new link
+ * invalidates the previous one.
+ *
+ * The token is `base64url(userId).<48 hex>`; only the sha256 of the random half
+ * is stored, so the database never holds anything that opens the link.
+ */
+const RESET_LINK_TTL_HOURS = 48;
+
+function resetLinkBaseUrl(): string {
+    // Follows «رابط الموقع» in محتوى التطبيق, so moving the site moves the links.
+    $url = (string) (appContentMerged()['websiteUrl'] ?? '');
+    return rtrim($url !== '' ? $url : 'https://deliverytamem.com', '/');
+}
+
+function resetLinkEncode(string $userId, string $secret): string {
+    return rtrim(strtr(base64_encode($userId), '+/', '-_'), '=') . '.' . $secret;
+}
+
+/** [userId, secret] or null when the token is malformed. */
+function resetLinkDecode(string $token): ?array {
+    $parts = explode('.', trim($token));
+    if (count($parts) !== 2) return null;
+    $pad = strlen($parts[0]) % 4;
+    $id = base64_decode(strtr($parts[0], '-_', '+/') . ($pad ? str_repeat('=', 4 - $pad) : ''), true);
+    if ($id === false || $id === '' || !ctype_xdigit($parts[1]) || strlen($parts[1]) !== 48) return null;
+    return [$id, $parts[1]];
+}
+
+/** The user a valid, unexpired token points at — or null. Never says which check failed. */
+function resetLinkUser(string $token): ?array {
+    $d = resetLinkDecode($token);
+    if (!$d) return null;
+    [$uid, $secret] = $d;
+    $st = db()->prepare('SELECT id, name, phone, role, passwordResetHash,
+        (passwordResetExpiresAt IS NOT NULL AND passwordResetExpiresAt > NOW(3)) AS stillValid
+        FROM `User` WHERE id = ? LIMIT 1');
+    $st->execute([$uid]);
+    $u = $st->fetch();
+    if (!$u || !$u['passwordResetHash'] || !(int) $u['stillValid']) return null;
+    if (!hash_equals((string) $u['passwordResetHash'], hash('sha256', $secret))) return null;
+    return $u;
+}
+
+/**
+ * «أول أوردر مجاني» — فحص وتصفير لرقم واحد.
+ *
+ * The promo is deliberately hard to re-claim: deleting a customer records their
+ * PHONE in PromoFirstOrderPhone first, precisely so a fresh account on the same
+ * number cannot take it twice. That guard is right by default, and it is also
+ * the thing an admin occasionally has to override on purpose — a number burnt
+ * while testing, or a customer whose first order never actually happened.
+ *
+ * Doing that by hand means three places at once (the table, the legacy Setting
+ * ledger, and the customer's own app orders), which is how it ends up
+ * half-done. This endpoint reports all of them, and clears exactly what is
+ * asked for.
+ */
+
+/** Every spelling a phone could be stored under: +20…, 0…, and bare. */
+function promoPhoneVariants(string $raw): array {
+    $raw = trim($raw);
+    $out = [$raw];
+    $digits = preg_replace('/\D/', '', $raw) ?? '';
+    if (preg_match('/(1[0125]\d{8})$/', $digits, $m)) {
+        $out[] = '+20' . $m[1];
+        $out[] = '0' . $m[1];
+        $out[] = '20' . $m[1];
+        $out[] = $m[1];
+    }
+    return array_values(array_unique(array_filter($out, fn ($v) => $v !== '')));
+}
+
+function promoFirstOrderReport(array $variants): array {
+    ensureFoPhoneSchema();
+    $in = implode(',', array_fill(0, count($variants), '?'));
+
+    $st = db()->prepare("SELECT phone, createdAt FROM `PromoFirstOrderPhone` WHERE phone IN ($in)");
+    $st->execute($variants);
+    $inTable = $st->fetchAll();
+
+    $legacy = array_values(array_filter($variants, fn ($v) => array_key_exists($v, foPhoneLegacyLedger())));
+
+    $st = db()->prepare("SELECT id, name, phone, isPhoneVerified, createdAt FROM `User` WHERE phone IN ($in)");
+    $st->execute($variants);
+    $users = [];
+    foreach ($st->fetchAll() as $u) {
+        $uid = (string) $u['id'];
+        // Only APP orders decide eligibility — a MANUAL/CUSTOM order the office
+        // typed in neither grants the promo nor burns it.
+        $o = db()->prepare("SELECT id, orderNumber, status, source, createdAt FROM `Order`
+                            WHERE customerId = ? AND status NOT IN ('CANCELLED','REJECTED')
+                              AND (source IS NULL OR source NOT IN ('MANUAL','CUSTOM'))
+                            ORDER BY createdAt DESC");
+        $o->execute([$uid]);
+        $appOrders = $o->fetchAll();
+        $tot = db()->prepare('SELECT COUNT(*) FROM `Order` WHERE customerId = ?');
+        $tot->execute([$uid]);
+        $users[] = [
+            'id' => $uid,
+            'name' => $u['name'],
+            'phone' => $u['phone'],
+            'isPhoneVerified' => (bool) $u['isPhoneVerified'],
+            'createdAt' => $u['createdAt'],
+            'ordersTotal' => (int) $tot->fetchColumn(),
+            'appOrdersCounting' => count($appOrders),
+            'appOrders' => array_map(fn ($r) => [
+                'id' => $r['id'], 'orderNumber' => $r['orderNumber'],
+                'status' => $r['status'], 'source' => $r['source'], 'createdAt' => $r['createdAt'],
+            ], $appOrders),
+        ];
+    }
+
+    return [
+        'variants' => $variants,
+        'inPromoTable' => $inTable,
+        'inLegacyLedger' => $legacy,
+        'users' => $users,
+        // What still stands between this phone and the promo, in plain terms.
+        'blockedBy' => array_values(array_filter([
+            $inTable ? 'الرقم مسجّل في جدول «أول أوردر»' : null,
+            $legacy ? 'الرقم مسجّل في السجل القديم' : null,
+            array_sum(array_column($users, 'appOrdersCounting')) > 0 ? 'للعميل طلبات من التطبيق' : null,
+            ($users && !array_filter(array_column($users, 'isPhoneVerified'))) ? 'الرقم غير مُوثَّق (isPhoneVerified = 0)' : null,
+        ])),
+    ];
+}
+
+if ($method === 'GET' && $path === '/admin/promo/first-order') {
+    $u = authUser();
+    if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
+    $phone = trim((string) ($_GET['phone'] ?? ''));
+    if ($phone === '') jsonErr('اكتب رقم الهاتف', 422, 'VALIDATION_ERROR');
+    jsonOk(promoFirstOrderReport(promoPhoneVariants($phone)));
+}
+
+if ($method === 'POST' && $path === '/admin/promo/first-order/reset') {
+    $u = authUser();
+    if (($u['role'] ?? '') !== 'SUPER_ADMIN') jsonErr('فقط مدير النظام', 403, 'FORBIDDEN');
+    $b = readJsonBody();
+    $phone = trim((string) ($b['phone'] ?? ''));
+    if ($phone === '') jsonErr('اكتب رقم الهاتف', 422, 'VALIDATION_ERROR');
+    $variants = promoPhoneVariants($phone);
+    $before = promoFirstOrderReport($variants);
+
+    $deleteOrders = !empty($b['deleteOrders']);
+    $verify = !empty($b['verify']);
+    $in = implode(',', array_fill(0, count($variants), '?'));
+    $pdo = db();
+    $ordersDeleted = 0;
+
+    try {
+        $pdo->beginTransaction();
+
+        ensureFoPhoneSchema();
+        $pdo->prepare("DELETE FROM `PromoFirstOrderPhone` WHERE phone IN ($in)")->execute($variants);
+
+        // The legacy ledger is a JSON map in Setting; rewrite it without these keys.
+        $ledger = foPhoneLegacyLedger();
+        $trimmed = array_diff_key($ledger, array_flip($variants));
+        if (count($trimmed) !== count($ledger)) {
+            $pdo->prepare('INSERT INTO `Setting` (`key`,`value`,`description`,`updatedAt`,`updatedById`) VALUES (?,?,NULL,NOW(3),?) ON DUPLICATE KEY UPDATE `value`=VALUES(`value`), `updatedAt`=VALUES(`updatedAt`), `updatedById`=VALUES(`updatedById`)')
+                ->execute(['promo_fo_phones', json_encode($trimmed, JSON_UNESCAPED_UNICODE), $u['sub'] ?? null]);
+        }
+
+        foreach ($before['users'] as $usr) {
+            if ($verify) {
+                $pdo->prepare('UPDATE `User` SET isPhoneVerified = 1, updatedAt = NOW(3) WHERE id = ?')
+                    ->execute([$usr['id']]);
+            }
+            if (!$deleteOrders) continue;
+            // Only the APP orders that count against «أول أوردر». The office's
+            // MANUAL/CUSTOM records are the shop's books and are never touched.
+            $ids = array_column($usr['appOrders'], 'id');
+            if (!$ids) continue;
+            $oin = implode(',', array_fill(0, count($ids), '?'));
+            // Same two RESTRICT keys the customer delete has to clear by hand;
+            // everything else under Order cascades.
+            $pdo->prepare("DELETE FROM `OrderStatusHistory` WHERE orderId IN ($oin)")->execute($ids);
+            $pdo->prepare("UPDATE `Order` SET parentOrderId = NULL WHERE parentOrderId IN ($oin)")->execute($ids);
+            $pdo->prepare("DELETE FROM `Order` WHERE id IN ($oin)")->execute($ids);
+            $ordersDeleted += count($ids);
+        }
+
+        $pdo->commit();
+    } catch (PDOException $e) {
+        if ($pdo->inTransaction()) $pdo->rollBack();
+        error_log('[api.php] promo first-order reset: ' . $e->getMessage());
+        jsonErr('تعذّر التصفير — راجع سجل الأخطاء', 422, 'RESET_FAILED');
+    }
+
+    error_log(sprintf('[api.php] first-order promo reset for %s by %s (orders deleted: %d, verified: %s)',
+        $phone, (string) ($u['sub'] ?? '?'), $ordersDeleted, $verify ? 'yes' : 'no'));
+
+    jsonOk([
+        'phone' => $phone,
+        'ordersDeleted' => $ordersDeleted,
+        'before' => $before,
+        // The static caches inside foPhoneLegacyLedger() make a same-request
+        // re-read stale, so this is the next request's view, taken fresh.
+        'after' => promoFirstOrderReport($variants),
+    ]);
+}
+
+if ($method === 'POST' && preg_match('#^/admin/users/([^/]+)/reset-link$#', $path, $m)) {
+    $u = authUser();
+    if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
+    $st = db()->prepare('SELECT id, name, phone, role FROM `User` WHERE id = ? LIMIT 1');
+    $st->execute([$m[1]]);
+    $target = $st->fetch();
+    if (!$target) jsonErr('المستخدم غير موجود', 404, 'NOT_FOUND');
+    // Same rule as setting a password directly: only a super admin may hand out
+    // a link that opens another admin's account.
+    if (in_array((string) $target['role'], ['ADMIN', 'SUPER_ADMIN'], true)
+        && ($u['role'] ?? '') !== 'SUPER_ADMIN') {
+        jsonErr('فقط مدير النظام يقدر يعمل رابط لمسؤول', 403, 'FORBIDDEN');
+    }
+
+    $secret = bin2hex(random_bytes(24));
+    db()->prepare('UPDATE `User` SET passwordResetHash = ?, passwordResetExpiresAt = DATE_ADD(NOW(3), INTERVAL ' . RESET_LINK_TTL_HOURS . ' HOUR), updatedAt = NOW(3) WHERE id = ?')
+        ->execute([hash('sha256', $secret), $target['id']]);
+
+    $url = resetLinkBaseUrl() . '/reset/?t=' . rawurlencode(resetLinkEncode((string) $target['id'], $secret));
+    $msg = "تميم للتوصيل 🚚\nده رابط تغيير كلمة المرور بتاعة حسابك:\n" . $url
+        . "\nالرابط صالح " . RESET_LINK_TTL_HOURS . " ساعة ومرة واحدة بس.";
+    $digits = preg_replace('/\D/', '', (string) ($target['phone'] ?? '')) ?? '';
+
+    error_log('[api.php] reset link issued for user ' . $target['id'] . ' by ' . (string) ($u['sub'] ?? '?'));
+    jsonOk([
+        'url' => $url,
+        'expiresInHours' => RESET_LINK_TTL_HOURS,
+        'message' => $msg,
+        // Empty for Google sign-ups, whose phone column holds a g_… placeholder.
+        'whatsappUrl' => ($digits !== '' && !str_starts_with((string) $target['phone'], 'g_'))
+            ? 'https://wa.me/' . $digits . '?text=' . rawurlencode($msg) : '',
+        'user' => ['id' => $target['id'], 'name' => $target['name'], 'phone' => $target['phone']],
+    ]);
+}
+
+if ($method === 'GET' && $path === '/auth/reset-link') {
+    $u = resetLinkUser((string) ($_GET['t'] ?? ''));
+    // One message for every failure mode — expired, used, forged all read alike.
+    if (!$u) jsonErr('الرابط غير صالح أو انتهت صلاحيته — كلّم الإدارة عشان تبعتلك رابط جديد', 401, 'INVALID_LINK');
+    jsonOk(['name' => $u['name']]);
+}
+
+if ($method === 'POST' && $path === '/auth/reset-link') {
+    $b = readJsonBody();
+    $new = (string) ($b['password'] ?? '');
+    $u = resetLinkUser((string) ($b['token'] ?? ''));
+    if (!$u) jsonErr('الرابط غير صالح أو انتهت صلاحيته — كلّم الإدارة عشان تبعتلك رابط جديد', 401, 'INVALID_LINK');
+    if (strlen($new) < 8) jsonErr('كلمة المرور لازم تكون 8 أحرف على الأقل', 422, 'WEAK_PASSWORD');
+    // Clearing the hash in the same statement is what makes the link single-use.
+    db()->prepare('UPDATE `User` SET passwordHash = ?, passwordResetHash = NULL, passwordResetExpiresAt = NULL, updatedAt = NOW(3) WHERE id = ?')
+        ->execute([password_hash($new, PASSWORD_BCRYPT), $u['id']]);
+    error_log('[api.php] password set via reset link for user ' . $u['id']);
+    jsonOk(['ok' => true, 'name' => $u['name']]);
+}
+
 if ($method === 'POST' && preg_match('#^/admin/users/([^/]+)/password$#', $path, $m)) {
     $u = authUser();
     if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
