@@ -2128,14 +2128,15 @@ function tgTokenInfo(): array {
 function tgToken(): ?string { return tgTokenInfo()['token']; }
 function tgEnabled(): bool { return tgToken() !== null; }
 
-/** One Bot API call → decoded `result` on success, else null (logged). Pass
- *  $tokenOverride to call with a specific bot (e.g. verifying a new token). */
-function tgApi(string $method, array $params, ?string $tokenOverride = null): ?array {
+/** One Bot API call → the FULL decoded response ({ok, result?, parameters?}),
+ *  or ['ok'=>false] on transport failure. Lets callers read error details like
+ *  a group's migrate_to_chat_id. Pass $tokenOverride to call a specific bot. */
+function tgApiFull(string $method, array $params, ?string $tokenOverride = null): array {
     $token = $tokenOverride ?? tgToken();
-    if ($token === null) return null;
+    if ($token === null) return ['ok' => false];
     $url = 'https://api.telegram.org/bot' . $token . '/' . $method;
     $body = json_encode($params, JSON_UNESCAPED_UNICODE);
-    $raw = null; $code = 0;
+    $raw = null;
     try {
         if (function_exists('curl_init')) {
             $ch = curl_init($url);
@@ -2145,17 +2146,22 @@ function tgApi(string $method, array $params, ?string $tokenOverride = null): ?a
                 CURLOPT_POST => true, CURLOPT_POSTFIELDS => $body,
                 CURLOPT_TIMEOUT => 20, CURLOPT_SSL_VERIFYPEER => false,
             ]);
-            $raw = curl_exec($ch); $code = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE); curl_close($ch);
+            $raw = curl_exec($ch); curl_close($ch);
         } else {
             $ctx = stream_context_create(['http' => ['method' => 'POST',
                 'header' => "Content-Type: application/json\r\n", 'content' => $body,
                 'timeout' => 20, 'ignore_errors' => true]]);
             $raw = @file_get_contents($url, false, $ctx);
         }
-    } catch (Throwable $e) { error_log('[api.php] tgApi ' . $method . ': ' . $e->getMessage()); return null; }
+    } catch (Throwable $e) { error_log('[api.php] tgApi ' . $method . ': ' . $e->getMessage()); return ['ok' => false]; }
     $j = json_decode((string) $raw, true);
-    if (!is_array($j) || empty($j['ok'])) {
-        error_log('[api.php] tgApi ' . $method . ' failed (' . $code . '): ' . substr((string) $raw, 0, 300));
+    return is_array($j) ? $j : ['ok' => false];
+}
+/** One Bot API call → decoded `result` on success, else null (logged). */
+function tgApi(string $method, array $params, ?string $tokenOverride = null): ?array {
+    $j = tgApiFull($method, $params, $tokenOverride);
+    if (empty($j['ok'])) {
+        error_log('[api.php] tgApi ' . $method . ' failed: ' . substr(json_encode($j, JSON_UNESCAPED_UNICODE), 0, 300));
         return null;
     }
     return is_array($j['result'] ?? null) ? $j['result'] : [];
@@ -2244,7 +2250,24 @@ function tgGroupId() {
 }
 function tgSendGroup(string $text): bool {
     $gid = tgGroupId();
-    return $gid === null ? false : tgSend($gid, $text);
+    if ($gid === null) return false;
+    $p = ['chat_id' => $gid, 'text' => tgHtml($text), 'parse_mode' => 'HTML', 'disable_web_page_preview' => true];
+    $res = tgApiFull('sendMessage', $p);
+    if (!empty($res['ok'])) return true;
+    // Self-heal a basic-group → supergroup upgrade: Telegram hands back the new
+    // chat id. Persist it and retry, so the group keeps receiving silently
+    // instead of failing every order until someone re-binds it by hand.
+    $newId = $res['parameters']['migrate_to_chat_id'] ?? null;
+    if ($newId !== null) {
+        try {
+            $cfg = notifReadSetting('telegram_order_group');
+            $cfg['chatId'] = $newId;
+            notifWriteSetting('telegram_order_group', $cfg, null);
+        } catch (Throwable $e) { /* best-effort */ }
+        $p['chat_id'] = $newId;
+        return !empty(tgApiFull('sendMessage', $p)['ok']);
+    }
+    return false;
 }
 
 /** A driver's linked Telegram chat id (DriverProfile.telegramChatId), or null. */
@@ -3489,6 +3512,20 @@ if (in_array($method, ['PUT', 'POST'], true) && $path === '/admin/telegram/token
     // bot offline. getMe also gives us the new @username.
     $me = tgApi('getMe', [], $token);
     if ($me === null || empty($me['username'])) jsonErr('التوكن غير صالح — راجعه من BotFather', 400, 'BAD_TOKEN');
+    // Switching to a DIFFERENT bot invalidates every existing link: the new bot
+    // can't DM anyone until they press Start on it. Clear the stored chat ids so
+    // the dashboard shows everyone as "not linked" and they re-link on the new bot.
+    $prevBotId = (string) (notifReadSetting('telegram_bot_meta')['botId'] ?? '');
+    $newBotId = (string) ($me['id'] ?? '');
+    $clearedLinks = false;
+    if ($prevBotId !== '' && $prevBotId !== $newBotId) {
+        try {
+            db()->exec("UPDATE `DriverProfile` SET telegramChatId = NULL, telegramUsername = NULL, updatedAt = NOW(3) WHERE telegramChatId IS NOT NULL");
+            db()->exec("UPDATE `Supervisor` SET telegramChatId = NULL, telegramUsername = NULL, updatedAt = NOW(3) WHERE telegramChatId IS NOT NULL");
+            $clearedLinks = true;
+        } catch (Throwable $e) { error_log('[api.php] tg clear links: ' . $e->getMessage()); }
+    }
+    notifWriteSetting('telegram_bot_meta', ['botId' => $newBotId, 'username' => $me['username']], $u['sub'] ?? null);
     notifWriteSetting('telegram_bot_token', ['value' => $token], $u['sub'] ?? null);
     // Point the new bot at our webhook (reuse the stored secret, or make one).
     $sec = notifReadSetting('telegram_webhook_secret');
@@ -3499,7 +3536,7 @@ if (in_array($method, ['PUT', 'POST'], true) && $path === '/admin/telegram/token
         'allowed_updates' => ['message', 'edited_message', 'callback_query'],
         'drop_pending_updates' => true,
     ], $token);
-    jsonOk(['ok' => true, 'botUsername' => $me['username'], 'webhookSet' => $wh !== null]);
+    jsonOk(['ok' => true, 'botUsername' => $me['username'], 'webhookSet' => $wh !== null, 'clearedLinks' => $clearedLinks]);
 }
 if ($method === 'POST' && $path === '/admin/telegram/webhook') {
     $u = authUser(); if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
@@ -4426,7 +4463,25 @@ if ($method === 'GET' && preg_match('#^/admin/orders/([^/]+)$#', $path, $m)) {
         foreach ($o['legs'] as $i => $lg) $o['legs'][$i]['collect'] = $collect[$lg['id']] ?? 0.0;
     }
     $o['statusHistory'] = [];
-    try { $sh = db()->prepare('SELECT * FROM `OrderStatusHistory` WHERE orderId = ? ORDER BY createdAt ASC'); $sh->execute([$m[1]]); $o['statusHistory'] = array_map('jsonizeRow', $sh->fetchAll()); } catch (Throwable $e) {}
+    try {
+        // Enrich each row with WHO made the change (name + role) so the «السجل»
+        // card can show "الأدمن أحمد" / "السائق محمود" next to the timestamp.
+        $sh = db()->prepare(
+            'SELECT h.*, u.name AS changedByName, u.role AS changedByUserRole
+               FROM `OrderStatusHistory` h
+               LEFT JOIN `User` u ON u.id = h.changedById
+              WHERE h.orderId = ? ORDER BY h.createdAt ASC'
+        );
+        $sh->execute([$m[1]]);
+        $o['statusHistory'] = array_map(function ($r) {
+            $row = jsonizeRow($r);
+            $row['changedBy'] = !empty($r['changedById'])
+                ? ['id' => $r['changedById'], 'name' => $r['changedByName'] ?? null,
+                   'role' => $r['changedByRole'] ?: ($r['changedByUserRole'] ?? null)]
+                : null;
+            return $row;
+        }, $sh->fetchAll());
+    } catch (Throwable $e) {}
     jsonOk($o);
 }
 if ($method === 'POST' && $path === '/admin/orders') {
@@ -8824,7 +8879,9 @@ if ($method === 'POST' && $path === '/telegram/webhook') {
         $mId = $cbMsg['message_id'] ?? null;
         if (preg_match('#^o:([^:]+):([PRD])$#', $data, $cm)) {
             $orderId = $cm[1];
-            $target = ['P' => 'PICKED_UP', 'R' => 'IN_ROUTE', 'D' => 'DELIVERED'][$cm[2]];
+            // "تم التوصيل" closes the order fully (COMPLETED) so there's no
+            // leftover "إنهاء الطلب" step on the dashboard after the driver taps.
+            $target = ['P' => 'PICKED_UP', 'R' => 'IN_ROUTE', 'D' => 'COMPLETED'][$cm[2]];
             $os = db()->prepare("SELECT o.status, o.assignedDriverId, dp.telegramChatId
                                    FROM `Order` o LEFT JOIN `DriverProfile` dp ON dp.userId = o.assignedDriverId
                                   WHERE o.id = ? LIMIT 1");
@@ -8839,7 +8896,7 @@ if ($method === 'POST' && $path === '/telegram/webhook') {
                 $allowed = [
                     'PICKED_UP' => ['DRIVER_ASSIGNED', 'ACCEPTED', 'NEW'],
                     'IN_ROUTE' => ['PICKED_UP'],
-                    'DELIVERED' => ['PICKED_UP', 'IN_ROUTE'],
+                    'COMPLETED' => ['PICKED_UP', 'IN_ROUTE', 'DELIVERED'],
                 ];
                 if (in_array($cur, $allowed[$target] ?? [], true)) {
                     tgAdvanceOrder($orderId, $target, (string) $ord['assignedDriverId']);

@@ -669,7 +669,7 @@ export function OrderDetailPage() {
             admins aren't toggling between two competing progress UIs.
             Cancel + price + driver actions still live in their own cards. */}
 
-        {canCancel && !isTerminal && (
+        {canCancel && !isDone && (
           <div className="flex justify-end">
             <Button variant="danger" size="sm" onClick={() => setDialog({ kind: 'cancel' })}>
               <Ban className="w-4 h-4" /> إلغاء الطلب
@@ -1154,8 +1154,14 @@ export function OrderDetailPage() {
                     {h.reason && (
                       <div className="text-muted-foreground mt-1 text-xs">{h.reason}</div>
                     )}
-                    <div className="text-xs text-muted-foreground mt-1">
-                      {h.changedBy?.name ?? ''} · {new Date(h.createdAt).toLocaleString('ar-EG')}
+                    <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
+                      <Clock className="w-3 h-3" />
+                      <span>{new Date(h.createdAt).toLocaleString('ar-EG')}</span>
+                      <span className="opacity-40">·</span>
+                      <ActorTag
+                        role={h.changedBy?.role ?? h.changedByRole}
+                        name={h.changedBy?.name}
+                      />
                     </div>
                   </li>
                 ))}
@@ -2478,5 +2484,25 @@ function AuditRow({ k, v }: { k: string; v: string }) {
       <dt className="text-muted-foreground shrink-0">{k}</dt>
       <dd className="font-bold text-end">{v}</dd>
     </div>
+  );
+}
+
+/** Who made a status change — a colored role chip + their name, for «السجل». */
+function ActorTag({ role, name }: { role?: string | null; name?: string | null }) {
+  const map: Record<string, { label: string; cls: string }> = {
+    ADMIN: { label: 'الأدمن', cls: 'bg-blue-50 text-blue-700' },
+    SUPER_ADMIN: { label: 'الأدمن', cls: 'bg-blue-50 text-blue-700' },
+    DRIVER: { label: 'السائق', cls: 'bg-purple-50 text-purple-700' },
+    CUSTOMER: { label: 'العميل', cls: 'bg-gray-100 text-gray-700' },
+    MERCHANT: { label: 'التاجر', cls: 'bg-amber-50 text-amber-700' },
+  };
+  const m = (role && map[role]) || { label: 'النظام', cls: 'bg-gray-100 text-gray-600' };
+  return (
+    <span
+      className={`inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 font-bold ${m.cls}`}
+    >
+      {m.label}
+      {name ? <span className="font-normal opacity-80">· {name}</span> : null}
+    </span>
   );
 }
