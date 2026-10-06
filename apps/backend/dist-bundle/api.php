@@ -6373,6 +6373,115 @@ if ($method === 'DELETE' && preg_match('#^/admin/zones/areas/([^/]+)$#', $path, 
 // updater must never touch credentials — so this is the one explicit door, and
 // it is narrow: an ADMIN cannot reset another admin's password, which would be
 // a straight privilege escalation. Only a SUPER_ADMIN can.
+/**
+ * Admin-issued password reset LINK.
+ *
+ * The app's «نسيت كلمة المرور» tells customers to message the office. The
+ * office can already set a password for them (POST /admin/users/:id/password),
+ * but then it has to read a password out loud and the customer never picks
+ * their own. This issues a one-time link instead: the admin sends it on
+ * WhatsApp and the customer chooses their own password in the browser.
+ *
+ * Reuses the `passwordResetHash` / `passwordResetExpiresAt` columns that the
+ * OTP reset flow used, so there is no migration — and only one reset secret can
+ * be outstanding per user, which is the behaviour we want: issuing a new link
+ * invalidates the previous one.
+ *
+ * The token is `base64url(userId).<48 hex>`; only the sha256 of the random half
+ * is stored, so the database never holds anything that opens the link.
+ */
+const RESET_LINK_TTL_HOURS = 48;
+
+function resetLinkBaseUrl(): string {
+    // Follows «رابط الموقع» in محتوى التطبيق, so moving the site moves the links.
+    $url = (string) (appContentMerged()['websiteUrl'] ?? '');
+    return rtrim($url !== '' ? $url : 'https://deliverytamem.com', '/');
+}
+
+function resetLinkEncode(string $userId, string $secret): string {
+    return rtrim(strtr(base64_encode($userId), '+/', '-_'), '=') . '.' . $secret;
+}
+
+/** [userId, secret] or null when the token is malformed. */
+function resetLinkDecode(string $token): ?array {
+    $parts = explode('.', trim($token));
+    if (count($parts) !== 2) return null;
+    $pad = strlen($parts[0]) % 4;
+    $id = base64_decode(strtr($parts[0], '-_', '+/') . ($pad ? str_repeat('=', 4 - $pad) : ''), true);
+    if ($id === false || $id === '' || !ctype_xdigit($parts[1]) || strlen($parts[1]) !== 48) return null;
+    return [$id, $parts[1]];
+}
+
+/** The user a valid, unexpired token points at — or null. Never says which check failed. */
+function resetLinkUser(string $token): ?array {
+    $d = resetLinkDecode($token);
+    if (!$d) return null;
+    [$uid, $secret] = $d;
+    $st = db()->prepare('SELECT id, name, phone, role, passwordResetHash,
+        (passwordResetExpiresAt IS NOT NULL AND passwordResetExpiresAt > NOW(3)) AS stillValid
+        FROM `User` WHERE id = ? LIMIT 1');
+    $st->execute([$uid]);
+    $u = $st->fetch();
+    if (!$u || !$u['passwordResetHash'] || !(int) $u['stillValid']) return null;
+    if (!hash_equals((string) $u['passwordResetHash'], hash('sha256', $secret))) return null;
+    return $u;
+}
+
+if ($method === 'POST' && preg_match('#^/admin/users/([^/]+)/reset-link$#', $path, $m)) {
+    $u = authUser();
+    if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
+    $st = db()->prepare('SELECT id, name, phone, role FROM `User` WHERE id = ? LIMIT 1');
+    $st->execute([$m[1]]);
+    $target = $st->fetch();
+    if (!$target) jsonErr('المستخدم غير موجود', 404, 'NOT_FOUND');
+    // Same rule as setting a password directly: only a super admin may hand out
+    // a link that opens another admin's account.
+    if (in_array((string) $target['role'], ['ADMIN', 'SUPER_ADMIN'], true)
+        && ($u['role'] ?? '') !== 'SUPER_ADMIN') {
+        jsonErr('فقط مدير النظام يقدر يعمل رابط لمسؤول', 403, 'FORBIDDEN');
+    }
+
+    $secret = bin2hex(random_bytes(24));
+    db()->prepare('UPDATE `User` SET passwordResetHash = ?, passwordResetExpiresAt = DATE_ADD(NOW(3), INTERVAL ' . RESET_LINK_TTL_HOURS . ' HOUR), updatedAt = NOW(3) WHERE id = ?')
+        ->execute([hash('sha256', $secret), $target['id']]);
+
+    $url = resetLinkBaseUrl() . '/reset/?t=' . rawurlencode(resetLinkEncode((string) $target['id'], $secret));
+    $msg = "تميم للتوصيل 🚚\nده رابط تغيير كلمة المرور بتاعة حسابك:\n" . $url
+        . "\nالرابط صالح " . RESET_LINK_TTL_HOURS . " ساعة ومرة واحدة بس.";
+    $digits = preg_replace('/\D/', '', (string) ($target['phone'] ?? '')) ?? '';
+
+    error_log('[api.php] reset link issued for user ' . $target['id'] . ' by ' . (string) ($u['sub'] ?? '?'));
+    jsonOk([
+        'url' => $url,
+        'expiresInHours' => RESET_LINK_TTL_HOURS,
+        'message' => $msg,
+        // Empty for Google sign-ups, whose phone column holds a g_… placeholder.
+        'whatsappUrl' => ($digits !== '' && !str_starts_with((string) $target['phone'], 'g_'))
+            ? 'https://wa.me/' . $digits . '?text=' . rawurlencode($msg) : '',
+        'user' => ['id' => $target['id'], 'name' => $target['name'], 'phone' => $target['phone']],
+    ]);
+}
+
+if ($method === 'GET' && $path === '/auth/reset-link') {
+    $u = resetLinkUser((string) ($_GET['t'] ?? ''));
+    // One message for every failure mode — expired, used, forged all read alike.
+    if (!$u) jsonErr('الرابط غير صالح أو انتهت صلاحيته — كلّم الإدارة عشان تبعتلك رابط جديد', 401, 'INVALID_LINK');
+    jsonOk(['name' => $u['name']]);
+}
+
+if ($method === 'POST' && $path === '/auth/reset-link') {
+    $b = readJsonBody();
+    $new = (string) ($b['password'] ?? '');
+    $u = resetLinkUser((string) ($b['token'] ?? ''));
+    if (!$u) jsonErr('الرابط غير صالح أو انتهت صلاحيته — كلّم الإدارة عشان تبعتلك رابط جديد', 401, 'INVALID_LINK');
+    if (strlen($new) < 8) jsonErr('كلمة المرور لازم تكون 8 أحرف على الأقل', 422, 'WEAK_PASSWORD');
+    // Clearing the hash in the same statement is what makes the link single-use.
+    db()->prepare('UPDATE `User` SET passwordHash = ?, passwordResetHash = NULL, passwordResetExpiresAt = NULL, updatedAt = NOW(3) WHERE id = ?')
+        ->execute([password_hash($new, PASSWORD_BCRYPT), $u['id']]);
+    error_log('[api.php] password set via reset link for user ' . $u['id']);
+    jsonOk(['ok' => true, 'name' => $u['name']]);
+}
+
 if ($method === 'POST' && preg_match('#^/admin/users/([^/]+)/password$#', $path, $m)) {
     $u = authUser();
     if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
