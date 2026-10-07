@@ -117,10 +117,42 @@ export function TelegramPage() {
     );
   }
 
-  const copy = async (text: string) => {
+  // A ready-to-send WhatsApp invite: a simple how-to + the person's own link.
+  const inviteText = (p: Person): string => {
+    const link = p.deepLink ?? '';
+    if (tab === 'supervisors') {
+      return [
+        `السلام عليكم ${p.name} 👋`,
+        'ده رابط ربط حسابك كمشرف في «تميم للتوصيل» على تلجرام:',
+        '',
+        link,
+        '',
+        '١) افتح الرابط من موبايلك.',
+        '٢) اضغط زر «Start / ابدأ» تحت.',
+        '',
+        'بعد كده هتوصلك كل الطلبات هنا على تلجرام أول بأول بكل التفاصيل 🌟',
+      ].join('\n');
+    }
+    return [
+      `السلام عليكم كابتن ${p.name} 🚚`,
+      'ده رابط ربط حسابك في «تميم للتوصيل» على تلجرام عشان تستقبل طلباتك:',
+      '',
+      link,
+      '',
+      '١) افتح الرابط من موبايلك.',
+      '٢) اضغط زر «Start / ابدأ» تحت.',
+      '',
+      'بعد كده كل طلب هيوصلك هنا فيه: المتجر، العميل، العنوان، والمبلغ.',
+      'ولما تخلّص، اضغط الأزرار اللي تحت الرسالة (📦 تم الاستلام ← ✅ تم التوصيل) عشان الحالة تتحدّث عندنا.',
+      '',
+      'أي مساعدة إحنا معاك 🌟',
+    ].join('\n');
+  };
+  const copyInvite = async (p: Person) => {
+    if (!p.deepLink) return;
     try {
-      await navigator.clipboard.writeText(text);
-      toast.success('تم نسخ الرابط — ابعته للشخص على واتساب');
+      await navigator.clipboard.writeText(inviteText(p));
+      toast.success('تم نسخ رسالة الدعوة — ابعتها له على واتساب');
     } catch {
       toast.error('تعذّر النسخ');
     }
@@ -408,7 +440,7 @@ export function TelegramPage() {
             <PersonRow
               key={p.id}
               p={p}
-              onCopy={copy}
+              onCopy={() => copyInvite(p)}
               onUnlink={() => unlink.mutate({ kind: tab, id: p.id })}
             />
           ))}
@@ -515,7 +547,7 @@ function PersonRow({
   onUnlink,
 }: {
   p: Person;
-  onCopy: (text: string) => void;
+  onCopy: () => void;
   onUnlink: () => void;
 }) {
   const initial = (p.name || '؟').trim().charAt(0);
@@ -547,13 +579,8 @@ function PersonRow({
             </Button>
           </>
         ) : (
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={() => p.deepLink && onCopy(p.deepLink)}
-            disabled={!p.deepLink}
-          >
-            <Copy className="h-3.5 w-3.5" /> نسخ الرابط
+          <Button size="sm" variant="outline" onClick={onCopy} disabled={!p.deepLink}>
+            <Copy className="h-3.5 w-3.5" /> نسخ رسالة الدعوة
           </Button>
         )}
       </div>

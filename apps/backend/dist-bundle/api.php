@@ -2292,6 +2292,86 @@ function tgSupervisorChats(): array {
 }
 
 /**
+ * The ONE evolving order card for the group/supervisors — a status header that
+ * changes (مع المندوب → استلم → في الطريق → اتسلّم) over the SAME message, so the
+ * group sees one live card per order instead of a new message every stage.
+ */
+function tgGroupOrderCard(array $ctx, string $status): string {
+    $labels = [
+        'DRIVER_ASSIGNED' => '🛵 مع المندوب (تم التعيين)',
+        'PICKED_UP' => '📦 استلم المندوب الطلب من المتجر',
+        'IN_ROUTE' => '🛣️ في الطريق للعميل',
+        'DELIVERED' => '✅ تم تسليم الطلب للعميل',
+        'COMPLETED' => '✅ تم تسليم الطلب للعميل',
+        'CANCELLED' => '⛔ أُلغي الطلب',
+    ];
+    $L = [];
+    $L[] = ($labels[$status] ?? $status) . ' · *#' . ($ctx['orderNumber'] ?? '') . '*';
+    if (!empty($ctx['merchantName'])) $L[] = '🏪 المتجر: ' . $ctx['merchantName'];
+    $cust = '👤 العميل: ' . ($ctx['customerName'] ?? '');
+    if (!empty($ctx['customerPhone'])) $cust .= ' · ' . $ctx['customerPhone'];
+    $L[] = $cust;
+    if (!empty($ctx['driverName'])) {
+        $d = '🛵 المندوب: ' . $ctx['driverName'];
+        if (!empty($ctx['driverPhone'])) $d .= ' · ' . $ctx['driverPhone'];
+        $L[] = $d;
+    }
+    if (!empty($ctx['items'])) $L[] = '🛒 ' . $ctx['items'];
+    if (!empty($ctx['locations'])) $L[] = $ctx['locations'];
+    if (!empty($ctx['payment'])) $L[] = '💳 ' . $ctx['payment'];
+    if (!empty($ctx['priceBlock'])) $L[] = $ctx['priceBlock'];
+    return implode("\n", $L);
+}
+
+/**
+ * Post/UPDATE the single order card to the group + each linked supervisor. The
+ * per-chat message ids live in `Order.tgMsgIds` (JSON {chatId: msgId}); first
+ * time we send and remember the id, after that we EDIT the same message — so no
+ * duplicate messages. Heals a group that upgraded to a supergroup on the way.
+ */
+function tgBroadcastCard(string $orderId, string $text, ?array $replyMarkup = null): bool {
+    // Always send an explicit keyboard (the action buttons, or an empty one to
+    // clear them at the final stage) so edits set BOTH the text and the buttons
+    // in a single call — the driver taps these buttons right on the group card.
+    $kb = $replyMarkup ?? ['inline_keyboard' => []];
+    $targets = [];
+    $gid = tgGroupId();
+    if ($gid !== null) $targets[(string) $gid] = true;
+    foreach (tgSupervisorChats() as $sc) $targets[(string) $sc] = true;
+    if (!$targets) return false;
+    $map = [];
+    try {
+        $st = db()->prepare("SELECT tgMsgIds FROM `Order` WHERE id = ? LIMIT 1");
+        $st->execute([$orderId]);
+        $raw = $st->fetchColumn();
+        if (is_string($raw) && $raw !== '') { $j = json_decode($raw, true); if (is_array($j)) $map = $j; }
+    } catch (Throwable $e) {}
+    $html = tgHtml($text);
+    $any = false; $changed = false;
+    foreach (array_keys($targets) as $chat) {
+        $mid = $map[$chat] ?? null;
+        if ($mid) {
+            $r = tgApiFull('editMessageText', ['chat_id' => $chat, 'message_id' => $mid, 'text' => $html, 'parse_mode' => 'HTML', 'disable_web_page_preview' => true, 'reply_markup' => $kb]);
+            if (!empty($r['ok']) || strpos((string) ($r['description'] ?? ''), 'not modified') !== false) { $any = true; continue; }
+            // edit failed (deleted / can't edit) → fall through and send a fresh one
+        }
+        $r = tgApiFull('sendMessage', ['chat_id' => $chat, 'text' => $html, 'parse_mode' => 'HTML', 'disable_web_page_preview' => true, 'reply_markup' => $kb]);
+        if (!empty($r['ok'])) { $map[$chat] = (int) ($r['result']['message_id'] ?? 0); $changed = true; $any = true; continue; }
+        // supergroup migration (only the group migrates) → update setting + retry
+        $migrate = $r['parameters']['migrate_to_chat_id'] ?? null;
+        if ($migrate !== null && $gid !== null && (string) $chat === (string) $gid) {
+            try { $cfg = notifReadSetting('telegram_order_group'); $cfg['chatId'] = $migrate; notifWriteSetting('telegram_order_group', $cfg, null); } catch (Throwable $e) {}
+            $r = tgApiFull('sendMessage', ['chat_id' => $migrate, 'text' => $html, 'parse_mode' => 'HTML', 'disable_web_page_preview' => true, 'reply_markup' => $kb]);
+            if (!empty($r['ok'])) { unset($map[$chat]); $map[(string) $migrate] = (int) ($r['result']['message_id'] ?? 0); $changed = true; $any = true; }
+        }
+    }
+    if ($changed) {
+        try { db()->prepare("UPDATE `Order` SET tgMsgIds = ? WHERE id = ?")->execute([json_encode($map, JSON_UNESCAPED_UNICODE), $orderId]); } catch (Throwable $e) {}
+    }
+    return $any;
+}
+
+/**
  * Which CHANNEL(s) each oversight recipient uses — separate from the per-event
  * enable toggle (that decides WHETHER to announce an event; this decides WHERE).
  * Setting `notification_channels`. Defaults: the group goes to Telegram only,
@@ -2933,30 +3013,11 @@ function notifyOrderParties(string $orderId, string $status, ?string $reason = n
                 ['orderId' => $orderId, 'orderNumber' => $no, 'screen' => 'OrderTracking', 'status' => $status]);
         }
 
-        // ── DRIVER ── channel-controlled: Telegram DM (if the driver linked the
-        // bot) and/or WhatsApp. The per-event enable toggle in «قوالب الرسائل»
-        // decides WHETHER to send; notifChannels()['DRIVER'] decides WHERE.
-        $drvMsg = $skipDriver ? null : $render('DRIVER');
-        if ($drvMsg) {
-            // SAFETY NET: the store is where the driver picks up — guarantee its
-            // name is in the message whenever the order has a merchant, even if a
-            // custom template dropped the {{merchantName}} line.
-            $drvMsg = driverStoreLine($drvMsg, (string) ($ctx['merchantName'] ?? ''));
-            $dch = notifChannels()['DRIVER'];
-            $drvSent = false;
-            if (!empty($dch['telegram'])) {
-                $tgChat = tgDriverChatId($o['assignedDriverId'] ?? null);
-                // Attach the tappable action button(s) for this stage so the
-                // driver advances the order from Telegram (updates the dashboard).
-                $kb = tgDriverKeyboard($orderId, $status);
-                if ($tgChat !== null && tgSend($tgChat, $drvMsg, $kb)) { $drvSent = true; $sent = true; $log[] = 'تلجرام المندوب'; }
-            }
-            // WhatsApp when its channel is on — the primary (Telegram off) or a
-            // fallback for a driver who has not linked Telegram yet.
-            if (!$drvSent && !empty($dch['whatsapp']) && !empty($o['drv_phone'])) {
-                waEnqueue($o['drv_phone'], $drvMsg); $sent = true; $log[] = 'واتساب المندوب';
-            }
-        }
+        // ── DRIVER ── NO private message any more. The action buttons live on
+        // the group card itself (see the OVERSIGHT block below), and the assigned
+        // driver taps them right there in the group — so there's no separate
+        // Telegram/WhatsApp DM to the driver. (The in-app push still goes out.)
+        // The DRIVER template is still used by the order page's «نسخ الرسالة» tool.
         // The driver used to get WhatsApp only — nothing reached their phone's
         // notification tray. Same push path the customer gets, carrying orderId
         // so the tap opens the order.
@@ -2998,15 +3059,16 @@ function notifyOrderParties(string $orderId, string $status, ?string $reason = n
         $supMsg = $render('SUPERVISOR');
         $grpMsg = $render('GROUP');
         $gch = notifChannels()['GROUP'];
-        // Telegram: the work group + a private DM to each linked supervisor.
-        if (!empty($gch['telegram'])) {
-            $tgMsg = $grpMsg ?: $supMsg;
-            if ($tgMsg) {
-                if (tgGroupId() !== null && tgSendGroup($tgMsg)) { $sent = true; $log[] = 'جروب تلجرام'; }
-                $nsup = 0;
-                foreach (tgSupervisorChats() as $sc) { if (tgSend($sc, $tgMsg)) $nsup++; }
-                if ($nsup) { $sent = true; $log[] = "مشرفين تلجرام ($nsup)"; }
-            }
+        // Telegram: ONE evolving card per order (group + each linked supervisor),
+        // created at DRIVER_ASSIGNED and EDITED on every later stage — so the
+        // group sees a single live card per order, no duplicate messages, and
+        // nothing is posted before a driver is actually assigned.
+        if (!empty($gch['telegram'])
+            && in_array($status, ['DRIVER_ASSIGNED', 'PICKED_UP', 'IN_ROUTE', 'DELIVERED', 'COMPLETED', 'CANCELLED'], true)) {
+            // The action buttons live ON the group card itself — the assigned
+            // driver taps them right here (no separate private message).
+            $cardKb = $skipDriver ? null : tgDriverKeyboard($orderId, $status);
+            if (tgBroadcastCard($orderId, tgGroupOrderCard($ctx, $status), $cardKb)) { $sent = true; $log[] = 'كارت تلجرام'; }
         }
         // WhatsApp oversight fan-out
         if (!empty($gch['whatsapp'])) {
@@ -9191,16 +9253,19 @@ if ($method === 'POST' && $path === '/telegram/webhook') {
                     'COMPLETED' => ['PICKED_UP', 'IN_ROUTE', 'DELIVERED'],
                 ];
                 if (in_array($cur, $allowed[$target] ?? [], true)) {
+                    // tgAdvanceOrder → notifyOrderParties → tgBroadcastCard rewrites
+                    // the card's text + buttons across the group & supervisors, so
+                    // there's nothing to edit here manually.
                     tgAdvanceOrder($orderId, $target, (string) $ord['assignedDriverId']);
-                    tgAnswerCallback($cbId, $target === 'PICKED_UP' ? 'تم تسجيل الاستلام ✅' : ($target === 'IN_ROUTE' ? 'في الطريق 🛵' : 'تم التوصيل ✅ شكراً'));
-                    $nextKb = tgDriverKeyboard($orderId, $target);
+                    tgAnswerCallback($cbId, $target === 'PICKED_UP' ? 'تم تسجيل الاستلام ✅' : ($target === 'IN_ROUTE' ? 'في الطريق 🛵' : 'تم التسليم ✅ شكراً'));
                 } else {
+                    // Stale tap (status already moved on) — just refresh this card's
+                    // buttons to the real current stage.
                     tgAnswerCallback($cbId, 'الحالة اتغيرت بالفعل');
-                    $nextKb = tgDriverKeyboard($orderId, $cur);
-                }
-                if ($mChatId !== null && $mId !== null) {
-                    tgApi('editMessageReplyMarkup', ['chat_id' => $mChatId, 'message_id' => $mId,
-                        'reply_markup' => $nextKb ?: ['inline_keyboard' => []]]);
+                    if ($mChatId !== null && $mId !== null) {
+                        tgApi('editMessageReplyMarkup', ['chat_id' => $mChatId, 'message_id' => $mId,
+                            'reply_markup' => tgDriverKeyboard($orderId, $cur) ?: ['inline_keyboard' => []]]);
+                    }
                 }
             }
         } else {
