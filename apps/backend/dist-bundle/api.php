@@ -5227,6 +5227,20 @@ if ($method === 'POST' && $path === '/admin/driver-shifts/copy') {
     $n = 0; foreach ($st->fetchAll() as $s) { db()->prepare("INSERT INTO `DriverShift` (id, driverId, dayOfWeek, startTime, endTime, isActive) VALUES (?,?,?,?,?,1)")->execute([newId(), $to, (int) $s['dayOfWeek'], $s['startTime'], $s['endTime']]); $n++; }
     jsonOk(['copied' => $n]);
 }
+// Wipe the sheet — all drivers (empty body) or one driver ({driverId}). For when
+// the whole weekly plan changes and the admin wants a clean slate. Only clears
+// the PLAN (DriverShift); open attendance sessions are untouched.
+if ($method === 'POST' && $path === '/admin/driver-shifts/clear') {
+    $u = authUser(); if (($u['role'] ?? '') !== 'SUPER_ADMIN' && ($u['role'] ?? '') !== 'ADMIN') jsonErr('غير مسموح', 403, 'FORBIDDEN');
+    $b = readJsonBody();
+    $driverId = trim((string) ($b['driverId'] ?? ''));
+    if ($driverId !== '') {
+        $st = db()->prepare("DELETE FROM `DriverShift` WHERE driverId = ?"); $st->execute([$driverId]);
+    } else {
+        $st = db()->query("DELETE FROM `DriverShift`");
+    }
+    jsonOk(['cleared' => $st->rowCount()]);
+}
 // Send a schedule to Telegram. Three shapes:
 //   {}                         → whole week, every driver → the group
 //   {driverId, to:'group'}     → one driver's week → the group

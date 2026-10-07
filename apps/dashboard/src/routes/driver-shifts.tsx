@@ -8,6 +8,7 @@ import {
   Power,
   Search,
   Send,
+  Trash2,
   Users,
   X,
 } from 'lucide-react';
@@ -310,6 +311,7 @@ function WeeklyGrid() {
   const [adding, setAdding] = useState<{ driver: GridDriver; day: number } | null>(null);
   const [copyFrom, setCopyFrom] = useState<GridDriver | null>(null);
   const [sendDriver, setSendDriver] = useState<GridDriver | null>(null);
+  const [clearing, setClearing] = useState(false);
 
   const del = useMutation({
     mutationFn: (id: string) =>
@@ -361,6 +363,14 @@ function WeeklyGrid() {
           </Button>
           <Button size="sm" variant="outline" onClick={() => setCopyFrom(data.drivers[0] ?? null)}>
             <Copy className="h-3.5 w-3.5" /> نسخ جدول مندوب
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => setClearing(true)}
+            className="border-red-200 text-red-600 hover:bg-red-50 hover:text-red-700"
+          >
+            <Trash2 className="h-3.5 w-3.5" /> مسح الجدول كله
           </Button>
         </div>
       </div>
@@ -473,7 +483,81 @@ function WeeklyGrid() {
         />
       )}
       {sendDriver && <SendScheduleDialog driver={sendDriver} onClose={() => setSendDriver(null)} />}
+      {clearing && (
+        <ClearSheetDialog
+          count={data.drivers.reduce(
+            (n, d) => n + Object.values(d.days ?? {}).reduce((m, list) => m + list.length, 0),
+            0,
+          )}
+          onClose={() => setClearing(false)}
+          onCleared={() => {
+            setClearing(false);
+            invalidate();
+          }}
+        />
+      )}
     </div>
+  );
+}
+
+// Wipes the ENTIRE weekly plan (all drivers). Irreversible, so it's gated behind
+// typing «مسح» — a plain confirm() is too easy to hit by accident on live data.
+function ClearSheetDialog({
+  count,
+  onClose,
+  onCleared,
+}: {
+  count: number;
+  onClose: () => void;
+  onCleared: () => void;
+}) {
+  const [typed, setTyped] = useState('');
+  const clear = useMutation({
+    mutationFn: () => api.raw.post('/admin/driver-shifts/clear', {}).then((r) => r.data.data),
+    onSuccess: () => {
+      toast.success('اتمسح الجدول كله — تقدر تبدأ من جديد');
+      onCleared();
+    },
+    onError: () => toast.error('تعذّر المسح'),
+  });
+  const ok = typed.trim() === 'مسح';
+  return (
+    <Dialog open onOpenChange={(o) => !o && onClose()} title="مسح الجدول كله">
+      <div className="space-y-3">
+        <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm leading-6 text-red-800">
+          ⚠️ ده هيمسح <b>كل ورديات كل المناديب</b> على الجدول ({count} وردية) ومش هينفع ترجّعها.
+          المناديب اللي شغّالين دلوقتي مش هيتأثروا — بس الخطة الأسبوعية هتبقى فاضية وتبدأ من جديد.
+        </div>
+        <label className="block text-sm">
+          <div className="mb-1 font-bold">
+            اكتب كلمة <span className="text-red-600">مسح</span> للتأكيد
+          </div>
+          <input
+            value={typed}
+            onChange={(e) => setTyped(e.target.value)}
+            placeholder="مسح"
+            className="w-full rounded-lg border border-input bg-popover px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-red-400/40"
+          />
+        </label>
+        <div className="flex justify-end gap-2">
+          <Button variant="outline" onClick={onClose}>
+            <X className="h-4 w-4" /> إلغاء
+          </Button>
+          <Button
+            onClick={() => clear.mutate()}
+            disabled={!ok || clear.isPending}
+            className="bg-red-600 text-white hover:bg-red-700"
+          >
+            {clear.isPending ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <Trash2 className="h-4 w-4" />
+            )}
+            مسح نهائي
+          </Button>
+        </div>
+      </div>
+    </Dialog>
   );
 }
 
