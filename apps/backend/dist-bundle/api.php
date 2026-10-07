@@ -5106,6 +5106,227 @@ if ($method === 'DELETE' && preg_match('#^/admin/supervisors/shifts/([^/]+)$#', 
     jsonOk(['deleted' => true]);
 }
 
+// ══════════ Driver shifts ══════════════════════════════════════════════
+// Weekly PLAN (DriverShift: one row per driver×day×time-window, recurring) +
+// daily ATTENDANCE (DriverShiftSession: who actually started/ended today). A
+// driver is assignable only while a session is open → their status is AVAILABLE.
+function hmToMin(string $t): int { return (int) substr($t, 0, 2) * 60 + (int) substr($t, 3, 2); }
+function shiftIsOvernight(string $start, string $end): bool { return hmToMin($end) <= hmToMin($start); }
+// A shift runs start→end; end<=start means it crosses midnight (ends NEXT day).
+// Own-day coverage = the part on the shift's OWN weekday (evening of an overnight,
+// or the full window of a same-day shift). Spillover = the after-midnight tail,
+// which belongs to the NEXT weekday — checked against the previous day's shifts.
+function shiftCoversOwnDay(string $start, string $end, int $mins): bool {
+    $s = hmToMin($start); $e = hmToMin($end);
+    if ($e <= $s) return $mins >= $s;         // overnight → start … midnight
+    return $mins >= $s && $mins < $e;         // same-day window
+}
+function shiftSpillsInto(string $start, string $end, int $mins): bool {
+    return shiftIsOvernight($start, $end) && $mins < hmToMin($end); // 0:00 … end next day
+}
+function driverShiftsForDay(string $driverId, int $dow): array {
+    $st = db()->prepare("SELECT id, startTime, endTime FROM `DriverShift` WHERE driverId = ? AND dayOfWeek = ? AND isActive = 1 ORDER BY startTime");
+    $st->execute([$driverId, $dow]);
+    return $st->fetchAll();
+}
+function driverScheduledNow(string $driverId): bool {
+    [$dow, $mins] = nowCairo();
+    foreach (driverShiftsForDay($driverId, $dow) as $sh) if (shiftCoversOwnDay($sh['startTime'], $sh['endTime'], $mins)) return true;
+    // An overnight shift from YESTERDAY may still be running past midnight today.
+    foreach (driverShiftsForDay($driverId, ($dow + 6) % 7) as $sh) if (shiftSpillsInto($sh['startTime'], $sh['endTime'], $mins)) return true;
+    return false;
+}
+function driverOpenSession(string $driverId): ?array {
+    $st = db()->prepare("SELECT * FROM `DriverShiftSession` WHERE driverId = ? AND endedAt IS NULL ORDER BY startedAt DESC LIMIT 1");
+    $st->execute([$driverId]);
+    return $st->fetch() ?: null;
+}
+function hhmmOk(string $t): bool { return (bool) preg_match('/^([01]\d|2[0-3]):[0-5]\d$/', $t); }
+function shiftMinutes(string $start, string $end): int {
+    $s = (int) substr($start, 0, 2) * 60 + (int) substr($start, 3, 2);
+    $e = (int) substr($end, 0, 2) * 60 + (int) substr($end, 3, 2);
+    return $e <= $s ? (1440 - $s + $e) : ($e - $s);
+}
+// ── Telegram schedule export: friendly 12h Arabic time + a driver's whole week.
+// 24h "20:00" → "٨:٠٠م" so a driver reading the group/DM doesn't have to decode.
+function hhmm12Ar(string $t): string {
+    $h = (int) substr($t, 0, 2); $m = (int) substr($t, 3, 2);
+    $ap = $h < 12 ? 'ص' : 'م';
+    $h12 = $h % 12; if ($h12 === 0) $h12 = 12;
+    $en = $h12 . ':' . str_pad((string) $m, 2, '0', STR_PAD_LEFT) . $ap;
+    return strtr($en, ['0'=>'٠','1'=>'١','2'=>'٢','3'=>'٣','4'=>'٤','5'=>'٥','6'=>'٦','7'=>'٧','8'=>'٨','9'=>'٩']);
+}
+const SHIFT_DAYS_AR = [6 => 'السبت', 0 => 'الأحد', 1 => 'الإثنين', 2 => 'الثلاثاء', 3 => 'الأربعاء', 4 => 'الخميس', 5 => 'الجمعة'];
+// One driver's week as lines (Sat-first). Overnight windows get a 🌙 so the
+// "ends next morning" bit is explicit. Returns '' when the driver has no shifts.
+function driverWeekLines(string $driverId): string {
+    $lines = [];
+    foreach (SHIFT_DAYS_AR as $dow => $label) {
+        $sh = driverShiftsForDay($driverId, $dow);
+        if (!$sh) continue;
+        $parts = array_map(function ($s) {
+            $t = hhmm12Ar($s['startTime']) . ' ← ' . hhmm12Ar($s['endTime']);
+            return shiftIsOvernight($s['startTime'], $s['endTime']) ? $t . ' 🌙' : $t;
+        }, $sh);
+        $lines[] = '• *' . $label . ':* ' . implode(' + ', $parts);
+    }
+    return implode("\n", $lines);
+}
+
+// The weekly schedule sheet: every active driver + shifts grouped by weekday.
+if ($method === 'GET' && $path === '/admin/driver-shifts') {
+    $u = authUser(); if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
+    $drivers = db()->query("SELECT u.id, u.name, u.phone FROM `User` u JOIN `DriverProfile` dp ON dp.userId = u.id WHERE u.role = 'DRIVER' AND u.isActive = 1 ORDER BY u.name")->fetchAll();
+    $shifts = db()->query("SELECT id, driverId, dayOfWeek, startTime, endTime FROM `DriverShift` WHERE isActive = 1 ORDER BY startTime")->fetchAll();
+    $byDriver = [];
+    foreach ($shifts as $s) $byDriver[$s['driverId']][(int) $s['dayOfWeek']][] = ['id' => $s['id'], 'startTime' => $s['startTime'], 'endTime' => $s['endTime']];
+    $out = array_map(function ($d) use ($byDriver) {
+        $days = $byDriver[$d['id']] ?? [];
+        $mins = 0;
+        foreach ($days as $list) foreach ($list as $sh) $mins += shiftMinutes($sh['startTime'], $sh['endTime']);
+        return ['id' => $d['id'], 'name' => $d['name'], 'phone' => $d['phone'], 'days' => (object) $days, 'weeklyHours' => round($mins / 60, 1)];
+    }, $drivers);
+    jsonOk(['drivers' => $out]);
+}
+// Add a shift to a driver on one or more days (the "copy to days" convenience).
+if ($method === 'POST' && $path === '/admin/driver-shifts') {
+    $u = authUser(); if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
+    $b = readJsonBody();
+    $driverId = trim((string) ($b['driverId'] ?? ''));
+    $start = trim((string) ($b['startTime'] ?? '')); $end = trim((string) ($b['endTime'] ?? ''));
+    $days = is_array($b['days'] ?? null) ? $b['days'] : (isset($b['dayOfWeek']) ? [$b['dayOfWeek']] : []);
+    if ($driverId === '' || !hhmmOk($start) || !hhmmOk($end) || !$days) jsonErr('بيانات الوردية ناقصة', 422, 'VALIDATION_ERROR');
+    $created = 0;
+    foreach ($days as $d) {
+        $dow = (int) $d; if ($dow < 0 || $dow > 6) continue;
+        db()->prepare("INSERT INTO `DriverShift` (id, driverId, dayOfWeek, startTime, endTime, isActive) VALUES (?,?,?,?,?,1)")->execute([newId(), $driverId, $dow, $start, $end]);
+        $created++;
+    }
+    jsonOk(['created' => $created]);
+}
+if ($method === 'PATCH' && preg_match('#^/admin/driver-shifts/([^/]+)$#', $path, $m)) {
+    $u = authUser(); if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
+    $b = readJsonBody(); $sets = []; $args = [];
+    if (isset($b['startTime'])) { if (!hhmmOk((string) $b['startTime'])) jsonErr('وقت غير صحيح', 422, 'V'); $sets[] = 'startTime = ?'; $args[] = (string) $b['startTime']; }
+    if (isset($b['endTime'])) { if (!hhmmOk((string) $b['endTime'])) jsonErr('وقت غير صحيح', 422, 'V'); $sets[] = 'endTime = ?'; $args[] = (string) $b['endTime']; }
+    if ($sets) { $args[] = $m[1]; db()->prepare("UPDATE `DriverShift` SET " . implode(', ', $sets) . " WHERE id = ?")->execute($args); }
+    jsonOk(['ok' => true]);
+}
+if ($method === 'DELETE' && preg_match('#^/admin/driver-shifts/([^/]+)$#', $path, $m)) {
+    $u = authUser(); if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
+    db()->prepare("DELETE FROM `DriverShift` WHERE id = ?")->execute([$m[1]]);
+    jsonOk(['deleted' => true]);
+}
+// Copy one driver's whole week onto another (replaces the target's schedule).
+if ($method === 'POST' && $path === '/admin/driver-shifts/copy') {
+    $u = authUser(); if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
+    $b = readJsonBody(); $from = trim((string) ($b['fromDriverId'] ?? '')); $to = trim((string) ($b['toDriverId'] ?? ''));
+    if ($from === '' || $to === '' || $from === $to) jsonErr('اختر مندوبين مختلفين', 422, 'V');
+    db()->prepare("DELETE FROM `DriverShift` WHERE driverId = ?")->execute([$to]);
+    $st = db()->prepare("SELECT dayOfWeek, startTime, endTime FROM `DriverShift` WHERE driverId = ? AND isActive = 1"); $st->execute([$from]);
+    $n = 0; foreach ($st->fetchAll() as $s) { db()->prepare("INSERT INTO `DriverShift` (id, driverId, dayOfWeek, startTime, endTime, isActive) VALUES (?,?,?,?,?,1)")->execute([newId(), $to, (int) $s['dayOfWeek'], $s['startTime'], $s['endTime']]); $n++; }
+    jsonOk(['copied' => $n]);
+}
+// Send a schedule to Telegram. Three shapes:
+//   {}                         → whole week, every driver → the group
+//   {driverId, to:'group'}     → one driver's week → the group
+//   {driverId, to:'dm'}        → one driver's week → that driver privately
+if ($method === 'POST' && $path === '/admin/driver-shifts/send') {
+    $u = authUser(); if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
+    if (!tgEnabled()) jsonErr('تلجرام مش متظبط حالياً', 400, 'NO_TELEGRAM');
+    $b = readJsonBody();
+    $driverId = trim((string) ($b['driverId'] ?? ''));
+    $to = ($b['to'] ?? 'group') === 'dm' ? 'dm' : 'group';
+
+    if ($driverId !== '') {
+        $st = db()->prepare("SELECT name FROM `User` WHERE id = ? AND role = 'DRIVER' LIMIT 1");
+        $st->execute([$driverId]); $name = (string) ($st->fetchColumn() ?: '');
+        if ($name === '') jsonErr('المندوب غير موجود', 404, 'NOT_FOUND');
+        $lines = driverWeekLines($driverId);
+        $body = $lines === '' ? '— لا توجد ورديات مسجّلة —' : $lines;
+        if ($to === 'dm') {
+            $chat = tgDriverChatId($driverId);
+            if ($chat === null) jsonErr('المندوب مش مربوط بتلجرام — يبعت /start للبوت الأول', 400, 'NOT_LINKED');
+            $text = "📅 *جدولك الأسبوعي* يا كابتن " . $name . "\n\n" . $body;
+            if (!tgSend($chat, $text)) jsonErr('تعذّر الإرسال للمندوب', 502, 'SEND_FAILED');
+        } else {
+            $text = "📅 *ورديات الكابتن " . $name . "*\n\n" . $body;
+            if (!tgSendGroup($text)) jsonErr('تعذّر الإرسال للجروب', 502, 'SEND_FAILED');
+        }
+        jsonOk(['ok' => true, 'target' => $to]);
+    }
+
+    // Whole schedule → the group. Chunk by driver block so we never trip
+    // Telegram's 4096-char message limit (25 drivers easily exceed it).
+    $drivers = db()->query("SELECT u.id, u.name FROM `User` u JOIN `DriverProfile` dp ON dp.userId = u.id WHERE u.role = 'DRIVER' AND u.isActive = 1 ORDER BY u.name")->fetchAll();
+    $blocks = [];
+    foreach ($drivers as $d) {
+        $lines = driverWeekLines($d['id']);
+        if ($lines === '') continue; // skip drivers with an empty week
+        $blocks[] = "👤 *" . $d['name'] . "*\n" . $lines;
+    }
+    if (!$blocks) jsonErr('مفيش ورديات مسجّلة علشان نبعتها', 400, 'EMPTY');
+    $header = "📅 *جدول ورديات المناديب — الأسبوع*";
+    $chunks = []; $cur = $header;
+    foreach ($blocks as $blk) {
+        if (mb_strlen($cur . "\n\n" . $blk) > 3500) { $chunks[] = $cur; $cur = $blk; }
+        else { $cur .= "\n\n" . $blk; }
+    }
+    if (trim($cur) !== '') $chunks[] = $cur;
+    $sent = 0; foreach ($chunks as $ch) { if (tgSendGroup($ch)) $sent++; }
+    if ($sent === 0) jsonErr('تعذّر الإرسال للجروب', 502, 'SEND_FAILED');
+    jsonOk(['ok' => true, 'drivers' => count($blocks), 'messages' => $sent]);
+}
+// Today's board: every driver with scheduled-today, scheduled-now, and on-shift.
+if ($method === 'GET' && $path === '/admin/shifts/today') {
+    $u = authUser(); if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
+    [$dow, $mins] = nowCairo();
+    $drivers = db()->query("SELECT u.id, u.name, u.phone, dp.status FROM `User` u JOIN `DriverProfile` dp ON dp.userId = u.id WHERE u.role = 'DRIVER' AND u.isActive = 1 ORDER BY u.name")->fetchAll();
+    $out = [];
+    $prevDow = ($dow + 6) % 7;
+    foreach ($drivers as $d) {
+        $today = driverShiftsForDay($d['id'], $dow);
+        // Overnight shifts from yesterday that are still running past midnight —
+        // the driver IS expected today (until the shift's end) because of them.
+        $carry = array_values(array_filter(driverShiftsForDay($d['id'], $prevDow), fn($s) => shiftIsOvernight($s['startTime'], $s['endTime'])));
+        $scheduledNow = false;
+        foreach ($today as $s) if (shiftCoversOwnDay($s['startTime'], $s['endTime'], $mins)) { $scheduledNow = true; break; }
+        if (!$scheduledNow) foreach ($carry as $s) if (shiftSpillsInto($s['startTime'], $s['endTime'], $mins)) { $scheduledNow = true; break; }
+        $labelParts = array_map(fn($s) => $s['startTime'] . '–' . $s['endTime'], $today);
+        foreach ($carry as $s) $labelParts[] = '⟵ حتى ' . $s['endTime'] . ' (من امبارح)';
+        $open = driverOpenSession($d['id']);
+        $out[] = [
+            'id' => $d['id'], 'name' => $d['name'], 'phone' => $d['phone'], 'status' => $d['status'],
+            'scheduledToday' => !empty($today) || !empty($carry),
+            'scheduledLabel' => implode('، ', $labelParts),
+            'scheduledNow' => $scheduledNow,
+            'onShift' => $open !== null,
+            'startedAt' => $open['startedAt'] ? isoZ($open['startedAt']) : null,
+            'offSchedule' => $open ? (bool) (int) $open['offSchedule'] : false,
+        ];
+    }
+    jsonOk(['dow' => $dow, 'drivers' => $out]);
+}
+// Start a driver's shift (admin) → open a session; AVAILABLE for orders.
+if ($method === 'POST' && preg_match('#^/admin/drivers/([^/]+)/shift/start$#', $path, $m)) {
+    $u = authUser(); if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
+    $did = $m[1];
+    if (!driverOpenSession($did)) {
+        $off = driverScheduledNow($did) ? 0 : 1; // started outside their schedule?
+        db()->prepare("INSERT INTO `DriverShiftSession` (id, driverId, startedAt, offSchedule, startedById) VALUES (?,?,NOW(3),?,?)")->execute([newId(), $did, $off, $u['sub'] ?? null]);
+    }
+    db()->prepare("UPDATE `DriverProfile` SET status = 'AVAILABLE', updatedAt = NOW(3) WHERE userId = ? AND status = 'OFFLINE'")->execute([$did]);
+    jsonOk(['ok' => true]);
+}
+// End a driver's shift (admin) → close the session; OFFLINE (off the pool).
+if ($method === 'POST' && preg_match('#^/admin/drivers/([^/]+)/shift/end$#', $path, $m)) {
+    $u = authUser(); if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
+    $did = $m[1];
+    db()->prepare("UPDATE `DriverShiftSession` SET endedAt = NOW(3) WHERE driverId = ? AND endedAt IS NULL")->execute([$did]);
+    db()->prepare("UPDATE `DriverProfile` SET status = 'OFFLINE', updatedAt = NOW(3) WHERE userId = ?")->execute([$did]);
+    jsonOk(['ok' => true]);
+}
+
 // Magic sub-path /current — used e.g. by supervisors to fetch the one
 // currently on-shift. We don't model shifts here, so return `null` in a way
 // the react-query code can safely read as "no current supervisor".

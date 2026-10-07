@@ -36,6 +36,9 @@ const DealsPage = lazy(() => import('./routes/deals.js').then((m) => ({ default:
 const DriversPage = lazy(() =>
   import('./routes/drivers.js').then((m) => ({ default: m.DriversPage })),
 );
+const DriverShiftsPage = lazy(() =>
+  import('./routes/driver-shifts.js').then((m) => ({ default: m.DriverShiftsPage })),
+);
 const GatePage = lazy(() => import('./routes/gate.js').then((m) => ({ default: m.GatePage })));
 const AppContentPage = lazy(() =>
   import('./routes/app-content.js').then((m) => ({ default: m.AppContentPage })),
@@ -198,6 +201,7 @@ const routes: RouteObject[] = [
           { path: 'orders/:id', element: <OrderDetailPage /> },
           { path: 'customers', element: <CustomersPage /> },
           { path: 'drivers', element: <DriversPage /> },
+          { path: 'driver-shifts', element: <DriverShiftsPage /> },
           { path: 'merchants', element: <MerchantsPage /> },
           { path: 'merchants/:id/hours', element: <MerchantHoursPage /> },
           { path: 'merchants/:id/products-api', element: <MerchantProductsApiPage /> },

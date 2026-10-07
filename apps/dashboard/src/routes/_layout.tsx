@@ -4,6 +4,7 @@ import {
   BarChart3,
   Bell,
   Box,
+  CalendarDays,
   ChevronLeft,
   ChevronsLeft,
   ChevronsRight,
@@ -92,6 +93,7 @@ const NAV_SECTIONS: NavSection[] = [
     items: [
       { to: '/customers', icon: Users, label: 'العملاء', perm: 'customers' },
       { to: '/drivers', icon: Truck, label: 'السائقون', perm: 'drivers' },
+      { to: '/driver-shifts', icon: CalendarDays, label: 'ورديات المناديب', perm: 'drivers' },
       { to: '/merchants', icon: Store, label: 'التجار', perm: 'merchants' },
       {
         to: '/merchant-requests',
