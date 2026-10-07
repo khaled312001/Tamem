@@ -10363,9 +10363,10 @@ function firstOrderNeedsVerification(?string $customerId): bool {
         if (!promoScheduleMatches($r)) continue;
         if (customerAppOrderCount($customerId) > 0) return false;
         $i = customerPhoneInfo($customerId);
-        if ($i['verified']) return false;                       // مستحق فعلاً، مش محتاج تنبيه
-        if (!isRealEgPhone($i['phone'])) return true;           // حساب جوجل من غير رقم
-        return !phoneUsedFreeFirst($i['phone']);                // الرقم خد العرض قبل كده؟
+        // التوثيق مابقاش شرط للعرض (شوف الملاحظة في promoFor…)، فاللي يستحق
+        // التنبيه بقى الحساب اللي مالوش رقم موبايل حقيقي بس — حساب جوجل.
+        if (!isRealEgPhone($i['phone'])) return true;
+        return false;
     }
     return false;
 }
@@ -10521,16 +10522,21 @@ function evalDeliveryPromo(?string $customerId, float $fee, bool $hasIntercity, 
             if (!$customerId || customerAppOrderCount($customerId) > 0) continue;
             $__fo = customerPhoneInfo($customerId);
             /*
-             * العرض لازم يبقى على رقم مصري حقيقي اتأكد بكود واتساب.
+             * لازم رقم مصري حقيقي الشكل — ده بيقفل حساب جوجل من غير رقم
+             * (placeholder g_…) وأي مدخل مش رقم موبايل أصلاً.
              *
-             * التسجيل نفسه مابيتحققش من الرقم (isPhoneVerified = 0 وقت
-             * الإنشاء)، فمن غير الشرط ده أي حد يكتب رقم متخيّل صحيح الشكل
-             * (01000000001، 01000000002…) وياخد توصيل مجاني بلا حدود من غير
-             * ما يملك أي خط — وحساب جوجل من غير رقم (placeholder g_…) كان
-             * بياخده كمان. التطبيق أصلاً بيوجّه كل تسجيل على شاشة الكود، فده
-             * مابيكلّفش العميل الحقيقي أي خطوة زيادة.
+             * كان في شرط تاني: isPhoneVerified. اتشال في 2026-10-06 لما الـ OTP
+             * اتشال من التطبيق — التسجيل بيحط isPhoneVerified = 0 ومبقاش في
+             * طريقة حد يتوثّق بيها، فالعرض كان مقفول على كل العملاء الجدد
+             * ومحدش بياخده. القرار (خالد): العرض يشتغل، والحماية تبقى بالرقم.
+             *
+             * اللي فاضل من الحماية: شكل الرقم + جدول PromoFirstOrderPhone اللي
+             * بيخلي كل رقم ياخد العرض مرة واحدة بس مهما اتعمل حسابات جديدة.
+             * الثغرة المعروفة والمقبولة: حد يكتب رقم متخيّل صحيح الشكل
+             * (01000000001، 01000000002…) ياخد العرض — مرة لكل رقم.
+             * لو رجع التحقق بالواتساب يوم ما، رجّع الشرط هنا.
              */
-            if (!isRealEgPhone($__fo['phone']) || !$__fo['verified']) continue;
+            if (!isRealEgPhone($__fo['phone'])) continue;
             // حماية بالرقم: رقم خد العرض قبل كده مش هياخده تاني حتى لو اتعمله
             // حساب جديد (سواء الأدمن مسح القديم أو العميل مسحه بنفسه).
             if (phoneUsedFreeFirst($__fo['phone'])) continue;
