@@ -2338,6 +2338,17 @@ function tgBroadcastCard(string $orderId, string $text, ?array $replyMarkup = nu
     $gid = tgGroupId();
     if ($gid !== null) $targets[(string) $gid] = true;
     foreach (tgSupervisorChats() as $sc) $targets[(string) $sc] = true;
+    // The assigned driver gets the SAME evolving card in their PRIVATE chat too,
+    // so every driver has a clean personal feed of just their own orders (the
+    // ones they're working + new ones) instead of hunting in the busy group.
+    // Buttons are on this card as well; a tap here and a tap on the group card
+    // edit each other (shared tgMsgIds), so they always stay in sync.
+    try {
+        $dv = db()->prepare("SELECT assignedDriverId FROM `Order` WHERE id = ? LIMIT 1");
+        $dv->execute([$orderId]);
+        $did = $dv->fetchColumn();
+        if ($did) { $dc = tgDriverChatId((string) $did); if ($dc !== null) $targets[(string) $dc] = true; }
+    } catch (Throwable $e) {}
     if (!$targets) return false;
     $map = [];
     try {
