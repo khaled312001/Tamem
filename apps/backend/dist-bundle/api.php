@@ -1617,6 +1617,7 @@ if ($method === 'GET' && $path === '/admin/alerts') {
     if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
     // Refresh before answering, so the page never shows a stale picture.
     maybeAutoSweep();
+    maybeTelegramDigest();
     $where = [];
     $args = [];
     $resolved = $_GET['resolved'] ?? null;
@@ -1718,6 +1719,7 @@ if ($method === 'GET' && $path === '/admin/alerts') {
 
 if ($method === 'GET' && $path === '/admin/alerts/stats') {
     maybeAutoSweep();
+    maybeTelegramDigest();
     authUser();
     $counts = db()->query("SELECT status, COUNT(*) c FROM `Alert` GROUP BY status")->fetchAll();
     $byStatus = [];
@@ -2034,6 +2036,120 @@ if ($method === 'POST' && $path === '/admin/alerts/run-sweep') {
     jsonOk(runAlertSweep());
 }
 
+/**
+ * Hourly Telegram pulse. One GROUP message listing orders that sat past their
+ * threshold without being delivered — including the ones a driver is holding and
+ * forgot to mark «تم» — PLUS a private NUDGE to each lagging driver with the
+ * action buttons ready to tap. Thresholds are the same alertSetting() knobs the
+ * dashboard sweep uses, so Telegram and the dashboard never disagree. Silent
+ * when nothing is overdue, so the group is never pinged just to say "all clear".
+ */
+function telegramOverdueDigest(): array {
+    if (!tgEnabled()) return ['sent' => false, 'nudged' => 0, 'count' => 0];
+    $now = time();
+    $thr = [
+        'NEW'             => alertSetting('order_new_alert_minutes', 15),
+        'PRICED'          => alertSetting('order_pending_alert_minutes', 60),
+        'UNDER_REVIEW'    => alertSetting('order_review_alert_minutes', 30),
+        'ACCEPTED'        => alertSetting('order_no_driver_alert_minutes', 15),
+        'DRIVER_ASSIGNED' => alertSetting('order_pickup_late_minutes', 30),
+        'PICKED_UP'       => alertSetting('order_held_late_minutes', 45),
+        'IN_ROUTE'        => alertSetting('order_delivery_late_minutes', 60),
+    ];
+    $lab = [
+        'NEW'             => 'جديد لسه محدش رد',
+        'PRICED'          => 'مُسعّر ومستني العميل',
+        'UNDER_REVIEW'    => 'التاجر مردّش',
+        'ACCEPTED'        => 'مقبول ومفيش مندوب',
+        'DRIVER_ASSIGNED' => 'متعيّن ومااستلمش',
+        'PICKED_UP'       => 'استلمها ولسه مسلّمش',
+        'IN_ROUTE'        => 'في الطريق ولسه مسلّمش',
+    ];
+    $held = ['DRIVER_ASSIGNED', 'PICKED_UP', 'IN_ROUTE']; // a driver is holding it
+    try {
+        $rows = db()->query(
+            "SELECT o.id, o.orderNumber, o.status, o.assignedDriverId,
+                    o.deliveryAddress, o.createdAt, o.updatedAt, dr.name AS drv_name
+               FROM `Order` o
+               LEFT JOIN `User` dr ON dr.id = o.assignedDriverId
+              WHERE o.status IN ('NEW','PRICED','UNDER_REVIEW','ACCEPTED','DRIVER_ASSIGNED','PICKED_UP','IN_ROUTE')"
+        )->fetchAll();
+    } catch (Throwable $e) { error_log('[api.php] digest query: ' . $e->getMessage()); return ['sent' => false, 'nudged' => 0, 'count' => 0]; }
+
+    $overdue = [];
+    foreach ($rows as $o) {
+        $status = (string) $o['status'];
+        if ($status === 'ACCEPTED' && !empty($o['assignedDriverId'])) continue; // only no-driver ACCEPTED counts
+        $ref = ($status === 'NEW') ? (string) $o['createdAt'] : (string) $o['updatedAt'];
+        $ts = strtotime(substr($ref, 0, 19) . ' UTC'); // DB stores UTC; drop the .fff
+        if (!$ts) continue;
+        $mins = (int) floor(($now - $ts) / 60);
+        $limit = (int) ($thr[$status] ?? 9999);
+        if ($mins < $limit) continue;
+        $o['_mins'] = $mins; $o['_limit'] = max(1, $limit);
+        $overdue[] = $o;
+    }
+    if (!$overdue) return ['sent' => false, 'nudged' => 0, 'count' => 0];
+    usort($overdue, fn($a, $b) => $b['_mins'] <=> $a['_mins']);
+
+    // ── group digest ──
+    $lines = ['⏰ *أوردرات عدّى عليها وقت* (' . count($overdue) . ')', ''];
+    foreach ($overdue as $o) {
+        $sev = $o['_mins'] >= 2 * $o['_limit'] ? '🔴' : '🟠';
+        $lines[] = $sev . ' #' . $o['orderNumber'] . ' · ' . ($lab[(string) $o['status']] ?? $o['status']) . ' من ' . $o['_mins'] . ' د';
+        $sub = [];
+        if (trim((string) ($o['drv_name'] ?? '')) !== '') $sub[] = '🏍️ ' . trim((string) $o['drv_name']);
+        $area = trim((string) ($o['deliveryAddress'] ?? ''));
+        if ($area !== '') $sub[] = '📍 ' . mb_substr($area, 0, 28);
+        if ($sub) $lines[] = '    ' . implode('   ', $sub);
+    }
+    $sent = tgSendGroup(implode("\n", $lines));
+
+    // ── private nudges to lagging drivers (orders they're holding) ──
+    $nudged = 0;
+    foreach ($overdue as $o) {
+        if (!in_array((string) $o['status'], $held, true)) continue;
+        $chat = tgDriverChatId((string) ($o['assignedDriverId'] ?? ''));
+        if ($chat === null) continue;
+        $cta = (string) $o['status'] === 'DRIVER_ASSIGNED'
+            ? 'لو استلمته اضغط «📦 تم الاستلام» تحت 👇'
+            : 'لو سلّمته اضغط «✅ تم التوصيل» تحت 👇';
+        $txt = "🛎️ *افتكار*\nلسه ماسك الأوردر #" . $o['orderNumber'] . ' من ' . $o['_mins'] . " دقيقة.\n" . $cta;
+        if (tgSend($chat, $txt, tgDriverKeyboard((string) $o['id'], (string) $o['status']))) $nudged++;
+    }
+    return ['sent' => $sent, 'nudged' => $nudged, 'count' => count($overdue)];
+}
+
+/**
+ * Run the digest at most once every telegram_digest_minutes (default 60; set it
+ * to 0 to switch the whole thing off), riding on an open request exactly like
+ * maybeAutoSweep. Never affects the response.
+ */
+function maybeTelegramDigest(): void {
+    try {
+        $every = (int) alertSetting('telegram_digest_minutes', 60);
+        if ($every <= 0) return; // disabled
+        $dir = __DIR__ . '/uploads/.alerts';
+        if (!is_dir($dir)) @mkdir($dir, 0755, true);
+        $stamp = $dir . '/last-tg-digest';
+        $last = is_file($stamp) ? (int) @file_get_contents($stamp) : 0;
+        if (time() - $last < $every * 60) return;
+        if (@file_put_contents($stamp, (string) time(), LOCK_EX) === false) return;
+        $r = telegramOverdueDigest();
+        if (($r['sent'] ?? false) || ($r['nudged'] ?? 0) > 0) {
+            error_log('[api.php] tg digest: group=' . (($r['sent'] ?? false) ? '1' : '0') . ' nudged=' . ($r['nudged'] ?? 0) . ' overdue=' . ($r['count'] ?? 0));
+        }
+    } catch (Throwable $e) {
+        error_log('[api.php] tg digest failed: ' . $e->getMessage());
+    }
+}
+
+if ($method === 'POST' && $path === '/admin/telegram/run-digest') {
+    $u = authUser();
+    if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
+    jsonOk(telegramOverdueDigest());
+}
+
 // Cron entry point: no JWT (a cron has no session), so it is gated by a shared
 // secret in the env instead. Without this the sweep only ever runs when an
 // admin happens to click the button — which is why live had zero alerts.
@@ -2278,6 +2394,15 @@ function tgDriverChatId(?string $driverUserId) {
         $st->execute([$driverUserId]);
         $v = $st->fetchColumn();
         return ($v !== false && $v !== null && $v !== '') ? $v : null;
+    } catch (Throwable $e) { return null; }
+}
+
+/** The bot's @username (Setting telegram_bot_meta), for building t.me links. */
+function tgBotUsername(): ?string {
+    try {
+        $m = notifReadSetting('telegram_bot_meta');
+        $u = trim((string) ($m['username'] ?? ''));
+        return $u !== '' ? $u : null;
     } catch (Throwable $e) { return null; }
 }
 
@@ -3080,6 +3205,15 @@ function notifyOrderParties(string $orderId, string $status, ?string $reason = n
             // driver taps them right here (no separate private message).
             $cardKb = $skipDriver ? null : tgDriverKeyboard($orderId, $status);
             if (tgBroadcastCard($orderId, tgGroupOrderCard($ctx, $status), $cardKb)) { $sent = true; $log[] = 'كارت تلجرام'; }
+            // If the just-assigned driver hasn't linked the bot, the card can't
+            // reach their DM — flag it in the group once so someone gets them to
+            // press Start (with the ready link).
+            if ($status === 'DRIVER_ASSIGNED' && !$skipDriver && !empty($o['assignedDriverId'])
+                && tgDriverChatId((string) $o['assignedDriverId']) === null) {
+                $bu = tgBotUsername();
+                $link = $bu ? ("\nاربطه من اللينك ده 👇\nhttps://t.me/" . $bu . '?start=drv_' . $o['assignedDriverId']) : '';
+                tgSendGroup("⚠️ *المندوب مش رابط تلجرام*\nالأوردر #{$no} اتسند لـ " . ($ctx['driverName'] ?: 'المندوب') . " — بس هو لسه مش رابط البوت، فكارت الأوردر مش هيوصله ع الخاص." . $link);
+            }
         }
         // WhatsApp oversight fan-out
         if (!empty($gch['whatsapp'])) {
@@ -9464,8 +9598,45 @@ if ($method === 'POST' && $path === '/telegram/webhook') {
             } else {
                 tgSend($chatId, "مش لاقيين كود الربط. تواصل مع الإدارة عشان يبعتولك اللينك الصح.");
             }
+        } elseif ($chatType === 'private' && in_array($text, ['/اوردراتي', 'اوردراتي', 'أوردراتي', '/myorders', '/orders'], true)) {
+            // A driver asks for their own open orders — one tidy list in their DM.
+            $drv = null;
+            try {
+                $q = db()->prepare("SELECT dp.userId, u.name FROM `DriverProfile` dp JOIN `User` u ON u.id = dp.userId WHERE dp.telegramChatId = ? LIMIT 1");
+                $q->execute([(string) $chatId]);
+                $drv = $q->fetch() ?: null;
+            } catch (Throwable $e) {}
+            if (!$drv) {
+                tgSend($chatId, "انت لسه مش مربوط كمندوب 🙏\nافتح رابط الربط اللي وصلك من الإدارة الأول.");
+            } else {
+                $stLab = ['DRIVER_ASSIGNED' => '🚚 متعيّن عليك', 'PICKED_UP' => '📦 استلمتها', 'IN_ROUTE' => '🛵 في الطريق'];
+                $os = db()->prepare("SELECT id, orderNumber, status, deliveryAddress FROM `Order`
+                                      WHERE assignedDriverId = ? AND status IN ('DRIVER_ASSIGNED','PICKED_UP','IN_ROUTE')
+                                      ORDER BY updatedAt ASC");
+                $os->execute([(string) $drv['userId']]);
+                $list = $os->fetchAll();
+                if (!$list) {
+                    tgSend($chatId, "مفيش أوردرات شغّالة عليك دلوقتي ✅");
+                } else {
+                    $L = ['📋 *أوردراتك الشغّالة* (' . count($list) . ')', ''];
+                    foreach ($list as $o) {
+                        $L[] = ($stLab[(string) $o['status']] ?? $o['status']) . ' · #' . $o['orderNumber'];
+                        $sub = [];
+                        $area = trim((string) ($o['deliveryAddress'] ?? ''));
+                        if ($area !== '') $sub[] = '📍 ' . mb_substr($area, 0, 30);
+                        try {
+                            $full = orderForMessages((string) $o['id']);
+                            if ($full) { $c = (string) (orderMessageContext($full)['collect'] ?? ''); if ($c !== '') $sub[] = '💵 ' . $c; }
+                        } catch (Throwable $e) {}
+                        if ($sub) $L[] = '    ' . implode('  ·  ', $sub);
+                    }
+                    $L[] = '';
+                    $L[] = 'تقدر تحرّك أي أوردر من الكارت بتاعه فوق 👆';
+                    tgSend($chatId, implode("\n", $L));
+                }
+            }
         } elseif ($chatType === 'private' && $text === '/start') {
-            tgSend($chatId, "أهلاً بك في بوت تميم للتوصيل 🚚\nلو إنت كابتن أو مشرف، افتح رابط الربط اللي وصلك من الإدارة عشان نربط حسابك.");
+            tgSend($chatId, "أهلاً بك في بوت تميم للتوصيل 🚚\nلو إنت كابتن أو مشرف، افتح رابط الربط اللي وصلك من الإدارة عشان نربط حسابك.\n\nلو كابتن، ابعت /اوردراتي عشان تشوف طلباتك الشغّالة.");
         }
     }
     // ── Inline button taps: the driver advances their order from Telegram ──
@@ -12359,6 +12530,20 @@ if (preg_match('#^/orders/([^/]+)/review$#', $path, $mm) && in_array($method, ['
                 ->execute([$o['merchantId'], $o['merchantId']]);
         }
     } catch (Throwable $e) { error_log('[api.php] rating recompute failed: ' . $e->getMessage()); }
+    // ── Telegram: a low rating needs eyes now, not at month-end ──
+    if ($rating > 0 && $rating < 3) {
+        try {
+            $info = orderForMessages($mm[1]);
+            if ($info) {
+                $m = "⭐ *تقييم سيّئ — محتاج متابعة*\n\nالأوردر: #" . $info['orderNumber']
+                   . "\nالتقييم: " . str_repeat('⭐', $rating) . " ({$rating} من 5)";
+                $cn = trim((string) ($info['cust_name'] ?? '')); if ($cn !== '') $m .= "\n👤 العميل: {$cn}";
+                $dn = trim((string) ($info['drv_name'] ?? '')); if ($dn !== '') $m .= "\n🛵 المندوب: {$dn}";
+                $cmt = trim((string) ($b['comment'] ?? '')); if ($cmt !== '') $m .= "\n💬 تعليقه: «{$cmt}»";
+                tgSendGroup($m);
+            }
+        } catch (Throwable $e) { error_log('[api.php] bad-rating tg: ' . $e->getMessage()); }
+    }
     $rs->execute([$mm[1]]);
     jsonOk($rs->fetch(), 201);
 }
