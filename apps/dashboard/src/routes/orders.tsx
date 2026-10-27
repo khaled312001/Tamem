@@ -175,6 +175,105 @@ function SortableTh({
   );
 }
 
+// Dashboard switch for how orders reach drivers: MANUAL (admin assigns each) or
+// AUTO (the system assigns every ready order to a checked-in driver).
+function DistributionModeToggle() {
+  const qc = useQueryClient();
+  const { data } = useQuery({
+    queryKey: ['admin', 'distribution-mode'],
+    queryFn: () =>
+      api.raw
+        .get('/admin/distribution-mode')
+        .then((r) => r.data.data as { mode: string; maxLoad: number }),
+  });
+  const mode = data?.mode === 'AUTO' ? 'AUTO' : 'MANUAL';
+  const [cap, setCap] = useState('');
+  useEffect(() => {
+    if (data) setCap(data.maxLoad > 0 ? String(data.maxLoad) : '');
+  }, [data]);
+  const set = useMutation({
+    mutationFn: (payload: { mode?: 'MANUAL' | 'AUTO'; maxLoad?: number }) =>
+      api.raw
+        .post('/admin/distribution-mode', payload)
+        .then((r) => r.data.data as { mode: string; maxLoad: number; assigned: number }),
+    onSuccess: (d, vars) => {
+      qc.invalidateQueries({ queryKey: ['admin', 'distribution-mode'] });
+      qc.invalidateQueries({ queryKey: ['admin', 'orders'] });
+      if (vars.mode)
+        toast.success(
+          d.mode === 'AUTO'
+            ? `التوزيع بقى أوتوماتيك${d.assigned ? ` — اتسند ${d.assigned} أوردر` : ''}`
+            : 'التوزيع بقى مانوال',
+        );
+      else if (vars.maxLoad !== undefined)
+        toast.success(
+          d.maxLoad > 0 ? `الحد الأقصى: ${d.maxLoad} أوردر/مندوب` : 'شيلنا الحد الأقصى',
+        );
+    },
+    onError: () => toast.error('تعذّر الحفظ'),
+  });
+  const switchTo = (m: 'MANUAL' | 'AUTO') => {
+    if (m === mode || set.isPending) return;
+    if (
+      m === 'AUTO' &&
+      !window.confirm(
+        'تفعيل التوزيع الأوتوماتيك؟\nالأوردرات الجاهزة هتتسند تلقائيًا للمناديب الحاضرين (اللي عملوا /حضرت على تلجرام).',
+      )
+    )
+      return;
+    set.mutate({ mode: m });
+  };
+  const saveCap = () => {
+    const n = Math.max(0, parseInt(cap || '0', 10) || 0);
+    if (n === (data?.maxLoad ?? 0) || set.isPending) return;
+    set.mutate({ maxLoad: n });
+  };
+  return (
+    <div
+      className="inline-flex items-center gap-1 rounded-lg border border-border bg-white p-0.5"
+      title="وضع توزيع الطلبات على المناديب"
+    >
+      <span className="px-1.5 text-[11px] font-bold text-muted-foreground">التوزيع</span>
+      <button
+        onClick={() => switchTo('MANUAL')}
+        disabled={set.isPending}
+        className={`rounded-md px-2.5 py-1 text-xs font-bold transition ${
+          mode === 'MANUAL' ? 'bg-brand-red text-white' : 'text-brand-dark hover:bg-muted'
+        }`}
+      >
+        يدوي
+      </button>
+      <button
+        onClick={() => switchTo('AUTO')}
+        disabled={set.isPending}
+        className={`inline-flex items-center gap-1 rounded-md px-2.5 py-1 text-xs font-bold transition ${
+          mode === 'AUTO' ? 'bg-emerald-600 text-white' : 'text-brand-dark hover:bg-muted'
+        }`}
+      >
+        <Zap className="w-3 h-3" />
+        أوتوماتيك
+      </button>
+      {mode === 'AUTO' && (
+        <span className="ml-1 inline-flex items-center gap-1 border-r border-border pr-1 pl-0.5 text-[11px] text-muted-foreground">
+          حد أقصى
+          <input
+            type="number"
+            min={0}
+            value={cap}
+            onChange={(e) => setCap(e.target.value)}
+            onBlur={saveCap}
+            onKeyDown={(e) => e.key === 'Enter' && saveCap()}
+            placeholder="∞"
+            className="w-12 rounded-md border border-input bg-popover px-1.5 py-0.5 text-center text-xs text-brand-dark outline-none focus:ring-1 focus:ring-emerald-400"
+            title="أقصى عدد أوردرات شغّالة للمندوب الواحد (فاضي = بلا حد)"
+          />
+          /مندوب
+        </span>
+      )}
+    </div>
+  );
+}
+
 export function OrdersPage() {
   const qc = useQueryClient();
   const navigate = useNavigate();
@@ -496,6 +595,7 @@ export function OrdersPage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          <DistributionModeToggle />
           {/* Two shapes of phone-in order: one that starts from a store and its
               catalogue, one that is just "take this from here to there". */}
           <Button size="md" onClick={() => setManualOpen(true)}>
