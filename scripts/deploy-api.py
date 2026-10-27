@@ -24,6 +24,7 @@ import hashlib
 import os
 import posixpath
 import re
+import subprocess
 import sys
 import time
 import urllib.request
@@ -48,6 +49,8 @@ HOST, PORT, USER = "77.37.37.207", 65002, "u748721963"
 HEALTH_URL = "https://backendtamem.deliverytamem.com/api/v1/health"
 
 DRY_RUN = "--dry-run" in sys.argv
+FORCE_DRIFT = "--force-overwrite-drift" in sys.argv
+REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 
 
 def read_password() -> str:
@@ -117,6 +120,47 @@ def main() -> None:
     remote_dir = posixpath.dirname(remote)
     staged = remote + ".new"
 
+    # Refuse to overwrite a live file that git has never seen.
+    #
+    # On 2026-10-27 this script replaced a live api.php that was 78 KB larger
+    # than the repo: Telegram work deployed straight from a laptop on 10-19 and
+    # 10-24 and never pushed. Nothing here noticed, and production ran without
+    # it until the backup was copied back by hand.
+    #
+    # The check is exact and cheap: the live file's git blob hash must already
+    # exist in this repo's object store, i.e. it is SOME committed version of
+    # api.php. If not, someone deployed code that only exists on the server —
+    # it is saved locally for merging and nothing is touched.
+    sftp = cli.open_sftp()
+    buf = __import__("io").BytesIO()
+    sftp.getfo(remote, buf)
+    sftp.close()
+    live = buf.getvalue()
+    blob = hashlib.sha1(b"blob %d\0" % len(live) + live).hexdigest()
+    known = subprocess.run(["git", "cat-file", "-e", blob], cwd=REPO_ROOT,
+                           capture_output=True).returncode == 0
+    if live == payload:
+        print("live file is already identical to the local one — nothing to deploy.")
+        cli.close()
+        return
+    if not known and not FORCE_DRIFT:
+        keep = os.path.join(REPO_ROOT, ".work", "drift", f"live-{time.strftime('%Y%m%d-%H%M%S')}.php")
+        os.makedirs(os.path.dirname(keep), exist_ok=True)
+        open(keep, "wb").write(live)
+        cli.close()
+        sys.exit("\n".join([
+            "",
+            "REFUSING TO DEPLOY: the live api.php is not any version committed to git.",
+            f"  live  {len(live):,} bytes   local {len(payload):,} bytes",
+            "Someone deployed code that only exists on the server. Overwriting it",
+            "would delete that work from production.",
+            f"  saved a copy: {keep}",
+            "Merge it into apps/backend/dist-bundle/api.php, commit, and deploy again.",
+            "(--force-overwrite-drift skips this check. Do not use it to make the error go away.)",
+        ]))
+    print(f"live file is a committed version ({blob[:12]}) — safe to replace."
+          if known else "WARNING: overwriting an uncommitted live file (--force-overwrite-drift).")
+
     if DRY_RUN:
         print(f"\n[dry-run] would deploy to {remote}")
         cli.close()
@@ -147,7 +191,10 @@ def main() -> None:
     #
     # `~/api-backups/` is not under any docroot, so there is nothing to guess.
     stamp = time.strftime("%Y%m%d-%H%M%S")
-    backup_dir = "$HOME/api-backups"
+    # Resolved on the server: as a literal inside the single-quoted commands
+    # below, "$HOME" was never expanded and every backup since this was written
+    # went to a directory actually named `$HOME` (~/$HOME/api-backups/).
+    backup_dir = run('printf %s "$HOME"') + "/api-backups"
     backup = f"{backup_dir}/api.php.{stamp}"
     print(run(f"mkdir -p '{backup_dir}' && chmod 700 '{backup_dir}' && "
               f"cp -p '{remote}' '{backup}' && echo 'backup -> {backup}'"))

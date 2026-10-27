@@ -25,7 +25,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 12
     steps:
+      # Full history: deploy-api.py refuses to overwrite a live api.php that is
+      # not SOME committed version, and with the default depth of 1 every older
+      # version would look unknown and block the deploy.
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Upload the repo copy for comparison (not into the web root)
         uses: appleboy/scp-action@v0.1.7
