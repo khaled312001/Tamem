@@ -1294,6 +1294,30 @@ if ($method === 'GET' && $path === '/admin/reports/services') {
         'orders' => (int) $r['orders'], 'revenue' => (float) $r['revenue'],
     ], $rows));
 }
+/**
+ * «من تاريخ / إلى تاريخ» on the driver report, its detail and its settlement.
+ *
+ * Bounded by the day the ORDER was placed, in Cairo — the same rule the orders
+ * page uses, so a driver's تقفيلة matches counting his orders there. It used to
+ * be the day the order was marked delivered, compared against UTC: an order
+ * picked up weeks earlier and only closed today landed in today's closing (the
+ * office counted 13 orders for a driver, the report said 15), and the day
+ * itself started at 03:00 Cairo time.
+ *
+ * Takes YYYY-MM-DD; anything else is ignored rather than guessed.
+ */
+function driverReportDays(string $from, string $to, array &$where, array &$args): void {
+    $from = trim($from); $to = trim($to);
+    if (preg_match('/^\d{4}-\d{2}-\d{2}$/', $from)) {
+        $where[] = 'o.createdAt >= ?';
+        $args[] = gmdate('Y-m-d H:i:s', strtotime($from . ' 00:00:00'));   // PHP runs on Africa/Cairo
+    }
+    if (preg_match('/^\d{4}-\d{2}-\d{2}$/', $to)) {
+        $where[] = 'o.createdAt < ?';
+        $args[] = gmdate('Y-m-d H:i:s', strtotime($to . ' 00:00:00 +1 day'));
+    }
+}
+
 if ($method === 'GET' && $path === '/admin/reports/drivers') {
     $u = authUser(); if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
     // Revenue is counted for DELIVERED/COMPLETED orders only — cancelled orders
@@ -1303,9 +1327,7 @@ if ($method === 'GET' && $path === '/admin/reports/drivers') {
     // ── order-level filters (live in the JOIN so drivers with no matching
     //    orders still appear with zeros) ──
     $onArgs = []; $on = ["o.assignedDriverId = u.id", "o.status IN ('DELIVERED','COMPLETED')"];
-    $from = trim((string) ($_GET['from'] ?? '')); $to = trim((string) ($_GET['to'] ?? ''));
-    if ($from !== '') { $on[] = "COALESCE(o.deliveredAt, o.completedAt, o.updatedAt) >= ?"; $onArgs[] = $from . ' 00:00:00'; }
-    if ($to !== '')   { $on[] = "COALESCE(o.deliveredAt, o.completedAt, o.updatedAt) <= ?"; $onArgs[] = $to . ' 23:59:59'; }
+    driverReportDays((string) ($_GET['from'] ?? ''), (string) ($_GET['to'] ?? ''), $on, $onArgs);
     $stf = strtoupper(trim((string) ($_GET['status'] ?? '')));
     if (in_array($stf, ['DELIVERED', 'COMPLETED'], true)) { $on[] = "o.status = ?"; $onArgs[] = $stf; }
     $settle = strtoupper(trim((string) ($_GET['settlement'] ?? '')));
@@ -1368,9 +1390,7 @@ if ($method === 'GET' && preg_match('#^/admin/reports/drivers/([^/]+)$#', $path,
     $u = authUser(); if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
     $driverId = $m[1];
     $w = ["o.assignedDriverId = ?", "o.status IN ('DELIVERED','COMPLETED')"]; $a = [$driverId];
-    $from = trim((string) ($_GET['from'] ?? '')); $to = trim((string) ($_GET['to'] ?? ''));
-    if ($from !== '') { $w[] = "COALESCE(o.deliveredAt, o.completedAt, o.updatedAt) >= ?"; $a[] = $from . ' 00:00:00'; }
-    if ($to !== '')   { $w[] = "COALESCE(o.deliveredAt, o.completedAt, o.updatedAt) <= ?"; $a[] = $to . ' 23:59:59'; }
+    driverReportDays((string) ($_GET['from'] ?? ''), (string) ($_GET['to'] ?? ''), $w, $a);
     $stf = strtoupper(trim((string) ($_GET['status'] ?? '')));
     if (in_array($stf, ['DELIVERED', 'COMPLETED'], true)) { $w[] = "o.status = ?"; $a[] = $stf; }
     $settle = strtoupper(trim((string) ($_GET['settlement'] ?? '')));
@@ -8814,9 +8834,9 @@ if ($method === 'POST' && preg_match('#^/admin/drivers/([^/]+)/settle$#', $path,
         $w[] = 'o.id IN (' . implode(',', array_fill(0, count($ids), '?')) . ')';
         foreach ($ids as $id) $a[] = (string) $id;
     } else {
-        $from = trim((string) ($b['from'] ?? '')); $to = trim((string) ($b['to'] ?? ''));
-        if ($from !== '') { $w[] = "COALESCE(o.deliveredAt, o.completedAt, o.updatedAt) >= ?"; $a[] = $from . ' 00:00:00'; }
-        if ($to !== '')   { $w[] = "COALESCE(o.deliveredAt, o.completedAt, o.updatedAt) <= ?"; $a[] = $to . ' 23:59:59'; }
+        // Same days as the report the admin is looking at, or the settlement
+        // pays for orders that were not on screen.
+        driverReportDays((string) ($b['from'] ?? ''), (string) ($b['to'] ?? ''), $w, $a);
     }
     $sel = $pdo->prepare("SELECT o.id, o.driverDeliveryRevenue FROM `Order` o WHERE " . implode(' AND ', $w));
     $sel->execute($a);
