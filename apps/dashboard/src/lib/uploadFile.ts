@@ -19,7 +19,58 @@ export interface UploadResult {
   kind: 'image' | 'audio';
 }
 
-export async function uploadFile(file: File): Promise<UploadResult> {
+/**
+ * Types the server stores as they are. It decides by the file's bytes, not its
+ * name, so a JPEG called `.jfif` (what Chrome on Windows saves from Google
+ * Images) goes straight through.
+ */
+const SERVER_KEEPS = new Set([
+  'image/jpeg',
+  'image/png',
+  'image/webp',
+  'image/gif',
+  'image/heic',
+  'image/heif',
+  'application/pdf',
+]);
+
+/**
+ * Formats a browser can open but the server does not keep — AVIF above all,
+ * which Google Images serves by default. Re-encoding them here means the admin
+ * never has to know what AVIF is. SVG is left out on purpose: it is a document
+ * that can carry script, not a photo, and the server refuses it by name.
+ */
+function needsConversion(file: File): boolean {
+  if (!file.type.startsWith('image/')) return false;
+  if (file.type === 'image/svg+xml') return false;
+  return !SERVER_KEEPS.has(file.type);
+}
+
+async function toJpeg(file: File): Promise<File> {
+  let bitmap: ImageBitmap;
+  try {
+    bitmap = await createImageBitmap(file);
+  } catch {
+    throw new Error('المتصفح مش قادر يفتح الصورة دي — احفظها JPG أو PNG وارفعها تاني');
+  }
+  const canvas = document.createElement('canvas');
+  canvas.width = bitmap.width;
+  canvas.height = bitmap.height;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) throw new Error('تعذّر تجهيز الصورة للرفع');
+  // JPEG has no transparency; without a fill, transparent areas turn black.
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.drawImage(bitmap, 0, 0);
+  bitmap.close();
+  const blob = await new Promise<Blob | null>((r) => canvas.toBlob(r, 'image/jpeg', 0.9));
+  if (!blob) throw new Error('تعذّر تحويل الصورة');
+  const base = file.name.replace(/\.[^.]+$/, '') || 'image';
+  return new File([blob], `${base}.jpg`, { type: 'image/jpeg' });
+}
+
+export async function uploadFile(input: File): Promise<UploadResult> {
+  const file = needsConversion(input) ? await toJpeg(input) : input;
   const token = useAuth.getState().tokens?.accessToken;
   const form = new FormData();
   form.append('file', file);
