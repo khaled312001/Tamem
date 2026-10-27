@@ -1617,7 +1617,7 @@ if ($method === 'GET' && $path === '/admin/alerts') {
     if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
     // Refresh before answering, so the page never shows a stale picture.
     maybeAutoSweep();
-    maybeTelegramDigest();
+    maybeSupervisorAlertDigest();
     $where = [];
     $args = [];
     $resolved = $_GET['resolved'] ?? null;
@@ -1719,7 +1719,7 @@ if ($method === 'GET' && $path === '/admin/alerts') {
 
 if ($method === 'GET' && $path === '/admin/alerts/stats') {
     maybeAutoSweep();
-    maybeTelegramDigest();
+    maybeSupervisorAlertDigest();
     authUser();
     $counts = db()->query("SELECT status, COUNT(*) c FROM `Alert` GROUP BY status")->fetchAll();
     $byStatus = [];
@@ -1842,16 +1842,82 @@ function resolveOrderAlerts(string $orderId): void {
     } catch (Throwable $e) { /* best-effort */ }
 }
 
+/**
+ * SQL predicate: a product is carrying a REAL offer right now — an unexpired
+ * timed sale with either an absolute salePrice under the list price, or a
+ * percentage discount. Shared by the reconcile and the offer-stats command so
+ * the two never disagree on what "on offer" means.
+ */
+function offerActiveSql(string $a = 'p'): string {
+    return "($a.saleEndsAt IS NULL OR $a.saleEndsAt > NOW(3)) AND ("
+         . "($a.salePrice IS NOT NULL AND $a.salePrice > 0 AND $a.salePrice < $a.price) "
+         . "OR ($a.discount IS NOT NULL AND $a.discount > 0))";
+}
+/**
+ * Keep Product.saleStartsAt in step with offer state: stamp NOW() the moment a
+ * product goes on offer (so «منذ بداية العرض» counts from then) and clear it
+ * when the offer ends. Idempotent — only the rows that actually changed are
+ * written, so it is cheap to run on every sweep. Scoped to one merchant when
+ * given (used lazily before the offer-stats command reads).
+ */
+function reconcileOfferStart(?string $merchantId = null): void {
+    try {
+        $on = offerActiveSql('p');
+        $scope = $merchantId ? ' AND p.merchantId = ?' : '';
+        $args = $merchantId ? [$merchantId] : [];
+        // Newly on offer → stamp the REAL offer-set time (the last salePrice/
+        // discount change in ProductHistory), falling back to updatedAt/createdAt,
+        // so «منذ بداية العرض» is accurate even if the sweep runs minutes later.
+        db()->prepare(
+            "UPDATE `Product` p SET p.saleStartsAt = COALESCE(
+                 (SELECT MAX(h.createdAt) FROM `ProductHistory` h
+                   WHERE h.productId = p.id AND (h.changes LIKE '%salePrice%' OR h.changes LIKE '%discount%')),
+                 p.updatedAt, p.createdAt)
+              WHERE p.saleStartsAt IS NULL AND ($on)$scope"
+        )->execute($args);
+        // Offer gone → clear the stamp so a future offer gets a fresh start.
+        db()->prepare("UPDATE `Product` p SET p.saleStartsAt = NULL WHERE p.saleStartsAt IS NOT NULL AND NOT ($on)$scope")->execute($args);
+    } catch (Throwable $e) { error_log('[api.php] reconcileOfferStart: ' . $e->getMessage()); }
+}
 function runAlertSweep(): array {
     $created = 0;
     $now = time();
     $ago = function (float $min) use ($now) { return gmdate('Y-m-d H:i:s', $now - (int) round($min * 60)); };
     $pdo = db();
 
+    // Stamp/clear offer-start so «أداء العروض» counts from the day each offer
+    // went live — rides on the same throttled sweep, no extra cron.
+    reconcileOfferStart();
+
+    // ── Auto-resolve alerts whose cause has cleared ──
+    // A "طلب جديد"/"تأخر في الاستلام"/… alert must not stay OPEN after the order
+    // moved on (got a driver, picked up, delivered, cancelled). Without this the
+    // dashboard keeps a growing pile of stale alerts and the Telegram digest
+    // announces a "new" order that's actually COMPLETED. One cheap UPDATE/join.
+    try {
+        $pdo->prepare(
+            "UPDATE `Alert` a JOIN `Order` o ON o.id = a.relatedOrderId
+                SET a.status = 'RESOLVED', a.isResolved = 1, a.resolvedAt = NOW(3), a.updatedAt = NOW(3)
+              WHERE a.status IN ('OPEN','ACKNOWLEDGED','ESCALATED')
+                AND (
+                  (a.type = 'PENDING_ORDER'          AND o.status NOT IN ('NEW','PRICED')) OR
+                  (a.type = 'MERCHANT_NOT_ACCEPTING' AND o.status <> 'UNDER_REVIEW') OR
+                  (a.type = 'DRIVER_NOT_ASSIGNED'    AND (o.status <> 'ACCEPTED' OR o.assignedDriverId IS NOT NULL)) OR
+                  (a.type = 'DRIVER_PICKUP_LATE'     AND o.status <> 'DRIVER_ASSIGNED') OR
+                  (a.type = 'DRIVER_DELIVERY_LATE'   AND o.status <> 'IN_ROUTE')
+                )"
+        )->execute();
+    } catch (Throwable $e) { error_log('[api.php] alert auto-resolve: ' . $e->getMessage()); }
+
+    // Only RECENT orders raise alerts. Old never-closed orders (days/weeks) must
+    // not keep flooding the board — they are a data-cleanup problem, not a live
+    // alert. Capped by alert_order_max_age_hours (default 24h = "today-ish").
+    $cut = $ago(alertSetting('alert_order_max_age_hours', 24) * 60);
+
     // ── orders stuck in NEW ──
     $m = alertSetting('order_new_alert_minutes', 15);
-    $st = $pdo->prepare("SELECT id, orderNumber FROM `Order` WHERE status = 'NEW' AND createdAt < ?");
-    $st->execute([$ago($m)]);
+    $st = $pdo->prepare("SELECT id, orderNumber FROM `Order` WHERE status = 'NEW' AND createdAt < ? AND createdAt >= ?");
+    $st->execute([$ago($m), $cut]);
     foreach ($st->fetchAll() as $o) {
         $created += upsertAlert([
             'type' => 'PENDING_ORDER', 'category' => 'ORDER', 'severity' => 'HIGH',
@@ -1866,8 +1932,8 @@ function runAlertSweep(): array {
 
     // ── priced but not accepted ──
     $m = alertSetting('order_pending_alert_minutes', 60);
-    $st = $pdo->prepare("SELECT id, orderNumber FROM `Order` WHERE status = 'PRICED' AND updatedAt < ?");
-    $st->execute([$ago($m)]);
+    $st = $pdo->prepare("SELECT id, orderNumber FROM `Order` WHERE status = 'PRICED' AND updatedAt < ? AND createdAt >= ?");
+    $st->execute([$ago($m), $cut]);
     foreach ($st->fetchAll() as $o) {
         $created += upsertAlert([
             'type' => 'PENDING_ORDER', 'category' => 'ORDER', 'severity' => 'MEDIUM',
@@ -1882,8 +1948,8 @@ function runAlertSweep(): array {
 
     // ── merchant not accepting ──
     $m = alertSetting('order_review_alert_minutes', 30);
-    $st = $pdo->prepare("SELECT id, orderNumber FROM `Order` WHERE status = 'UNDER_REVIEW' AND updatedAt < ?");
-    $st->execute([$ago($m)]);
+    $st = $pdo->prepare("SELECT id, orderNumber FROM `Order` WHERE status = 'UNDER_REVIEW' AND updatedAt < ? AND createdAt >= ?");
+    $st->execute([$ago($m), $cut]);
     foreach ($st->fetchAll() as $o) {
         $created += upsertAlert([
             'type' => 'MERCHANT_NOT_ACCEPTING', 'category' => 'MERCHANT', 'severity' => 'HIGH',
@@ -1896,10 +1962,22 @@ function runAlertSweep(): array {
         ]) ? 1 : 0;
     }
 
+    // ── AUTO distribution catch-up ──
+    // In AUTO mode, assign any ACCEPTED order still without a driver (e.g. nobody
+    // was checked in when it was accepted, now someone clocked in). Runs before
+    // the "no driver" alert so only the genuinely un-coverable ones get flagged.
+    if (distributionMode() === 'AUTO') {
+        try {
+            $pend = $pdo->prepare("SELECT id FROM `Order` WHERE status = 'ACCEPTED' AND assignedDriverId IS NULL AND createdAt >= ?");
+            $pend->execute([$cut]);
+            foreach ($pend->fetchAll() as $po) { autoAssignOrder((string) $po['id']); }
+        } catch (Throwable $e) { error_log('[api.php] auto-assign sweep: ' . $e->getMessage()); }
+    }
+
     // ── accepted with no driver ──
     $m = alertSetting('order_no_driver_alert_minutes', 15);
-    $st = $pdo->prepare("SELECT id, orderNumber FROM `Order` WHERE status = 'ACCEPTED' AND assignedDriverId IS NULL AND updatedAt < ?");
-    $st->execute([$ago($m)]);
+    $st = $pdo->prepare("SELECT id, orderNumber FROM `Order` WHERE status = 'ACCEPTED' AND assignedDriverId IS NULL AND updatedAt < ? AND createdAt >= ?");
+    $st->execute([$ago($m), $cut]);
     foreach ($st->fetchAll() as $o) {
         $created += upsertAlert([
             'type' => 'DRIVER_NOT_ASSIGNED', 'category' => 'DELAY', 'severity' => 'HIGH',
@@ -1914,8 +1992,8 @@ function runAlertSweep(): array {
 
     // ── pickup late ──
     $m = alertSetting('order_pickup_late_minutes', 30);
-    $st = $pdo->prepare("SELECT id, orderNumber FROM `Order` WHERE status = 'DRIVER_ASSIGNED' AND updatedAt < ?");
-    $st->execute([$ago($m)]);
+    $st = $pdo->prepare("SELECT id, orderNumber FROM `Order` WHERE status = 'DRIVER_ASSIGNED' AND updatedAt < ? AND createdAt >= ?");
+    $st->execute([$ago($m), $cut]);
     foreach ($st->fetchAll() as $o) {
         $created += upsertAlert([
             'type' => 'DRIVER_PICKUP_LATE', 'category' => 'DELAY', 'severity' => 'MEDIUM',
@@ -1930,8 +2008,8 @@ function runAlertSweep(): array {
 
     // ── delivery late ──
     $m = alertSetting('order_delivery_late_minutes', 60);
-    $st = $pdo->prepare("SELECT id, orderNumber FROM `Order` WHERE status = 'IN_ROUTE' AND updatedAt < ?");
-    $st->execute([$ago($m)]);
+    $st = $pdo->prepare("SELECT id, orderNumber FROM `Order` WHERE status = 'IN_ROUTE' AND updatedAt < ? AND createdAt >= ?");
+    $st->execute([$ago($m), $cut]);
     foreach ($st->fetchAll() as $o) {
         $created += upsertAlert([
             'type' => 'DRIVER_DELIVERY_LATE', 'category' => 'DELAY', 'severity' => 'HIGH',
@@ -2037,117 +2115,90 @@ if ($method === 'POST' && $path === '/admin/alerts/run-sweep') {
 }
 
 /**
- * Hourly Telegram pulse. One GROUP message listing orders that sat past their
- * threshold without being delivered — including the ones a driver is holding and
- * forgot to mark «تم» — PLUS a private NUDGE to each lagging driver with the
- * action buttons ready to tap. Thresholds are the same alertSetting() knobs the
- * dashboard sweep uses, so Telegram and the dashboard never disagree. Silent
- * when nothing is overdue, so the group is never pinged just to say "all clear".
+ * Supervisor alert digest → each linked supervisor's PRIVATE chat (NOT the group).
+ * Same source as the dashboard «التنبيهات» page (the `Alert` table the sweep
+ * fills), so it mirrors it exactly and respects تم الحل / تجاهل (only active
+ * statuses). Scoped to RECENT orders only — the last `telegram_sup_digest_window_hours`
+ * (default 2) — so it never drags up the pile of ancient open orders. Returns
+ * [sent, count]. Silent (nothing sent) when there are no recent alerts.
  */
-function telegramOverdueDigest(): array {
-    if (!tgEnabled()) return ['sent' => false, 'nudged' => 0, 'count' => 0];
-    $now = time();
-    $thr = [
-        'NEW'             => alertSetting('order_new_alert_minutes', 15),
-        'PRICED'          => alertSetting('order_pending_alert_minutes', 60),
-        'UNDER_REVIEW'    => alertSetting('order_review_alert_minutes', 30),
-        'ACCEPTED'        => alertSetting('order_no_driver_alert_minutes', 15),
-        'DRIVER_ASSIGNED' => alertSetting('order_pickup_late_minutes', 30),
-        'PICKED_UP'       => alertSetting('order_held_late_minutes', 45),
-        'IN_ROUTE'        => alertSetting('order_delivery_late_minutes', 60),
-    ];
-    $lab = [
-        'NEW'             => 'جديد لسه محدش رد',
-        'PRICED'          => 'مُسعّر ومستني العميل',
-        'UNDER_REVIEW'    => 'التاجر مردّش',
-        'ACCEPTED'        => 'مقبول ومفيش مندوب',
-        'DRIVER_ASSIGNED' => 'متعيّن ومااستلمش',
-        'PICKED_UP'       => 'استلمها ولسه مسلّمش',
-        'IN_ROUTE'        => 'في الطريق ولسه مسلّمش',
-    ];
-    $held = ['DRIVER_ASSIGNED', 'PICKED_UP', 'IN_ROUTE']; // a driver is holding it
+function tgSupervisorAlertDigest(): array {
+    if (!tgEnabled()) return ['sent' => 0, 'count' => 0];
+    $chats = tgSupervisorChats();
+    if (!$chats) return ['sent' => 0, 'count' => 0];
+    $winH = (float) alertSetting('telegram_sup_digest_window_hours', 2);
+    $cut = gmdate('Y-m-d H:i:s', time() - (int) round(max(0.25, $winH) * 3600));
     try {
-        $rows = db()->query(
-            "SELECT o.id, o.orderNumber, o.status, o.assignedDriverId,
-                    o.deliveryAddress, o.createdAt, o.updatedAt, dr.name AS drv_name
-               FROM `Order` o
+        $st = db()->prepare(
+            "SELECT a.titleAr, a.descriptionAr, a.severity, o.orderNumber, dr.name AS drv_name
+               FROM `Alert` a
+               JOIN `Order` o ON o.id = a.relatedOrderId
                LEFT JOIN `User` dr ON dr.id = o.assignedDriverId
-              WHERE o.status IN ('NEW','PRICED','UNDER_REVIEW','ACCEPTED','DRIVER_ASSIGNED','PICKED_UP','IN_ROUTE')"
-        )->fetchAll();
-    } catch (Throwable $e) { error_log('[api.php] digest query: ' . $e->getMessage()); return ['sent' => false, 'nudged' => 0, 'count' => 0]; }
-
-    $overdue = [];
-    foreach ($rows as $o) {
-        $status = (string) $o['status'];
-        if ($status === 'ACCEPTED' && !empty($o['assignedDriverId'])) continue; // only no-driver ACCEPTED counts
-        $ref = ($status === 'NEW') ? (string) $o['createdAt'] : (string) $o['updatedAt'];
-        $ts = strtotime(substr($ref, 0, 19) . ' UTC'); // DB stores UTC; drop the .fff
-        if (!$ts) continue;
-        $mins = (int) floor(($now - $ts) / 60);
-        $limit = (int) ($thr[$status] ?? 9999);
-        if ($mins < $limit) continue;
-        $o['_mins'] = $mins; $o['_limit'] = max(1, $limit);
-        $overdue[] = $o;
+              WHERE a.status IN ('OPEN','ACKNOWLEDGED','ESCALATED')
+                AND a.category IN ('ORDER','DELAY','MERCHANT')
+                AND o.createdAt >= ?
+                AND (
+                  (a.type = 'PENDING_ORDER'          AND o.status IN ('NEW','PRICED')) OR
+                  (a.type = 'MERCHANT_NOT_ACCEPTING' AND o.status = 'UNDER_REVIEW') OR
+                  (a.type = 'DRIVER_NOT_ASSIGNED'    AND o.status = 'ACCEPTED' AND o.assignedDriverId IS NULL) OR
+                  (a.type = 'DRIVER_PICKUP_LATE'     AND o.status = 'DRIVER_ASSIGNED') OR
+                  (a.type = 'DRIVER_DELIVERY_LATE'   AND o.status = 'IN_ROUTE') OR
+                  (a.type NOT IN ('PENDING_ORDER','MERCHANT_NOT_ACCEPTING','DRIVER_NOT_ASSIGNED','DRIVER_PICKUP_LATE','DRIVER_DELIVERY_LATE')
+                   AND o.status NOT IN ('DELIVERED','COMPLETED','CANCELLED','REJECTED'))
+                )
+              ORDER BY FIELD(a.severity,'CRITICAL','HIGH','MEDIUM','LOW','INFO'), a.createdAt DESC
+              LIMIT 25"
+        );
+        $st->execute([$cut]);
+        $rows = $st->fetchAll();
+    } catch (Throwable $e) { error_log('[api.php] sup digest query: ' . $e->getMessage()); return ['sent' => 0, 'count' => 0]; }
+    if (!$rows) return ['sent' => 0, 'count' => 0];
+    $emoji = ['CRITICAL' => '🔴', 'HIGH' => '🔴', 'MEDIUM' => '🟠', 'LOW' => '🟡', 'INFO' => '🔵'];
+    $L = ["🔔 *تنبيهات الطلبات* (" . count($rows) . ")", ""];
+    foreach ($rows as $r) {
+        $L[] = ($emoji[(string) $r['severity']] ?? '🔔') . ' *' . ($r['titleAr'] ?: 'تنبيه') . '*';
+        if (trim((string) ($r['descriptionAr'] ?? '')) !== '') $L[] = '   ' . $r['descriptionAr'];
+        if (trim((string) ($r['drv_name'] ?? '')) !== '') $L[] = '   🛵 ' . trim((string) $r['drv_name']);
+        $L[] = '';
     }
-    if (!$overdue) return ['sent' => false, 'nudged' => 0, 'count' => 0];
-    usort($overdue, fn($a, $b) => $b['_mins'] <=> $a['_mins']);
-
-    // ── group digest ──
-    $lines = ['⏰ *أوردرات عدّى عليها وقت* (' . count($overdue) . ')', ''];
-    foreach ($overdue as $o) {
-        $sev = $o['_mins'] >= 2 * $o['_limit'] ? '🔴' : '🟠';
-        $lines[] = $sev . ' #' . $o['orderNumber'] . ' · ' . ($lab[(string) $o['status']] ?? $o['status']) . ' من ' . $o['_mins'] . ' د';
-        $sub = [];
-        if (trim((string) ($o['drv_name'] ?? '')) !== '') $sub[] = '🏍️ ' . trim((string) $o['drv_name']);
-        $area = trim((string) ($o['deliveryAddress'] ?? ''));
-        if ($area !== '') $sub[] = '📍 ' . mb_substr($area, 0, 28);
-        if ($sub) $lines[] = '    ' . implode('   ', $sub);
-    }
-    $sent = tgSendGroup(implode("\n", $lines));
-
-    // ── private nudges to lagging drivers (orders they're holding) ──
-    $nudged = 0;
-    foreach ($overdue as $o) {
-        if (!in_array((string) $o['status'], $held, true)) continue;
-        $chat = tgDriverChatId((string) ($o['assignedDriverId'] ?? ''));
-        if ($chat === null) continue;
-        $cta = (string) $o['status'] === 'DRIVER_ASSIGNED'
-            ? 'لو استلمته اضغط «📦 تم الاستلام» تحت 👇'
-            : 'لو سلّمته اضغط «✅ تم التوصيل» تحت 👇';
-        $txt = "🛎️ *افتكار*\nلسه ماسك الأوردر #" . $o['orderNumber'] . ' من ' . $o['_mins'] . " دقيقة.\n" . $cta;
-        if (tgSend($chat, $txt, tgDriverKeyboard((string) $o['id'], (string) $o['status']))) $nudged++;
-    }
-    return ['sent' => $sent, 'nudged' => $nudged, 'count' => count($overdue)];
+    $text = rtrim(implode("\n", $L));
+    $sent = 0;
+    foreach ($chats as $c) { if (tgSend((string) $c, $text)) $sent++; }
+    return ['sent' => $sent, 'count' => count($rows)];
 }
-
-/**
- * Run the digest at most once every telegram_digest_minutes (default 60; set it
- * to 0 to switch the whole thing off), riding on an open request exactly like
- * maybeAutoSweep. Never affects the response.
- */
-function maybeTelegramDigest(): void {
+/** Hourly throttle for the supervisor digest (Setting telegram_sup_digest_minutes,
+ *  default 60; 0 = off). Rides on an open request like the sweep — never affects it. */
+function maybeSupervisorAlertDigest(): void {
     try {
-        $every = (int) alertSetting('telegram_digest_minutes', 60);
-        if ($every <= 0) return; // disabled
+        if ((int) alertSetting('telegram_sup_digest_enabled', 1) === 0) return; // off switch
+        $tz = new DateTimeZone('Africa/Cairo');
+        $now = new DateTime('now', $tz);
+        $hour = (int) $now->format('G');
+        // Active window (Cairo): from the start hour (default 16 = 4م) through the
+        // end hour (default 2 = 2ص) — the busy evening/night of the 8ص→3ص shift.
+        // Quiet outside it. The window wraps past midnight.
+        $startH = (int) alertSetting('telegram_sup_digest_start_hour', 16);
+        $endH   = (int) alertSetting('telegram_sup_digest_end_hour', 2);
+        $inWindow = ($startH <= $endH) ? ($hour >= $startH && $hour <= $endH) : ($hour >= $startH || $hour <= $endH);
+        if (!$inWindow) return;
+        // Fire once per clock-hour (Cairo), so it lands on the hour: 4م، 5م، 6م …
         $dir = __DIR__ . '/uploads/.alerts';
         if (!is_dir($dir)) @mkdir($dir, 0755, true);
-        $stamp = $dir . '/last-tg-digest';
-        $last = is_file($stamp) ? (int) @file_get_contents($stamp) : 0;
-        if (time() - $last < $every * 60) return;
-        if (@file_put_contents($stamp, (string) time(), LOCK_EX) === false) return;
-        $r = telegramOverdueDigest();
-        if (($r['sent'] ?? false) || ($r['nudged'] ?? 0) > 0) {
-            error_log('[api.php] tg digest: group=' . (($r['sent'] ?? false) ? '1' : '0') . ' nudged=' . ($r['nudged'] ?? 0) . ' overdue=' . ($r['count'] ?? 0));
-        }
+        $stamp = $dir . '/last-sup-digest-hour';
+        $key = $now->format('Y-m-d-H');
+        if ((is_file($stamp) ? trim((string) @file_get_contents($stamp)) : '') === $key) return;
+        if (@file_put_contents($stamp, $key, LOCK_EX) === false) return;
+        $r = tgSupervisorAlertDigest();
+        if (($r['sent'] ?? 0) > 0) error_log('[api.php] sup digest ' . $key . ': sent=' . $r['sent'] . ' alerts=' . ($r['count'] ?? 0));
     } catch (Throwable $e) {
-        error_log('[api.php] tg digest failed: ' . $e->getMessage());
+        error_log('[api.php] sup digest failed: ' . $e->getMessage());
     }
 }
 
-if ($method === 'POST' && $path === '/admin/telegram/run-digest') {
+if ($method === 'POST' && $path === '/admin/alerts/sup-digest-test') {
     $u = authUser();
     if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
-    jsonOk(telegramOverdueDigest());
+    jsonOk(tgSupervisorAlertDigest());
 }
 
 // Cron entry point: no JWT (a cron has no session), so it is gated by a shared
@@ -2157,7 +2208,12 @@ if ($method === 'POST' && $path === '/internal/alerts/sweep') {
     $secret = env('CRON_SECRET') ?: '';
     $given = $_SERVER['HTTP_X_CRON_KEY'] ?? ($_GET['key'] ?? '');
     if ($secret === '' || !hash_equals($secret, (string) $given)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
-    jsonOk(runAlertSweep());
+    $res = runAlertSweep();
+    // The supervisor digest also runs here so it fires even when no admin has the
+    // dashboard open. `force=1` sends it immediately (ignores the hourly throttle).
+    if (!empty($_GET['force'])) { $res['supDigest'] = tgSupervisorAlertDigest(); }
+    else { maybeSupervisorAlertDigest(); }
+    jsonOk($res);
 }
 
 // ─── WhatsApp bridge (Baileys) — a persistent Node.js process runs the real
@@ -2271,7 +2327,11 @@ function tgApiFull(string $method, array $params, ?string $tokenOverride = null)
         }
     } catch (Throwable $e) { error_log('[api.php] tgApi ' . $method . ': ' . $e->getMessage()); return ['ok' => false]; }
     $j = json_decode((string) $raw, true);
-    return is_array($j) ? $j : ['ok' => false];
+    if (!is_array($j)) return ['ok' => false];
+    // Telegram rejected the call (bad HTML, chat not found, …) comes back as a
+    // 200 with ok:false, so curl doesn't flag it — log it or it fails silently.
+    if (empty($j['ok'])) error_log('[api.php] tg ' . $method . ' not-ok: ' . substr((string) ($j['description'] ?? '?'), 0, 160));
+    return $j;
 }
 /** One Bot API call → decoded `result` on success, else null (logged). */
 function tgApi(string $method, array $params, ?string $tokenOverride = null): ?array {
@@ -2309,12 +2369,34 @@ function tgSend($chatId, string $text, ?array $replyMarkup = null): bool {
  * stage; null when there is no next action (delivered / cancelled). callback_data
  * is `o:<orderId>:<code>` (P=picked up, R=in route, D=delivered), well under 64B.
  */
+/**
+ * A «🗺️ الخريطة» button row for the active card — a direct Google-Maps URL, but
+ * ONLY when the order actually carries coordinates (never a text-address guess,
+ * which can drop a wrong pin). Empty row when there are no coords, so the line
+ * just drops. (No call button: Telegram can't start a call from a bot button.)
+ */
+function tgOrderContactButtons(string $orderId): array {
+    $row = [];
+    try {
+        $st = db()->prepare("SELECT o.deliveryLat, o.deliveryLng FROM `Order` o WHERE o.id = ? LIMIT 1");
+        $st->execute([$orderId]);
+        $r = $st->fetch() ?: [];
+        $lat = $r['deliveryLat'] ?? null; $lng = $r['deliveryLng'] ?? null;
+        if ($lat !== null && $lat !== '' && $lng !== null && $lng !== '') {
+            $row[] = ['text' => '🗺️ الخريطة', 'url' => 'https://maps.google.com/?q=' . $lat . ',' . $lng];
+        }
+    } catch (Throwable $e) {}
+    return $row;
+}
 function tgDriverKeyboard(string $orderId, string $status): ?array {
     $btn = fn(string $t, string $code) => ['text' => $t, 'callback_data' => 'o:' . $orderId . ':' . $code];
     if ($status === 'DRIVER_ASSIGNED') $rows = [[$btn('📦 تم الاستلام', 'P')]];
     elseif ($status === 'PICKED_UP')   $rows = [[$btn('🛵 في الطريق', 'R'), $btn('✅ تم التوصيل', 'D')]];
     elseif ($status === 'IN_ROUTE')    $rows = [[$btn('✅ تم التوصيل', 'D')]];
     else return null;
+    // Contact row (call customer / open the drop on a map) while the order is active.
+    $contact = tgOrderContactButtons($orderId);
+    if ($contact) $rows[] = $contact;
     return ['inline_keyboard' => $rows];
 }
 /** Pop the little toast on the driver's screen after they tap a button. */
@@ -2386,6 +2468,407 @@ function tgSendGroup(string $text): bool {
     return false;
 }
 
+/** Order status → a short Arabic label (with emoji) for bot messages. */
+function tgStatusAr(string $s): string {
+    return [
+        'NEW' => '🆕 جديد', 'PRICED' => '💲 مُسعّر', 'UNDER_REVIEW' => '🔍 تحت المراجعة',
+        'ACCEPTED' => '✅ مقبول', 'DRIVER_ASSIGNED' => '🚚 متعيّن لمندوب', 'PICKED_UP' => '📦 استلمه المندوب',
+        'IN_ROUTE' => '🛵 في الطريق', 'DELIVERED' => '✅ تم التسليم', 'COMPLETED' => '✅ مكتمل',
+        'CANCELLED' => '⛔ ملغي', 'REJECTED' => '🚫 مرفوض',
+    ][$s] ?? $s;
+}
+/** The active supervisor linked to this Telegram chat (id+name), or null. */
+function tgSupervisorByChat($chatId): ?array {
+    try {
+        $q = db()->prepare("SELECT id, name FROM `Supervisor` WHERE telegramChatId = ? AND isActive = 1 LIMIT 1");
+        $q->execute([(string) $chatId]);
+        return $q->fetch() ?: null;
+    } catch (Throwable $e) { return null; }
+}
+/** Persistent button menus so people TAP a command instead of typing «/». The
+ *  button labels are plain words that the command branches already accept. */
+function tgDriverMenu(): array {
+    return ['keyboard' => [['اوردراتي', 'حسابي'], ['➕ أوردر خارجي'], ['حضرت', 'انصرفت'], ['مساعدة']],
+            'resize_keyboard' => true, 'is_persistent' => true];
+}
+function tgSupervisorMenu(): array {
+    return ['keyboard' => [['الطلبات', 'الحضور'], ['المتاحين', 'احصائيات'], ['محاسبة', 'مستحقات'], ['الافضل', 'مساعدة']],
+            'resize_keyboard' => true, 'is_persistent' => true];
+}
+
+/* ───────── Driver "external order" self-entry (Telegram, stateful) ─────────
+ * A courier sometimes gets a job straight from a customer, outside the app — it
+ * used to vanish from the books. Now the driver records one in a few taps:
+ * price → customer phone → from/note → status. It lands under the driver with
+ * his usual delivery share frozen (snapshotDriverShare), tagged source=DRIVER_TG,
+ * and createdByAdminId set to the driver's own id so it is NOT mistaken for the
+ * customer's free first APP order (that promo keys off createdByAdminId IS NULL).
+ * No group/supervisor fan-out — the owner's call.
+ *
+ * Conversation state lives in TgChatState keyed by chatId, so a plain reply (a
+ * bare number, a phone) is read as the answer to the last prompt. Stale flows
+ * expire after 15 min so a half-finished entry never traps the driver.
+ */
+function tgStateEnsure(): void {
+    static $done = false; if ($done) return; $done = true;
+    try {
+        db()->exec("CREATE TABLE IF NOT EXISTS `TgChatState` (
+            `chatId` VARCHAR(32) NOT NULL PRIMARY KEY,
+            `flow` VARCHAR(32) NOT NULL,
+            `step` INT NOT NULL DEFAULT 0,
+            `data` LONGTEXT NULL,
+            `updatedAt` DATETIME(3) NOT NULL
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+    } catch (Throwable $e) {}
+}
+function tgStateGet(string $chatId): ?array {
+    tgStateEnsure();
+    try {
+        // Expiry is evaluated in the DB's own clock (NOW() vs updatedAt), never by
+        // comparing a parsed datetime to PHP's time(): the DB stores UTC while PHP
+        // runs on Africa/Cairo, and that 2–3h skew made a row written one second
+        // ago look >15 min old — so a fresh flow was wiped on its very next step.
+        $st = db()->prepare("SELECT flow, step, data FROM `TgChatState`
+                             WHERE chatId = ? AND updatedAt >= (NOW(3) - INTERVAL 15 MINUTE) LIMIT 1");
+        $st->execute([$chatId]);
+        $r = $st->fetch(); if (!$r) return null;
+        $r['step'] = (int) $r['step'];
+        $r['data'] = json_decode((string) ($r['data'] ?? ''), true) ?: [];
+        return $r;
+    } catch (Throwable $e) { return null; }
+}
+function tgStateSet(string $chatId, string $flow, int $step, array $data): void {
+    tgStateEnsure();
+    try {
+        db()->prepare("INSERT INTO `TgChatState` (chatId, flow, step, data, updatedAt) VALUES (?,?,?,?,NOW(3))
+                       ON DUPLICATE KEY UPDATE flow = VALUES(flow), step = VALUES(step), data = VALUES(data), updatedAt = VALUES(updatedAt)")
+            ->execute([$chatId, $flow, $step, json_encode($data, JSON_UNESCAPED_UNICODE)]);
+    } catch (Throwable $e) {}
+}
+function tgStateClear(string $chatId): void {
+    try { db()->prepare("DELETE FROM `TgChatState` WHERE chatId = ?")->execute([$chatId]); } catch (Throwable $e) {}
+}
+/** The linked driver for a chat id, or null. */
+function tgDriverByChat(string $chatId): ?array {
+    try {
+        $q = db()->prepare("SELECT dp.userId, u.name FROM `DriverProfile` dp JOIN `User` u ON u.id = dp.userId WHERE dp.telegramChatId = ? LIMIT 1");
+        $q->execute([$chatId]);
+        return $q->fetch() ?: null;
+    } catch (Throwable $e) { return null; }
+}
+/** Western digits from Arabic-Indic, so "٢٥" parses as 25. */
+function tgDigits(string $s): string {
+    return str_replace(['٠','١','٢','٣','٤','٥','٦','٧','٨','٩','۰','۱','۲','۳','۴','۵','۶','۷','۸','۹'],
+                        ['0','1','2','3','4','5','6','7','8','9','0','1','2','3','4','5','6','7','8','9'], $s);
+}
+function tgMoney($v): string { return rtrim(rtrim(number_format((float) $v, 2, '.', ''), '0'), '.'); }
+/** Confirmation card for a just-created external order (no driver-share line). */
+function tgExtOrderConfirmText(string $no, $price, string $phone, string $note, string $status): string {
+    $stLabel = $status === 'COMPLETED' ? '✅ مكتمل' : '🛵 مع المندوب';
+    return "✅ *اتسجّل أوردر خارجي*\n"
+         . "الرقم: *#{$no}*\n"
+         . "💵 التوصيل: " . tgMoney($price) . " ج\n"
+         . ($phone !== '' ? "📞 العميل: {$phone}\n" : '')
+         . ($note !== '' ? "📍 {$note}\n" : '')
+         . "الحالة: {$stLabel}";
+}
+/** The one-tap status toggle under an external-order card. */
+function tgExtOrderButton(string $orderId, string $status): array {
+    if ($status === 'COMPLETED')
+        return ['inline_keyboard' => [[['text' => '↩️ رجّعه «مع المندوب»', 'callback_data' => 'xo:' . $orderId . ':A']]]];
+    return ['inline_keyboard' => [[['text' => '✅ علّمه «مكتمل»', 'callback_data' => 'xo:' . $orderId . ':D']]]];
+}
+/** Rebuild an external order's card (text + toggle) from its current DB row. */
+function tgExtOrderCardFromDb(string $orderId): array {
+    $r = db()->prepare("SELECT o.orderNumber, o.status, o.deliveryFee, o.notes, u.phone
+                        FROM `Order` o LEFT JOIN `User` u ON u.id = o.customerId WHERE o.id = ? LIMIT 1");
+    $r->execute([$orderId]);
+    $o = $r->fetch() ?: [];
+    $no = (string) ($o['orderNumber'] ?? '');
+    $price = (float) ($o['deliveryFee'] ?? 0);
+    $phone = (string) ($o['phone'] ?? '');
+    if ($phone === '+200000000001') $phone = ''; // the shared "عميل خارجي" placeholder
+    $note = trim((string) preg_replace('/^أوردر خارجي:?\s*/u', '', (string) ($o['notes'] ?? '')));
+    $status = (string) ($o['status'] ?? '');
+    return [tgExtOrderConfirmText($no, $price, $phone, $note, $status), tgExtOrderButton($orderId, $status)];
+}
+/** Flip an external order between «مع المندوب» and «مكتمل» — minimal update, NO
+ *  group/customer fan-out (external orders are silent by the owner's call). */
+function tgExtSetStatus(string $orderId, string $newStatus): void {
+    $sets = ['`status` = ?', '`updatedAt` = NOW(3)']; $args = [$newStatus];
+    if ($newStatus === 'COMPLETED') { $sets[] = '`completedAt` = NOW(3)'; $sets[] = '`deliveredAt` = NOW(3)'; }
+    else { $sets[] = '`completedAt` = NULL'; $sets[] = '`deliveredAt` = NULL'; }
+    $args[] = $orderId;
+    try { db()->prepare('UPDATE `Order` SET ' . implode(',', $sets) . ' WHERE id = ?')->execute($args); } catch (Throwable $e) {}
+    try { snapshotDriverShare($orderId); } catch (Throwable $e) {}
+}
+
+function tgStartExtOrder(string $chatId): void {
+    if (!tgDriverByChat($chatId)) { tgSend($chatId, 'حسابك مش مربوط كسائق. اطلب من الإدارة رابط الربط.'); return; }
+    tgStateSet($chatId, 'extorder', 1, []);
+    tgSend($chatId, "➕ *تسجيل أوردر خارجي*\n\n💵 اكتب *قيمة التوصيل* بالأرقام 👇\nمثال: 25\n\n(ابعت «الغاء» في أي وقت للخروج)");
+}
+
+function tgHandleExtOrderStep(string $chatId, string $text, array $state): void {
+    $t = trim($text);
+    // A command or a main-menu tap drops the half-made entry instead of being
+    // swallowed as an answer — the driver just taps what they meant again.
+    if ($t === '' || preg_match('#^/#u', $t)
+        || in_array($t, ['الغاء','إلغاء','خروج','اوردراتي','أوردراتي','حسابي','حضرت','انصرفت','مساعدة'], true)) {
+        tgStateClear($chatId);
+        tgSend($chatId, 'اتلغى تسجيل الأوردر الخارجي. تقدر تبدأ من جديد من زرار «➕ أوردر خارجي».', tgDriverMenu());
+        return;
+    }
+    $drv = tgDriverByChat($chatId);
+    if (!$drv) { tgStateClear($chatId); tgSend($chatId, 'حسابك مش مربوط كسائق.'); return; }
+    $data = (array) ($state['data'] ?? []); $step = (int) ($state['step'] ?? 1);
+
+    if ($step === 1) {
+        $n = (float) preg_replace('/[^0-9.]/', '', tgDigits($t));
+        if ($n <= 0) { tgSend($chatId, 'اكتب قيمة التوصيل بالأرقام، مثال: 25'); return; }
+        $data['price'] = round($n, 2);
+        tgStateSet($chatId, 'extorder', 2, $data);
+        tgSend($chatId, "📞 اكتب *رقم العميل*\n(ابعت «-» لو مش معاك)");
+        return;
+    }
+    if ($step === 2) {
+        if ($t === '-') { $data['phone'] = ''; }
+        else {
+            $cl = preg_replace('/[\s\-()]/', '', tgDigits($t));
+            if (preg_match('/^(?:\+?20|0)?(1[0125]\d{8})$/', $cl, $mm)) $data['phone'] = '+20' . $mm[1];
+            else { tgSend($chatId, 'الرقم مش مظبوط. اكتب رقم موبايل مصري صح، أو ابعت «-» لو مش معاك.'); return; }
+        }
+        tgStateSet($chatId, 'extorder', 3, $data);
+        tgSend($chatId, "📍 اكتب *مكان العميل / ملاحظة*\n(ابعت «-» لو مفيش)");
+        return;
+    }
+    if ($step === 3) {
+        // Last answer — create the order now, always as «مكتمل» (owner's call: the
+        // driver only records a delivery he already did). No status step, no toggle.
+        $note = ($t === '-') ? '' : mb_substr($t, 0, 480);
+        $res = tgCreateExternalOrder((string) $drv['userId'], (float) ($data['price'] ?? 0),
+                                     (string) ($data['phone'] ?? ''), $note, 'COMPLETED');
+        tgStateClear($chatId);
+        if (!$res) { tgSend($chatId, '⚠️ حصل خطأ أثناء تسجيل الأوردر. حاول تاني.', tgDriverMenu()); return; }
+        tgSend($chatId, tgExtOrderConfirmText((string) $res[0], $data['price'] ?? 0,
+            (string) ($data['phone'] ?? ''), $note, 'COMPLETED'), tgDriverMenu());
+        return;
+    }
+    tgStateClear($chatId);
+}
+
+/**
+ * Create a driver-entered external order. Delivery-only (no goods/merchant):
+ * deliveryFee = finalPrice = quotedPrice = the price the driver typed, and the
+ * driver's usual share is frozen onto it. Returns [orderNumber, driverShare] or
+ * null on failure.
+ */
+function tgCreateExternalOrder(string $driverUserId, float $price, string $phone, string $note, string $status): ?array {
+    try {
+        if ($price < 0) $price = 0.0;
+        if (!in_array($status, ['DRIVER_ASSIGNED', 'COMPLETED'], true)) $status = 'DRIVER_ASSIGNED';
+
+        // Customer: reuse/create by phone; a shared "عميل خارجي" row when none given.
+        $findCust = function (string $ph, string $name): string {
+            $f = db()->prepare('SELECT id FROM `User` WHERE phone = ? LIMIT 1'); $f->execute([$ph]);
+            if ($ex = $f->fetch()) return (string) $ex['id'];
+            $cid = newId();
+            db()->prepare('INSERT INTO `User` (id, name, phone, role, isActive, isPhoneVerified, createdAt, updatedAt) VALUES (?,?,?,?,1,0,NOW(3),NOW(3))')
+                ->execute([$cid, $name, $ph, 'CUSTOMER']);
+            return $cid;
+        };
+        $customerId = $phone !== '' ? $findCust($phone, 'عميل خارجي') : $findCust('+200000000001', 'عميل خارجي');
+
+        // A delivery service to hang it on.
+        $sv = db()->query("SELECT id FROM `Service` WHERE category = 'DELIVERY' LIMIT 1")->fetch();
+        if (!$sv) $sv = db()->query("SELECT id FROM `Service` LIMIT 1")->fetch();
+        if (!$sv) return null;
+        $serviceId = (string) $sv['id'];
+
+        $id = newId(); $no = newOrderNumber($id);
+        $cols = ['id','orderNumber','serviceId','customerId','category','status','createdByAdminId','assignedDriverId',
+                 'deliveryFee','finalPrice','quotedPrice','paymentMethod','source','notes'];
+        $qm   = ['?','?','?','?','?','?','?','?','?','?','?','?','?','?'];
+        $args = [$id, $no, $serviceId, $customerId, 'DELIVERY', $status, $driverUserId, $driverUserId,
+                 $price, $price, $price, 'CASH', 'DRIVER_TG', ($note !== '' ? ('أوردر خارجي: ' . $note) : 'أوردر خارجي')];
+        if ($note !== '') { $cols[] = 'deliveryAddress'; $qm[] = '?'; $args[] = mb_substr($note, 0, 480); }
+        if ($status === 'COMPLETED') { $cols[] = 'deliveredAt'; $qm[] = 'NOW(3)'; $cols[] = 'completedAt'; $qm[] = 'NOW(3)'; }
+        $cols[] = 'createdAt'; $qm[] = 'NOW(3)'; $cols[] = 'updatedAt'; $qm[] = 'NOW(3)';
+        $colStr = implode(',', array_map(fn($c) => "`$c`", $cols));
+        db()->prepare("INSERT INTO `Order` ($colStr) VALUES (" . implode(',', $qm) . ")")->execute($args);
+
+        orderHistory($id, 'NEW', $status, $driverUserId, 'DRIVER', 'أوردر خارجي من تيليجرام');
+        snapshotDriverShare($id);
+
+        $share = 0.0;
+        try {
+            $r = db()->prepare("SELECT driverDeliveryRevenue FROM `Order` WHERE id = ? LIMIT 1"); $r->execute([$id]);
+            $share = (float) ($r->fetchColumn() ?: 0);
+        } catch (Throwable $e) {}
+        return [$no, $share, $id];
+    } catch (Throwable $e) { error_log('[api.php] tgCreateExternalOrder: ' . $e->getMessage()); return null; }
+}
+/**
+ * Per-driver accounting board for a time window — orders, total delivery,
+ * company cut (fees − share) and driver share, plus a grand total. $startUtc is
+ * inclusive, $endUtc exclusive (null = up to now). Returns '' when no deliveries
+ * fall in the window, so the caller can say so. Shared by the محاسبة commands.
+ */
+function tgAccountingText(string $startUtc, ?string $endUtc, string $title): string {
+    $cond = "o.status IN ('DELIVERED','COMPLETED') AND COALESCE(o.deliveredAt, o.completedAt, o.updatedAt) >= ?";
+    $args = [$startUtc];
+    if ($endUtc !== null) { $cond .= " AND COALESCE(o.deliveredAt, o.completedAt, o.updatedAt) < ?"; $args[] = $endUtc; }
+    $st = db()->prepare(
+        "SELECT u.name, COUNT(o.id) AS n,
+                COALESCE(SUM(COALESCE(o.deliveryFee,0)),0) AS fees,
+                COALESCE(SUM(COALESCE(o.driverDeliveryRevenue, ROUND(COALESCE(o.deliveryFee,0) * COALESCE(dp.deliverySharePct,0) / 100, 2))),0) AS due
+           FROM `User` u
+           JOIN `DriverProfile` dp ON dp.userId = u.id
+           JOIN `Order` o ON o.assignedDriverId = u.id AND $cond
+          WHERE u.role = 'DRIVER'
+          GROUP BY u.id, u.name
+          ORDER BY due DESC"
+    );
+    $st->execute($args);
+    $rows = $st->fetchAll();
+    if (!$rows) return '';
+    $tn = 0; $tf = 0.0; $td = 0.0;
+    $L = ["🧮 *$title*", ""];
+    foreach ($rows as $r) {
+        $n = (int) $r['n']; $f = (float) $r['fees']; $d = (float) $r['due'];
+        $tn += $n; $tf += $f; $td += $d;
+        $L[] = "👤 *" . $r['name'] . "*";
+        $L[] = "   📦 " . $n . " · 🚚 " . waMoney($f) . " · 🏢 شركة " . waMoney($f - $d) . " · 🤝 طيار " . waMoney($d);
+    }
+    $L[] = "━━━━━━━━━━";
+    $L[] = "💰 *الإجمالي*";
+    $L[] = "📦 توصيلات: " . $tn;
+    $L[] = "🚚 إجمالي التوصيل: " . waMoney($tf);
+    $L[] = "🏢 حساب الشركة: " . waMoney($tf - $td);
+    $L[] = "🤝 حساب الطيارين: " . waMoney($td);
+    return implode("\n", $L);
+}
+/** Active drivers whose name contains $q (up to 6) — for name-based commands. */
+function tgFindDriversByName(string $q): array {
+    $q = trim($q);
+    if ($q === '') return [];
+    try {
+        $st = db()->prepare("SELECT u.id, u.name FROM `User` u JOIN `DriverProfile` dp ON dp.userId = u.id
+                              WHERE u.role = 'DRIVER' AND u.isActive = 1 AND u.name LIKE ? ORDER BY u.name LIMIT 6");
+        $st->execute(['%' . $q . '%']);
+        return $st->fetchAll();
+    } catch (Throwable $e) { return []; }
+}
+/** Merchants whose Arabic store name matches — for the «مطعم <اسم>» offer report. */
+function tgFindMerchantsByName(string $q): array {
+    $q = trim($q);
+    if ($q === '') return [];
+    try {
+        $st = db()->prepare("SELECT id, storeNameAr FROM `MerchantProfile` WHERE storeNameAr LIKE ? ORDER BY storeNameAr LIMIT 6");
+        $st->execute(['%' . $q . '%']);
+        return $st->fetchAll();
+    } catch (Throwable $e) { return []; }
+}
+/**
+ * «أداء العروض» for a merchant: how much people are actually buying its
+ * discounted products from the APP, each product counted since its own offer
+ * start (Product.saleStartsAt). Office/manual orders and cancelled/rejected
+ * orders are excluded. Returns a ready-to-send Arabic report.
+ */
+function tgMerchantOfferText(string $merchantId, string $storeName): string {
+    reconcileOfferStart($merchantId); // make sure the starts are fresh before counting
+    $on = offerActiveSql('p');
+
+    $cnt = db()->prepare("SELECT COUNT(*) FROM `Product` p WHERE p.merchantId = ? AND ($on)");
+    $cnt->execute([$merchantId]);
+    $offerCount = (int) $cnt->fetchColumn();
+    if ($offerCount === 0) return "🏪 *$storeName*\n\nمفيش عروض شغّالة على المتجر ده دلوقتي.";
+
+    // Every on-offer product's app purchases since that product's offer start.
+    $base = "FROM `Product` p
+             JOIN `OrderItem` oi ON oi.productId = p.id
+             JOIN `Order` o ON o.id = oi.orderId
+             WHERE p.merchantId = ? AND p.saleStartsAt IS NOT NULL AND ($on)
+               AND o.createdByAdminId IS NULL
+               AND o.status NOT IN ('CANCELLED','REJECTED')
+               AND o.createdAt >= p.saleStartsAt";
+    $agg = db()->prepare("SELECT
+            COUNT(DISTINCT o.id) AS orders,
+            COUNT(DISTINCT o.customerId) AS customers,
+            COALESCE(SUM(oi.quantity),0) AS units,
+            COALESCE(SUM(oi.unitPriceSnapshot * oi.quantity),0) AS revenue,
+            COALESCE(SUM(GREATEST(p.price - oi.unitPriceSnapshot,0) * oi.quantity),0) AS saved,
+            MIN(p.saleStartsAt) AS firstStart
+          $base");
+    $agg->execute([$merchantId]);
+    $a = $agg->fetch() ?: [];
+
+    $top = db()->prepare("SELECT p.nameAr, p.price, p.salePrice, p.discount, COALESCE(SUM(oi.quantity),0) AS units
+          $base GROUP BY p.id ORDER BY units DESC, p.nameAr ASC LIMIT 5");
+    $top->execute([$merchantId]);
+    $rows = $top->fetchAll();
+
+    $money = fn($v) => number_format((float) $v, ((float) $v == (int) $v) ? 0 : 2);
+    $since = '';
+    try {
+        if (!empty($a['firstStart'])) {
+            $dt = new DateTime((string) $a['firstStart'], new DateTimeZone('UTC'));
+            $dt->setTimezone(new DateTimeZone('Africa/Cairo'));
+            $since = $dt->format('Y-m-d');
+        }
+    } catch (Throwable $e) {}
+
+    $L = ["🏪 *$storeName* — أداء العروض"];
+    if ($since !== '') $L[] = "📅 من بداية العرض: $since";
+    $L[] = "";
+    $L[] = "🔖 منتجات عليها عرض دلوقتي: $offerCount";
+    $L[] = "🛒 طلبات العرض من التطبيق: " . (int) ($a['orders'] ?? 0) . " أوردر";
+    $L[] = "👥 عملاء مختلفين: " . (int) ($a['customers'] ?? 0);
+    $L[] = "📦 قِطع مباعة بعرض: " . (int) ($a['units'] ?? 0);
+    $L[] = "💰 مبيعات العروض: " . $money($a['revenue'] ?? 0) . " ج";
+    $L[] = "💸 إجمالي الخصم للعملاء: " . $money($a['saved'] ?? 0) . " ج";
+    if ($rows) {
+        $L[] = ""; $L[] = "⭐ أكثر العروض مبيعًا:";
+        foreach ($rows as $r) {
+            $price = (float) $r['price'];
+            $sp = $r['salePrice'] !== null ? (float) $r['salePrice'] : 0.0;
+            $disc = $r['discount'] !== null ? (float) $r['discount'] : 0.0;
+            $eff = ($sp > 0 && $sp < $price) ? $sp : ($disc > 0 ? round($price * (1 - min(90.0, $disc) / 100), 2) : $price);
+            $L[] = "• " . $r['nameAr'] . " — " . (int) $r['units'] . " قطعة (" . $money($eff) . " بدل " . $money($price) . ")";
+        }
+    }
+    return implode("\n", $L);
+}
+/**
+ * Settle ALL still-pending delivered orders for a driver — mirrors the dashboard
+ * POST /admin/drivers/:id/settle (snapshot missing shares, one DriverSettlement
+ * batch, mark orders SETTLED). Returns [orderCount, amount]. createdById is null
+ * because the actor is a supervisor (not a User); who did it goes in $note.
+ */
+function tgSettleDriverPending(string $driverId, string $note): array {
+    $pdo = db();
+    $sel = $pdo->prepare("SELECT id, driverDeliveryRevenue FROM `Order`
+                           WHERE assignedDriverId = ? AND status IN ('DELIVERED','COMPLETED') AND driverSettlementStatus <> 'SETTLED'");
+    $sel->execute([$driverId]);
+    $rows = $sel->fetchAll();
+    if (!$rows) return ['orderCount' => 0, 'amount' => 0.0];
+    $orderIds = [];
+    foreach ($rows as $r) { if ($r['driverDeliveryRevenue'] === null) { try { snapshotDriverShare($r['id']); } catch (Throwable $e) {} } $orderIds[] = $r['id']; }
+    $ph = implode(',', array_fill(0, count($orderIds), '?'));
+    $amt = $pdo->prepare("SELECT COALESCE(SUM(driverDeliveryRevenue), 0) FROM `Order` WHERE id IN ($ph)");
+    $amt->execute($orderIds); $amount = round((float) $amt->fetchColumn(), 2);
+    $sid = newId();
+    $pdo->beginTransaction();
+    try {
+        $pdo->prepare('INSERT INTO `DriverSettlement` (id, driverId, amount, orderCount, note, createdById, createdAt) VALUES (?,?,?,?,?,?,NOW(3))')
+            ->execute([$sid, $driverId, $amount, count($orderIds), $note !== '' ? $note : null, null]);
+        $pdo->prepare("UPDATE `Order` SET driverSettlementStatus = 'SETTLED', driverSettledAt = NOW(3), driverSettlementId = ?, updatedAt = NOW(3) WHERE id IN ($ph)")
+            ->execute(array_merge([$sid], $orderIds));
+        $pdo->commit();
+    } catch (Throwable $e) { if ($pdo->inTransaction()) $pdo->rollBack(); throw $e; }
+    return ['orderCount' => count($orderIds), 'amount' => $amount, 'settlementId' => $sid];
+}
+
 /** A driver's linked Telegram chat id (DriverProfile.telegramChatId), or null. */
 function tgDriverChatId(?string $driverUserId) {
     if (!$driverUserId || !tgEnabled()) return null;
@@ -2416,6 +2899,51 @@ function tgSupervisorChats(): array {
     } catch (Throwable $e) { return []; }
 }
 
+/** A UTC datetime from the DB → a readable Cairo label «8 أكتوبر · 3:45م». */
+function cairoTimeLabel(?string $utc): string {
+    $utc = trim((string) $utc);
+    if ($utc === '') return '';
+    try {
+        $dt = new DateTime(substr($utc, 0, 19) . ' UTC');
+        $dt->setTimezone(new DateTimeZone('Africa/Cairo'));
+        $h = (int) $dt->format('G'); $m = $dt->format('i');
+        $ap = $h < 12 ? 'ص' : 'م'; $h12 = ($h % 12) ?: 12;
+        $mons = [1 => 'يناير', 2 => 'فبراير', 3 => 'مارس', 4 => 'أبريل', 5 => 'مايو', 6 => 'يونيو', 7 => 'يوليو', 8 => 'أغسطس', 9 => 'سبتمبر', 10 => 'أكتوبر', 11 => 'نوفمبر', 12 => 'ديسمبر'];
+        return $dt->format('j') . ' ' . ($mons[(int) $dt->format('n')] ?? '') . ' · ' . $h12 . ':' . $m . $ap;
+    } catch (Throwable $e) { return ''; }
+}
+/** How long ago, in Arabic: «من 20 د» / «من 3 س» / «من 4 يوم» — so a stale order stands out. */
+function cairoAgoLabel(?string $utc): string {
+    $utc = trim((string) $utc);
+    if ($utc === '') return '';
+    $ts = strtotime(substr($utc, 0, 19) . ' UTC');
+    if (!$ts) return '';
+    $mins = max(0, (int) floor((time() - $ts) / 60));
+    if ($mins < 60) return 'من ' . $mins . ' د';
+    $h = (int) floor($mins / 60);
+    if ($h < 24) return 'من ' . $h . ' س';
+    return 'من ' . (int) floor($h / 24) . ' يوم';
+}
+/** Worked duration since a shift start: «4 ساعة و20 دقيقة» / «45 دقيقة». */
+function workedLabel(?string $startUtc): string {
+    $ts = strtotime(substr((string) $startUtc, 0, 19) . ' UTC');
+    if (!$ts) return '';
+    return minsLabel((int) floor((time() - $ts) / 60));
+}
+/** Worked duration between two timestamps (for closed sessions). */
+function workedBetween(?string $aUtc, ?string $bUtc): string {
+    $a = strtotime(substr((string) $aUtc, 0, 19) . ' UTC');
+    $b = strtotime(substr((string) $bUtc, 0, 19) . ' UTC');
+    if (!$a || !$b || $b < $a) return '';
+    return minsLabel((int) floor(($b - $a) / 60));
+}
+/** N minutes → «X ساعة و Y دقيقة» / «Y دقيقة». */
+function minsLabel(int $mins): string {
+    $mins = max(0, $mins); $h = intdiv($mins, 60); $m = $mins % 60;
+    if ($h <= 0) return $m . ' دقيقة';
+    return $h . ' ساعة' . ($m > 0 ? ' و' . $m . ' دقيقة' : '');
+}
+
 /**
  * The ONE evolving order card for the group/supervisors — a status header that
  * changes (مع المندوب → استلم → في الطريق → اتسلّم) over the SAME message, so the
@@ -2432,6 +2960,7 @@ function tgGroupOrderCard(array $ctx, string $status): string {
     ];
     $L = [];
     $L[] = ($labels[$status] ?? $status) . ' · *#' . ($ctx['orderNumber'] ?? '') . '*';
+    if (!empty($ctx['orderedAt'])) $L[] = '🕐 وقت الطلب: ' . $ctx['orderedAt'];
     if (!empty($ctx['merchantName'])) $L[] = '🏪 المتجر: ' . $ctx['merchantName'];
     $cust = '👤 العميل: ' . ($ctx['customerName'] ?? '');
     if (!empty($ctx['customerPhone'])) $cust .= ' · ' . $ctx['customerPhone'];
@@ -2446,6 +2975,17 @@ function tgGroupOrderCard(array $ctx, string $status): string {
     if (!empty($ctx['payment'])) $L[] = '💳 ' . $ctx['payment'];
     if (!empty($ctx['priceBlock'])) $L[] = $ctx['priceBlock'];
     return implode("\n", $L);
+}
+
+/** True when an order is older than the "don't touch old orders" cap (Setting
+ *  telegram_digest_max_age_hours, default 24h). Used to keep the group from ever
+ *  receiving anything about a stale order — even one still open, even if a late
+ *  status change or a bulk operation just touched it. */
+function tgOrderTooOld($createdAt): bool {
+    $ts = strtotime(substr((string) $createdAt, 0, 19) . ' UTC');
+    if (!$ts) return false; // unknown age → don't block
+    $h = (int) alertSetting('telegram_digest_max_age_hours', 24);
+    return (time() - $ts) > max(1, $h) * 3600;
 }
 
 /**
@@ -2477,10 +3017,16 @@ function tgBroadcastCard(string $orderId, string $text, ?array $replyMarkup = nu
     if (!$targets) return false;
     $map = [];
     try {
-        $st = db()->prepare("SELECT tgMsgIds FROM `Order` WHERE id = ? LIMIT 1");
+        $st = db()->prepare("SELECT tgMsgIds, createdAt FROM `Order` WHERE id = ? LIMIT 1");
         $st->execute([$orderId]);
-        $raw = $st->fetchColumn();
-        if (is_string($raw) && $raw !== '') { $j = json_decode($raw, true); if (is_array($j)) $map = $j; }
+        $row = $st->fetch();
+        if ($row) {
+            // Never broadcast a stale order's card — even if it's still open, and
+            // even if a late status change or a bulk op just touched it.
+            if (tgOrderTooOld($row['createdAt'] ?? null)) return false;
+            $raw = $row['tgMsgIds'] ?? null;
+            if (is_string($raw) && $raw !== '') { $j = json_decode($raw, true); if (is_array($j)) $map = $j; }
+        }
     } catch (Throwable $e) {}
     $html = tgHtml($text);
     $any = false; $changed = false;
@@ -2488,8 +3034,18 @@ function tgBroadcastCard(string $orderId, string $text, ?array $replyMarkup = nu
         $mid = $map[$chat] ?? null;
         if ($mid) {
             $r = tgApiFull('editMessageText', ['chat_id' => $chat, 'message_id' => $mid, 'text' => $html, 'parse_mode' => 'HTML', 'disable_web_page_preview' => true, 'reply_markup' => $kb]);
-            if (!empty($r['ok']) || strpos((string) ($r['description'] ?? ''), 'not modified') !== false) { $any = true; continue; }
-            // edit failed (deleted / can't edit) → fall through and send a fresh one
+            $desc = (string) ($r['description'] ?? '');
+            if (!empty($r['ok']) || strpos($desc, 'not modified') !== false) { $any = true; continue; }
+            // The card ALREADY existed but its message is gone (deleted / "message
+            // to edit not found" / too old to edit). Re-posting would RESURRECT a
+            // finished or hours-old order in the group — the exact bug the office
+            // reported (a delivered order keeps popping back up). So DON'T send a
+            // fresh card here; leave it and move on.
+            if (stripos($desc, 'not found') !== false || stripos($desc, "can't be edited") !== false || stripos($desc, 'invalid') !== false) {
+                $any = true; continue;
+            }
+            // Any other edit error (e.g. a group→supergroup migration) → fall
+            // through to a fresh send below, which also self-heals the migration.
         }
         $r = tgApiFull('sendMessage', ['chat_id' => $chat, 'text' => $html, 'parse_mode' => 'HTML', 'disable_web_page_preview' => true, 'reply_markup' => $kb]);
         if (!empty($r['ok'])) { $map[$chat] = (int) ($r['result']['message_id'] ?? 0); $changed = true; $any = true; continue; }
@@ -2945,6 +3501,9 @@ function orderMessageContext(array $o, ?string $reason = null): array {
         'deliveryAddress' => (string) ($o['deliveryAddress'] ?? ''),
         'paymentMethod' => waPayMethodAr($o['paymentMethod'] ?? null),
         'reason' => (string) ($reason ?? ''),
+        // When the customer placed the order (Cairo time) — so the group/driver
+        // can see at a glance whether a card is fresh or stale.
+        'orderedAt' => cairoTimeLabel($o['createdAt'] ?? ''),
     ];
     // ─────────────────────────────────────────────────────────────────
     // SINGLE SOURCE OF TRUTH: every message is the catalog template for
@@ -3209,6 +3768,7 @@ function notifyOrderParties(string $orderId, string $status, ?string $reason = n
             // reach their DM — flag it in the group once so someone gets them to
             // press Start (with the ready link).
             if ($status === 'DRIVER_ASSIGNED' && !$skipDriver && !empty($o['assignedDriverId'])
+                && !tgOrderTooOld($o['createdAt'] ?? null)
                 && tgDriverChatId((string) $o['assignedDriverId']) === null) {
                 $bu = tgBotUsername();
                 $link = $bu ? ("\nاربطه من اللينك ده 👇\nhttps://t.me/" . $bu . '?start=drv_' . $o['assignedDriverId']) : '';
@@ -4327,13 +4887,16 @@ function orderNest(array $r): array {
     $out['customer'] = ['id' => $r['customerId'] ?? null, 'name' => $r['cu_name'] ?? null, 'phone' => $r['cu_phone'] ?? null, 'city' => $r['cu_city'] ?? null];
     $out['service'] = ['id' => $r['serviceId'] ?? null, 'nameAr' => $r['s_nameAr'] ?? null, 'name' => $r['s_name'] ?? null];
     $out['assignedDriver'] = ($r['assignedDriverId'] ?? null) ? ['id' => $r['assignedDriverId'], 'name' => $r['dr_name'] ?? null, 'phone' => $r['dr_phone'] ?? null] : null;
-    foreach (['cu_name','cu_phone','cu_city','s_nameAr','s_name','dr_name','dr_phone'] as $k) unset($out[$k]);
+    // The store this order is bought from — the list reads o.merchant.storeNameAr.
+    $out['merchant'] = ($r['merchantId'] ?? null) ? ['id' => $r['merchantId'], 'storeNameAr' => $r['m_name'] ?? null] : null;
+    foreach (['cu_name','cu_phone','cu_city','s_nameAr','s_name','dr_name','dr_phone','m_name'] as $k) unset($out[$k]);
     return $out;
 }
 const ORDER_JOIN = "FROM `Order` o
     LEFT JOIN `User` cu ON cu.id = o.customerId
     LEFT JOIN `Service` s ON s.id = o.serviceId
-    LEFT JOIN `User` dr ON dr.id = o.assignedDriverId";
+    LEFT JOIN `User` dr ON dr.id = o.assignedDriverId
+    LEFT JOIN `MerchantProfile` mp ON mp.id = o.merchantId";
 const ORDER_COLS = "o.*, cu.name AS cu_name, cu.phone AS cu_phone, cu.city AS cu_city,
     s.nameAr AS s_nameAr, s.name AS s_name, dr.name AS dr_name, dr.phone AS dr_phone";
 /**
@@ -4353,7 +4916,8 @@ const ORDER_LIST_COLS = "o.id, o.orderNumber, o.status, o.category, o.source, o.
     o.platformCommission, o.merchantPayout,
     o.notes, o.whatsappSentAt, o.driverSettlementStatus,
     cu.name AS cu_name, cu.phone AS cu_phone, cu.city AS cu_city,
-    s.nameAr AS s_nameAr, s.name AS s_name, dr.name AS dr_name, dr.phone AS dr_phone";
+    s.nameAr AS s_nameAr, s.name AS s_name, dr.name AS dr_name, dr.phone AS dr_phone,
+    mp.storeNameAr AS m_name";
 // GET /admin/perf — API performance, aggregated from the request log written by
 // the shutdown hook at the top of this file. Per-route avg/p95/max, response
 // size, error rate, plus the slowest individual requests.
@@ -4483,8 +5047,8 @@ if ($method === 'GET' && $path === '/admin/orders') {
     $search = trim((string)($_GET['search'] ?? ''));
     if ($search !== '') {
         // Match order#, customer, and — as the spec asks — driver and merchant.
-        $where .= ' AND (o.orderNumber LIKE ? OR cu.name LIKE ? OR cu.phone LIKE ? OR dr.name LIKE ? OR dr.phone LIKE ? OR s.nameAr LIKE ?)';
-        $like = "%$search%"; array_push($args, $like, $like, $like, $like, $like, $like);
+        $where .= ' AND (o.orderNumber LIKE ? OR cu.name LIKE ? OR cu.phone LIKE ? OR dr.name LIKE ? OR dr.phone LIKE ? OR s.nameAr LIKE ? OR mp.storeNameAr LIKE ?)';
+        $like = "%$search%"; array_push($args, $like, $like, $like, $like, $like, $like, $like);
     }
     // driverId=none ⇒ الطلبات اللي لسه من غير مندوب — أهم لستة في اليوم.
     if (($_GET['driverId'] ?? '') === 'none') { $where .= ' AND o.assignedDriverId IS NULL'; }
@@ -5060,10 +5624,19 @@ if ($method === 'POST' && $path === '/admin/orders') {
          * offline between opening the form and submitting it — so the order
          * lands on ACCEPTED instead and the response says why.
          */
-        if (in_array($advanceTo, ['DRIVER_ASSIGNED', 'IN_ROUTE', 'PICKED_UP'], true)
+        if (in_array($advanceTo, ['DRIVER_ASSIGNED', 'IN_ROUTE', 'PICKED_UP', 'DELIVERED', 'COMPLETED'], true)
             && empty($row['assignedDriverId'])) {
+            // The order can't be "with the driver" — nor closed as delivered —
+            // when no driver was assigned. The closing statuses used to slip
+            // through this guard, which is how orders were being born COMPLETED
+            // with an empty driver column. Land them on ACCEPTED instead, clear
+            // the closing flag so no completedAt / snapshot runs, and say why.
+            $wasClosing = in_array($advanceTo, ['DELIVERED', 'COMPLETED'], true);
             $advanceTo = 'ACCEPTED';
-            $driverNotes[] = 'الطلب اتسجّل «مؤكد» بدل «مع المندوب» لأن مفيش مندوب اتعيّن';
+            $closing = false;
+            $driverNotes[] = $wasClosing
+                ? 'مينفعش الطلب يتقفل «مكتمل» من غير مندوب — اتسجّل «مؤكد»، عيّن المندوب وبعدها اقفله'
+                : 'الطلب اتسجّل «مؤكد» بدل «مع المندوب» لأن مفيش مندوب اتعيّن';
         }
     }
     if ($advanceTo !== '' && $curStatus !== $advanceTo) {
@@ -6194,6 +6767,11 @@ if ($method === 'GET' && $path === '/admin/drivers') {
     if ($dStatus !== '' && $dStatus !== 'ALL' && in_array($dStatus, ['AVAILABLE', 'BUSY', 'OFFLINE'], true)) {
         // An inactive account can't take work regardless of its profile status.
         $dWhere .= ' AND dp.status = ? AND u.isActive = 1'; $dArgs[] = $dStatus;
+        // When the check-in gate is on, the assign dialog (status=AVAILABLE) only
+        // offers drivers with an OPEN shift session — i.e. who actually clocked in.
+        if ($dStatus === 'AVAILABLE' && (int) alertSetting('assign_requires_checkin', 0) === 1) {
+            $dWhere .= " AND EXISTS (SELECT 1 FROM `DriverShiftSession` s WHERE s.driverId = u.id AND s.endedAt IS NULL)";
+        }
     }
     $q = trim((string) ($_GET['q'] ?? $_GET['search'] ?? ''));
     if ($q !== '') { $dWhere .= ' AND (u.name LIKE ? OR u.phone LIKE ?)'; $dArgs[] = "%$q%"; $dArgs[] = "%$q%"; }
@@ -8426,6 +9004,61 @@ if ($method === 'POST' && $path === '/admin/broadcast') {
 }
 
 // ─── Order operational actions ─────────────────────────────────────────
+/** Distribution mode set from the dashboard: 'AUTO' (system assigns) or 'MANUAL'
+ *  (admin assigns each order). Setting `order_distribution_mode`; default MANUAL. */
+function distributionMode(): string {
+    try {
+        $st = db()->prepare("SELECT `value` FROM `Setting` WHERE `key` = 'order_distribution_mode' LIMIT 1");
+        $st->execute();
+        $raw = $st->fetchColumn();
+        if (is_string($raw) && $raw !== '') {
+            $d = json_decode($raw, true);
+            $v = is_string($d) ? $d : $raw;
+            if (strtoupper(trim($v, " \"'")) === 'AUTO') return 'AUTO';
+        }
+    } catch (Throwable $e) {}
+    return 'MANUAL';
+}
+/**
+ * Auto-assign one ACCEPTED, driver-less order to the best CHECKED-IN driver —
+ * the one with an open shift session, AVAILABLE, and the fewest active orders
+ * (tie → earliest check-in, for fairness). Mirrors the manual assign side
+ * effects (legs, share snapshot, notify). Returns the driver id, or null when
+ * nobody is checked in / the order already moved. Safe to call repeatedly.
+ */
+function autoAssignOrder(string $orderId): ?string {
+    try {
+        $o = db()->prepare("SELECT status, assignedDriverId FROM `Order` WHERE id = ? LIMIT 1");
+        $o->execute([$orderId]); $row = $o->fetch();
+        if (!$row || (string) $row['status'] !== 'ACCEPTED' || !empty($row['assignedDriverId'])) return null;
+        $pick = db()->query(
+            "SELECT u.id,
+                    (SELECT COUNT(*) FROM `Order` o2 WHERE o2.assignedDriverId = u.id AND o2.status IN ('DRIVER_ASSIGNED','PICKED_UP','IN_ROUTE')) AS ld
+               FROM `User` u
+               JOIN `DriverProfile` dp ON dp.userId = u.id
+               JOIN `DriverShiftSession` s ON s.driverId = u.id AND s.endedAt IS NULL
+              WHERE u.role = 'DRIVER' AND u.isActive = 1 AND dp.status = 'AVAILABLE'
+              ORDER BY ld ASC, s.startedAt ASC LIMIT 1"
+        )->fetch();
+        if (!$pick) return null; // nobody checked in / available
+        // Admin-set cap: don't pile more than N active orders on one driver. The
+        // pick is the least-loaded, so if even they are at the cap, everyone is.
+        $cap = (int) alertSetting('auto_assign_max_load', 0);
+        if ($cap > 0 && (int) $pick['ld'] >= $cap) return null;
+        $did = (string) $pick['id'];
+        // Conditional UPDATE guards against a race (two sweeps / a manual assign).
+        db()->prepare("UPDATE `Order` SET assignedDriverId = ?, status = 'DRIVER_ASSIGNED', updatedAt = NOW(3) WHERE id = ? AND status = 'ACCEPTED' AND assignedDriverId IS NULL")
+            ->execute([$did, $orderId]);
+        $chk = db()->prepare("SELECT assignedDriverId FROM `Order` WHERE id = ? LIMIT 1"); $chk->execute([$orderId]);
+        if ((string) ($chk->fetchColumn() ?: '') !== $did) return null; // lost the race
+        if (DRIVER_AUTO_BUSY) db()->prepare("UPDATE `DriverProfile` SET status = 'BUSY', updatedAt = NOW(3) WHERE userId = ?")->execute([$did]);
+        try { db()->prepare("UPDATE `OrderLeg` SET driverId = ?, status = 'DRIVER_ASSIGNED', updatedAt = NOW(3) WHERE orderId = ? AND driverId IS NULL")->execute([$did, $orderId]); } catch (Throwable $e) {}
+        snapshotDriverShare($orderId);
+        notifyOrderParties($orderId, 'DRIVER_ASSIGNED');
+        return $did;
+    } catch (Throwable $e) { error_log('[api.php] autoAssignOrder: ' . $e->getMessage()); return null; }
+}
+
 if ($method === 'PATCH' && preg_match('#^/admin/orders/([^/]+)/status$#', $path, $m)) {
     $u = authUser(); if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
     $b = readJsonBody(); $status = (string)($b['status'] ?? '');
@@ -8442,6 +9075,16 @@ if ($method === 'PATCH' && preg_match('#^/admin/orders/([^/]+)/status$#', $path,
     $prevSt->execute([$m[1]]);
     $prevStatus = $prevSt->fetchColumn();
     $prevStatus = $prevStatus === false ? null : (string) $prevStatus;
+
+    // The owner's rule: an order only ever reads "مكتمل" when a driver carried
+    // it. Block closing one that has no driver on it. (A multi-leg order sets
+    // Order.assignedDriverId on its first leg, so this single check covers both
+    // single- and multi-origin orders.)
+    if (in_array($status, ['DELIVERED', 'COMPLETED'], true)) {
+        $dchk = db()->prepare('SELECT assignedDriverId FROM `Order` WHERE id = ? LIMIT 1');
+        $dchk->execute([$m[1]]);
+        if (empty($dchk->fetchColumn())) jsonErr('لازم تعيّن مندوب للطلب قبل ما تقفله «مكتمل»', 422, 'DRIVER_REQUIRED');
+    }
 
     $sets = ['`status` = ?', '`updatedAt` = NOW(3)']; $args = [$status];
     if (in_array($status, ['DELIVERED', 'COMPLETED'], true)) { $sets[] = '`completedAt` = NOW(3)'; $sets[] = '`deliveredAt` = NOW(3)'; }
@@ -8482,8 +9125,47 @@ if ($method === 'PATCH' && preg_match('#^/admin/orders/([^/]+)/status$#', $path,
     }
     // Fan out role-specific WhatsApp updates (customer / driver / admin).
     notifyOrderParties($m[1], $status, !empty($b['reason']) ? (string) $b['reason'] : null);
+    // AUTO distribution: the moment an order is ACCEPTED (ready for a driver),
+    // hand it to a checked-in driver — only when the admin chose AUTO mode.
+    if ($status === 'ACCEPTED' && distributionMode() === 'AUTO') { try { autoAssignOrder($m[1]); } catch (Throwable $e) {} }
     $r = db()->prepare('SELECT * FROM `Order` WHERE id = ?'); $r->execute([$m[1]]);
     jsonOk(jsonizeRow($r->fetch()) ?: []);
+}
+// Distribution mode (dashboard switch): MANUAL = admin assigns, AUTO = system
+// assigns each ready order to a checked-in driver.
+if ($method === 'GET' && $path === '/admin/distribution-mode') {
+    authUser();
+    jsonOk(['mode' => distributionMode(), 'maxLoad' => (int) alertSetting('auto_assign_max_load', 0)]);
+}
+if ($method === 'POST' && $path === '/admin/distribution-mode') {
+    $u = authUser(); if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
+    $b = readJsonBody();
+    $setStmt = db()->prepare("INSERT INTO `Setting` (`key`,`value`,`updatedAt`,`updatedById`) VALUES (?,?,NOW(3),?) ON DUPLICATE KEY UPDATE `value`=VALUES(`value`), `updatedAt`=VALUES(`updatedAt`), `updatedById`=VALUES(`updatedById`)");
+    // Max active orders per driver in AUTO (0 = no cap). Write BEFORE any assign,
+    // and don't read it via alertSetting() first (its static cache would then hold
+    // the stale value for the backlog assign below).
+    $capOut = null;
+    if (array_key_exists('maxLoad', $b)) {
+        $capOut = max(0, (int) $b['maxLoad']);
+        $setStmt->execute(['auto_assign_max_load', json_encode($capOut), $u['sub'] ?? null]);
+    }
+    $mode = distributionMode();
+    $assigned = 0;
+    if (array_key_exists('mode', $b)) {
+        $mode = strtoupper(trim((string) $b['mode'])) === 'AUTO' ? 'AUTO' : 'MANUAL';
+        $setStmt->execute(['order_distribution_mode', json_encode($mode), $u['sub'] ?? null]);
+        // Switching to AUTO → immediately clear the backlog of ready orders.
+        if ($mode === 'AUTO') {
+            try {
+                $cut = gmdate('Y-m-d H:i:s', time() - 24 * 3600);
+                $pend = db()->prepare("SELECT id FROM `Order` WHERE status = 'ACCEPTED' AND assignedDriverId IS NULL AND createdAt >= ?");
+                $pend->execute([$cut]);
+                foreach ($pend->fetchAll() as $po) { if (autoAssignOrder((string) $po['id'])) $assigned++; }
+            } catch (Throwable $e) {}
+        }
+    }
+    if ($capOut === null) $capOut = (int) alertSetting('auto_assign_max_load', 0);
+    jsonOk(['mode' => $mode, 'maxLoad' => $capOut, 'assigned' => $assigned]);
 }
 if ($method === 'PATCH' && preg_match('#^/admin/orders/([^/]+)/price$#', $path, $m)) {
     $u = authUser(); if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
@@ -8545,6 +9227,12 @@ if ($method === 'PATCH' && preg_match('#^/admin/orders/([^/]+)/assign-driver$#',
         jsonErr(($dRow['status'] ?? '') === 'BUSY'
             ? 'السائق مشغول بطلب حالياً — اختر سائق متاح'
             : 'السائق غير متصل — اختر سائق متاح', 409, 'DRIVER_UNAVAILABLE');
+    }
+    // Optional gate: distribute only to drivers who CHECKED IN (open shift
+    // session). Off by default — turn Setting assign_requires_checkin = 1 on ONLY
+    // once drivers are reliably sending /حضرت, else assignment would be blocked.
+    if ((int) alertSetting('assign_requires_checkin', 0) === 1 && !driverOpenSession($driverId)) {
+        jsonErr('السائق مش مسجّل حضور — لازم يعمل /حضرت الأول', 409, 'DRIVER_NOT_CHECKED_IN');
     }
     db()->prepare("UPDATE `Order` SET `assignedDriverId` = ?, `status` = 'DRIVER_ASSIGNED', `updatedAt` = NOW(3) WHERE id = ?")
         ->execute([$driverId, $m[1]]);
@@ -9555,6 +10243,10 @@ if ($method === 'POST' && $path === '/telegram/webhook') {
     $got = (string) ($_SERVER['HTTP_X_TELEGRAM_BOT_API_SECRET_TOKEN'] ?? '');
     if ($secret === '' || !hash_equals($secret, $got)) jsonErr('forbidden', 403, 'FORBIDDEN');
     $upd = readJsonBody();
+    // NEVER let a handler error 500 the webhook: Telegram retries a failed update
+    // and delivers IN ORDER, so one failing update jams the whole queue and the
+    // bot goes silent for everyone. Catch everything, log it, always answer 200.
+    try {
     $msg = $upd['message'] ?? $upd['edited_message'] ?? null;
     if (is_array($msg)) {
         $chat = is_array($msg['chat'] ?? null) ? $msg['chat'] : [];
@@ -9566,11 +10258,25 @@ if ($method === 'POST' && $path === '/telegram/webhook') {
             notifWriteSetting('telegram_group_candidate',
                 ['chatId' => $chatId, 'title' => (string) ($chat['title'] ?? ''), 'ts' => time()], null);
         }
-        if ($chatType === 'private' && preg_match('#^/start\s+drv_([A-Za-z0-9_-]+)#', $text, $mm)) {
+        // Driver "external order" self-entry — must come BEFORE command matching
+        // so a plain reply (a bare number, a phone) is read as the answer to the
+        // current step and not treated as a stray command.
+        if ($chatType === 'private' && $chatId !== null
+            && ($tgSt = tgStateGet((string) $chatId)) && (($tgSt['flow'] ?? '') === 'extorder')) {
+            tgHandleExtOrderStep((string) $chatId, $text, $tgSt);
+        } elseif ($chatType === 'private'
+            && in_array($text, ['➕ أوردر خارجي', 'أوردر خارجي', 'اوردر خارجي', '/اوردر_خارجي', '/extorder'], true)) {
+            tgStartExtOrder((string) $chatId);
+        } elseif ($chatType === 'private' && preg_match('#^/start\s+drv_([A-Za-z0-9_-]+)#', $text, $mm)) {
             $drvId = $mm[1];
             $uname = trim((string) ($msg['from']['username'] ?? ''));
             $ok = false;
             try {
+                // One Telegram account = ONE driver. Clear this chatId off any OTHER
+                // driver first, so the same phone can't end up linked to two drivers
+                // (which tangles orders and blocks delivery). Then link it here.
+                db()->prepare("UPDATE `DriverProfile` SET telegramChatId = NULL WHERE telegramChatId = ? AND userId <> ?")
+                    ->execute([(string) $chatId, $drvId]);
                 $st = db()->prepare("UPDATE `DriverProfile` SET telegramChatId = ?, telegramUsername = ?, updatedAt = NOW(3) WHERE userId = ?");
                 $st->execute([(string) $chatId, $uname !== '' ? $uname : null, $drvId]);
                 $ok = $st->rowCount() > 0;
@@ -9578,7 +10284,7 @@ if ($method === 'POST' && $path === '/telegram/webhook') {
             if ($ok) {
                 $dn = '';
                 try { $q = db()->prepare("SELECT name FROM `User` WHERE id = ? LIMIT 1"); $q->execute([$drvId]); $dn = (string) ($q->fetchColumn() ?: ''); } catch (Throwable $e) {}
-                tgSend($chatId, "تم ربط حسابك بتميم ✅\nأهلاً " . ($dn ?: 'كابتن') . " — هتوصلك طلباتك هنا على تلجرام.");
+                tgSend($chatId, "تم ربط حسابك بتميم ✅\nأهلاً " . ($dn ?: 'كابتن') . " — هتوصلك طلباتك هنا على تلجرام.\nاستخدم الأزرار تحت 👇", tgDriverMenu());
             } else {
                 tgSend($chatId, "مش لاقيين كود الربط. تواصل مع الإدارة عشان يبعتولك اللينك الصح.");
             }
@@ -9587,6 +10293,8 @@ if ($method === 'POST' && $path === '/telegram/webhook') {
             $uname = trim((string) ($msg['from']['username'] ?? ''));
             $ok = false;
             try {
+                db()->prepare("UPDATE `Supervisor` SET telegramChatId = NULL WHERE telegramChatId = ? AND id <> ?")
+                    ->execute([(string) $chatId, $supId]);
                 $st = db()->prepare("UPDATE `Supervisor` SET telegramChatId = ?, telegramUsername = ?, updatedAt = NOW(3) WHERE id = ?");
                 $st->execute([(string) $chatId, $uname !== '' ? $uname : null, $supId]);
                 $ok = $st->rowCount() > 0;
@@ -9594,7 +10302,7 @@ if ($method === 'POST' && $path === '/telegram/webhook') {
             if ($ok) {
                 $sn = '';
                 try { $q = db()->prepare("SELECT name FROM `Supervisor` WHERE id = ? LIMIT 1"); $q->execute([$supId]); $sn = (string) ($q->fetchColumn() ?: ''); } catch (Throwable $e) {}
-                tgSend($chatId, "تم ربط حسابك كمشرف في تميم ✅\nأهلاً " . ($sn ?: 'أستاذ') . " — هتوصلك الطلبات هنا على تلجرام.");
+                tgSend($chatId, "تم ربط حسابك كمشرف في تميم ✅\nأهلاً " . ($sn ?: 'أستاذ') . " — هتوصلك الطلبات هنا على تلجرام.\nاستخدم الأزرار تحت 👇", tgSupervisorMenu());
             } else {
                 tgSend($chatId, "مش لاقيين كود الربط. تواصل مع الإدارة عشان يبعتولك اللينك الصح.");
             }
@@ -9622,12 +10330,15 @@ if ($method === 'POST' && $path === '/telegram/webhook') {
                     foreach ($list as $o) {
                         $L[] = ($stLab[(string) $o['status']] ?? $o['status']) . ' · #' . $o['orderNumber'];
                         $sub = [];
-                        $area = trim((string) ($o['deliveryAddress'] ?? ''));
-                        if ($area !== '') $sub[] = '📍 ' . mb_substr($area, 0, 30);
                         try {
                             $full = orderForMessages((string) $o['id']);
-                            if ($full) { $c = (string) (orderMessageContext($full)['collect'] ?? ''); if ($c !== '') $sub[] = '💵 ' . $c; }
+                            if ($full) {
+                                $t = cairoTimeLabel((string) ($full['createdAt'] ?? '')); if ($t !== '') $sub[] = '🕐 ' . $t;
+                                $c = (string) (orderMessageContext($full)['collect'] ?? ''); if ($c !== '') $sub[] = '💵 ' . $c;
+                            }
                         } catch (Throwable $e) {}
+                        $area = trim((string) ($o['deliveryAddress'] ?? ''));
+                        if ($area !== '') $sub[] = '📍 ' . mb_substr($area, 0, 30);
                         if ($sub) $L[] = '    ' . implode('  ·  ', $sub);
                     }
                     $L[] = '';
@@ -9635,8 +10346,457 @@ if ($method === 'POST' && $path === '/telegram/webhook') {
                     tgSend($chatId, implode("\n", $L));
                 }
             }
+        } elseif ($chatType === 'private' && in_array($text, ['/حضرت', 'حضرت', '/متاح', 'متاح', 'بدأت', '/checkin'], true)) {
+            // Driver checks IN himself → opens a shift session; AVAILABLE for orders.
+            $drv = null;
+            try { $q = db()->prepare("SELECT dp.userId, u.name FROM `DriverProfile` dp JOIN `User` u ON u.id = dp.userId WHERE dp.telegramChatId = ? LIMIT 1"); $q->execute([(string) $chatId]); $drv = $q->fetch() ?: null; } catch (Throwable $e) {}
+            if (!$drv) {
+                tgSend($chatId, "انت لسه مش مربوط كمندوب 🙏\nافتح رابط الربط اللي وصلك من الإدارة الأول.");
+            } else {
+                $did = (string) $drv['userId'];
+                $open = driverOpenSession($did);
+                if ($open) {
+                    tgSend($chatId, "انت مسجّل حضور بالفعل 🟢\nبدأت الساعة " . cairoTimeLabel((string) $open['startedAt']) . "\nبقالك " . workedLabel((string) $open['startedAt']) . ".");
+                } else {
+                    try {
+                        $off = driverScheduledNow($did) ? 0 : 1;
+                        db()->prepare("INSERT INTO `DriverShiftSession` (id, driverId, startedAt, offSchedule, startedById) VALUES (?,?,NOW(3),?,NULL)")->execute([newId(), $did, $off]);
+                        db()->prepare("UPDATE `DriverProfile` SET status='AVAILABLE', updatedAt=NOW(3) WHERE userId=? AND status='OFFLINE'")->execute([$did]);
+                        $msg = "تم تسجيل حضورك ✅ بالتوفيق يا كابتن " . $drv['name'] . " 🌹";
+                        if ($off) $msg .= "\n\n⚠️ ملاحظة: دلوقتي مش في معادك المجدول (حضور خارج الوردية).";
+                        $msg .= "\n\nلما تخلّص ابعت /انصرفت.";
+                        tgSend($chatId, $msg);
+                        // Push attendance to the supervisors so it "comes to them".
+                        foreach (tgSupervisorChats() as $sc) tgSend((string) $sc, "🟢 *حضور* — الكابتن " . $drv['name'] . " بدأ الساعة " . cairoTimeLabel(gmdate('Y-m-d H:i:s')) . ($off ? " · خارج الوردية ⚠️" : ""));
+                    } catch (Throwable $e) { error_log('[api.php] /حضرت: ' . $e->getMessage()); tgSend($chatId, "تعذّر تسجيل الحضور، جرّب تاني."); }
+                }
+            }
+        } elseif ($chatType === 'private' && in_array($text, ['/انصرفت', 'انصرفت', '/خلصت', 'خلصت', '/checkout'], true)) {
+            // Driver checks OUT → closes the open session; OFFLINE (off the pool).
+            $drv = null;
+            try { $q = db()->prepare("SELECT dp.userId, u.name FROM `DriverProfile` dp JOIN `User` u ON u.id = dp.userId WHERE dp.telegramChatId = ? LIMIT 1"); $q->execute([(string) $chatId]); $drv = $q->fetch() ?: null; } catch (Throwable $e) {}
+            if (!$drv) {
+                tgSend($chatId, "انت لسه مش مربوط كمندوب 🙏");
+            } else {
+                $did = (string) $drv['userId'];
+                $open = driverOpenSession($did);
+                if (!$open) {
+                    tgSend($chatId, "انت مش مسجّل حضور حاليًا. لو بتبدأ شغل ابعت /حضرت.");
+                } else {
+                    try {
+                        $worked = workedLabel((string) $open['startedAt']);
+                        db()->prepare("UPDATE `DriverShiftSession` SET endedAt=NOW(3) WHERE driverId=? AND endedAt IS NULL")->execute([$did]);
+                        db()->prepare("UPDATE `DriverProfile` SET status='OFFLINE', updatedAt=NOW(3) WHERE userId=?")->execute([$did]);
+                        tgSend($chatId, "تم تسجيل انصرافك ✅\nاشتغلت النهاردة " . $worked . ". تسلم يا كابتن 🌹");
+                        foreach (tgSupervisorChats() as $sc) tgSend((string) $sc, "🔴 *انصراف* — الكابتن " . $drv['name'] . " خلّص (اشتغل " . $worked . ")");
+                    } catch (Throwable $e) { error_log('[api.php] /انصرفت: ' . $e->getMessage()); tgSend($chatId, "تعذّر تسجيل الانصراف، جرّب تاني."); }
+                }
+            }
+        } elseif ($chatType === 'private' && in_array($text, ['/حسابي', 'حسابي', '/myaccount'], true)) {
+            // The driver's own numbers for TODAY (Cairo): deliveries, cash collected, their cut.
+            $drv = null;
+            try {
+                $q = db()->prepare("SELECT dp.userId, u.name FROM `DriverProfile` dp JOIN `User` u ON u.id = dp.userId WHERE dp.telegramChatId = ? LIMIT 1");
+                $q->execute([(string) $chatId]);
+                $drv = $q->fetch() ?: null;
+            } catch (Throwable $e) {}
+            if (!$drv) {
+                tgSend($chatId, "انت لسه مش مربوط كمندوب 🙏\nافتح رابط الربط اللي وصلك من الإدارة الأول.");
+            } else {
+                try {
+                    // The work day runs 8ص→3ص (crosses midnight), so the accounting
+                    // boundary is 3ص, NOT midnight: before 3ص we're still inside the
+                    // shift that started the previous morning, so count back to it.
+                    $tz = new DateTimeZone('Africa/Cairo');
+                    $nowC = new DateTime('now', $tz);
+                    $startC = new DateTime('today', $tz); $startC->setTime(3, 0, 0);
+                    if ($nowC < $startC) $startC->modify('-1 day');
+                    $startC->setTimezone(new DateTimeZone('UTC'));
+                    $st = db()->prepare(
+                        "SELECT o.orderNumber,
+                                COALESCE(o.deliveryFee, 0) AS fee,
+                                COALESCE(o.driverDeliveryRevenue, ROUND(COALESCE(o.deliveryFee,0) * COALESCE(dp.deliverySharePct,0) / 100, 2)) AS due
+                           FROM `Order` o JOIN `DriverProfile` dp ON dp.userId = o.assignedDriverId
+                          WHERE o.assignedDriverId = ? AND o.status IN ('DELIVERED','COMPLETED')
+                            AND COALESCE(o.deliveredAt, o.completedAt, o.updatedAt) >= ?
+                          ORDER BY COALESCE(o.deliveredAt, o.completedAt, o.updatedAt) ASC"
+                    );
+                    $st->execute([(string) $drv['userId'], $startC->format('Y-m-d H:i:s')]);
+                    $rows = $st->fetchAll();
+                    $fees = 0.0; $due = 0.0;
+                    foreach ($rows as $x) { $fees += (float) $x['fee']; $due += (float) $x['due']; }
+                    $open = driverOpenSession((string) $drv['userId']);
+                    $shiftLine = $open
+                        ? "🟢 شغّال من " . cairoTimeLabel((string) $open['startedAt']) . " (بقالك " . workedLabel((string) $open['startedAt']) . ")"
+                        : "⚪ مش مسجّل حضور — ابعت /حضرت";
+                    $L = [
+                        "📊 *حسابك — الوردية الحالية* يا كابتن " . $drv['name'],
+                        $shiftLine,
+                        "",
+                        "📦 توصيلات: " . count($rows),
+                        "🚚 إجمالي التوصيل: " . waMoney($fees),
+                        "🤝 نصيب السائق: " . waMoney($due),
+                    ];
+                    if ($rows) {
+                        $L[] = "";
+                        $L[] = "🧾 *التفاصيل:*";
+                        foreach ($rows as $x) $L[] = '• #' . $x['orderNumber'] . ' — ' . waMoney($x['fee']) . ' (نصيبك ' . waMoney($x['due']) . ')';
+                    }
+                    tgSend($chatId, implode("\n", $L));
+                } catch (Throwable $e) {
+                    error_log('[api.php] /حسابي: ' . $e->getMessage());
+                    tgSend($chatId, "تعذّر جلب الحساب دلوقتي، جرّب تاني بعد شوية.");
+                }
+            }
+        } elseif ($chatType === 'private' && preg_match('#^/?(?:اوردر|أوردر|order)\s+(.+)$#u', $text, $om)) {
+            // Supervisor looks up any order by its number.
+            if (!tgSupervisorByChat($chatId)) {
+                tgSend($chatId, "الأمر ده للمشرفين 🙏");
+            } else {
+                $num = preg_replace('/\D+/', '', $om[1]);
+                if ($num === '') {
+                    tgSend($chatId, "اكتب رقم الأوردر، مثلاً: /اوردر 10432");
+                } else {
+                    $q = db()->prepare("SELECT o.orderNumber, o.status, o.createdAt, o.deliveryAddress,
+                                               cu.name AS cust_name, cu.phone AS cust_phone, dr.name AS drv_name
+                                          FROM `Order` o
+                                          LEFT JOIN `User` cu ON cu.id = o.customerId
+                                          LEFT JOIN `User` dr ON dr.id = o.assignedDriverId
+                                         WHERE o.orderNumber = ? LIMIT 1");
+                    $q->execute([$num]);
+                    $o = $q->fetch();
+                    if (!$o) {
+                        tgSend($chatId, "مفيش أوردر برقم #$num");
+                    } else {
+                        $L = ["🧾 *أوردر #" . $o['orderNumber'] . "*", "", "الحالة: " . tgStatusAr((string) $o['status'])];
+                        $t = cairoTimeLabel((string) ($o['createdAt'] ?? '')); if ($t !== '') $L[] = '🕐 وقت الطلب: ' . $t;
+                        $cn = trim((string) ($o['cust_name'] ?? ''));
+                        if ($cn !== '') { $cl = '👤 العميل: ' . $cn; $cp = trim((string) ($o['cust_phone'] ?? '')); if ($cp !== '') $cl .= ' · ' . $cp; $L[] = $cl; }
+                        $dn = trim((string) ($o['drv_name'] ?? '')); $L[] = '🛵 المندوب: ' . ($dn !== '' ? $dn : '— لسه —');
+                        $area = trim((string) ($o['deliveryAddress'] ?? '')); if ($area !== '') $L[] = '📍 ' . mb_substr($area, 0, 40);
+                        tgSend($chatId, implode("\n", $L));
+                    }
+                }
+            }
+        } elseif ($chatType === 'private' && in_array($text, ['/المتاحين', 'المتاحين', '/available'], true)) {
+            // Supervisor: who's working right now (available vs busy).
+            if (!tgSupervisorByChat($chatId)) {
+                tgSend($chatId, "الأمر ده للمشرفين 🙏");
+            } else {
+                $rows = db()->query("SELECT u.name, dp.status FROM `User` u JOIN `DriverProfile` dp ON dp.userId = u.id
+                                      WHERE u.role = 'DRIVER' AND u.isActive = 1 AND dp.status IN ('AVAILABLE','BUSY')
+                                      ORDER BY dp.status = 'BUSY', u.name")->fetchAll();
+                if (!$rows) {
+                    tgSend($chatId, "مفيش مناديب شغّالين دلوقتي.");
+                } else {
+                    $avail = count(array_filter($rows, fn($r) => $r['status'] === 'AVAILABLE'));
+                    $L = ["🛵 *المناديب الشغّالين* (" . count($rows) . ")", ""];
+                    foreach ($rows as $r) $L[] = ($r['status'] === 'AVAILABLE' ? '🟢 ' : '🟠 ') . $r['name'] . ($r['status'] === 'BUSY' ? ' (مشغول بطلب)' : '');
+                    $L[] = ""; $L[] = '🟢 متاح: ' . $avail . ' · 🟠 مشغول: ' . (count($rows) - $avail);
+                    tgSend($chatId, implode("\n", $L));
+                }
+            }
+        } elseif ($chatType === 'private' && in_array($text, ['/الطلبات', 'الطلبات', '/شغال'], true)) {
+            // Supervisor: how many active orders right now, by status (last 24h only).
+            if (!tgSupervisorByChat($chatId)) {
+                tgSend($chatId, "الأمر ده للمشرفين 🙏");
+            } else {
+                $cut = gmdate('Y-m-d H:i:s', time() - 24 * 3600);
+                $q = db()->prepare("SELECT status, COUNT(*) c FROM `Order`
+                                     WHERE status IN ('NEW','PRICED','UNDER_REVIEW','ACCEPTED','DRIVER_ASSIGNED','PICKED_UP','IN_ROUTE')
+                                       AND createdAt >= ? GROUP BY status");
+                $q->execute([$cut]);
+                $by = []; $tot = 0;
+                foreach ($q->fetchAll() as $r) { $by[(string) $r['status']] = (int) $r['c']; $tot += (int) $r['c']; }
+                if ($tot === 0) {
+                    tgSend($chatId, "مفيش طلبات شغّالة دلوقتي ✅");
+                } else {
+                    $L = ["📋 *الطلبات الشغّالة* ($tot)", ""];
+                    foreach (['NEW', 'PRICED', 'UNDER_REVIEW', 'ACCEPTED', 'DRIVER_ASSIGNED', 'PICKED_UP', 'IN_ROUTE'] as $s) {
+                        if (!empty($by[$s])) $L[] = tgStatusAr($s) . ': ' . $by[$s];
+                    }
+                    tgSend($chatId, implode("\n", $L));
+                }
+            }
+        } elseif ($chatType === 'private' && preg_match('#^/?(?:محاسبة|محاسبه|الحسابات|accounts)(.*)$#u', $text, $am)) {
+            // Accountant view: per-driver tally. Bare = current shift; add
+            // «امبارح» for the previous shift, «الاسبوع» for the last 7 days.
+            // Business day boundary is 3ص (shift runs 8ص→3ص).
+            if (!tgSupervisorByChat($chatId)) {
+                tgSend($chatId, "الأمر ده للمشرفين 🙏");
+            } else {
+                try {
+                    $arg = trim($am[1]);
+                    $utc = new DateTimeZone('UTC');
+                    $tz = new DateTimeZone('Africa/Cairo');
+                    $nowC = new DateTime('now', $tz);
+                    $shift = new DateTime('today', $tz); $shift->setTime(3, 0, 0);
+                    if ($nowC < $shift) $shift->modify('-1 day'); // most recent 3ص
+                    if (mb_strpos($arg, 'امبارح') !== false || stripos($arg, 'yesterday') !== false) {
+                        $title = 'محاسبة امبارح';
+                        $endD = (clone $shift); $startD = (clone $shift)->modify('-1 day');
+                    } elseif (mb_strpos($arg, 'اسبوع') !== false || mb_strpos($arg, 'أسبوع') !== false || stripos($arg, 'week') !== false) {
+                        $title = 'محاسبة آخر ٧ أيام';
+                        $startD = (clone $shift)->modify('-6 day'); $endD = null;
+                    } else {
+                        $title = 'محاسبة الوردية الحالية';
+                        $startD = (clone $shift); $endD = null;
+                    }
+                    $startD->setTimezone($utc);
+                    $endUtc = $endD ? $endD->setTimezone($utc)->format('Y-m-d H:i:s') : null;
+                    $txt = tgAccountingText($startD->format('Y-m-d H:i:s'), $endUtc, $title);
+                    tgSend($chatId, $txt !== '' ? $txt : ('🧮 *' . $title . "*\n\nمفيش توصيلات في الفترة دي."));
+                } catch (Throwable $e) {
+                    error_log('[api.php] /محاسبة: ' . $e->getMessage());
+                    tgSend($chatId, "تعذّر جلب المحاسبة دلوقتي، جرّب تاني.");
+                }
+            }
+        } elseif ($chatType === 'private' && in_array($text, ['/مستحقات', 'مستحقات', '/dues'], true)) {
+            // Per-driver money not yet settled (handed to the office).
+            if (!tgSupervisorByChat($chatId)) {
+                tgSend($chatId, "الأمر ده للمشرفين 🙏");
+            } else {
+                $rows = db()->query(
+                    "SELECT u.name, COUNT(o.id) AS n,
+                            COALESCE(SUM(COALESCE(o.driverDeliveryRevenue, ROUND(COALESCE(o.deliveryFee,0) * COALESCE(dp.deliverySharePct,0) / 100, 2))),0) AS due
+                       FROM `User` u
+                       JOIN `DriverProfile` dp ON dp.userId = u.id
+                       JOIN `Order` o ON o.assignedDriverId = u.id
+                            AND o.status IN ('DELIVERED','COMPLETED') AND o.driverSettlementStatus <> 'SETTLED'
+                      WHERE u.role = 'DRIVER'
+                      GROUP BY u.id, u.name HAVING due > 0 ORDER BY due DESC"
+                )->fetchAll();
+                if (!$rows) {
+                    tgSend($chatId, "مفيش مستحقات غير مُسوّاة 👍");
+                } else {
+                    $tot = 0.0; $tn = 0;
+                    $L = ["💸 *مستحقات غير مُسوّاة*", "(لسه متسلّمتش للمكتب)", ""];
+                    foreach ($rows as $r) { $tn += (int) $r['n']; $tot += (float) $r['due']; $L[] = "👤 " . $r['name'] . " — " . waMoney($r['due']) . " (" . $r['n'] . " أوردر)"; }
+                    $L[] = ""; $L[] = "الإجمالي: " . waMoney($tot) . " · " . $tn . " أوردر";
+                    $L[] = ""; $L[] = "للتسوية: /تسوية <اسم المندوب>";
+                    tgSend($chatId, implode("\n", $L));
+                }
+            }
+        } elseif ($chatType === 'private' && preg_match('#^/?(?:تسوية|تسويه|settle)(?:\s+(.+))?$#u', $text, $sm)) {
+            // Supervisor confirms a driver handed over their dues → mark SETTLED.
+            $sup = tgSupervisorByChat($chatId);
+            if (!$sup) {
+                tgSend($chatId, "الأمر ده للمشرفين 🙏");
+            } elseif (trim($sm[1] ?? '') === '') {
+                tgSend($chatId, "اكتب اسم المندوب، مثلاً: /تسوية أحمد");
+            } else {
+                $cands = tgFindDriversByName(trim($sm[1]));
+                if (!$cands) {
+                    tgSend($chatId, "مفيش مندوب بالاسم ده.");
+                } elseif (count($cands) > 1) {
+                    $L = ["فيه أكتر من مندوب بالاسم ده — حدّد أكتر:"];
+                    foreach ($cands as $c) $L[] = "• " . $c['name'];
+                    tgSend($chatId, implode("\n", $L));
+                } else {
+                    $d = $cands[0];
+                    try {
+                        $res = tgSettleDriverPending((string) $d['id'], 'تسوية عبر تلجرام — المشرف ' . $sup['name']);
+                        if (($res['orderCount'] ?? 0) === 0) {
+                            tgSend($chatId, "مفيش مستحقات غير مُسوّاة للكابتن " . $d['name'] . " 👍");
+                        } else {
+                            tgSend($chatId, "✅ تمّت تسوية حساب الكابتن " . $d['name'] . "\nاتقفل " . $res['orderCount'] . " أوردر بإجمالي " . waMoney($res['amount']) . ".");
+                        }
+                    } catch (Throwable $e) {
+                        error_log('[api.php] /تسوية: ' . $e->getMessage());
+                        tgSend($chatId, "تعذّرت التسوية، جرّب تاني.");
+                    }
+                }
+            }
+        } elseif ($chatType === 'private' && preg_match('#^/?(?:الافضل|الأفضل|top|leaderboard)(.*)$#u', $text, $lm)) {
+            // Leaderboard by delivery count — current shift, or «الافضل الاسبوع».
+            if (!tgSupervisorByChat($chatId)) {
+                tgSend($chatId, "الأمر ده للمشرفين 🙏");
+            } else {
+                $arg = trim($lm[1]); $utc = new DateTimeZone('UTC'); $tz = new DateTimeZone('Africa/Cairo');
+                $nowC = new DateTime('now', $tz); $shift = new DateTime('today', $tz); $shift->setTime(3, 0, 0); if ($nowC < $shift) $shift->modify('-1 day');
+                if (mb_strpos($arg, 'اسبوع') !== false || mb_strpos($arg, 'أسبوع') !== false || stripos($arg, 'week') !== false) { $title = 'الأفضل — آخر ٧ أيام'; $start = (clone $shift)->modify('-6 day'); }
+                else { $title = 'الأفضل — الوردية الحالية'; $start = (clone $shift); }
+                $start->setTimezone($utc);
+                $st = db()->prepare("SELECT u.name, COUNT(o.id) AS n
+                                       FROM `User` u JOIN `Order` o ON o.assignedDriverId = u.id
+                                            AND o.status IN ('DELIVERED','COMPLETED')
+                                            AND COALESCE(o.deliveredAt, o.completedAt, o.updatedAt) >= ?
+                                      WHERE u.role = 'DRIVER' GROUP BY u.id, u.name ORDER BY n DESC LIMIT 10");
+                $st->execute([$start->format('Y-m-d H:i:s')]);
+                $rows = $st->fetchAll();
+                if (!$rows) {
+                    tgSend($chatId, "مفيش توصيلات في الفترة دي.");
+                } else {
+                    $medals = ['🥇', '🥈', '🥉']; $L = ["🏆 *$title*", ""]; $i = 0;
+                    foreach ($rows as $r) { $L[] = ($medals[$i] ?? (($i + 1) . '.')) . ' ' . $r['name'] . " — " . (int) $r['n'] . " توصيلة"; $i++; }
+                    tgSend($chatId, implode("\n", $L));
+                }
+            }
+        } elseif ($chatType === 'private' && in_array($text, ['/احصائيات', 'احصائيات', '/إحصائيات', 'إحصائيات', '/stats'], true)) {
+            // Shift-level summary (created / delivered / cancelled / delivery total).
+            if (!tgSupervisorByChat($chatId)) {
+                tgSend($chatId, "الأمر ده للمشرفين 🙏");
+            } else {
+                $tz = new DateTimeZone('Africa/Cairo'); $nowC = new DateTime('now', $tz);
+                $shift = new DateTime('today', $tz); $shift->setTime(3, 0, 0); if ($nowC < $shift) $shift->modify('-1 day');
+                $shift->setTimezone(new DateTimeZone('UTC')); $s = $shift->format('Y-m-d H:i:s');
+                $q1 = db()->prepare("SELECT COUNT(*) FROM `Order` WHERE createdAt >= ?"); $q1->execute([$s]); $created = (int) $q1->fetchColumn();
+                $q2 = db()->prepare("SELECT COUNT(*) FROM `Order` WHERE status IN ('DELIVERED','COMPLETED') AND COALESCE(deliveredAt, completedAt, updatedAt) >= ?"); $q2->execute([$s]); $delivered = (int) $q2->fetchColumn();
+                $q3 = db()->prepare("SELECT COUNT(*) FROM `Order` WHERE status IN ('CANCELLED','REJECTED') AND COALESCE(cancelledAt, updatedAt) >= ?"); $q3->execute([$s]); $cancelled = (int) $q3->fetchColumn();
+                $q4 = db()->prepare("SELECT COALESCE(SUM(COALESCE(deliveryFee,0)),0) FROM `Order` WHERE status IN ('DELIVERED','COMPLETED') AND COALESCE(deliveredAt, completedAt, updatedAt) >= ?"); $q4->execute([$s]); $fees = (float) $q4->fetchColumn();
+                tgSend($chatId,
+                    "📈 *إحصائيات الوردية الحالية*\n\n"
+                    . "🆕 أوردرات جديدة: " . $created . "\n"
+                    . "✅ تم التسليم: " . $delivered . "\n"
+                    . "⛔ ملغية: " . $cancelled . "\n"
+                    . "🚚 إجمالي التوصيل: " . waMoney($fees));
+            }
+        } elseif ($chatType === 'private' && preg_match('#^/?(?:مطعم|متجر|عروض|عرض|merchant|store)\s+(.+)$#u', $text, $sm2)) {
+            // «أداء العروض» for a merchant — how much people buy its discounted
+            // products from the app, since each offer started.
+            if (!tgSupervisorByChat($chatId)) {
+                tgSend($chatId, "الأمر ده للمشرفين 🙏");
+            } else {
+                $cands = tgFindMerchantsByName(trim($sm2[1]));
+                if (!$cands) {
+                    tgSend($chatId, "مفيش متجر بالاسم ده.");
+                } elseif (count($cands) > 1) {
+                    $L = ["فيه أكتر من متجر بالاسم ده — حدّد أكتر:"];
+                    foreach ($cands as $c) $L[] = "• " . $c['storeNameAr'];
+                    tgSend($chatId, implode("\n", $L));
+                } else {
+                    tgSend($chatId, tgMerchantOfferText((string) $cands[0]['id'], (string) $cands[0]['storeNameAr']));
+                }
+            }
+        } elseif ($chatType === 'private' && preg_match('#^/?(?:عميل|customer)\s+(.+)$#u', $text, $cm2)) {
+            // Look up a customer by phone + their last orders (for complaints).
+            if (!tgSupervisorByChat($chatId)) {
+                tgSend($chatId, "الأمر ده للمشرفين 🙏");
+            } else {
+                $digits = preg_replace('/\D+/', '', $cm2[1]);
+                if (strlen($digits) < 6) {
+                    tgSend($chatId, "اكتب رقم العميل، مثلاً: /عميل 01012345678");
+                } else {
+                    $cu = db()->prepare("SELECT id, name, phone FROM `User` WHERE phone LIKE ? ORDER BY (role = 'CUSTOMER') DESC LIMIT 1");
+                    $cu->execute(['%' . $digits . '%']); $c = $cu->fetch();
+                    if (!$c) {
+                        tgSend($chatId, "مفيش عميل بالرقم ده.");
+                    } else {
+                        $os = db()->prepare("SELECT orderNumber, status, createdAt FROM `Order` WHERE customerId = ? ORDER BY createdAt DESC LIMIT 5");
+                        $os->execute([$c['id']]); $list = $os->fetchAll();
+                        $L = ["👤 *" . $c['name'] . "*  " . ($c['phone'] ?? '')];
+                        if (!$list) { $L[] = ""; $L[] = "مفيش أوردرات."; }
+                        else {
+                            $L[] = ""; $L[] = "آخر " . count($list) . " أوردرات:";
+                            foreach ($list as $o) { $t = cairoTimeLabel((string) $o['createdAt']); $L[] = "• #" . $o['orderNumber'] . " · " . tgStatusAr((string) $o['status']) . ($t !== '' ? " · " . $t : ''); }
+                        }
+                        tgSend($chatId, implode("\n", $L));
+                    }
+                }
+            }
+        } elseif ($chatType === 'private' && preg_match('#^/?(?:مندوب|سائق|طيار|driver)\s+(.+)$#u', $text, $dm)) {
+            // A specific driver's live orders — what they're holding, status, time.
+            if (!tgSupervisorByChat($chatId)) {
+                tgSend($chatId, "الأمر ده للمشرفين 🙏");
+            } else {
+                $cands = tgFindDriversByName(trim($dm[1]));
+                if (!$cands) {
+                    tgSend($chatId, "مفيش مندوب بالاسم ده.");
+                } elseif (count($cands) > 1) {
+                    $L = ["فيه أكتر من مندوب بالاسم ده — حدّد أكتر:"];
+                    foreach ($cands as $c) $L[] = "• " . $c['name'];
+                    tgSend($chatId, implode("\n", $L));
+                } else {
+                    $d = $cands[0];
+                    $stLab = ['DRIVER_ASSIGNED' => '🚚 متعيّن', 'PICKED_UP' => '📦 استلمها', 'IN_ROUTE' => '🛵 في الطريق'];
+                    $os = db()->prepare("SELECT orderNumber, status, createdAt, deliveryAddress FROM `Order`
+                                          WHERE assignedDriverId = ? AND status IN ('DRIVER_ASSIGNED','PICKED_UP','IN_ROUTE')
+                                          ORDER BY createdAt DESC");
+                    $os->execute([(string) $d['id']]);
+                    $list = $os->fetchAll();
+                    if (!$list) {
+                        tgSend($chatId, "الكابتن " . $d['name'] . " مفيش عليه أوردرات شغّالة دلوقتي ✅");
+                    } else {
+                        $L = ["🛵 *أوردرات الكابتن " . $d['name'] . "* (" . count($list) . ")", ""];
+                        foreach ($list as $o) {
+                            $ago = cairoAgoLabel((string) ($o['createdAt'] ?? ''));
+                            $L[] = ($stLab[(string) $o['status']] ?? $o['status']) . " · #" . $o['orderNumber'] . ($ago !== '' ? ' · ' . $ago : '');
+                            $sub = [];
+                            $t = cairoTimeLabel((string) ($o['createdAt'] ?? '')); if ($t !== '') $sub[] = '🕐 ' . $t;
+                            $area = trim((string) ($o['deliveryAddress'] ?? '')); if ($area !== '') $sub[] = '📍 ' . mb_substr($area, 0, 35);
+                            if ($sub) $L[] = '   ' . implode('  ·  ', $sub);
+                        }
+                        tgSend($chatId, implode("\n", $L));
+                    }
+                }
+            }
+        } elseif ($chatType === 'private' && in_array($text, ['/الحضور', 'الحضور', '/attendance'], true)) {
+            // Today's attendance: who's present now, and who came & left + hours.
+            if (!tgSupervisorByChat($chatId)) {
+                tgSend($chatId, "الأمر ده للمشرفين 🙏");
+            } else {
+                // Shift-day start (3ص) so "today" = the current work day.
+                $tz = new DateTimeZone('Africa/Cairo'); $nowC = new DateTime('now', $tz);
+                $dayStart = new DateTime('today', $tz); $dayStart->setTime(3, 0, 0);
+                if ($nowC < $dayStart) $dayStart->modify('-1 day');
+                $dayStart->setTimezone(new DateTimeZone('UTC'));
+                $sUtc = $dayStart->format('Y-m-d H:i:s');
+                $open = db()->query("SELECT u.name, s.startedAt, s.offSchedule FROM `DriverShiftSession` s JOIN `User` u ON u.id = s.driverId WHERE s.endedAt IS NULL ORDER BY s.startedAt ASC")->fetchAll();
+                $done = db()->prepare("SELECT u.name, s.startedAt, s.endedAt FROM `DriverShiftSession` s JOIN `User` u ON u.id = s.driverId WHERE s.endedAt IS NOT NULL AND s.startedAt >= ? ORDER BY s.endedAt DESC");
+                $done->execute([$sUtc]); $doneRows = $done->fetchAll();
+                if (!$open && !$doneRows) {
+                    tgSend($chatId, "مفيش حضور مسجّل النهاردة.");
+                } else {
+                    $L = [];
+                    if ($open) {
+                        $L[] = "🟢 *الحاضرين دلوقتي* (" . count($open) . ")";
+                        foreach ($open as $r) {
+                            $line = "• " . $r['name'] . " — من " . cairoTimeLabel((string) $r['startedAt']) . " · بقاله " . workedLabel((string) $r['startedAt']);
+                            if ((int) $r['offSchedule'] === 1) $line .= " ⚠️ خارج الوردية";
+                            $L[] = $line;
+                        }
+                    }
+                    if ($doneRows) {
+                        if ($L) $L[] = "";
+                        $L[] = "🏁 *حضروا وانصرفوا* (" . count($doneRows) . ")";
+                        foreach ($doneRows as $r) {
+                            $L[] = "• " . $r['name'] . " — " . cairoTimeLabel((string) $r['startedAt']) . " ← " . cairoTimeLabel((string) $r['endedAt']) . " · اشتغل " . workedBetween((string) $r['startedAt'], (string) $r['endedAt']);
+                        }
+                    }
+                    tgSend($chatId, implode("\n", $L));
+                }
+            }
+        } elseif ($chatType === 'private' && in_array($text, ['/مساعدة', '/مساعده', 'مساعدة', '/help'], true)) {
+            if (tgSupervisorByChat($chatId)) {
+                tgSend($chatId,
+                    "🤖 *أوامر المشرف*\n\n"
+                    . "📋 /الطلبات — الطلبات الشغّالة دلوقتي حسب الحالة\n"
+                    . "🟢 /الحضور — الحاضرين دلوقتي + اللي حضروا وانصرفوا وساعاتهم\n"
+                    . "🛵 /مندوب <اسم> — أوردرات سائق معيّن دلوقتي\n"
+                    . "📈 /احصائيات — ملخص الوردية (جديد/مسلّم/ملغي/توصيل)\n"
+                    . "🛵 /المتاحين — المناديب الشغّالين دلوقتي\n"
+                    . "🏆 /الافضل — ترتيب الطيارين (ممكن: الافضل الاسبوع)\n"
+                    . "🧮 /محاسبة — حساب كل طيار (ممكن: محاسبة امبارح/الاسبوع)\n"
+                    . "💸 /مستحقات — الفلوس غير المُسوّاة لكل طيار\n"
+                    . "✅ /تسوية <مندوب> — قفل مستحقات طيار بعد التسليم\n"
+                    . "🧾 /اوردر <رقم> — تفاصيل أوردر\n"
+                    . "👤 /عميل <رقم> — آخر أوردرات عميل\n"
+                    . "🏪 /مطعم <اسم> — أداء عروض/خصومات متجر (كام عميل طلب العرض من التطبيق)\n"
+                    . "❓ /مساعدة — القايمة دي\n\n"
+                    . "🔔 وكمان بتوصلك تلقائيًا كل ساعة تنبيهات الطلبات المتأخرة (آخر ساعتين).\n\n"
+                    . "💡 تقدر تستخدم الأزرار تحت بدل ما تكتب 👇", tgSupervisorMenu());
+            } else {
+                tgSend($chatId,
+                    "🤖 *أوامر بوت تميم*\n\n"
+                    . "🟢 /حضرت — تسجيل حضورك وبدء الوردية\n"
+                    . "🔴 /انصرفت — تسجيل انصرافك وإنهاء الوردية\n"
+                    . "📋 /اوردراتي — كل أوردراتك الشغّالة دلوقتي\n"
+                    . "📊 /حسابي — حضورك + توصيلاتك وإجمالي التوصيل ونصيبك\n"
+                    . "❓ /مساعدة — القايمة دي\n\n"
+                    . "💡 تقدر تستخدم الأزرار تحت بدل ما تكتب 👇", tgDriverMenu());
+            }
         } elseif ($chatType === 'private' && $text === '/start') {
-            tgSend($chatId, "أهلاً بك في بوت تميم للتوصيل 🚚\nلو إنت كابتن أو مشرف، افتح رابط الربط اللي وصلك من الإدارة عشان نربط حسابك.\n\nلو كابتن، ابعت /اوردراتي عشان تشوف طلباتك الشغّالة.");
+            tgSend($chatId, "أهلاً بك في بوت تميم للتوصيل 🚚\nلو إنت كابتن أو مشرف، افتح رابط الربط اللي وصلك من الإدارة عشان نربط حسابك.\n\nلو كابتن، ابعت /اوردراتي عشان تشوف طلباتك الشغّالة، و /مساعدة لكل الأوامر.");
         }
     }
     // ── Inline button taps: the driver advances their order from Telegram ──
@@ -9685,10 +10845,68 @@ if ($method === 'POST' && $path === '/telegram/webhook') {
                     }
                 }
             }
+        } elseif (preg_match('#^ext:(done|assigned)$#', $data, $em)) {
+            // Driver tapped the status for a new external order — create it from
+            // the saved conversation state (keyed by the driver's chat id, which
+            // equals from.id in a private chat).
+            $exChat = (string) ($fromId ?? '');
+            $exSt = $exChat !== '' ? tgStateGet($exChat) : null;
+            if (!$exSt || (($exSt['flow'] ?? '') !== 'extorder')) {
+                tgAnswerCallback($cbId, 'انتهت الجلسة — ابدأ من «➕ أوردر خارجي»');
+            } else {
+                $exDrv = tgDriverByChat($exChat);
+                if (!$exDrv) { tgStateClear($exChat); tgAnswerCallback($cbId, 'حسابك مش مربوط كسائق'); }
+                else {
+                    $exData = (array) ($exSt['data'] ?? []);
+                    $exStatus = $em[1] === 'done' ? 'COMPLETED' : 'DRIVER_ASSIGNED';
+                    $exRes = tgCreateExternalOrder((string) $exDrv['userId'], (float) ($exData['price'] ?? 0),
+                                                   (string) ($exData['phone'] ?? ''), (string) ($exData['note'] ?? ''), $exStatus);
+                    tgStateClear($exChat);
+                    // Strip the inline buttons so the prompt can't be tapped twice.
+                    if ($mChatId !== null && $mId !== null) {
+                        try { tgApi('editMessageReplyMarkup', ['chat_id' => $mChatId, 'message_id' => $mId, 'reply_markup' => ['inline_keyboard' => []]]); } catch (Throwable $e) {}
+                    }
+                    if (!$exRes) {
+                        tgAnswerCallback($cbId, 'حصل خطأ، حاول تاني');
+                        tgSend($exChat, '⚠️ حصل خطأ أثناء تسجيل الأوردر. حاول تاني.', tgDriverMenu());
+                    } else {
+                        tgAnswerCallback($cbId, $exStatus === 'COMPLETED' ? 'اتسجّل مكتمل ✅' : 'اتسجّل مع المندوب 🛵');
+                        [$exTxt, $exKb] = tgExtOrderCardFromDb((string) $exRes[2]);
+                        tgSend($exChat, $exTxt, $exKb);
+                    }
+                }
+            }
+        } elseif (preg_match('#^xo:([^:]+):([DA])$#', $data, $xm)) {
+            // One-tap status toggle on an external-order card: «مكتمل» ⇄ «مع المندوب».
+            $xoId = $xm[1];
+            $xoTarget = $xm[2] === 'D' ? 'COMPLETED' : 'DRIVER_ASSIGNED';
+            $xos = db()->prepare("SELECT o.status, o.assignedDriverId, dp.telegramChatId
+                                    FROM `Order` o LEFT JOIN `DriverProfile` dp ON dp.userId = o.assignedDriverId
+                                   WHERE o.id = ? LIMIT 1");
+            $xos->execute([$xoId]); $xoOrd = $xos->fetch();
+            if (!$xoOrd) {
+                tgAnswerCallback($cbId, 'الطلب غير موجود');
+            } elseif ((string) ($xoOrd['telegramChatId'] ?? '') !== (string) $fromId) {
+                tgAnswerCallback($cbId, 'مش مسموح — ده مش طلبك');
+            } else {
+                $xoCur = (string) $xoOrd['status'];
+                if ($xoCur !== $xoTarget) {
+                    tgExtSetStatus($xoId, $xoTarget);
+                    try { orderHistory($xoId, $xoCur, $xoTarget, (string) $xoOrd['assignedDriverId'], 'DRIVER', 'تغيير حالة أوردر خارجي'); } catch (Throwable $e) {}
+                }
+                tgAnswerCallback($cbId, $xoTarget === 'COMPLETED' ? 'بقى مكتمل ✅' : 'رجع مع المندوب 🛵');
+                if ($mChatId !== null && $mId !== null) {
+                    [$xoTxt, $xoKb] = tgExtOrderCardFromDb($xoId);
+                    try { tgApi('editMessageText', ['chat_id' => $mChatId, 'message_id' => $mId,
+                        'text' => tgHtml($xoTxt), 'parse_mode' => 'HTML', 'disable_web_page_preview' => true,
+                        'reply_markup' => $xoKb]); } catch (Throwable $e) {}
+                }
+            }
         } else {
             tgAnswerCallback($cbId, '');
         }
     }
+    } catch (Throwable $e) { error_log('[api.php] webhook handler: ' . $e->getMessage()); }
     jsonOk(['ok' => true]);
 }
 
@@ -10794,15 +12012,20 @@ function customerNonCancelledCount(string $customerId): int {
     return (int) $st->fetchColumn();
 }
 /**
- * طلبات العميل اللي عملها بنفسه من التطبيق (مش اللي الأدمن سجّلها يدوي).
- * «أول أوردر توصيل مجاني» مكسب على استخدام التطبيق — فالطلبات اليدوية لا بتاخد
- * العرض ولا بتحرق حق العميل فيه. الطلبات القديمة قبل عمود source (NULL) بتتحسب
- * طلبات عميل عشان مكانش فيه طلب يدوي ساعتها.
+ * طلبات العميل اللي عملها *بنفسه من التطبيق* (مش اللي الأدمن سجّلها يدوي/مخصص).
+ * «أول أوردر توصيل مجاني» مكسب على استخدام التطبيق، فلازم أول طلب يعمله العميل
+ * من التطبيق ياخد العرض — حتى لو المكتب كان مسجّلّه طلبات يدوية قبل كده.
+ *
+ * الفيصل: `createdByAdminId` — أي طلب الأدمن عمله (يدوي/مخصص/من المكتب) بيكون
+ * فيه createdByAdminId، فمابيتحسبش «طلب تطبيق» مهما كانت قيمة عمود source (اللي
+ * بيفضل NULL على طلبات كتير). ده نفس تعريف باقي النظام: createdByAdminId ⇒ MANUAL،
+ * وإلا APP. فطلبات المكتب مابتحرقش حق العميل في أول أوردر مجاني من التطبيق.
  */
 function customerAppOrderCount(string $customerId): int {
     $st = db()->prepare(
         "SELECT COUNT(*) FROM `Order`
           WHERE customerId = ? AND status NOT IN ('CANCELLED','REJECTED')
+            AND createdByAdminId IS NULL
             AND (source IS NULL OR source NOT IN ('MANUAL','CUSTOM'))"
     );
     $st->execute([$customerId]);
@@ -12781,79 +14004,15 @@ if ($method === 'POST' && $path === '/pricing/estimate') {
 }
 
 // ═══ UPLOADS ═══════════════════════════════════════════════════════════
-/**
- * The real type of an uploaded file, read from its first bytes.
- *
- * Returns the extension the file should be SAVED under, or a `?label` string
- * for a format we recognise but do not store (so the error can name it), or
- * null when the bytes match nothing we know.
- *
- * This replaced a check on the file NAME, which was wrong in both directions:
- * a perfectly good JPEG saved from Chrome on Windows is named `.jfif` and was
- * refused («نوع الملف غير مدعوم» — the office could not add product photos
- * from Google Images), while anything renamed to `.png` was accepted and then
- * served back with the wrong type.
- */
-function sniffUploadType(string $tmp): ?string {
-    $h = @file_get_contents($tmp, false, null, 0, 32);
-    if (!is_string($h) || strlen($h) < 4) return null;
-    if (strncmp($h, "\xFF\xD8\xFF", 3) === 0) return 'jpg';
-    if (strncmp($h, "\x89PNG\r\n\x1A\n", 8) === 0) return 'png';
-    if (strncmp($h, 'GIF87a', 6) === 0 || strncmp($h, 'GIF89a', 6) === 0) return 'gif';
-    if (strncmp($h, '%PDF', 4) === 0) return 'pdf';
-    if (strncmp($h, 'RIFF', 4) === 0 && strlen($h) >= 12) {
-        $kind = substr($h, 8, 4);
-        if ($kind === 'WEBP') return 'webp';
-        if ($kind === 'WAVE') return 'wav';
-    }
-    // ISO base media (HEIC/AVIF photos, M4A voice notes): "ftyp" at offset 4.
-    if (strlen($h) >= 12 && substr($h, 4, 4) === 'ftyp') {
-        $brand = substr($h, 8, 4);
-        if (in_array($brand, ['heic', 'heix', 'hevc', 'hevx', 'heim', 'heis', 'mif1', 'msf1'], true)) return 'heic';
-        if ($brand === 'avif' || $brand === 'avis') return '?AVIF';
-        if ($brand === 'M4A ' || $brand === 'M4B ') return 'm4a';
-        // Generic MP4 brands are used by both video and audio — Android's
-        // recorder writes voice notes as `mp42`/`isom`. The caller decides from
-        // what the client said the file was.
-        if (in_array($brand, ['mp42', 'mp41', 'isom', 'iso2', '3gp4', '3gp5', 'dash'], true)) return '?MP4';
-    }
-    if (strncmp($h, 'ID3', 3) === 0) return 'mp3';
-    $b0 = ord($h[0]); $b1 = ord($h[1]);
-    if ($b0 === 0xFF && ($b1 === 0xF1 || $b1 === 0xF9)) return 'aac';            // ADTS
-    if ($b0 === 0xFF && ($b1 & 0xE0) === 0xE0) return 'mp3';                     // MPEG frame sync
-    if (strncmp($h, 'BM', 2) === 0) return '?BMP';
-    if (strncmp($h, "II*\0", 4) === 0 || strncmp($h, "MM\0*", 4) === 0) return '?TIFF';
-    if (stripos($h, '<svg') !== false || stripos($h, '<?xml') === 0) return '?SVG';
-    return null;
-}
-
 if ($method === 'POST' && $path === '/uploads') {
     authUser();
     if (empty($_FILES['file']) || ($_FILES['file']['error'] ?? 1) !== UPLOAD_ERR_OK) jsonErr('لم يتم رفع أي ملف', 422, 'VALIDATION_ERROR');
     $f = $_FILES['file'];
     $max = (int) env('UPLOAD_MAX_BYTES', '10485760');
     if ((int) $f['size'] > $max) jsonErr('حجم الملف كبير جداً', 422, 'FILE_TOO_LARGE');
-    $sniffed = sniffUploadType((string) $f['tmp_name']);
-    if ($sniffed === '?MP4') {
-        // An MP4 container is only accepted as a voice note — never as video.
-        $nameExt = strtolower(pathinfo((string) $f['name'], PATHINFO_EXTENSION));
-        $isAudio = in_array($nameExt, ['m4a', 'aac', 'mp4a'], true)
-            || str_starts_with(strtolower((string) ($f['type'] ?? '')), 'audio/');
-        if ($isAudio) $sniffed = 'm4a';
-    }
-    $allowed = ['jpg', 'png', 'webp', 'gif', 'heic', 'm4a', 'mp3', 'wav', 'aac', 'pdf'];
-    if ($sniffed === null || !in_array($sniffed, $allowed, true)) {
-        // Logged so the next «مش بيرفع» can be answered from the log, not guessed.
-        error_log(sprintf('[api.php] upload refused: name=%s sniffed=%s size=%d',
-            (string) $f['name'], $sniffed ?? 'unknown', (int) $f['size']));
-        $label = ($sniffed !== null && $sniffed[0] === '?') ? substr($sniffed, 1) : null;
-        jsonErr($label
-            ? "الصورة بصيغة $label ودي مش مدعومة — احفظها JPG أو PNG وارفعها تاني"
-            : 'نوع الملف غير مدعوم — المسموح: صور JPG / PNG / WEBP / GIF / HEIC، أو PDF، أو تسجيل صوتي',
-            422, 'BAD_FILE_TYPE');
-    }
-    // Saved under the type it really is, whatever it was called.
-    $ext = $sniffed;
+    $ext = strtolower(pathinfo((string) $f['name'], PATHINFO_EXTENSION));
+    if (!preg_match('/^[a-z0-9]{1,5}$/', $ext)) $ext = 'bin';
+    if (!in_array($ext, ['jpg', 'jpeg', 'png', 'webp', 'gif', 'heic', 'm4a', 'mp3', 'wav', 'aac', 'pdf'], true)) jsonErr('نوع الملف غير مدعوم', 422, 'BAD_FILE_TYPE');
     $dir = __DIR__ . '/uploads';
     if (!is_dir($dir)) @mkdir($dir, 0755, true);
     $name = date('Ymd') . '_' . bin2hex(random_bytes(8)) . '.' . $ext;
