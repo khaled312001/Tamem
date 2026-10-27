@@ -14004,15 +14004,79 @@ if ($method === 'POST' && $path === '/pricing/estimate') {
 }
 
 // ═══ UPLOADS ═══════════════════════════════════════════════════════════
+/**
+ * The real type of an uploaded file, read from its first bytes.
+ *
+ * Returns the extension the file should be SAVED under, or a `?label` string
+ * for a format we recognise but do not store (so the error can name it), or
+ * null when the bytes match nothing we know.
+ *
+ * This replaced a check on the file NAME, which was wrong in both directions:
+ * a perfectly good JPEG saved from Chrome on Windows is named `.jfif` and was
+ * refused («نوع الملف غير مدعوم» — the office could not add product photos
+ * from Google Images), while anything renamed to `.png` was accepted and then
+ * served back with the wrong type.
+ */
+function sniffUploadType(string $tmp): ?string {
+    $h = @file_get_contents($tmp, false, null, 0, 32);
+    if (!is_string($h) || strlen($h) < 4) return null;
+    if (strncmp($h, "\xFF\xD8\xFF", 3) === 0) return 'jpg';
+    if (strncmp($h, "\x89PNG\r\n\x1A\n", 8) === 0) return 'png';
+    if (strncmp($h, 'GIF87a', 6) === 0 || strncmp($h, 'GIF89a', 6) === 0) return 'gif';
+    if (strncmp($h, '%PDF', 4) === 0) return 'pdf';
+    if (strncmp($h, 'RIFF', 4) === 0 && strlen($h) >= 12) {
+        $kind = substr($h, 8, 4);
+        if ($kind === 'WEBP') return 'webp';
+        if ($kind === 'WAVE') return 'wav';
+    }
+    // ISO base media (HEIC/AVIF photos, M4A voice notes): "ftyp" at offset 4.
+    if (strlen($h) >= 12 && substr($h, 4, 4) === 'ftyp') {
+        $brand = substr($h, 8, 4);
+        if (in_array($brand, ['heic', 'heix', 'hevc', 'hevx', 'heim', 'heis', 'mif1', 'msf1'], true)) return 'heic';
+        if ($brand === 'avif' || $brand === 'avis') return '?AVIF';
+        if ($brand === 'M4A ' || $brand === 'M4B ') return 'm4a';
+        // Generic MP4 brands are used by both video and audio — Android's
+        // recorder writes voice notes as `mp42`/`isom`. The caller decides from
+        // what the client said the file was.
+        if (in_array($brand, ['mp42', 'mp41', 'isom', 'iso2', '3gp4', '3gp5', 'dash'], true)) return '?MP4';
+    }
+    if (strncmp($h, 'ID3', 3) === 0) return 'mp3';
+    $b0 = ord($h[0]); $b1 = ord($h[1]);
+    if ($b0 === 0xFF && ($b1 === 0xF1 || $b1 === 0xF9)) return 'aac';            // ADTS
+    if ($b0 === 0xFF && ($b1 & 0xE0) === 0xE0) return 'mp3';                     // MPEG frame sync
+    if (strncmp($h, 'BM', 2) === 0) return '?BMP';
+    if (strncmp($h, "II*\0", 4) === 0 || strncmp($h, "MM\0*", 4) === 0) return '?TIFF';
+    if (stripos($h, '<svg') !== false || stripos($h, '<?xml') === 0) return '?SVG';
+    return null;
+}
+
 if ($method === 'POST' && $path === '/uploads') {
     authUser();
     if (empty($_FILES['file']) || ($_FILES['file']['error'] ?? 1) !== UPLOAD_ERR_OK) jsonErr('لم يتم رفع أي ملف', 422, 'VALIDATION_ERROR');
     $f = $_FILES['file'];
     $max = (int) env('UPLOAD_MAX_BYTES', '10485760');
     if ((int) $f['size'] > $max) jsonErr('حجم الملف كبير جداً', 422, 'FILE_TOO_LARGE');
-    $ext = strtolower(pathinfo((string) $f['name'], PATHINFO_EXTENSION));
-    if (!preg_match('/^[a-z0-9]{1,5}$/', $ext)) $ext = 'bin';
-    if (!in_array($ext, ['jpg', 'jpeg', 'png', 'webp', 'gif', 'heic', 'm4a', 'mp3', 'wav', 'aac', 'pdf'], true)) jsonErr('نوع الملف غير مدعوم', 422, 'BAD_FILE_TYPE');
+    $sniffed = sniffUploadType((string) $f['tmp_name']);
+    if ($sniffed === '?MP4') {
+        // An MP4 container is only accepted as a voice note — never as video.
+        $nameExt = strtolower(pathinfo((string) $f['name'], PATHINFO_EXTENSION));
+        $isAudio = in_array($nameExt, ['m4a', 'aac', 'mp4a'], true)
+            || str_starts_with(strtolower((string) ($f['type'] ?? '')), 'audio/');
+        if ($isAudio) $sniffed = 'm4a';
+    }
+    $allowed = ['jpg', 'png', 'webp', 'gif', 'heic', 'm4a', 'mp3', 'wav', 'aac', 'pdf'];
+    if ($sniffed === null || !in_array($sniffed, $allowed, true)) {
+        // Logged so the next «مش بيرفع» can be answered from the log, not guessed.
+        error_log(sprintf('[api.php] upload refused: name=%s sniffed=%s size=%d',
+            (string) $f['name'], $sniffed ?? 'unknown', (int) $f['size']));
+        $label = ($sniffed !== null && $sniffed[0] === '?') ? substr($sniffed, 1) : null;
+        jsonErr($label
+            ? "الصورة بصيغة $label ودي مش مدعومة — احفظها JPG أو PNG وارفعها تاني"
+            : 'نوع الملف غير مدعوم — المسموح: صور JPG / PNG / WEBP / GIF / HEIC، أو PDF، أو تسجيل صوتي',
+            422, 'BAD_FILE_TYPE');
+    }
+    // Saved under the type it really is, whatever it was called.
+    $ext = $sniffed;
     $dir = __DIR__ . '/uploads';
     if (!is_dir($dir)) @mkdir($dir, 0755, true);
     $name = date('Ymd') . '_' . bin2hex(random_bytes(8)) . '.' . $ext;
