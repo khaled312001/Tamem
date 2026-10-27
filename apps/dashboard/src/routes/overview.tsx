@@ -37,19 +37,13 @@ import { PageHeader } from '../components/ui/PageHeader.js';
 import { CardSkeleton } from '../components/ui/Skeleton.js';
 import { StatCard } from '../components/ui/StatCard.js';
 import { ErrorState } from '../components/ui/States.js';
+import { DateRangePicker } from '../components/DateRangePicker.js';
 import { api } from '../lib/api.js';
+import { rangeLabel, rangeParams, type DateRange } from '../lib/dateRange.js';
 import { formatCount, formatMoney, formatWeekdayDate } from '../lib/format.js';
 import { connectSocket } from '../lib/socket.js';
 import { playNewOrderSound } from '../lib/sound.js';
 import { AnalyticsSection } from './overview-analytics.js';
-
-const RANGE_OPTIONS = [
-  { value: 'today', label: 'اليوم' },
-  { value: 'week', label: 'آخر ٧ أيام' },
-  { value: 'month', label: 'الشهر' },
-] as const;
-
-type Range = (typeof RANGE_OPTIONS)[number]['value'];
 
 interface OverviewResponse {
   kpis: {
@@ -75,22 +69,17 @@ interface OverviewResponse {
   }[];
 }
 
-const RANGE_LABEL: Record<Range, string> = {
-  today: 'اليوم',
-  week: 'آخر ٧ أيام',
-  month: 'هذا الشهر',
-};
-
 const PIE_COLORS = ['#E0301E', '#EC7A2C', '#F2A93B', '#3B82F6', '#10B981', '#8B5CF6'];
 
 export function OverviewPage() {
   const qc = useQueryClient();
   const navigate = useNavigate();
-  const [range, setRange] = useState<Range>('week');
+  const [range, setRange] = useState<DateRange>({ key: 'week' });
+  const params = rangeParams(range);
 
   const { data, isLoading, isError, refetch, isFetching } = useQuery({
-    queryKey: ['admin', 'overview', range],
-    queryFn: () => api.adminOverview(range) as Promise<OverviewResponse>,
+    queryKey: ['admin', 'overview', params],
+    queryFn: () => api.adminOverview(params) as Promise<OverviewResponse>,
   });
 
   // Realtime: refetch KPIs on new orders (toast + sound) and status changes.
@@ -118,7 +107,17 @@ export function OverviewPage() {
   }, [qc, navigate]);
 
   const k = data?.kpis;
-  const trendData = (data?.trend ?? []).map((t) => ({ ...t, dayLabel: formatWeekdayDate(t.day) }));
+  // Long windows come back one point per month (`YYYY-MM`), short ones per day.
+  const trendData = (data?.trend ?? []).map((t) => ({
+    ...t,
+    dayLabel:
+      t.day.length === 7
+        ? new Date(`${t.day}-01T00:00:00`).toLocaleDateString('ar-EG', {
+            month: 'short',
+            year: '2-digit',
+          })
+        : formatWeekdayDate(t.day),
+  }));
 
   return (
     <div className="space-y-6">
@@ -127,21 +126,7 @@ export function OverviewPage() {
         subtitle="ملخص التشغيل والأداء"
         actions={
           <>
-            <div className="bg-card border border-border rounded-lg p-1 flex">
-              {RANGE_OPTIONS.map((opt) => (
-                <button
-                  key={opt.value}
-                  onClick={() => setRange(opt.value)}
-                  className={`px-3 py-1.5 text-sm rounded-md transition ${
-                    range === opt.value
-                      ? 'bg-brand-red text-white font-bold'
-                      : 'text-muted-foreground hover:bg-muted'
-                  }`}
-                >
-                  {opt.label}
-                </button>
-              ))}
-            </div>
+            <DateRangePicker value={range} onChange={(r) => r && setRange(r)} />
             <Button variant="outline" size="md" onClick={() => refetch()} disabled={isFetching}>
               {isFetching ? (
                 <Loader2 className="w-4 h-4 animate-spin" />
@@ -217,7 +202,7 @@ export function OverviewPage() {
 
           {/* ── ملخص الفترة ── */}
           <section className="space-y-2">
-            <h2 className="text-sm font-black text-muted-foreground">ملخص {RANGE_LABEL[range]}</h2>
+            <h2 className="text-sm font-black text-muted-foreground">ملخص {rangeLabel(range)}</h2>
             <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
               <StatCard
                 label="إجمالي الطلبات"
@@ -273,7 +258,7 @@ export function OverviewPage() {
           {/* ── الرسوم ── */}
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
             <div className="lg:col-span-2 bg-card rounded-xl p-5 shadow-sm border border-border">
-              <h2 className="font-bold mb-4">الطلبات — {RANGE_LABEL[range]}</h2>
+              <h2 className="font-bold mb-4">الطلبات — {rangeLabel(range)}</h2>
               <div className="h-64">
                 {trendData.length === 0 ? (
                   <QuietDay />
@@ -342,7 +327,7 @@ export function OverviewPage() {
           </div>
 
           <div className="bg-card rounded-xl p-5 shadow-sm border border-border">
-            <h2 className="font-bold mb-4">الإيرادات — {RANGE_LABEL[range]}</h2>
+            <h2 className="font-bold mb-4">الإيرادات — {rangeLabel(range)}</h2>
             <div className="h-48">
               {trendData.length === 0 ? (
                 <QuietDay />

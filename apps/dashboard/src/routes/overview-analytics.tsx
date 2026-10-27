@@ -24,9 +24,8 @@ import {
 
 import { CardSkeleton } from '../components/ui/Skeleton.js';
 import { api } from '../lib/api.js';
+import { rangeParams, type DateRange } from '../lib/dateRange.js';
 import { formatCount, formatMoney } from '../lib/format.js';
-
-type Range = 'today' | 'week' | 'month';
 
 interface Analytics {
   kpis: {
@@ -85,11 +84,12 @@ const WEEK_ORDER = [6, 0, 1, 2, 3, 4, 5];
 
 const fmtHour = (h: number) => `${h % 12 || 12}${h < 12 ? 'ص' : 'م'}`;
 
-export function AnalyticsSection({ range }: { range: Range }) {
+export function AnalyticsSection({ range }: { range: DateRange }) {
+  const params = rangeParams(range);
   const { data, isLoading } = useQuery({
-    queryKey: ['admin', 'analytics', range],
+    queryKey: ['admin', 'analytics', params],
     queryFn: () =>
-      api.raw.get('/admin/analytics', { params: { range } }).then((r) => r.data.data as Analytics),
+      api.raw.get('/admin/analytics', { params }).then((r) => r.data.data as Analytics),
   });
 
   if (isLoading) {

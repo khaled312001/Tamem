@@ -42,6 +42,8 @@ import { StatusQuickMenu } from '../components/StatusQuickMenu.js';
 import { EmptyState, TableSkeleton } from '../components/ui/Skeleton.js';
 import { api } from '../lib/api.js';
 import { connectSocket } from '../lib/socket.js';
+import { isRangeKey, rangeBounds, type DateRange } from '../lib/dateRange.js';
+import { DateRangePicker } from '../components/DateRangePicker.js';
 import { playNewOrderSound } from '../lib/sound.js';
 
 const STATUS_TABS = [
@@ -281,9 +283,15 @@ export function OrdersPage() {
   const [page, setPage] = useState(() => Math.max(1, Number(searchParams.get('page') ?? 1)));
   const [pageSize] = useState(20);
   const [statusFilter, setStatusFilter] = useState<string>(searchParams.get('status') ?? '');
-  const [fromPreset, setFromPreset] = useState<'today' | undefined>(
-    searchParams.get('from') === 'today' ? 'today' : undefined,
-  );
+  // الفترة — `from` holds the preset key; a custom range adds dFrom/dTo.
+  const [dateRange, setDateRange] = useState<DateRange | null>(() => {
+    const key = searchParams.get('from');
+    if (!isRangeKey(key)) return null;
+    if (key !== 'custom') return { key };
+    const from = searchParams.get('dFrom') ?? '';
+    const to = searchParams.get('dTo') ?? '';
+    return from && to ? { key, from, to } : null;
+  });
   const [sourceFilter, setSourceFilter] = useState<string>(searchParams.get('source') ?? '');
   const [paymentStatusFilter, setPaymentStatusFilter] = useState<string>(
     searchParams.get('paymentStatus') ?? '',
@@ -344,7 +352,13 @@ export function OrdersPage() {
     const next: Record<string, string> = {};
     if (debouncedSearch) next.search = debouncedSearch;
     if (statusFilter) next.status = statusFilter;
-    if (fromPreset) next.from = fromPreset;
+    if (dateRange) {
+      next.from = dateRange.key;
+      if (dateRange.key === 'custom' && dateRange.from && dateRange.to) {
+        next.dFrom = dateRange.from;
+        next.dTo = dateRange.to;
+      }
+    }
     if (sourceFilter) next.source = sourceFilter;
     if (paymentStatusFilter) next.paymentStatus = paymentStatusFilter;
     if (categoryFilter) next.category = categoryFilter;
@@ -363,7 +377,7 @@ export function OrdersPage() {
   }, [
     debouncedSearch,
     statusFilter,
-    fromPreset,
+    dateRange,
     sourceFilter,
     paymentStatusFilter,
     categoryFilter,
@@ -455,10 +469,11 @@ export function OrdersPage() {
     if (categoryFilter) p.category = categoryFilter;
     if (noDriverOnly) p.driverId = 'none';
     if (scheduledOnly) p.scheduled = 1;
-    if (fromPreset === 'today') {
-      const start = new Date();
-      start.setHours(0, 0, 0, 0);
-      p.from = start.toISOString();
+    const bounds = dateRange && rangeBounds(dateRange);
+    if (bounds) {
+      p.from = bounds.from.toISOString();
+      // Presets run up to "now", which keeps moving — only a custom range ends.
+      if (dateRange?.key === 'custom') p.to = bounds.to.toISOString();
     }
     return p;
   }, [
@@ -466,7 +481,7 @@ export function OrdersPage() {
     pageSize,
     statusFilter,
     debouncedSearch,
-    fromPreset,
+    dateRange,
     sourceFilter,
     paymentStatusFilter,
     categoryFilter,
@@ -714,14 +729,15 @@ export function OrdersPage() {
       {/* Quick filter presets */}
       <div className="flex flex-wrap gap-2">
         {QUICK_FILTERS.map((q) => {
-          const isActive =
-            (q.status ?? '') === statusFilter && (q.from ?? undefined) === fromPreset;
+          const isActive = q.from
+            ? dateRange?.key === q.from && !statusFilter
+            : (q.status ?? '') === statusFilter;
           return (
             <button
               key={q.key}
               onClick={() => {
                 setStatusFilter(q.status ?? '');
-                setFromPreset(q.from);
+                if (q.from) setDateRange({ key: q.from });
                 setPage(1);
               }}
               className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-bold transition border ${
@@ -736,7 +752,7 @@ export function OrdersPage() {
           );
         })}
         {(statusFilter ||
-          fromPreset ||
+          dateRange ||
           debouncedSearch ||
           sourceFilter ||
           paymentStatusFilter ||
@@ -746,7 +762,7 @@ export function OrdersPage() {
           <button
             onClick={() => {
               setStatusFilter('');
-              setFromPreset(undefined);
+              setDateRange(null);
               setSearch('');
               setDebouncedSearch('');
               setSourceFilter('');
@@ -772,14 +788,24 @@ export function OrdersPage() {
               key={tab.value}
               onClick={() => {
                 setStatusFilter(tab.value);
-                setFromPreset(undefined);
                 setPage(1);
               }}
-              className={`px-3 py-1.5 rounded-lg text-sm transition ${statusFilter === tab.value && !fromPreset ? 'bg-brand-red text-white font-bold' : 'bg-muted hover:bg-muted/80'}`}
+              className={`px-3 py-1.5 rounded-lg text-sm transition ${statusFilter === tab.value ? 'bg-brand-red text-white font-bold' : 'bg-muted hover:bg-muted/80'}`}
             >
               {tab.label}
             </button>
           ))}
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-xs font-bold text-muted-foreground">الفترة</span>
+          <DateRangePicker
+            allowAll
+            value={dateRange}
+            onChange={(r) => {
+              setDateRange(r);
+              setPage(1);
+            }}
+          />
         </div>
         <div className="relative">
           <Search className="absolute top-1/2 -translate-y-1/2 start-3 w-4 h-4 text-muted-foreground" />

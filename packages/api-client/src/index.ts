@@ -357,8 +357,12 @@ export class TamemClient {
   }
 
   // ===== Admin Overview =====
-  async adminOverview(range: 'today' | 'week' | 'month' = 'week'): Promise<unknown> {
-    return this.request({ method: 'GET', url: '/admin/overview', params: { range } });
+  /** `range` is a preset key, or `{ range: 'custom', from, to }` with YYYY-MM-DD days. */
+  async adminOverview(
+    range: string | { range: string; from?: string; to?: string } = 'week',
+  ): Promise<unknown> {
+    const params = typeof range === 'string' ? { range } : range;
+    return this.request({ method: 'GET', url: '/admin/overview', params });
   }
 
   /** One lightweight poll for the live notifier: new orders/alerts since `since`

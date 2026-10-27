@@ -1450,17 +1450,51 @@ if ($method === 'GET' && $path === '/admin/reports/customers') {
     ], $rows));
 }
 
+/**
+ * The window behind the period picker on «نظرة عامة» (overview + analytics).
+ *
+ *   today  → since midnight          month1 → since this day last month
+ *   week   → the last 7 days         month3 → the last 3 months
+ *   month  → since the 1st           year   → the last 12 months
+ *   custom → from=YYYY-MM-DD … to=YYYY-MM-DD, both days whole
+ *
+ * Days are Cairo days (PHP runs on Africa/Cairo); callers convert to UTC for
+ * SQL. Returns [fromTs, toTs, key]; an unknown or half-filled range falls back
+ * to the last 7 days rather than to everything.
+ */
+function adminRangeWindow(): array {
+    $key = (string) ($_GET['range'] ?? 'week');
+    $now = time();
+    $day = '/^\d{4}-\d{2}-\d{2}$/';
+    if ($key === 'custom') {
+        $f = trim((string) ($_GET['from'] ?? '')); $t = trim((string) ($_GET['to'] ?? ''));
+        if (preg_match($day, $f) && preg_match($day, $t)) {
+            if ($f > $t) [$f, $t] = [$t, $f];
+            $fromTs = strtotime($f . ' 00:00:00');
+            $toTs = min($now, strtotime($t . ' 00:00:00 +1 day') - 1);
+            if ($fromTs !== false && $toTs >= $fromTs) return [$fromTs, $toTs, 'custom'];
+        }
+        $key = 'week';
+    }
+    $starts = [
+        'today' => 'today',
+        'week' => 'today -6 days',
+        'month' => 'first day of this month 00:00',
+        'month1' => 'today -1 month',
+        'month3' => 'today -3 months',
+        'year' => 'today -1 year',
+    ];
+    if (!isset($starts[$key])) $key = 'week';
+    return [strtotime($starts[$key]), $now, $key];
+}
+
 // GET /admin/analytics — the advanced analytics section on «نظرة عامة»:
 // order source, best weekdays, peak hours, status mix, top merchants, top
 // products, plus decision KPIs. One handful of grouped queries per load.
 if ($method === 'GET' && $path === '/admin/analytics') {
     $u = authUser();
     if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
-    $range = $_GET['range'] ?? 'week';
-    $now = time();
-    if ($range === 'today') $fromTs = strtotime('today');
-    elseif ($range === 'month') $fromTs = strtotime('first day of this month 00:00');
-    else $fromTs = $now - 7 * 86400;
+    [$fromTs, $now, $range] = adminRangeWindow();
     $fromSql = gmdate('Y-m-d H:i:s', $fromTs);
     $toSql = gmdate('Y-m-d H:i:s', $now);
     $pdo = db();
@@ -1530,7 +1564,7 @@ if ($method === 'GET' && $path === '/admin/analytics') {
     $total = (int) ($k['total'] ?? 0); $completed = (int) ($k['completed'] ?? 0); $sales = round((float) ($k['sales'] ?? 0), 2);
 
     jsonOk([
-        'range' => ['from' => gmdate('c', $fromTs), 'to' => gmdate('c', $now)],
+        'range' => ['key' => $range, 'from' => gmdate('c', $fromTs), 'to' => gmdate('c', $now)],
         'kpis' => [
             'orders' => $total, 'active' => (int) ($k['active'] ?? 0),
             'completed' => $completed, 'cancelled' => (int) ($k['cancelled'] ?? 0),
@@ -1550,11 +1584,7 @@ if ($method === 'GET' && $path === '/admin/analytics') {
 if ($method === 'GET' && $path === '/admin/overview') {
     $u = authUser();
     if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
-    $range = $_GET['range'] ?? 'week';
-    $now = time();
-    if ($range === 'today') $fromTs = strtotime('today');
-    elseif ($range === 'month') $fromTs = strtotime('first day of this month 00:00');
-    else $fromTs = $now - 7 * 86400;
+    [$fromTs, $now, $range] = adminRangeWindow();
     $from = gmdate('Y-m-d\TH:i:s.000\Z', $fromTs);
     $to = gmdate('Y-m-d\TH:i:s.000\Z', $now);
     $fromSql = gmdate('Y-m-d H:i:s', $fromTs);
@@ -1586,25 +1616,29 @@ if ($method === 'GET' && $path === '/admin/overview') {
         $deliveryTotal += (float) ($r['deliveryFee'] ?? 0);
     }
     $deliveryTotal = round($deliveryTotal, 2);
-    // 7-day trend
-    $trendFromSql = gmdate('Y-m-d H:i:s', $now - 7 * 86400);
-    $st = $pdo->prepare("SELECT DATE(createdAt) AS d, status, finalPrice, quotedPrice FROM `Order` WHERE createdAt >= ?");
-    $st->execute([$trendFromSql]);
-    $rows = $st->fetchAll();
+    // Trend over the chosen window: one point per Cairo day, or per month once
+    // the window is longer than two months (a year of daily points is a smear).
+    // Never shorter than 7 days, so «اليوم» still draws a line, not a dot.
+    $trendFrom = min($fromTs, strtotime('today -6 days'));
+    $monthly = ($now - $trendFrom) > 62 * 86400;
     $trend = [];
-    for ($i = 6; $i >= 0; $i--) {
-        $day = gmdate('Y-m-d', $now - $i * 86400);
-        $orders = 0; $rev = 0.0;
-        foreach ($rows as $r) {
-            if ($r['d'] === $day) {
-                $orders++;
-                if (in_array($r['status'], ['COMPLETED', 'DELIVERED'], true)) {
-                    $rev += (float) ($r['finalPrice'] ?? $r['quotedPrice'] ?? 0);
-                }
-            }
-        }
-        $trend[] = ['day' => $day, 'orders' => $orders, 'revenue' => $rev];
+    for ($t = $trendFrom; $t <= $now; $t = strtotime($monthly ? 'first day of next month' : '+1 day', $t)) {
+        $key = date($monthly ? 'Y-m' : 'Y-m-d', $t);
+        $trend[$key] = ['day' => $key, 'orders' => 0, 'revenue' => 0.0];
+        if ($monthly) $t = strtotime(date('Y-m-01', $t));
     }
+    $st = $pdo->prepare("SELECT createdAt, status, finalPrice, quotedPrice FROM `Order` WHERE createdAt BETWEEN ? AND ?");
+    $st->execute([gmdate('Y-m-d H:i:s', $trendFrom), $toSql]);
+    foreach ($st->fetchAll() as $r) {
+        // Stored as UTC; bucketed by the Cairo day the office lived through.
+        $key = date($monthly ? 'Y-m' : 'Y-m-d', strtotime($r['createdAt'] . ' UTC'));
+        if (!isset($trend[$key])) continue;
+        $trend[$key]['orders']++;
+        if (in_array($r['status'], ['COMPLETED', 'DELIVERED'], true)) {
+            $trend[$key]['revenue'] += (float) ($r['finalPrice'] ?? $r['quotedPrice'] ?? 0);
+        }
+    }
+    $trend = array_values($trend);
     // ordersByService
     $st = $pdo->prepare("SELECT serviceId, COUNT(*) AS c FROM `Order` WHERE createdAt BETWEEN ? AND ? GROUP BY serviceId");
     $st->execute([$fromSql, $toSql]);
