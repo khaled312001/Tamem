@@ -39,7 +39,7 @@ import { Badge } from '../components/ui/Badge.js';
 import { Button } from '../components/ui/Button.js';
 import { ConfirmDialog } from '../components/ui/ConfirmDialog.js';
 import { Dialog, Drawer } from '../components/ui/Dialog.js';
-import { Field, Input, Textarea } from '../components/ui/Input.js';
+import { Field, Input, Textarea, SearchInput } from '../components/ui/Input.js';
 import { ProductHistoryDrawer } from '../components/ProductHistoryDrawer.js';
 import { ProductOptionsPanel } from '../components/ProductOptionsPanel.js';
 import { PageHeader } from '../components/ui/PageHeader.js';
@@ -479,8 +479,8 @@ export function ProductsPage() {
         <div className="flex flex-wrap items-center gap-2">
           <div className="relative flex-1 min-w-[180px]">
             <Search className="w-4 h-4 absolute top-1/2 -translate-y-1/2 start-3 text-muted-foreground" />
-            <input
-              type="search"
+            <SearchInput
+              bare
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               placeholder="ابحث بالاسم أو الكود (SKU)…"

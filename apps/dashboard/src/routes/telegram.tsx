@@ -20,6 +20,7 @@ import { toast } from 'sonner';
 
 import { Button } from '../components/ui/Button.js';
 import { api } from '../lib/api.js';
+import { SearchInput } from '../components/ui/Input.js';
 
 type Person = {
   id: string;
@@ -425,7 +426,8 @@ export function TelegramPage() {
         {people.length > 6 && (
           <div className="relative mt-3">
             <Search className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-            <input
+            <SearchInput
+              bare
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               placeholder="ابحث بالاسم أو الرقم…"

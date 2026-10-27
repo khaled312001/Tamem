@@ -39,7 +39,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 
 import { Dialog } from '../components/ui/Dialog.js';
-import { Field, Textarea } from '../components/ui/Input.js';
+import { Field, Textarea, SearchInput } from '../components/ui/Input.js';
 import { EmptyState } from '../components/ui/Skeleton.js';
 import { api } from '../lib/api.js';
 import { connectSocket } from '../lib/socket.js';
@@ -447,8 +447,8 @@ export function AlertsPage() {
         </div>
         <div className="relative">
           <Search className="absolute top-1/2 -translate-y-1/2 start-3 w-4 h-4 text-muted-foreground" />
-          <input
-            type="search"
+          <SearchInput
+            bare
             placeholder="ابحث برقم الطلب، اسم/هاتف العميل، اسم السائق..."
             value={search}
             onChange={(e) => setSearch(e.target.value)}

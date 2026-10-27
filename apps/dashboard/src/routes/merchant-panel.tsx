@@ -25,7 +25,7 @@ import { MerchantImportDialog, MerchantRequestsTab } from './merchant-extras.js'
 import { Button } from '../components/ui/Button.js';
 import { ConfirmDialog } from '../components/ui/ConfirmDialog.js';
 import { Dialog } from '../components/ui/Dialog.js';
-import { Field, Input, Textarea } from '../components/ui/Input.js';
+import { Field, Input, Textarea, SearchInput } from '../components/ui/Input.js';
 import { EmptyState, TableSkeleton } from '../components/ui/Skeleton.js';
 import { StatCard } from '../components/ui/StatCard.js';
 import { ErrorState } from '../components/ui/States.js';
@@ -736,7 +736,8 @@ export function MerchantPanelPage() {
               {/* Search */}
               <div className="relative w-full md:w-80">
                 <Search className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-                <input
+                <SearchInput
+                  bare
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
                   placeholder="ابحث في اسم أو وصف المنتج..."

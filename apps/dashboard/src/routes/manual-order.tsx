@@ -35,7 +35,7 @@ import { toast } from 'sonner';
 
 import { Button } from '../components/ui/Button.js';
 import { Dialog } from '../components/ui/Dialog.js';
-import { Field, Input, Textarea } from '../components/ui/Input.js';
+import { Field, Input, Textarea, SearchInput } from '../components/ui/Input.js';
 import { api } from '../lib/api.js';
 import { formatMoney } from '../lib/format.js';
 import { DEFAULT_ORDER_STAGE, ORDER_STAGES, type OrderStageKey } from '../lib/orderStages.js';
@@ -1026,7 +1026,7 @@ function MerchantPicker({ rows, onPick }: { rows?: Row[]; onPick: (m: Row) => vo
   );
   return (
     <div className="space-y-2">
-      <Input
+      <SearchInput
         value={q}
         onChange={(e) => setQ(e.target.value)}
         placeholder="ابحث عن تاجر…"
@@ -1108,7 +1108,7 @@ function MerchantBasket({
 
       <div className="relative">
         <Search className="w-4 h-4 absolute top-1/2 -translate-y-1/2 start-3 text-muted-foreground" />
-        <Input
+        <SearchInput
           value={q}
           onChange={(e) => setQ(e.target.value)}
           placeholder="ابحث في منيو التاجر… (مثال: بيتزا)"

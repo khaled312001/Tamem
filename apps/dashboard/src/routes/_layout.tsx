@@ -50,6 +50,7 @@ import { isSoundEnabled, playNewOrderSound, setSoundEnabled } from '../lib/sound
 import { useSocketStatus } from '../lib/useSocketStatus.js';
 import { cn } from '../lib/utils.js';
 import { NotificationsProvider } from '../providers/NotificationsProvider.js';
+import { SearchInput } from '../components/ui/Input.js';
 
 type NavItem = {
   to: string;
@@ -402,8 +403,8 @@ export function DashboardLayout() {
             </div>
             <div className="flex items-center gap-2 md:gap-3">
               <form onSubmit={submitSearch} className="hidden md:block relative">
-                <input
-                  type="search"
+                <SearchInput
+                  bare
                   value={searchValue}
                   onChange={(e) => setSearchValue(e.target.value)}
                   placeholder="ابحث برقم الطلب أو اسم العميل... (Enter)"

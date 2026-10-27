@@ -36,7 +36,7 @@ import { Button } from '../components/ui/Button.js';
 import { CustomOrderDialog } from './custom-order.js';
 import { ManualOrderDialog as NewManualOrderDialog } from './manual-order.js';
 import { Dialog, Drawer } from '../components/ui/Dialog.js';
-import { Field, Input, Textarea } from '../components/ui/Input.js';
+import { Field, Input, Textarea, SearchInput } from '../components/ui/Input.js';
 import { OrdersMap, type OrdersMapOrder } from '../components/OrdersMap.js';
 import { StatusQuickMenu } from '../components/StatusQuickMenu.js';
 import { EmptyState, TableSkeleton } from '../components/ui/Skeleton.js';
@@ -783,8 +783,7 @@ export function OrdersPage() {
         </div>
         <div className="relative">
           <Search className="absolute top-1/2 -translate-y-1/2 start-3 w-4 h-4 text-muted-foreground" />
-          <Input
-            type="search"
+          <SearchInput
             placeholder="بحث برقم الطلب أو اسم/رقم العميل..."
             value={search}
             onChange={(e) => setSearch(e.target.value)}

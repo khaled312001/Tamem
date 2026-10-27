@@ -23,7 +23,7 @@ import { DriverStatusBadge } from '../components/ui/Badge.js';
 import { Button } from '../components/ui/Button.js';
 import { Dialog } from '../components/ui/Dialog.js';
 import { formatMoney } from '../lib/format.js';
-import { Field, Input } from '../components/ui/Input.js';
+import { Field, Input, SearchInput } from '../components/ui/Input.js';
 import { PhoneInput } from '../components/ui/PhoneInput.js';
 import { Pagination } from '../components/ui/Pagination.js';
 import { EmptyState, TableSkeleton } from '../components/ui/Skeleton.js';
@@ -217,7 +217,7 @@ export function DriversPage() {
       </div>
 
       <div className="bg-white rounded-xl border border-border p-3">
-        <Input
+        <SearchInput
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           placeholder="ابحث بالاسم أو رقم الهاتف…"

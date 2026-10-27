@@ -31,7 +31,7 @@ import { Button } from '../components/ui/Button.js';
 import { SetPasswordDialog, type PasswordTarget } from '../components/SetPasswordDialog.js';
 import { ConfirmDialog } from '../components/ui/ConfirmDialog.js';
 import { Dialog } from '../components/ui/Dialog.js';
-import { Input } from '../components/ui/Input.js';
+import { Input, SearchInput } from '../components/ui/Input.js';
 import { PageHeader } from '../components/ui/PageHeader.js';
 import { PhoneInput } from '../components/ui/PhoneInput.js';
 import { Pagination } from '../components/ui/Pagination.js';
@@ -424,8 +424,7 @@ export function CustomersPage() {
         <div className="flex items-center gap-2 flex-wrap">
           <div className="relative flex-1 min-w-[240px]">
             <Search className="absolute top-1/2 -translate-y-1/2 start-3 w-4 h-4 text-muted-foreground" />
-            <Input
-              type="search"
+            <SearchInput
               placeholder="بحث بالاسم، الهاتف، المدينة/المنطقة، أو رقم العميل…"
               value={search}
               onChange={(e) => setSearch(e.target.value)}

@@ -43,7 +43,7 @@ import { Button } from '../components/ui/Button.js';
 import { ConfirmDialog } from '../components/ui/ConfirmDialog.js';
 import { SetPasswordDialog, type PasswordTarget } from '../components/SetPasswordDialog.js';
 import { Dialog } from '../components/ui/Dialog.js';
-import { Field, Input, Textarea } from '../components/ui/Input.js';
+import { Field, Input, Textarea, SearchInput } from '../components/ui/Input.js';
 import { PageHeader } from '../components/ui/PageHeader.js';
 import { PhoneInput } from '../components/ui/PhoneInput.js';
 import { EmptyState, TableSkeleton } from '../components/ui/Skeleton.js';
@@ -413,8 +413,8 @@ export function MerchantsPage() {
         <div className="flex flex-wrap items-center gap-2">
           <div className="relative flex-1 min-w-[220px]">
             <Search className="w-4 h-4 absolute top-1/2 -translate-y-1/2 start-3 text-muted-foreground" />
-            <input
-              type="search"
+            <SearchInput
+              bare
               value={searchInput}
               onChange={(e) => setSearchInput(e.target.value)}
               placeholder="ابحث بالاسم، الهاتف، الإيميل، المنطقة، أو ID التاجر…"

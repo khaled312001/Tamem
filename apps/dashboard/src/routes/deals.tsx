@@ -6,7 +6,7 @@ import { toast } from 'sonner';
 import { Button } from '../components/ui/Button.js';
 import { ConfirmDialog } from '../components/ui/ConfirmDialog.js';
 import { Dialog } from '../components/ui/Dialog.js';
-import { Field, Input } from '../components/ui/Input.js';
+import { Field, Input, SearchInput } from '../components/ui/Input.js';
 import { PageHeader } from '../components/ui/PageHeader.js';
 import { EmptyState, TableSkeleton } from '../components/ui/Skeleton.js';
 import { ErrorState } from '../components/ui/States.js';
@@ -337,7 +337,7 @@ function OfferDialog({
           <Field label="اختر المنتج" required>
             <div className="relative">
               <Search className="w-4 h-4 absolute top-1/2 -translate-y-1/2 start-3 text-muted-foreground" />
-              <Input
+              <SearchInput
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
                 placeholder="ابحث باسم المنتج…"

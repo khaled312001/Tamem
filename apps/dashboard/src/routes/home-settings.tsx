@@ -31,7 +31,7 @@ import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 
 import { Button } from '../components/ui/Button.js';
-import { Field, Input } from '../components/ui/Input.js';
+import { Field, Input, SearchInput } from '../components/ui/Input.js';
 import { CardSkeleton } from '../components/ui/Skeleton.js';
 import { api } from '../lib/api.js';
 import { uploadFile } from '../lib/uploadFile.js';
@@ -1721,7 +1721,7 @@ function FeaturedProductsTab({
 
       <div className="relative">
         <Search className="w-4 h-4 absolute top-1/2 -translate-y-1/2 start-3 text-muted-foreground" />
-        <Input
+        <SearchInput
           value={term}
           onChange={(e) => setTerm(e.target.value)}
           placeholder="ابحث عن منتج بالاسم…"

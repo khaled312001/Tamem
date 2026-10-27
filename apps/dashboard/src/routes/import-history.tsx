@@ -27,6 +27,7 @@ import { formatCount, formatDateTime } from '../lib/format.js';
 import { downloadBlob } from '../lib/productsSheet.js';
 import type { Tone } from '../lib/statusRegistry.js';
 import { TONE } from '../lib/statusRegistry.js';
+import { SearchInput } from '../components/ui/Input.js';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Row = any;
@@ -146,8 +147,8 @@ export function ImportHistoryPage() {
         <div className="flex flex-wrap items-center gap-2">
           <div className="relative flex-1 min-w-[200px]">
             <Search className="w-4 h-4 absolute top-1/2 -translate-y-1/2 start-3 text-muted-foreground" />
-            <input
-              type="search"
+            <SearchInput
+              bare
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               placeholder="ابحث باسم الملف أو المستخدم…"

@@ -13,7 +13,7 @@ import { ChevronLeft, MessageSquare, Search, Star } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 
-import { Input } from '../components/ui/Input.js';
+import { SearchInput } from '../components/ui/Input.js';
 import { Pagination } from '../components/ui/Pagination.js';
 import { EmptyState, TableSkeleton } from '../components/ui/Skeleton.js';
 import { api } from '../lib/api.js';
@@ -127,8 +127,7 @@ export function ReviewsPage() {
       <div className="bg-white rounded-xl border border-border p-4 flex items-center gap-3 flex-wrap">
         <div className="relative flex-1 min-w-[220px]">
           <Search className="absolute top-1/2 -translate-y-1/2 start-3 w-4 h-4 text-muted-foreground" />
-          <Input
-            type="search"
+          <SearchInput
             placeholder="ابحث برقم الطلب أو نص التعليق..."
             value={search}
             onChange={(e) => setSearch(e.target.value)}

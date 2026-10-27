@@ -18,6 +18,7 @@ import { toast } from 'sonner';
 import { Button } from '../components/ui/Button.js';
 import { Dialog } from '../components/ui/Dialog.js';
 import { api } from '../lib/api.js';
+import { SearchInput } from '../components/ui/Input.js';
 
 // Arabic week, Saturday-first. dayOfWeek matches PHP 'w' (0=Sun … 6=Sat).
 const DAYS: { d: number; l: string }[] = [
@@ -169,7 +170,8 @@ function TodayBoard() {
 
       <div className="relative">
         <Search className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-        <input
+        <SearchInput
+          bare
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           placeholder="ابحث باسم المندوب أو رقمه…"

@@ -14,6 +14,7 @@ import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import { Loader2, MapPin, Search } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
+import { SearchInput } from './ui/Input.js';
 
 // Patch the default marker icons once — Leaflet's bundled images don't resolve
 // through Vite without help. Pointing at the CDN keeps the picker self-contained.
@@ -177,8 +178,8 @@ export function MapPicker({ lat, lng, onChange, height = 320, initialQuery }: Ma
       {/* Search bar */}
       <div className="relative">
         <Search className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-        <input
-          type="search"
+        <SearchInput
+          bare
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           onFocus={() => results.length > 0 && setShowResults(true)}
