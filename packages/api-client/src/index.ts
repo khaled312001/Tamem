@@ -982,6 +982,26 @@ export class TamemClient {
   async adminSettleDriver(id: string, data?: unknown): Promise<unknown> {
     return this.request({ method: 'POST', url: `/admin/drivers/${id}/settle`, data });
   }
+  // ===== Driver incentives: daily bonus, lateness, absence =====
+  async adminDriverIncentives(): Promise<unknown> {
+    return this.request({ method: 'GET', url: '/admin/driver-incentives' });
+  }
+  async adminSaveDriverIncentives(rules: unknown): Promise<unknown> {
+    return this.request({ method: 'PUT', url: '/admin/driver-incentives', data: rules });
+  }
+  async adminDriverIncentiveDays(params: Record<string, unknown>): Promise<unknown> {
+    return this.request({ method: 'GET', url: '/admin/driver-incentives/days', params });
+  }
+  /** Forgive (waived: true) or restore one day's BONUS / LATE / ABSENCE for a driver. */
+  async adminWaiveDriverIncentive(data: {
+    driverId: string;
+    day: string;
+    kind: 'BONUS' | 'LATE' | 'ABSENCE';
+    waived: boolean;
+    note?: string;
+  }): Promise<unknown> {
+    return this.request({ method: 'POST', url: '/admin/driver-incentives/waive', data });
+  }
   async adminDriverSettlements(id: string): Promise<unknown> {
     return this.request({ method: 'GET', url: `/admin/drivers/${id}/settlements` });
   }

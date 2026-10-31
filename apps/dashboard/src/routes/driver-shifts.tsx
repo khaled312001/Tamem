@@ -9,6 +9,7 @@ import {
   Search,
   Send,
   Trash2,
+  Trophy,
   Users,
   X,
 } from 'lucide-react';
@@ -19,6 +20,7 @@ import { Button } from '../components/ui/Button.js';
 import { Dialog } from '../components/ui/Dialog.js';
 import { api } from '../lib/api.js';
 import { SearchInput } from '../components/ui/Input.js';
+import { IncentiveRulesPanel } from './driver-incentives.js';
 
 // Arabic week, Saturday-first. dayOfWeek matches PHP 'w' (0=Sun … 6=Sat).
 const DAYS: { d: number; l: string }[] = [
@@ -77,21 +79,24 @@ function sinceLabel(iso: string | null): string {
 }
 
 export function DriverShiftsPage() {
-  const [tab, setTab] = useState<'today' | 'week'>('today');
+  const [tab, setTab] = useState<'today' | 'week' | 'incentives'>('today');
   return (
     <div className="mx-auto max-w-5xl space-y-4">
       <div className="flex items-center gap-2 text-xl font-black">
         <CalendarDays className="h-6 w-6 text-brand-red" /> ورديات المناديب
       </div>
-      <div className="flex gap-2">
+      <div className="flex flex-wrap gap-2">
         <TabBtn active={tab === 'today'} onClick={() => setTab('today')}>
           <Clock className="h-4 w-4" /> اليوم
         </TabBtn>
         <TabBtn active={tab === 'week'} onClick={() => setTab('week')}>
           <CalendarDays className="h-4 w-4" /> الجدول الأسبوعي
         </TabBtn>
+        <TabBtn active={tab === 'incentives'} onClick={() => setTab('incentives')}>
+          <Trophy className="h-4 w-4" /> البونص والخصومات
+        </TabBtn>
       </div>
-      {tab === 'today' ? <TodayBoard /> : <WeeklyGrid />}
+      {tab === 'today' ? <TodayBoard /> : tab === 'week' ? <WeeklyGrid /> : <IncentiveRulesPanel />}
     </div>
   );
 }

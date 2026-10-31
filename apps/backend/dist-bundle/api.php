@@ -1183,7 +1183,7 @@ function extraMerchantFee(): float {
 function snapshotDriverShare(string $orderId): void {
     try {
         $q = db()->prepare(
-            "SELECT o.deliveryFee, o.assignedDriverId, dp.deliverySharePct
+            "SELECT o.deliveryFee, o.customData, o.assignedDriverId, dp.deliverySharePct
              FROM `Order` o
              LEFT JOIN `DriverProfile` dp ON dp.userId = o.assignedDriverId
              WHERE o.id = ? LIMIT 1"
@@ -1194,11 +1194,29 @@ function snapshotDriverShare(string $orderId): void {
         $fee = $o['deliveryFee'] !== null ? (float) $o['deliveryFee'] : 0.0;
         if ($fee < 0) $fee = 0.0;
         $pct = $o['deliverySharePct'] !== null ? (float) $o['deliverySharePct'] : 0.0;
-        $driverRev = round($fee * $pct / 100, 2);
+        // A free / discounted app order (عرض «أول أوردر مجاني») still took the
+        // driver a full trip: his share is on the fee BEFORE the promo, and the
+        // promo is the company's cost — its revenue on the order goes negative.
+        $driverRev = round(max($fee, orderPromoOriginalFee($o['customData'])) * $pct / 100, 2);
         $companyRev = round($fee - $driverRev, 2);
         db()->prepare('UPDATE `Order` SET driverSharePct = ?, driverDeliveryRevenue = ?, companyDeliveryRevenue = ?, updatedAt = NOW(3) WHERE id = ?')
             ->execute([$pct, $driverRev, $companyRev, $orderId]);
     } catch (Throwable $e) { error_log('[api.php] snapshotDriverShare: ' . $e->getMessage()); }
+    maybeNotifyBonusTier($orderId);
+}
+/** A promo'd order's delivery fee before the promo (customData.deliveryPromo.originalFee), else 0. */
+function orderPromoOriginalFee($customData): float {
+    if (!is_string($customData) || $customData === '') return 0.0;
+    $d = json_decode($customData, true);
+    $v = is_array($d) ? ($d['deliveryPromo']['originalFee'] ?? null) : null;
+    return is_numeric($v) ? max(0.0, (float) $v) : 0.0;
+}
+/**
+ * SQL for what an order's delivery is WORTH to the driver: the fee charged,
+ * or — for a free/discounted app order — the fee before the promo.
+ */
+function orderFeeWorthSql(string $o = 'o'): string {
+    return "GREATEST(COALESCE($o.deliveryFee,0), COALESCE(CAST(JSON_UNQUOTE(JSON_EXTRACT($o.customData,'\$.deliveryPromo.originalFee')) AS DECIMAL(10,2)),0))";
 }
 function computeOrderFinancials(string $orderId): void {
     try {
@@ -1297,12 +1315,15 @@ if ($method === 'GET' && $path === '/admin/reports/services') {
 /**
  * «من تاريخ / إلى تاريخ» on the driver report, its detail and its settlement.
  *
- * Bounded by the day the ORDER was placed, in Cairo — the same rule the orders
- * page uses, so a driver's تقفيلة matches counting his orders there. It used to
- * be the day the order was marked delivered, compared against UTC: an order
- * picked up weeks earlier and only closed today landed in today's closing (the
- * office counted 13 orders for a driver, the report said 15), and the day
- * itself started at 03:00 Cairo time.
+ * Bounded by the day the ORDER was placed — not the day it was marked
+ * delivered: an order picked up weeks earlier and only closed today used to
+ * land in today's closing (the office counted 13 orders for a driver, the
+ * report said 15).
+ *
+ * A day here is a driver's WORK day, 03:00 → 03:00 Cairo: night shifts run
+ * past midnight (up to 3ص), and a night's orders — and its daily bonus —
+ * belong to the day the shift started. About 1 order in 11 is placed between
+ * midnight and 3ص.
  *
  * Takes YYYY-MM-DD; anything else is ignored rather than guessed.
  */
@@ -1310,13 +1331,17 @@ function driverReportDays(string $from, string $to, array &$where, array &$args)
     $from = trim($from); $to = trim($to);
     if (preg_match('/^\d{4}-\d{2}-\d{2}$/', $from)) {
         $where[] = 'o.createdAt >= ?';
-        $args[] = gmdate('Y-m-d H:i:s', strtotime($from . ' 00:00:00'));   // PHP runs on Africa/Cairo
+        $args[] = gmdate('Y-m-d H:i:s', workDayStartTs($from));
     }
     if (preg_match('/^\d{4}-\d{2}-\d{2}$/', $to)) {
         $where[] = 'o.createdAt < ?';
-        $args[] = gmdate('Y-m-d H:i:s', strtotime($to . ' 00:00:00 +1 day'));
+        $args[] = gmdate('Y-m-d H:i:s', workDayEndTs($to));
     }
 }
+/** The work day (YYYY-MM-DD) an instant belongs to: it starts at 03:00 Cairo. PHP runs on Africa/Cairo. */
+function workDayOf(?int $ts = null): string { return date('Y-m-d', strtotime('-3 hours', $ts ?? time())); }
+function workDayStartTs(string $ymd): int { return (int) strtotime($ymd . ' 03:00:00'); }
+function workDayEndTs(string $ymd): int { return (int) strtotime($ymd . ' 03:00:00 +1 day'); }
 
 if ($method === 'GET' && $path === '/admin/reports/drivers') {
     $u = authUser(); if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
@@ -1338,13 +1363,17 @@ if ($method === 'GET' && $path === '/admin/reports/drivers') {
     if ($drv !== '') { $wh[] = "u.id = ?"; $whArgs[] = $drv; }
     $gov = trim((string) ($_GET['governorate'] ?? ''));
     if ($gov !== '') { $wh[] = "dp.governorate = ?"; $whArgs[] = $gov; }
-    // Driver's delivery cut: the saved snapshot, else live (deliveryFee × current %).
-    $due = "COALESCE(o.driverDeliveryRevenue, ROUND(COALESCE(o.deliveryFee,0) * COALESCE(dp.deliverySharePct,0) / 100, 2))";
+    // Driver's delivery cut: the saved snapshot, else live (fee × current %).
+    // A free app order counts at its fee before the promo (see snapshotDriverShare).
+    $W = orderFeeWorthSql();
+    $due = "COALESCE(o.driverDeliveryRevenue, ROUND($W * COALESCE(dp.deliverySharePct,0) / 100, 2))";
     $sql = "SELECT u.id AS driverId, u.name, u.phone, u.governorate, dp.rating, dp.deliverySharePct,
                    COUNT(o.id) AS deliveries,
                    COALESCE(SUM(COALESCE(o.finalPrice, o.quotedPrice, 0)), 0) AS totalCollected,
                    COALESCE(SUM(COALESCE(o.merchantSubtotal, 0)), 0) AS merchantGoods,
-                   COALESCE(SUM(COALESCE(o.deliveryFee, 0)), 0) AS totalDeliveryFees,
+                   COALESCE(SUM($W), 0) AS totalDeliveryFees,
+                   COALESCE(SUM(COALESCE(o.deliveryFee, 0)), 0) AS chargedDeliveryFees,
+                   COALESCE(SUM(CASE WHEN $W > COALESCE(o.deliveryFee, 0) THEN 1 ELSE 0 END), 0) AS freeCount,
                    COALESCE(SUM($due), 0) AS driverDue,
                    COALESCE(SUM(COALESCE(o.deliveryFee, 0)) - SUM($due), 0) AS tamemRevenue,
                    COALESCE(SUM(CASE WHEN o.driverSettlementStatus = 'SETTLED' THEN $due ELSE 0 END), 0) AS paid,
@@ -1372,7 +1401,24 @@ if ($method === 'GET' && $path === '/admin/reports/drivers') {
         'paid' => (float) $r['paid'],
         'remaining' => (float) $r['remaining'],
         'pendingCount' => (int) $r['pendingCount'],
+        'chargedDeliveryFees' => (float) $r['chargedDeliveryFees'],
+        'freeCount' => (int) $r['freeCount'],
     ], $st->fetchAll());
+    // Daily bonus and lateness/absence deductions over the same days. The
+    // bonus is paid out of the company's share, so it lowers تميم's revenue.
+    $inc = driverIncentives($drv !== '' ? $drv : null,
+        trim((string) ($_GET['from'] ?? '')) ?: '0000-01-01', trim((string) ($_GET['to'] ?? '')) ?: '9999-12-31');
+    foreach ($rows as &$row) {
+        $t = $inc[$row['driverId']]['totals'] ?? ['bonus' => 0.0, 'deductions' => 0.0, 'paid' => 0.0, 'pending' => 0.0];
+        $row['bonus'] = $t['bonus'];
+        $row['deductions'] = $t['deductions'];
+        $row['netDue'] = round($row['driverDue'] + $t['bonus'] - $t['deductions'], 2);
+        $row['tamemRevenue'] = round($row['tamemRevenue'] - $t['bonus'] + $t['deductions'], 2);
+        $row['paid'] = round($row['paid'] + $t['paid'], 2);
+        $row['remaining'] = round($row['remaining'] + $t['pending'], 2);
+        $row['incentivesPending'] = $t['pending'];
+    }
+    unset($row);
     // Grand totals row.
     $sum = fn(string $k) => round(array_sum(array_map(fn($r) => $r[$k], $rows)), 2);
     $totals = [
@@ -1380,6 +1426,9 @@ if ($method === 'GET' && $path === '/admin/reports/drivers') {
         'totalCollected' => $sum('totalCollected'), 'merchantGoods' => $sum('merchantGoods'),
         'totalDeliveryFees' => $sum('totalDeliveryFees'), 'driverDue' => $sum('driverDue'),
         'tamemRevenue' => $sum('tamemRevenue'), 'paid' => $sum('paid'), 'remaining' => $sum('remaining'),
+        'chargedDeliveryFees' => $sum('chargedDeliveryFees'),
+        'freeCount' => array_sum(array_map(fn($r) => $r['freeCount'], $rows)),
+        'bonus' => $sum('bonus'), 'deductions' => $sum('deductions'), 'netDue' => $sum('netDue'),
     ];
     // Distinct governorates for the filter dropdown.
     $govs = db()->query("SELECT DISTINCT governorate FROM `DriverProfile` WHERE governorate IS NOT NULL AND governorate <> '' ORDER BY governorate")->fetchAll(PDO::FETCH_COLUMN);
@@ -1395,10 +1444,13 @@ if ($method === 'GET' && preg_match('#^/admin/reports/drivers/([^/]+)$#', $path,
     if (in_array($stf, ['DELIVERED', 'COMPLETED'], true)) { $w[] = "o.status = ?"; $a[] = $stf; }
     $settle = strtoupper(trim((string) ($_GET['settlement'] ?? '')));
     if (in_array($settle, ['PENDING', 'SETTLED'], true)) { $w[] = "o.driverSettlementStatus = ?"; $a[] = $settle; }
-    $due = "COALESCE(o.driverDeliveryRevenue, ROUND(COALESCE(o.deliveryFee,0) * COALESCE(dp.deliverySharePct,0) / 100, 2))";
-    $sql = "SELECT o.id, o.orderNumber, o.status, o.deliveredAt, o.completedAt,
+    $W = orderFeeWorthSql();
+    $due = "COALESCE(o.driverDeliveryRevenue, ROUND($W * COALESCE(dp.deliverySharePct,0) / 100, 2))";
+    $sql = "SELECT o.id, o.orderNumber, o.status, o.deliveredAt, o.completedAt, o.createdAt,
                    COALESCE(o.merchantSubtotal, 0) AS merchantGoods,
-                   COALESCE(o.deliveryFee, 0) AS deliveryFee,
+                   $W AS deliveryFee,
+                   COALESCE(o.deliveryFee, 0) AS chargedFee,
+                   JSON_UNQUOTE(JSON_EXTRACT(o.customData, '\$.deliveryPromo.label')) AS promoLabel,
                    COALESCE(o.driverSharePct, dp.deliverySharePct, 0) AS sharePct,
                    $due AS driverDue,
                    (COALESCE(o.deliveryFee, 0) - $due) AS tamemRevenue,
@@ -1415,6 +1467,11 @@ if ($method === 'GET' && preg_match('#^/admin/reports/drivers/([^/]+)$#', $path,
         'sharePct' => (float) $r['sharePct'], 'driverDue' => (float) $r['driverDue'],
         'tamemRevenue' => (float) $r['tamemRevenue'], 'totalCollected' => (float) $r['totalCollected'],
         'settlementStatus' => $r['settlementStatus'], 'settledAt' => isoZ($r['driverSettledAt']),
+        'chargedFee' => (float) $r['chargedFee'],
+        // Free/discounted by an app promo: shown at its real fee, marked «مجاني».
+        'isFree' => (float) $r['deliveryFee'] > (float) $r['chargedFee'],
+        'promoLabel' => $r['promoLabel'] !== null && $r['promoLabel'] !== 'null' ? $r['promoLabel'] : null,
+        'createdAt' => isoZ($r['createdAt']),
     ], $st->fetchAll());
     $sum = fn(string $k) => round(array_sum(array_map(fn($r) => $r[$k], $orders)), 2);
     $dh = db()->prepare("SELECT u.name, u.phone, dp.deliverySharePct, dp.rating FROM `User` u JOIN `DriverProfile` dp ON dp.userId = u.id WHERE u.id = ? LIMIT 1");
@@ -1428,6 +1485,8 @@ if ($method === 'GET' && preg_match('#^/admin/reports/drivers/([^/]+)$#', $path,
             'deliveries' => count($orders), 'merchantGoods' => $sum('merchantGoods'),
             'deliveryFees' => $sum('deliveryFee'), 'driverDue' => $sum('driverDue'),
             'tamemRevenue' => $sum('tamemRevenue'), 'totalCollected' => $sum('totalCollected'),
+            'chargedFees' => $sum('chargedFee'),
+            'freeCount' => count(array_filter($orders, fn($o) => $o['isFree'])),
         ],
     ]);
 }
@@ -2358,6 +2417,13 @@ function tgEnabled(): bool { return tgToken() !== null; }
  *  or ['ok'=>false] on transport failure. Lets callers read error details like
  *  a group's migrate_to_chat_id. Pass $tokenOverride to call a specific bot. */
 function tgApiFull(string $method, array $params, ?string $tokenOverride = null): array {
+    // Local test runs only: TG_OUTBOX names a file that receives every call
+    // instead of Telegram. Production never sets it.
+    $outbox = (string) env('TG_OUTBOX', '');
+    if ($outbox !== '') {
+        @file_put_contents($outbox, json_encode(['method' => $method, 'params' => $params], JSON_UNESCAPED_UNICODE) . "\n", FILE_APPEND);
+        return ['ok' => true, 'result' => ['message_id' => 0]];
+    }
     $token = $tokenOverride ?? tgToken();
     if ($token === null) return ['ok' => false];
     $url = 'https://api.telegram.org/bot' . $token . '/' . $method;
@@ -5919,6 +5985,409 @@ function shiftMinutes(string $start, string $end): int {
     $e = (int) substr($end, 0, 2) * 60 + (int) substr($end, 3, 2);
     return $e <= $s ? (1440 - $s + $e) : ($e - $s);
 }
+// ══════════ Driver incentives — daily bonus, lateness, absence ══════════
+/**
+ * What the owner asked for on 2026-10-31:
+ *   • بونص يومي: 20 أوردر → 50 ج، 25 → 70، 30 → 100 — the highest tier
+ *     reached in the work day, paid out of the company's share.
+ *   • تأخير عن أول وردية في «جدول المناديب»: from 30 minutes late, 10 ج per
+ *     started hour (لحد ساعة 10، لحد ساعتين 20، لحد 3 ساعات 30). Later than
+ *     that — or no sign of him at all — is a غياب with its own amount.
+ *
+ * Every number is a rule in Setting `driver_incentives`, edited from the
+ * dashboard. Nothing is computed for a day before `effectiveFrom`, so turning
+ * this on never back-charges a driver for a day nobody had told him about.
+ *
+ * Amounts are worked out live from the orders, the schedule and the check-ins.
+ * Only two things are stored: a waiver (غياب بإذن, a forgiven lateness, a
+ * cancelled bonus) and a payout row per day × kind when a settlement pays it.
+ * So a day can never be paid twice, and a waiver granted after settling shows
+ * up as money owed back to the driver.
+ */
+/** A function, not a const: a top-level const only exists once execution reaches
+ *  it, and the driver report — far above this point — needs it first. */
+function incentiveKinds(): array { return ['BONUS', 'LATE', 'ABSENCE']; }
+
+function incentiveRulesDefault(): array {
+    return [
+        'enabled' => true,
+        'effectiveFrom' => '2026-11-01',
+        'bonusTiers' => [
+            ['orders' => 20, 'amount' => 50],
+            ['orders' => 25, 'amount' => 70],
+            ['orders' => 30, 'amount' => 100],
+        ],
+        'lateGraceMin' => 30,
+        'latePerHour' => 10,
+        'absenceAfterMin' => 180,
+        'absenceAmount' => 50,
+    ];
+}
+/** A rules payload, validated; anything missing or malformed keeps $base's value. */
+function normalizeIncentiveRules(array $in, array $base): array {
+    $r = $base;
+    if (array_key_exists('enabled', $in)) $r['enabled'] = (bool) $in['enabled'];
+    if (isset($in['effectiveFrom']) && preg_match('/^\d{4}-\d{2}-\d{2}$/', (string) $in['effectiveFrom']))
+        $r['effectiveFrom'] = (string) $in['effectiveFrom'];
+    if (isset($in['bonusTiers']) && is_array($in['bonusTiers'])) {
+        $t = [];
+        foreach ($in['bonusTiers'] as $x) {
+            if (!is_array($x)) continue;
+            $o = (int) ($x['orders'] ?? 0); $a = round((float) ($x['amount'] ?? 0), 2);
+            if ($o > 0 && $o <= 500 && $a > 0 && $a <= 100000) $t[$o] = ['orders' => $o, 'amount' => $a];
+        }
+        ksort($t);
+        $r['bonusTiers'] = array_values($t);
+    }
+    foreach (['lateGraceMin' => [0, 600], 'absenceAfterMin' => [1, 1440]] as $k => [$lo, $hi])
+        if (isset($in[$k]) && is_numeric($in[$k])) $r[$k] = max($lo, min($hi, (int) $in[$k]));
+    foreach (['latePerHour', 'absenceAmount'] as $k)
+        if (isset($in[$k]) && is_numeric($in[$k])) $r[$k] = max(0, min(100000, round((float) $in[$k], 2)));
+    return $r;
+}
+function driverIncentiveRules(bool $fresh = false): array {
+    static $r = null;
+    if ($r === null || $fresh) $r = normalizeIncentiveRules(notifReadSetting('driver_incentives'), incentiveRulesDefault());
+    return $r;
+}
+function ensureIncentiveSchema(): void {
+    static $done = false;
+    // DDL commits implicitly: never run it under somebody else's transaction.
+    if ($done || db()->inTransaction()) return;
+    $done = true;
+    try {
+        db()->exec("CREATE TABLE IF NOT EXISTS `DriverIncentiveWaiver` (
+            driverId VARCHAR(30) NOT NULL, workDay DATE NOT NULL, kind VARCHAR(12) NOT NULL,
+            note VARCHAR(255) NULL, createdById VARCHAR(30) NULL, createdAt DATETIME(3) NOT NULL,
+            PRIMARY KEY (driverId, workDay, kind)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+        db()->exec("CREATE TABLE IF NOT EXISTS `DriverIncentivePayout` (
+            id VARCHAR(30) NOT NULL PRIMARY KEY, driverId VARCHAR(30) NOT NULL, workDay DATE NOT NULL,
+            kind VARCHAR(12) NOT NULL, amount DECIMAL(10,2) NOT NULL, settlementId VARCHAR(30) NOT NULL,
+            createdAt DATETIME(3) NOT NULL, KEY idx_dip_driver_day (driverId, workDay)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+        db()->exec("CREATE TABLE IF NOT EXISTS `DriverIncentiveNotice` (
+            driverId VARCHAR(30) NOT NULL, workDay DATE NOT NULL, kind VARCHAR(20) NOT NULL,
+            createdAt DATETIME(3) NOT NULL, PRIMARY KEY (driverId, workDay, kind)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+    } catch (Throwable $e) { error_log('[api.php] incentive schema: ' . $e->getMessage()); }
+    backfillFreeOrderShares();
+}
+/**
+ * One-off: free app orders completed before the fix were snapshotted on a 0
+ * fee, so the driver's share came out 0 (the 50 ج that «بقلت في النص»).
+ * Re-snapshot the ones not settled yet, at the share % saved on each order —
+ * from freeShareFrom() only. The ~290 unsettled free orders of October 2026
+ * (≈3,300 ج of driver share) are left as they were: paying them is the
+ * owner's call, not a side effect of a deploy. Move freeShareFrom() back to include them.
+ */
+function freeShareFrom(): string { return '2026-10-31'; }   // a function: see incentiveKinds()
+function backfillFreeOrderShares(): void {
+    try {
+        if (notifReadSetting('migr_free_order_share_v1')) return;
+        $st = db()->prepare("SELECT id, deliveryFee, customData, driverSharePct FROM `Order`
+                            WHERE status IN ('DELIVERED','COMPLETED') AND assignedDriverId IS NOT NULL
+                              AND COALESCE(driverSettlementStatus, 'PENDING') <> 'SETTLED'
+                              AND customData LIKE '%originalFee%' AND createdAt >= ?");
+        $st->execute([gmdate('Y-m-d H:i:s', workDayStartTs(freeShareFrom()))]);
+        $n = 0;
+        $up = db()->prepare('UPDATE `Order` SET driverDeliveryRevenue = ?, companyDeliveryRevenue = ? WHERE id = ?');
+        foreach ($st->fetchAll() as $o) {
+            $fee = max(0.0, (float) ($o['deliveryFee'] ?? 0));
+            $worth = max($fee, orderPromoOriginalFee($o['customData']));
+            if ($worth <= $fee || $o['driverSharePct'] === null) continue;
+            $drv = round($worth * (float) $o['driverSharePct'] / 100, 2);
+            $up->execute([$drv, round($fee - $drv, 2), $o['id']]);
+            $n++;
+        }
+        notifWriteSetting('migr_free_order_share_v1', ['done' => gmdate('c'), 'orders' => $n], null);
+        error_log("[api.php] free-order share backfill: $n orders");
+    } catch (Throwable $e) { error_log('[api.php] free-order share backfill: ' . $e->getMessage()); }
+}
+
+/**
+ * Bonus / lateness / absence for every driver (or one) over work days
+ * [$fromDay, $toDay], clamped to the rules' effectiveFrom and to today.
+ *
+ * Returns [driverId => ['days' => [YYYY-MM-DD => day], 'totals' => …]] where a day is
+ *   orders, tier (orders needed for the bonus earned), next (the next tier, if any),
+ *   schedStart ('HH:MM' of the first shift, or null = day off), arrival (ISO or null),
+ *   arrivalBy ('checkin'|'activity'|null), lateMin, status ('ontime'|'late'|'absent'|'waiting'|'off'),
+ *   raw {kind: signed amount before waivers}, waived {kind: note|''}, amount {kind: after waivers},
+ *   paid {kind}, pending {kind}
+ * Signs: BONUS is +, LATE and ABSENCE are − (money off the driver).
+ */
+function driverIncentives(?string $driverId, string $fromDay, string $toDay): array {
+    $R = driverIncentiveRules();
+    if (!$R['enabled']) return [];
+    $today = workDayOf();
+    if ($fromDay < $R['effectiveFrom']) $fromDay = $R['effectiveFrom'];
+    if ($toDay > $today) $toDay = $today;
+    if ($fromDay > $toDay) return [];
+    ensureIncentiveSchema();
+    $startTs = workDayStartTs($fromDay); $endTs = workDayEndTs($toDay);
+    $sUtc = gmdate('Y-m-d H:i:s', $startTs); $eUtc = gmdate('Y-m-d H:i:s', $endTs);
+    $one = $driverId !== null;
+    $utcTs = static fn($v) => $v ? (int) strtotime(substr((string) $v, 0, 19) . ' UTC') : null;
+
+    // Delivered orders per work day — the same rows the driver report counts.
+    $q = db()->prepare("SELECT assignedDriverId d, createdAt FROM `Order`
+                         WHERE status IN ('DELIVERED','COMPLETED') AND assignedDriverId IS NOT NULL
+                           AND createdAt >= ? AND createdAt < ?" . ($one ? ' AND assignedDriverId = ?' : ''));
+    $q->execute($one ? [$sUtc, $eUtc, $driverId] : [$sUtc, $eUtc]);
+    $orders = [];
+    foreach ($q->fetchAll() as $r) {
+        $day = workDayOf($utcTs($r['createdAt']));
+        $orders[$r['d']][$day] = ($orders[$r['d']][$day] ?? 0) + 1;
+    }
+    // First shift start per weekday (0 = الأحد, as in «جدول المناديب»).
+    $q = db()->prepare("SELECT driverId, dayOfWeek, MIN(startTime) s FROM `DriverShift` WHERE isActive = 1"
+        . ($one ? ' AND driverId = ?' : '') . " GROUP BY driverId, dayOfWeek");
+    $q->execute($one ? [$driverId] : []);
+    $sched = [];
+    foreach ($q->fetchAll() as $r) $sched[$r['driverId']][(int) $r['dayOfWeek']] = substr((string) $r['s'], 0, 5);
+    // Check-ins overlapping the range (one left open from before still counts).
+    $q = db()->prepare("SELECT driverId, startedAt, endedAt FROM `DriverShiftSession`
+                         WHERE startedAt < ? AND (endedAt IS NULL OR endedAt > ?)" . ($one ? ' AND driverId = ?' : ''));
+    $q->execute($one ? [$eUtc, gmdate('Y-m-d H:i:s', $startTs - 86400), $driverId] : [$eUtc, gmdate('Y-m-d H:i:s', $startTs - 86400)]);
+    $sessions = [];
+    foreach ($q->fetchAll() as $r) $sessions[$r['driverId']][] = [$utcTs($r['startedAt']), $utcTs($r['endedAt'])];
+    // First thing a driver did on an order each day — he was working even if
+    // he forgot to send «حضرت», so he is never marked absent on a day he drove.
+    $q = db()->prepare("SELECT changedById d, createdAt FROM `OrderStatusHistory`
+                         WHERE changedByRole = 'DRIVER' AND createdAt >= ? AND createdAt < ?" . ($one ? ' AND changedById = ?' : '') . "
+                         ORDER BY createdAt ASC");
+    $q->execute($one ? [$sUtc, $eUtc, $driverId] : [$sUtc, $eUtc]);
+    $activity = [];
+    foreach ($q->fetchAll() as $r) {
+        $ts = $utcTs($r['createdAt']); $day = workDayOf($ts);
+        if (!isset($activity[$r['d']][$day])) $activity[$r['d']][$day] = $ts;
+    }
+    $q = db()->prepare("SELECT driverId, workDay, kind, note FROM `DriverIncentiveWaiver` WHERE workDay BETWEEN ? AND ?" . ($one ? ' AND driverId = ?' : ''));
+    $q->execute($one ? [$fromDay, $toDay, $driverId] : [$fromDay, $toDay]);
+    $waivers = [];
+    foreach ($q->fetchAll() as $r) $waivers[$r['driverId']][$r['workDay']][$r['kind']] = (string) ($r['note'] ?? '');
+    $q = db()->prepare("SELECT driverId, workDay, kind, SUM(amount) a FROM `DriverIncentivePayout` WHERE workDay BETWEEN ? AND ?"
+        . ($one ? ' AND driverId = ?' : '') . " GROUP BY driverId, workDay, kind");
+    $q->execute($one ? [$fromDay, $toDay, $driverId] : [$fromDay, $toDay]);
+    $paid = [];
+    foreach ($q->fetchAll() as $r) $paid[$r['driverId']][$r['workDay']][$r['kind']] = (float) $r['a'];
+
+    $ids = array_unique(array_merge(array_keys($orders), array_keys($sched), array_keys($waivers), array_keys($paid)));
+    if ($one) $ids = [$driverId];
+    $tiers = $R['bonusTiers'];
+    $now = time();
+    $out = [];
+    foreach ($ids as $d) {
+        $days = []; $tot = ['bonus' => 0.0, 'deductions' => 0.0, 'paid' => 0.0, 'pending' => 0.0];
+        for ($day = $fromDay; $day <= $toDay; $day = date('Y-m-d', strtotime($day . ' +1 day'))) {
+            $n = $orders[$d][$day] ?? 0;
+            $tier = null; $next = null;
+            foreach ($tiers as $t) { if ($n >= $t['orders']) $tier = $t; elseif ($next === null) $next = $t; }
+            $raw = ['BONUS' => $tier ? (float) $tier['amount'] : 0.0, 'LATE' => 0.0, 'ABSENCE' => 0.0];
+
+            $start = $sched[$d][(int) date('w', strtotime($day))] ?? null;
+            $status = 'off'; $arrival = null; $arrivalBy = null; $lateMin = 0;
+            if ($start !== null) {
+                // A first shift that starts after midnight (before 3ص) is on the next calendar date.
+                $schedTs = (int) strtotime($day . ' ' . $start . ':00' . (hmToMin($start) < 180 ? ' +1 day' : ''));
+                $dayEnd = workDayEndTs($day);
+                foreach ($sessions[$d] ?? [] as [$a, $b]) {
+                    if ($a <= $schedTs && ($b === null || $b > $schedTs)) { $arrival = $schedTs; $arrivalBy = 'checkin'; break; }
+                    if ($a > $schedTs && $a < $dayEnd && ($arrival === null || $a < $arrival)) { $arrival = $a; $arrivalBy = 'checkin'; }
+                }
+                $act = $activity[$d][$day] ?? null;
+                if ($act !== null && ($arrival === null || $act < $arrival)) { $arrival = max($act, $schedTs); $arrivalBy = 'activity'; }
+                if ($arrival !== null) {
+                    $lateMin = max(0, intdiv($arrival - $schedTs, 60));
+                    if ($lateMin > $R['absenceAfterMin']) { $status = 'absent'; $raw['ABSENCE'] = -(float) $R['absenceAmount']; }
+                    elseif ($lateMin >= $R['lateGraceMin'] && $lateMin > 0) { $status = 'late'; $raw['LATE'] = -(float) (ceil($lateMin / 60) * $R['latePerHour']); }
+                    else $status = 'ontime';
+                } elseif ($now >= $schedTs + $R['absenceAfterMin'] * 60) {
+                    $status = 'absent'; $raw['ABSENCE'] = -(float) $R['absenceAmount'];
+                } else {
+                    $status = 'waiting';
+                }
+            }
+            $w = $waivers[$d][$day] ?? [];
+            $pd = $paid[$d][$day] ?? [];
+            if ($n === 0 && $start === null && !$w && !$pd) continue;
+            $amount = []; $pending = []; $paidK = [];
+            foreach (incentiveKinds() as $k) {
+                $amount[$k] = array_key_exists($k, $w) ? 0.0 : $raw[$k];
+                $paidK[$k] = round($pd[$k] ?? 0.0, 2);
+                $pending[$k] = round($amount[$k] - $paidK[$k], 2);
+            }
+            $days[$day] = [
+                'day' => $day, 'orders' => $n,
+                'tier' => $tier ? $tier['orders'] : null,
+                'next' => $next,
+                'schedStart' => $start, 'arrival' => $arrival ? gmdate('Y-m-d\TH:i:s\Z', $arrival) : null,
+                'arrivalBy' => $arrivalBy, 'lateMin' => $lateMin, 'status' => $status,
+                'raw' => $raw, 'waived' => (object) $w, 'amount' => $amount, 'paid' => $paidK, 'pending' => $pending,
+            ];
+            $tot['bonus'] += $amount['BONUS'];
+            $tot['deductions'] -= $amount['LATE'] + $amount['ABSENCE'];
+            $tot['paid'] += array_sum($paidK);
+            $tot['pending'] += array_sum($pending);
+        }
+        foreach ($tot as $k => $v) $tot[$k] = round($v, 2);
+        $out[$d] = ['days' => $days, 'totals' => $tot];
+    }
+    return $out;
+}
+
+/** «⏰ …» line describing one day's attendance, for Telegram. '' on a day off. */
+function incentiveAttendanceLine(array $x): string {
+    if (($x['schedStart'] ?? null) === null) return '';
+    $at = 'معادك ' . hhmm12Ar((string) $x['schedStart']);
+    $wv = (array) $x['waived'];
+    switch ($x['status']) {
+        case 'ontime':  return "✅ $at — وصلت في معادك";
+        case 'waiting': return "⏳ $at — لسه ما سجّلتش حضور";
+        case 'late':
+            return "⏰ $at — اتأخرت " . minsLabel((int) $x['lateMin'])
+                . (isset($wv['LATE']) ? ' (اتعفى من الإدارة ✅)' : ' ➜ خصم ' . waMoney(-$x['raw']['LATE']));
+        case 'absent':
+            return "🚫 $at — اتحسب غياب"
+                . (isset($wv['ABSENCE']) ? ' (بإذن — من غير خصم ✅)' : ' ➜ خصم ' . waMoney(-$x['raw']['ABSENCE']));
+    }
+    return '';
+}
+
+/**
+ * «حسابي» — the driver's current work day: his orders (a free one at its real
+ * fee, marked مجاني), his share, the bonus, the deductions, and what he hands
+ * over to the company out of the delivery money he collected.
+ */
+function driverAccountText(string $driverId, string $name, ?string $day = null): string {
+    $day = $day ?? workDayOf();
+    $W = orderFeeWorthSql();
+    $st = db()->prepare(
+        "SELECT o.orderNumber, COALESCE(o.deliveryFee, 0) AS charged, $W AS worth,
+                COALESCE(o.driverDeliveryRevenue, ROUND($W * COALESCE(dp.deliverySharePct,0) / 100, 2)) AS due
+           FROM `Order` o JOIN `DriverProfile` dp ON dp.userId = o.assignedDriverId
+          WHERE o.assignedDriverId = ? AND o.status IN ('DELIVERED','COMPLETED')
+            AND o.createdAt >= ? AND o.createdAt < ?
+          ORDER BY o.createdAt ASC"
+    );
+    $st->execute([$driverId, gmdate('Y-m-d H:i:s', workDayStartTs($day)), gmdate('Y-m-d H:i:s', workDayEndTs($day))]);
+    $rows = $st->fetchAll();
+    $worth = 0.0; $charged = 0.0; $due = 0.0; $free = 0;
+    foreach ($rows as $x) {
+        $worth += (float) $x['worth']; $charged += (float) $x['charged']; $due += (float) $x['due'];
+        if ((float) $x['worth'] > (float) $x['charged']) $free++;
+    }
+    $open = driverOpenSession($driverId);
+    $dow = (int) date('w', strtotime($day));
+    $L = [
+        '📊 *حسابك — ' . (SHIFT_DAYS_AR[$dow] ?? '') . ' ' . date('j/n', strtotime($day)) . '* يا كابتن ' . $name,
+        $open ? '🟢 شغّال من ' . cairoTimeLabel((string) $open['startedAt']) . ' (بقالك ' . workedLabel((string) $open['startedAt']) . ')'
+              : '⚪ مش مسجّل حضور — ابعت /حضرت',
+    ];
+    $inc = driverIncentives($driverId, $day, $day)[$driverId]['days'][$day] ?? null;
+    if ($inc && ($line = incentiveAttendanceLine($inc)) !== '') $L[] = $line;
+    $L[] = '';
+    $L[] = '📦 توصيلات: ' . count($rows) . ($free ? ' (منهم ' . $free . ' مجاني 🎁)' : '');
+    $L[] = '🚚 قيمة التوصيل: ' . waMoney($worth) . ($free ? ' — المجاني محسوب بسعره' : '');
+    $L[] = '🤝 نصيبك: ' . waMoney($due);
+    $bonus = 0.0; $ded = 0.0;
+    if ($inc) {
+        $bonus = (float) $inc['amount']['BONUS'];
+        $ded = -((float) $inc['amount']['LATE'] + (float) $inc['amount']['ABSENCE']);
+        $nx = $inc['next'];
+        if ($bonus > 0) {
+            $L[] = '🏆 بونص: ' . waMoney($bonus) . ' (وصلت ' . $inc['tier'] . ' أوردر)'
+                . ($nx ? ' — فاضلك ' . ($nx['orders'] - $inc['orders']) . ' على ' . waMoney($nx['amount']) : '');
+        } elseif ($nx) {
+            $L[] = '🎯 فاضلك ' . ($nx['orders'] - $inc['orders']) . ' أوردر على بونص ' . waMoney($nx['amount']);
+        }
+        if ($ded > 0) $L[] = '➖ خصومات: ' . waMoney($ded);
+    }
+    $net = $due + $bonus - $ded;
+    $L[] = '━━━━━━━━━━';
+    $L[] = '💰 صافي ليك: ' . waMoney($net);
+    $L[] = '💵 حصّلت توصيل من العملاء: ' . waMoney($charged);
+    $rest = round($charged - $net, 2);
+    $L[] = $rest >= 0 ? '📤 تسلّم للشركة: ' . waMoney($rest) : '📥 ليك عند الشركة: ' . waMoney(-$rest);
+    if ($rows) {
+        $L[] = '';
+        $L[] = '🧾 *التفاصيل:*';
+        foreach ($rows as $x) {
+            $isFree = (float) $x['worth'] > (float) $x['charged'];
+            $L[] = '• #' . $x['orderNumber'] . ' — ' . waMoney($x['worth']) . ($isFree ? ' 🎁 مجاني' : '')
+                . ' (نصيبك ' . waMoney($x['due']) . ')';
+        }
+    }
+    return implode("\n", $L);
+}
+
+/** When a delivery takes the driver into a new bonus tier today, tell him (once per tier). */
+function maybeNotifyBonusTier(string $orderId): void {
+    try {
+        $R = driverIncentiveRules();
+        if (!$R['enabled'] || !$R['bonusTiers'] || !tgEnabled() || db()->inTransaction()) return;
+        $q = db()->prepare("SELECT o.assignedDriverId d, o.createdAt, o.status, u.name, dp.telegramChatId chat
+                              FROM `Order` o JOIN `DriverProfile` dp ON dp.userId = o.assignedDriverId JOIN `User` u ON u.id = o.assignedDriverId
+                             WHERE o.id = ? LIMIT 1");
+        $q->execute([$orderId]);
+        $o = $q->fetch();
+        if (!$o || !in_array($o['status'], ['DELIVERED', 'COMPLETED'], true)) return;
+        $day = workDayOf((int) strtotime(substr((string) $o['createdAt'], 0, 19) . ' UTC'));
+        if ($day !== workDayOf()) return;   // a late snapshot of an old order is not news
+        $x = driverIncentives((string) $o['d'], $day, $day)[(string) $o['d']]['days'][$day] ?? null;
+        if (!$x || !$x['tier'] || $x['amount']['BONUS'] <= 0) return;
+        $ins = db()->prepare("INSERT IGNORE INTO `DriverIncentiveNotice` (driverId, workDay, kind, createdAt) VALUES (?,?,?,NOW(3))");
+        $ins->execute([(string) $o['d'], $day, 'BONUS_' . $x['tier']]);
+        if ($ins->rowCount() !== 1) return;
+        $msg = '🏆 برافو يا كابتن ' . $o['name'] . '! وصلت ' . $x['orders'] . ' أوردر النهارده'
+            . "\n" . 'بونص ' . waMoney($x['amount']['BONUS']) . ' اتضاف لحسابك 🎉'
+            . ($x['next'] ? "\n" . '🎯 فاضلك ' . ($x['next']['orders'] - $x['orders']) . ' أوردر على ' . waMoney($x['next']['amount']) : '');
+        if (!empty($o['chat'])) tgSend((string) $o['chat'], $msg);
+        foreach (tgSupervisorChats() as $sc)
+            tgSend((string) $sc, '🏆 *بونص* — الكابتن ' . $o['name'] . ' وصل ' . $x['orders'] . ' أوردر (' . waMoney($x['amount']['BONUS']) . ')');
+    } catch (Throwable $e) { error_log('[api.php] bonus notice: ' . $e->getMessage()); }
+}
+
+if ($method === 'GET' && $path === '/admin/driver-incentives') {
+    $u = authUser(); if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
+    jsonOk(['rules' => driverIncentiveRules(), 'today' => workDayOf()]);
+}
+if ($method === 'PUT' && $path === '/admin/driver-incentives') {
+    $u = authUser(); if (($u['role'] ?? '') !== 'SUPER_ADMIN') jsonErr('فقط مدير النظام', 403, 'FORBIDDEN');
+    $rules = normalizeIncentiveRules(readJsonBody(), driverIncentiveRules(true));
+    notifWriteSetting('driver_incentives', $rules, $u['sub'] ?? null);
+    jsonOk(['rules' => driverIncentiveRules(true), 'today' => workDayOf()]);
+}
+// One driver's days (bonus / lateness / absence) — the detail under the report.
+if ($method === 'GET' && $path === '/admin/driver-incentives/days') {
+    $u = authUser(); if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
+    $driverId = trim((string) ($_GET['driverId'] ?? ''));
+    if ($driverId === '') jsonErr('اختر السائق', 422, 'VALIDATION_ERROR');
+    $from = trim((string) ($_GET['from'] ?? '')); $to = trim((string) ($_GET['to'] ?? ''));
+    $r = driverIncentives($driverId, preg_match('/^\d{4}-\d{2}-\d{2}$/', $from) ? $from : '0000-01-01',
+        preg_match('/^\d{4}-\d{2}-\d{2}$/', $to) ? $to : '9999-12-31')[$driverId] ?? ['days' => [], 'totals' => null];
+    jsonOk(['rules' => driverIncentiveRules(), 'days' => array_values(array_reverse($r['days'])), 'totals' => $r['totals']]);
+}
+// Forgive (or un-forgive) one day's bonus / lateness / absence, e.g. «غياب بإذن».
+if ($method === 'POST' && $path === '/admin/driver-incentives/waive') {
+    $u = authUser(); if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
+    $b = readJsonBody();
+    $driverId = trim((string) ($b['driverId'] ?? '')); $day = trim((string) ($b['day'] ?? ''));
+    $kind = strtoupper(trim((string) ($b['kind'] ?? '')));
+    if ($driverId === '' || !preg_match('/^\d{4}-\d{2}-\d{2}$/', $day) || !in_array($kind, incentiveKinds(), true))
+        jsonErr('بيانات غير صحيحة', 422, 'VALIDATION_ERROR');
+    ensureIncentiveSchema();
+    if (!empty($b['waived'])) {
+        db()->prepare('INSERT INTO `DriverIncentiveWaiver` (driverId, workDay, kind, note, createdById, createdAt) VALUES (?,?,?,?,?,NOW(3))
+                       ON DUPLICATE KEY UPDATE note = VALUES(note), createdById = VALUES(createdById), createdAt = VALUES(createdAt)')
+            ->execute([$driverId, $day, $kind, mb_substr(trim((string) ($b['note'] ?? '')), 0, 255) ?: null, $u['sub'] ?? null]);
+    } else {
+        db()->prepare('DELETE FROM `DriverIncentiveWaiver` WHERE driverId = ? AND workDay = ? AND kind = ?')->execute([$driverId, $day, $kind]);
+    }
+    jsonOk(['day' => driverIncentives($driverId, $day, $day)[$driverId]['days'][$day] ?? null]);
+}
+
 // ── Telegram schedule export: friendly 12h Arabic time + a driver's whole week.
 // 24h "20:00" → "٨:٠٠م" so a driver reading the group/DM doesn't have to decode.
 function hhmm12Ar(string $t): string {
@@ -8875,23 +9344,42 @@ if ($method === 'POST' && preg_match('#^/admin/drivers/([^/]+)/settle$#', $path,
     $sel = $pdo->prepare("SELECT o.id, o.driverDeliveryRevenue FROM `Order` o WHERE " . implode(' AND ', $w));
     $sel->execute($a);
     $rows = $sel->fetchAll();
-    if (!$rows) jsonErr('لا توجد طلبات مستحقة للتسوية', 422, 'NOTHING_TO_SETTLE');
+    // Bonus / lateness / absence not yet paid for the same days (not for a
+    // hand-picked list of orders — that has no days to speak of).
+    $incPay = [];
+    if (!(is_array($ids) && $ids)) {
+        $fd = trim((string) ($b['from'] ?? '')); $td = trim((string) ($b['to'] ?? ''));
+        $days = driverIncentives($driverId, preg_match('/^\d{4}-\d{2}-\d{2}$/', $fd) ? $fd : '0000-01-01',
+            preg_match('/^\d{4}-\d{2}-\d{2}$/', $td) ? $td : '9999-12-31')[$driverId]['days'] ?? [];
+        foreach ($days as $day => $x) foreach ($x['pending'] as $kind => $amt) if (abs($amt) >= 0.01) $incPay[] = [$day, $kind, $amt];
+    }
+    if (!$rows && !$incPay) jsonErr('لا توجد طلبات مستحقة للتسوية', 422, 'NOTHING_TO_SETTLE');
+    ensureIncentiveSchema();   // DDL commits implicitly — never inside the transaction below
     $orderIds = [];
     foreach ($rows as $r) { if ($r['driverDeliveryRevenue'] === null) snapshotDriverShare($r['id']); $orderIds[] = $r['id']; }
-    $ph = implode(',', array_fill(0, count($orderIds), '?'));
-    $amt = $pdo->prepare("SELECT COALESCE(SUM(driverDeliveryRevenue), 0) FROM `Order` WHERE id IN ($ph)");
-    $amt->execute($orderIds); $amount = round((float) $amt->fetchColumn(), 2);
+    $ph = implode(',', array_fill(0, max(1, count($orderIds)), '?'));
+    $amount = 0.0;
+    if ($orderIds) {
+        $amt = $pdo->prepare("SELECT COALESCE(SUM(driverDeliveryRevenue), 0) FROM `Order` WHERE id IN ($ph)");
+        $amt->execute($orderIds); $amount = round((float) $amt->fetchColumn(), 2);
+    }
+    $incTotal = round(array_sum(array_column($incPay, 2)), 2);
+    $amount = round($amount + $incTotal, 2);
     $note = mb_substr(trim((string) ($b['note'] ?? '')), 0, 255);
     $sid = newId();
     try {
         $pdo->beginTransaction();
         $pdo->prepare('INSERT INTO `DriverSettlement` (id, driverId, amount, orderCount, note, createdById, createdAt) VALUES (?,?,?,?,?,?,NOW(3))')
             ->execute([$sid, $driverId, $amount, count($orderIds), $note !== '' ? $note : null, $u['sub'] ?? null]);
-        $pdo->prepare("UPDATE `Order` SET driverSettlementStatus = 'SETTLED', driverSettledAt = NOW(3), driverSettlementId = ?, updatedAt = NOW(3) WHERE id IN ($ph)")
-            ->execute(array_merge([$sid], $orderIds));
+        if ($orderIds)
+            $pdo->prepare("UPDATE `Order` SET driverSettlementStatus = 'SETTLED', driverSettledAt = NOW(3), driverSettlementId = ?, updatedAt = NOW(3) WHERE id IN ($ph)")
+                ->execute(array_merge([$sid], $orderIds));
+        $ip = $pdo->prepare('INSERT INTO `DriverIncentivePayout` (id, driverId, workDay, kind, amount, settlementId, createdAt) VALUES (?,?,?,?,?,?,NOW(3))');
+        foreach ($incPay as [$day, $kind, $amt]) $ip->execute([newId(), $driverId, $day, $kind, $amt, $sid]);
         $pdo->commit();
     } catch (Throwable $e) { if ($pdo->inTransaction()) $pdo->rollBack(); error_log('[api.php] settle: ' . $e->getMessage()); jsonErr('تعذّرت التسوية', 422, 'SETTLE_FAILED'); }
-    jsonOk(['settlementId' => $sid, 'driverId' => $driverId, 'amount' => $amount, 'orderCount' => count($orderIds)]);
+    jsonOk(['settlementId' => $sid, 'driverId' => $driverId, 'amount' => $amount, 'orderCount' => count($orderIds),
+        'incentives' => $incTotal]);
 }
 // Settlement history for a driver (audit trail of paid batches).
 if ($method === 'GET' && preg_match('#^/admin/drivers/([^/]+)/settlements$#', $path, $m)) {
@@ -10418,10 +10906,15 @@ if ($method === 'POST' && $path === '/telegram/webhook') {
                         db()->prepare("UPDATE `DriverProfile` SET status='AVAILABLE', updatedAt=NOW(3) WHERE userId=? AND status='OFFLINE'")->execute([$did]);
                         $msg = "تم تسجيل حضورك ✅ بالتوفيق يا كابتن " . $drv['name'] . " 🌹";
                         if ($off) $msg .= "\n\n⚠️ ملاحظة: دلوقتي مش في معادك المجدول (حضور خارج الوردية).";
+                        // Lateness against today's first shift, with the deduction it costs.
+                        $today = workDayOf();
+                        $inc = driverIncentives($did, $today, $today)[$did]['days'][$today] ?? null;
+                        $incLine = ($inc && in_array($inc['status'], ['late', 'absent'], true)) ? incentiveAttendanceLine($inc) : '';
+                        if ($incLine !== '') $msg .= "\n\n" . $incLine;
                         $msg .= "\n\nلما تخلّص ابعت /انصرفت.";
                         tgSend($chatId, $msg);
                         // Push attendance to the supervisors so it "comes to them".
-                        foreach (tgSupervisorChats() as $sc) tgSend((string) $sc, "🟢 *حضور* — الكابتن " . $drv['name'] . " بدأ الساعة " . cairoTimeLabel(gmdate('Y-m-d H:i:s')) . ($off ? " · خارج الوردية ⚠️" : ""));
+                        foreach (tgSupervisorChats() as $sc) tgSend((string) $sc, "🟢 *حضور* — الكابتن " . $drv['name'] . " بدأ الساعة " . cairoTimeLabel(gmdate('Y-m-d H:i:s')) . ($off ? " · خارج الوردية ⚠️" : "") . ($incLine !== '' ? "\n" . $incLine : ''));
                     } catch (Throwable $e) { error_log('[api.php] /حضرت: ' . $e->getMessage()); tgSend($chatId, "تعذّر تسجيل الحضور، جرّب تاني."); }
                 }
             }
@@ -10458,45 +10951,10 @@ if ($method === 'POST' && $path === '/telegram/webhook') {
                 tgSend($chatId, "انت لسه مش مربوط كمندوب 🙏\nافتح رابط الربط اللي وصلك من الإدارة الأول.");
             } else {
                 try {
-                    // The work day runs 8ص→3ص (crosses midnight), so the accounting
-                    // boundary is 3ص, NOT midnight: before 3ص we're still inside the
-                    // shift that started the previous morning, so count back to it.
-                    $tz = new DateTimeZone('Africa/Cairo');
-                    $nowC = new DateTime('now', $tz);
-                    $startC = new DateTime('today', $tz); $startC->setTime(3, 0, 0);
-                    if ($nowC < $startC) $startC->modify('-1 day');
-                    $startC->setTimezone(new DateTimeZone('UTC'));
-                    $st = db()->prepare(
-                        "SELECT o.orderNumber,
-                                COALESCE(o.deliveryFee, 0) AS fee,
-                                COALESCE(o.driverDeliveryRevenue, ROUND(COALESCE(o.deliveryFee,0) * COALESCE(dp.deliverySharePct,0) / 100, 2)) AS due
-                           FROM `Order` o JOIN `DriverProfile` dp ON dp.userId = o.assignedDriverId
-                          WHERE o.assignedDriverId = ? AND o.status IN ('DELIVERED','COMPLETED')
-                            AND COALESCE(o.deliveredAt, o.completedAt, o.updatedAt) >= ?
-                          ORDER BY COALESCE(o.deliveredAt, o.completedAt, o.updatedAt) ASC"
-                    );
-                    $st->execute([(string) $drv['userId'], $startC->format('Y-m-d H:i:s')]);
-                    $rows = $st->fetchAll();
-                    $fees = 0.0; $due = 0.0;
-                    foreach ($rows as $x) { $fees += (float) $x['fee']; $due += (float) $x['due']; }
-                    $open = driverOpenSession((string) $drv['userId']);
-                    $shiftLine = $open
-                        ? "🟢 شغّال من " . cairoTimeLabel((string) $open['startedAt']) . " (بقالك " . workedLabel((string) $open['startedAt']) . ")"
-                        : "⚪ مش مسجّل حضور — ابعت /حضرت";
-                    $L = [
-                        "📊 *حسابك — الوردية الحالية* يا كابتن " . $drv['name'],
-                        $shiftLine,
-                        "",
-                        "📦 توصيلات: " . count($rows),
-                        "🚚 إجمالي التوصيل: " . waMoney($fees),
-                        "🤝 نصيب السائق: " . waMoney($due),
-                    ];
-                    if ($rows) {
-                        $L[] = "";
-                        $L[] = "🧾 *التفاصيل:*";
-                        foreach ($rows as $x) $L[] = '• #' . $x['orderNumber'] . ' — ' . waMoney($x['fee']) . ' (نصيبك ' . waMoney($x['due']) . ')';
-                    }
-                    tgSend($chatId, implode("\n", $L));
+                    // Built by driverAccountText(): today's work day (03:00 → 03:00) by
+                    // the day each order was placed — the same rows the driver report,
+                    // the bonus and the settlement count.
+                    tgSend($chatId, driverAccountText((string) $drv['userId'], (string) $drv['name']));
                 } catch (Throwable $e) {
                     error_log('[api.php] /حسابي: ' . $e->getMessage());
                     tgSend($chatId, "تعذّر جلب الحساب دلوقتي، جرّب تاني بعد شوية.");
@@ -10845,7 +11303,7 @@ if ($method === 'POST' && $path === '/telegram/webhook') {
                     . "🟢 /حضرت — تسجيل حضورك وبدء الوردية\n"
                     . "🔴 /انصرفت — تسجيل انصرافك وإنهاء الوردية\n"
                     . "📋 /اوردراتي — كل أوردراتك الشغّالة دلوقتي\n"
-                    . "📊 /حسابي — حضورك + توصيلاتك وإجمالي التوصيل ونصيبك\n"
+                    . "📊 /حسابي — حضورك وتأخيرك + توصيلاتك ونصيبك + البونص والخصومات واللي تسلّمه\n"
                     . "❓ /مساعدة — القايمة دي\n\n"
                     . "💡 تقدر تستخدم الأزرار تحت بدل ما تكتب 👇", tgDriverMenu());
             }

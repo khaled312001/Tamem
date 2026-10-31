@@ -287,6 +287,10 @@ function DriversTab() {
       { header: 'إجمالي رسوم التوصيل', key: 'totalDeliveryFees', width: 16 },
       { header: 'نسبة السائق %', key: 'deliverySharePct', width: 12 },
       { header: 'مستحق السائق', key: 'driverDue', width: 14 },
+      { header: 'بونص', key: 'bonus', width: 10 },
+      { header: 'خصومات', key: 'deductions', width: 10 },
+      { header: 'صافي السائق', key: 'netDue', width: 14 },
+      { header: 'أوردرات مجانية', key: 'freeCount', width: 12 },
       { header: 'إيراد تميم', key: 'tamemRevenue', width: 14 },
       { header: 'المسدد للسائق', key: 'paid', width: 14 },
       { header: 'المتبقي المستحق', key: 'remaining', width: 14 },
@@ -301,6 +305,10 @@ function DriversTab() {
       merchantGoods: totals.merchantGoods ?? 0,
       totalDeliveryFees: totals.totalDeliveryFees ?? 0,
       driverDue: totals.driverDue ?? 0,
+      bonus: totals.bonus ?? 0,
+      deductions: totals.deductions ?? 0,
+      netDue: totals.netDue ?? 0,
+      freeCount: totals.freeCount ?? 0,
       tamemRevenue: totals.tamemRevenue ?? 0,
       paid: totals.paid ?? 0,
       remaining: totals.remaining ?? 0,
@@ -418,7 +426,7 @@ function DriversTab() {
         <EmptyState title="لا توجد بيانات في هذه الفترة" />
       ) : (
         <div className="bg-white rounded-xl border border-border p-5 overflow-x-auto">
-          <table className="w-full text-sm min-w-[1100px]">
+          <table className="w-full text-sm min-w-[1350px]">
             <thead className="border-b border-border">
               <tr className="text-right whitespace-nowrap">
                 <th className="py-2 px-2 font-bold">السائق</th>
@@ -429,6 +437,9 @@ function DriversTab() {
                 <th className="py-2 px-2 font-bold">رسوم التوصيل</th>
                 <th className="py-2 px-2 font-bold">نسبة السائق</th>
                 <th className="py-2 px-2 font-bold">مستحق السائق</th>
+                <th className="py-2 px-2 font-bold">بونص</th>
+                <th className="py-2 px-2 font-bold">خصومات</th>
+                <th className="py-2 px-2 font-bold">صافي السائق</th>
                 <th className="py-2 px-2 font-bold">إيراد تميم</th>
                 <th className="py-2 px-2 font-bold">المسدد</th>
                 <th className="py-2 px-2 font-bold">المتبقي</th>
@@ -456,9 +467,23 @@ function DriversTab() {
                   <td className="py-2 px-2 font-bold">{d.deliveries}</td>
                   <td className="py-2 px-2">{money(d.totalCollected)}</td>
                   <td className="py-2 px-2 text-muted-foreground">{money(d.merchantGoods)}</td>
-                  <td className="py-2 px-2">{money(d.totalDeliveryFees)}</td>
+                  <td className="py-2 px-2">
+                    {money(d.totalDeliveryFees)}
+                    {Number(d.freeCount) > 0 && (
+                      <div className="text-[11px] text-muted-foreground">
+                        منها {d.freeCount} مجاني 🎁
+                      </div>
+                    )}
+                  </td>
                   <td className="py-2 px-2">{Number(d.deliverySharePct ?? 0)}%</td>
                   <td className="py-2 px-2 font-bold text-emerald-700">{money(d.driverDue)}</td>
+                  <td className="py-2 px-2 text-emerald-700">
+                    {Number(d.bonus) ? `+${money(d.bonus)}` : '—'}
+                  </td>
+                  <td className="py-2 px-2 text-destructive">
+                    {Number(d.deductions) ? `−${money(d.deductions)}` : '—'}
+                  </td>
+                  <td className="py-2 px-2 font-black">{money(d.netDue)}</td>
                   <td className="py-2 px-2 font-bold text-brand-red">{money(d.tamemRevenue)}</td>
                   <td className="py-2 px-2 text-muted-foreground">{money(d.paid)}</td>
                   <td className="py-2 px-2 font-bold">{money(d.remaining)}</td>
@@ -466,7 +491,7 @@ function DriversTab() {
                     {d.rating ? `⭐ ${Number(d.rating).toFixed(1)}` : '—'}
                   </td>
                   <td className="py-2 px-2" data-print="hide">
-                    {Number(d.remaining) > 0 && (
+                    {(Number(d.remaining) !== 0 || Number(d.pendingCount) > 0) && (
                       <button
                         onClick={() => setSettleFor(d)}
                         className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-emerald-600 text-white text-xs font-bold"
@@ -488,6 +513,9 @@ function DriversTab() {
                 <td className="py-2 px-2">{money(totals.totalDeliveryFees)}</td>
                 <td className="py-2 px-2" />
                 <td className="py-2 px-2 text-emerald-700">{money(totals.driverDue)}</td>
+                <td className="py-2 px-2 text-emerald-700">{money(totals.bonus)}</td>
+                <td className="py-2 px-2 text-destructive">{money(totals.deductions)}</td>
+                <td className="py-2 px-2">{money(totals.netDue)}</td>
                 <td className="py-2 px-2 text-brand-red">{money(totals.tamemRevenue)}</td>
                 <td className="py-2 px-2">{money(totals.paid)}</td>
                 <td className="py-2 px-2">{money(totals.remaining)}</td>
@@ -549,10 +577,22 @@ function SettleDialog({
       size="sm"
     >
       <div className="space-y-3">
-        <div className="rounded-lg bg-emerald-50 border border-emerald-200 p-3 text-sm">
-          <div className="flex justify-between">
-            <span>المتبقي المستحق</span>
-            <span className="font-black text-emerald-700">{money(driver.remaining)}</span>
+        <div className="rounded-lg bg-emerald-50 border border-emerald-200 p-3 text-sm space-y-1">
+          <div className="flex justify-between text-xs">
+            <span>مستحق الأوردرات</span>
+            <span>{money(Number(driver.remaining) - Number(driver.incentivesPending ?? 0))}</span>
+          </div>
+          {Number(driver.incentivesPending ?? 0) !== 0 && (
+            <div className="flex justify-between text-xs">
+              <span>البونص − الخصومات (اللي لسه ما اتسوّتش)</span>
+              <span dir="ltr">{money(driver.incentivesPending)}</span>
+            </div>
+          )}
+          <div className="flex justify-between border-t border-emerald-200 pt-1">
+            <span>{Number(driver.remaining) < 0 ? 'على السائق للشركة' : 'المتبقي المستحق'}</span>
+            <span className="font-black text-emerald-700">
+              {money(Math.abs(Number(driver.remaining)))}
+            </span>
           </div>
           <div className="flex justify-between text-xs text-muted-foreground mt-1">
             <span>طلبات غير مسوّاة</span>
@@ -613,6 +653,7 @@ function DriverDetailModal({
       title={`تفاصيل السائق: ${d.name ?? ''}`}
       size="xl"
     >
+      <IncentiveDays driverId={driverId} filters={filters} />
       {isLoading ? (
         <CardSkeleton />
       ) : !orders.length ? (
@@ -649,7 +690,17 @@ function DriverDetailModal({
                       : '—'}
                   </td>
                   <td className="py-2 px-2 text-muted-foreground">{money(o.merchantGoods)}</td>
-                  <td className="py-2 px-2">{money(o.deliveryFee)}</td>
+                  <td className="py-2 px-2">
+                    {money(o.deliveryFee)}
+                    {o.isFree && (
+                      <span
+                        className="ms-1 rounded-full bg-amber-100 px-1.5 py-0.5 text-[11px] font-bold text-amber-800"
+                        title={`${o.promoLabel ?? 'عرض'} — العميل دفع ${money(o.chargedFee)}، والسائق نصيبه على السعر الحقيقي`}
+                      >
+                        🎁 مجاني
+                      </span>
+                    )}
+                  </td>
                   <td className="py-2 px-2">{Number(o.sharePct ?? 0)}%</td>
                   <td className="py-2 px-2 font-bold text-emerald-700">{money(o.driverDue)}</td>
                   <td className="py-2 px-2 font-bold text-brand-red">{money(o.tamemRevenue)}</td>
@@ -682,6 +733,208 @@ function DriverDetailModal({
         </div>
       )}
     </Dialog>
+  );
+}
+
+type IncentiveDay = {
+  day: string;
+  orders: number;
+  tier: number | null;
+  next: { orders: number; amount: number } | null;
+  schedStart: string | null;
+  arrival: string | null;
+  arrivalBy: 'checkin' | 'activity' | null;
+  lateMin: number;
+  status: 'ontime' | 'late' | 'absent' | 'waiting' | 'off';
+  raw: Record<'BONUS' | 'LATE' | 'ABSENCE', number>;
+  waived: Partial<Record<'BONUS' | 'LATE' | 'ABSENCE', string>>;
+  amount: Record<'BONUS' | 'LATE' | 'ABSENCE', number>;
+  paid: Record<'BONUS' | 'LATE' | 'ABSENCE', number>;
+  pending: Record<'BONUS' | 'LATE' | 'ABSENCE', number>;
+};
+
+const STATUS_AR: Record<IncentiveDay['status'], string> = {
+  ontime: 'في المعاد',
+  late: 'متأخر',
+  absent: 'غياب',
+  waiting: 'لسه',
+  off: 'إجازة',
+};
+
+/**
+ * One driver's days in the report's range: orders, the bonus earned, when his
+ * first shift started and when he showed up, and what that cost — with a
+ * «إعفاء» per day for a غياب بإذن or a late arrival the office accepts.
+ */
+function IncentiveDays({ driverId, filters }: { driverId: string; filters: DriverFilters }) {
+  const qc = useQueryClient();
+  const params: Record<string, unknown> = { driverId };
+  if (filters.from) params.from = filters.from;
+  if (filters.to) params.to = filters.to;
+  const { data } = useQuery({
+    queryKey: ['admin', 'driver-incentives', 'days', params],
+    queryFn: () =>
+      api.adminDriverIncentiveDays(params) as Promise<{
+        days: IncentiveDay[];
+        totals: Row | null;
+        rules: { enabled: boolean; effectiveFrom: string };
+      }>,
+  });
+  const waive = useMutation({
+    mutationFn: (v: { day: string; kind: 'BONUS' | 'LATE' | 'ABSENCE'; waived: boolean }) =>
+      api.adminWaiveDriverIncentive({ driverId, ...v }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['admin', 'driver-incentives', 'days'] });
+      qc.invalidateQueries({ queryKey: ['admin', 'reports', 'drivers'] });
+    },
+    onError: (e: Error) => toast.error(e.message),
+  });
+  if (!data) return null;
+  if (!data.rules.enabled) return null;
+  const days = data.days.filter((d) => d.status !== 'off' || d.orders > 0 || d.raw.BONUS);
+  if (!days.length) {
+    return (
+      <p className="mb-3 text-xs text-muted-foreground">
+        البونص والخصومات بيبدأوا من {data.rules.effectiveFrom} — مفيش أيام في الفترة دي.
+      </p>
+    );
+  }
+  const time = (iso: string | null) =>
+    iso ? new Date(iso).toLocaleTimeString('ar-EG', { hour: 'numeric', minute: '2-digit' }) : '—';
+  const hm = (t: string) => {
+    const [h, m] = t.split(':').map(Number);
+    return new Date(2000, 0, 1, h, m).toLocaleTimeString('ar-EG', {
+      hour: 'numeric',
+      minute: '2-digit',
+    });
+  };
+  return (
+    <div className="mb-4 rounded-xl border border-border p-3">
+      <div className="mb-2 flex flex-wrap items-center gap-3 text-sm">
+        <span className="font-black">البونص والخصومات</span>
+        {data.totals && (
+          <>
+            <span className="text-emerald-700">بونص {money(data.totals.bonus)}</span>
+            <span className="text-destructive">خصومات {money(data.totals.deductions)}</span>
+          </>
+        )}
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full min-w-[720px] text-xs">
+          <thead className="border-b border-border">
+            <tr className="text-right whitespace-nowrap">
+              <th className="py-1.5 px-2">اليوم</th>
+              <th className="py-1.5 px-2">أوردرات</th>
+              <th className="py-1.5 px-2">البونص</th>
+              <th className="py-1.5 px-2">المعاد</th>
+              <th className="py-1.5 px-2">الحضور</th>
+              <th className="py-1.5 px-2">الحالة</th>
+              <th className="py-1.5 px-2">الخصم</th>
+              <th className="py-1.5 px-2" />
+            </tr>
+          </thead>
+          <tbody>
+            {days.map((d) => {
+              const dedKind = d.raw.ABSENCE ? 'ABSENCE' : d.raw.LATE ? 'LATE' : null;
+              const ded = dedKind ? -d.raw[dedKind] : 0;
+              const dedWaived = dedKind ? dedKind in d.waived : false;
+              const bonusWaived = 'BONUS' in d.waived;
+              return (
+                <tr key={d.day} className="border-b border-border/30 whitespace-nowrap">
+                  <td className="py-1.5 px-2 font-bold">
+                    {new Date(`${d.day}T12:00:00`).toLocaleDateString('ar-EG', {
+                      weekday: 'short',
+                      day: 'numeric',
+                      month: 'numeric',
+                    })}
+                  </td>
+                  <td className="py-1.5 px-2">{d.orders}</td>
+                  <td className="py-1.5 px-2">
+                    {d.raw.BONUS ? (
+                      <span
+                        className={
+                          bonusWaived
+                            ? 'line-through text-muted-foreground'
+                            : 'text-emerald-700 font-bold'
+                        }
+                      >
+                        +{money(d.raw.BONUS)}
+                      </span>
+                    ) : d.next ? (
+                      <span className="text-muted-foreground">فاضل {d.next.orders - d.orders}</span>
+                    ) : (
+                      '—'
+                    )}
+                  </td>
+                  <td className="py-1.5 px-2">{d.schedStart ? hm(d.schedStart) : '—'}</td>
+                  <td className="py-1.5 px-2">
+                    {time(d.arrival)}
+                    {d.arrivalBy === 'activity' && (
+                      <span
+                        className="ms-1 text-muted-foreground"
+                        title="ما سجّلش «حضرت» — ده وقت أول حركة له على أوردر"
+                      >
+                        (أول أوردر)
+                      </span>
+                    )}
+                  </td>
+                  <td className="py-1.5 px-2">
+                    {STATUS_AR[d.status]}
+                    {d.status === 'late' && ` ${d.lateMin} د`}
+                  </td>
+                  <td className="py-1.5 px-2">
+                    {ded ? (
+                      <span
+                        className={
+                          dedWaived
+                            ? 'line-through text-muted-foreground'
+                            : 'text-destructive font-bold'
+                        }
+                      >
+                        −{money(ded)}
+                      </span>
+                    ) : (
+                      '—'
+                    )}
+                    {dedWaived && <span className="ms-1 text-emerald-700">معفي</span>}
+                  </td>
+                  <td className="py-1.5 px-2" data-print="hide">
+                    <div className="flex gap-1">
+                      {dedKind && (
+                        <button
+                          disabled={waive.isPending}
+                          onClick={() =>
+                            waive.mutate({ day: d.day, kind: dedKind, waived: !dedWaived })
+                          }
+                          className="rounded border border-border px-2 py-0.5 hover:border-brand-red"
+                        >
+                          {dedWaived
+                            ? 'رجّع الخصم'
+                            : dedKind === 'ABSENCE'
+                              ? 'إعفاء (بإذن)'
+                              : 'إعفاء'}
+                        </button>
+                      )}
+                      {d.raw.BONUS > 0 && (
+                        <button
+                          disabled={waive.isPending}
+                          onClick={() =>
+                            waive.mutate({ day: d.day, kind: 'BONUS', waived: !bonusWaived })
+                          }
+                          className="rounded border border-border px-2 py-0.5 text-muted-foreground hover:border-brand-red"
+                        >
+                          {bonusWaived ? 'رجّع البونص' : 'إلغاء البونص'}
+                        </button>
+                      )}
+                    </div>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
   );
 }
 
