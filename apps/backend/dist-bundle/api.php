@@ -6118,13 +6118,15 @@ function backfillFreeOrderShares(): void {
  * Signs: BONUS is +, LATE and ABSENCE are − (money off the driver).
  */
 function driverIncentives(?string $driverId, string $fromDay, string $toDay): array {
+    // Before any early return: it also runs the free-order backfill, which
+    // must not wait for the incentive rules to start or be switched on.
+    ensureIncentiveSchema();
     $R = driverIncentiveRules();
     if (!$R['enabled']) return [];
     $today = workDayOf();
     if ($fromDay < $R['effectiveFrom']) $fromDay = $R['effectiveFrom'];
     if ($toDay > $today) $toDay = $today;
     if ($fromDay > $toDay) return [];
-    ensureIncentiveSchema();
     $startTs = workDayStartTs($fromDay); $endTs = workDayEndTs($toDay);
     $sUtc = gmdate('Y-m-d H:i:s', $startTs); $eUtc = gmdate('Y-m-d H:i:s', $endTs);
     $one = $driverId !== null;
