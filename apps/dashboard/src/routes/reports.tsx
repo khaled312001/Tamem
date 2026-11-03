@@ -1,10 +1,13 @@
+import { ORDER_STATUS_AR } from '@tamem/types';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Download, FileSpreadsheet, HandCoins, Printer } from 'lucide-react';
 import { useState } from 'react';
 import { toast } from 'sonner';
 
+import { DateRangePicker } from '../components/DateRangePicker.js';
 import { Dialog } from '../components/ui/Dialog.js';
 import { Field, Input } from '../components/ui/Input.js';
+import { type DateRange, isCompleteRange, rangeLabel, rangeParams } from '../lib/dateRange.js';
 import { printReport } from '../lib/printReport.js';
 import {
   Bar,
@@ -33,6 +36,7 @@ const TABS = [
   { value: 'services', label: 'الخدمات' },
   { value: 'drivers', label: 'السائقون' },
   { value: 'customers', label: 'العملاء' },
+  { value: 'taher', label: 'صيدلية الطاهر' },
 ] as const;
 
 const PIE_COLORS = ['#E0301E', '#EC7A2C', '#F2A93B', '#3B82F6', '#10B981', '#8B5CF6', '#F59E0B'];
@@ -78,6 +82,7 @@ export function ReportsPage() {
       {tab === 'services' && <ServicesTab />}
       {tab === 'drivers' && <DriversTab />}
       {tab === 'customers' && <CustomersTab />}
+      {tab === 'taher' && <TaherTab />}
     </div>
   );
 }
@@ -934,6 +939,193 @@ function IncentiveDays({ driverId, filters }: { driverId: string; filters: Drive
           </tbody>
         </table>
       </div>
+    </div>
+  );
+}
+
+const CAIRO = { timeZone: 'Africa/Cairo' } as const;
+// en-GB: the Arabic locale puts invisible direction marks inside the date, and
+// Excel then can't sort or filter the column as dates.
+const cairoDate = (iso: string) =>
+  new Date(iso).toLocaleDateString('en-GB', {
+    ...CAIRO,
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+  });
+const cairoTime = (iso: string) =>
+  new Date(iso).toLocaleTimeString('ar-EG-u-nu-latn', {
+    ...CAIRO,
+    hour: 'numeric',
+    minute: '2-digit',
+  });
+
+/** The pharmacy's own sheet: what left it in a period, and at exactly what time. */
+function TaherTab() {
+  const [range, setRange] = useState<DateRange>({ key: 'today' });
+  const ready = isCompleteRange(range);
+  const params = rangeParams(range);
+  const { data, isLoading } = useQuery({
+    queryKey: ['admin', 'reports', 'taher', params],
+    queryFn: () => api.adminReportTaherPharmacy(params) as Promise<Row>,
+    enabled: ready,
+  });
+  const orders: Row[] = Array.isArray(data?.orders) ? data.orders : [];
+  const totals: Row = data?.totals ?? {};
+  // A blank delivery time needs its reason next to it, or it reads as a bug.
+  const deliveredLabel = (o: Row) =>
+    o.deliveredAt
+      ? cairoTime(o.deliveredAt)
+      : o.closedWhenTyped
+        ? 'اتقفل وقت التسجيل'
+        : 'لسه ما اتقفلش';
+
+  const exportExcel = async () => {
+    if (!orders.length) return;
+    const ExcelJS = (await import('exceljs')).default;
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet('صيدلية الطاهر');
+    ws.views = [{ rightToLeft: true, state: 'frozen', ySplit: 1 }];
+    ws.columns = [
+      { header: 'م', key: 'n', width: 6 },
+      { header: 'رقم الطلب', key: 'orderNumber', width: 16 },
+      { header: 'التاريخ', key: 'date', width: 13 },
+      { header: 'وقت نزول الأوردر', key: 'time', width: 16 },
+      { header: 'وقت التسليم', key: 'delivered', width: 18 },
+      { header: 'العميل', key: 'customerName', width: 22 },
+      { header: 'هاتف العميل', key: 'customerPhone', width: 16 },
+      { header: 'مكان التسليم', key: 'deliveryAddress', width: 32 },
+      { header: 'المندوب', key: 'driverName', width: 22 },
+      { header: 'رسوم التوصيل', key: 'deliveryFee', width: 13 },
+      { header: 'الإجمالي', key: 'total', width: 12 },
+      { header: 'الحالة', key: 'status', width: 14 },
+    ];
+    ws.getRow(1).font = { bold: true };
+    orders.forEach((o, i) =>
+      ws.addRow({
+        ...o,
+        n: i + 1,
+        // Some numbers were saved with direction marks pasted in from a phone.
+        customerPhone: String(o.customerPhone ?? '').replace(/[‎‏‪-‮⁦-⁩]/g, ''),
+        date: cairoDate(o.createdAt),
+        time: cairoTime(o.createdAt),
+        delivered: deliveredLabel(o),
+        status: ORDER_STATUS_AR[o.status as keyof typeof ORDER_STATUS_AR] ?? o.status,
+      }),
+    );
+    const t = ws.addRow({
+      orderNumber: `الإجمالي: ${orders.length} أوردر`,
+      deliveryFee: totals.deliveryFees ?? 0,
+      total: totals.total ?? 0,
+    });
+    t.font = { bold: true };
+    const buf = await wb.xlsx.writeBuffer();
+    const url = URL.createObjectURL(
+      new Blob([buf], {
+        type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      }),
+    );
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `صيدلية-الطاهر-${rangeLabel(range).replace(/[\s/]+/g, '-')}.xlsx`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="bg-white rounded-xl border border-border p-4 space-y-3" data-print="hide">
+        <div className="flex flex-wrap items-center gap-2">
+          <DateRangePicker value={range} onChange={(r) => r && setRange(r)} />
+          <div className="flex-1" />
+          <Button variant="outline" size="sm" onClick={exportExcel} disabled={!orders.length}>
+            <FileSpreadsheet className="w-4 h-4" /> Excel
+          </Button>
+        </div>
+        <p className="text-xs text-muted-foreground">
+          كل طلب مكان استلامه فيه «الطاهر»، بأي طريقة اتكتب بيها، من غير الملغي. اليوم من ١٢ بالليل
+          لـ١٢ بالليل.
+        </p>
+      </div>
+
+      {!ready ? (
+        <EmptyState title="اختار يوم البداية والنهاية" />
+      ) : isLoading ? (
+        <CardSkeleton />
+      ) : !orders.length ? (
+        <EmptyState title={`مفيش أوردرات من صيدلية الطاهر — ${rangeLabel(range)}`} />
+      ) : (
+        <>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            {[
+              { label: 'عدد الأوردرات', value: String(totals.count ?? 0) },
+              { label: 'رسوم التوصيل', value: money(totals.deliveryFees) },
+              { label: 'الإجمالي', value: money(totals.total) },
+            ].map((c) => (
+              <div key={c.label} className="bg-white rounded-xl border border-border p-4">
+                <div className="text-xs text-muted-foreground">{c.label}</div>
+                <div className="text-xl font-black mt-1">{c.value}</div>
+              </div>
+            ))}
+          </div>
+          <div className="bg-white rounded-xl border border-border p-5 overflow-x-auto">
+            <table className="w-full text-sm min-w-[1000px]">
+              <thead className="border-b border-border">
+                <tr className="text-right whitespace-nowrap">
+                  <th className="py-2 px-2 font-bold">م</th>
+                  <th className="py-2 px-2 font-bold">رقم الطلب</th>
+                  <th className="py-2 px-2 font-bold">التاريخ</th>
+                  <th className="py-2 px-2 font-bold">وقت نزول الأوردر</th>
+                  <th className="py-2 px-2 font-bold">وقت التسليم</th>
+                  <th className="py-2 px-2 font-bold">العميل</th>
+                  <th className="py-2 px-2 font-bold">مكان التسليم</th>
+                  <th className="py-2 px-2 font-bold">المندوب</th>
+                  <th className="py-2 px-2 font-bold">رسوم التوصيل</th>
+                  <th className="py-2 px-2 font-bold">الإجمالي</th>
+                  <th className="py-2 px-2 font-bold">الحالة</th>
+                </tr>
+              </thead>
+              <tbody>
+                {orders.map((o, i) => (
+                  <tr key={o.orderNumber} className="border-b border-border/30 hover:bg-muted/40">
+                    <td className="py-2 px-2 text-muted-foreground">{i + 1}</td>
+                    <td className="py-2 px-2 font-bold whitespace-nowrap" dir="ltr">
+                      #{o.orderNumber}
+                    </td>
+                    <td className="py-2 px-2 whitespace-nowrap">{cairoDate(o.createdAt)}</td>
+                    <td className="py-2 px-2 font-bold whitespace-nowrap">
+                      {cairoTime(o.createdAt)}
+                    </td>
+                    <td
+                      className={`py-2 px-2 whitespace-nowrap ${o.deliveredAt ? '' : 'text-xs text-muted-foreground'}`}
+                    >
+                      {deliveredLabel(o)}
+                    </td>
+                    <td className="py-2 px-2 whitespace-nowrap">
+                      {o.customerName ?? '—'}
+                      <div className="text-xs text-muted-foreground" dir="ltr">
+                        {o.customerPhone}
+                      </div>
+                    </td>
+                    <td
+                      className="py-2 px-2 max-w-[240px] truncate"
+                      title={o.deliveryAddress ?? ''}
+                    >
+                      {o.deliveryAddress ?? '—'}
+                    </td>
+                    <td className="py-2 px-2 whitespace-nowrap">{o.driverName ?? '—'}</td>
+                    <td className="py-2 px-2 whitespace-nowrap">{money(o.deliveryFee)}</td>
+                    <td className="py-2 px-2 whitespace-nowrap">{money(o.total)}</td>
+                    <td className="py-2 px-2 whitespace-nowrap text-xs">
+                      {ORDER_STATUS_AR[o.status as keyof typeof ORDER_STATUS_AR] ?? o.status}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
     </div>
   );
 }

@@ -1343,6 +1343,42 @@ function workDayOf(?int $ts = null): string { return date('Y-m-d', strtotime('-3
 function workDayStartTs(string $ymd): int { return (int) strtotime($ymd . ' 03:00:00'); }
 function workDayEndTs(string $ymd): int { return (int) strtotime($ymd . ' 03:00:00 +1 day'); }
 
+// «صيدلية الطاهر» — every order picked up from the pharmacy, with its exact times.
+// There is no merchant behind it: agents have always written the name in the
+// pickup address, in a dozen spellings («الطاهر», «من صيدليه الطاهر», «صدلية الطاهر»),
+// and all of them carry «طاهر». Matching on that keeps the whole history in
+// the report without rewriting a single order, and still catches an agent who
+// types the name instead of pressing the button on the custom-order form.
+if ($method === 'GET' && $path === '/admin/reports/taher-pharmacy') {
+    $u = authUser(); if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
+    [$fromTs, $toTs] = adminRangeWindow();
+    $st = db()->prepare("SELECT o.orderNumber, o.status, o.createdAt, o.deliveredAt, o.pickupAddress, o.deliveryAddress,
+                                o.deliveryFee, o.finalPrice, c.name AS customerName, c.phone AS customerPhone, d.name AS driverName
+                           FROM `Order` o
+                           LEFT JOIN `User` c ON c.id = o.customerId
+                           LEFT JOIN `User` d ON d.id = o.assignedDriverId
+                          WHERE o.pickupAddress LIKE ? AND o.status NOT IN ('CANCELLED','REJECTED')
+                            AND o.createdAt >= ? AND o.createdAt <= ?
+                          ORDER BY o.createdAt ASC");
+    $st->execute(['%طاهر%', gmdate('Y-m-d H:i:s', $fromTs), gmdate('Y-m-d H:i:s.999', $toTs)]);
+    $orders = []; $fees = 0.0; $total = 0.0;
+    foreach ($st->fetchAll() as $r) {
+        $created = isoZ($r['createdAt']); $delivered = isoZ($r['deliveredAt']);
+        // An order written down as already finished is stamped «delivered» the
+        // moment it is created. That is when it was typed, not when it arrived,
+        // so it must not reach the sheet as a delivery time.
+        $typedClosed = $delivered && abs(strtotime($delivered) - strtotime($created)) < 60;
+        $fee = (float) ($r['deliveryFee'] ?? 0); $price = (float) ($r['finalPrice'] ?? $fee);
+        $fees += $fee; $total += $price;
+        $orders[] = ['orderNumber' => $r['orderNumber'], 'status' => $r['status'], 'createdAt' => $created,
+            'deliveredAt' => $typedClosed ? null : $delivered, 'closedWhenTyped' => (bool) $typedClosed,
+            'pickupAddress' => $r['pickupAddress'], 'deliveryAddress' => $r['deliveryAddress'],
+            'customerName' => $r['customerName'], 'customerPhone' => $r['customerPhone'],
+            'driverName' => $r['driverName'], 'deliveryFee' => $fee, 'total' => $price];
+    }
+    jsonOk(['orders' => $orders, 'totals' => ['count' => count($orders), 'deliveryFees' => round($fees, 2), 'total' => round($total, 2)]]);
+}
+
 if ($method === 'GET' && $path === '/admin/reports/drivers') {
     $u = authUser(); if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
     // Revenue is counted for DELIVERED/COMPLETED orders only — cancelled orders

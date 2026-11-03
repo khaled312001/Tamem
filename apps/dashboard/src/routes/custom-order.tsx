@@ -42,6 +42,9 @@ const PAYMENTS = [
 
 const STAGES = ORDER_STAGES;
 
+// One press writes the name the same way every time; «التقارير ← صيدلية الطاهر» reads it from here.
+const TAHER_PICKUP = 'صيدلية الطاهر';
+
 export function CustomOrderDialog({
   onClose,
   onCreated,
@@ -273,6 +276,17 @@ export function CustomOrderDialog({
               onChange={(e) => setPickup(e.target.value)}
               placeholder="مثال: قفط — شارع المحطة، أمام الصيدلية"
             />
+            <button
+              type="button"
+              onClick={() => setPickup(TAHER_PICKUP)}
+              className={`mt-2 rounded-lg border px-3 py-1.5 text-xs font-bold transition ${
+                pickup === TAHER_PICKUP
+                  ? 'border-brand-red bg-brand-red/5 text-brand-red'
+                  : 'border-border hover:bg-muted/40'
+              }`}
+            >
+              💊 {TAHER_PICKUP}
+            </button>
           </Field>
           <Field label="إلى (مكان التسليم)">
             <Input

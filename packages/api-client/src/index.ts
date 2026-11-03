@@ -976,6 +976,9 @@ export class TamemClient {
   async adminReportDrivers(params?: Record<string, unknown>): Promise<unknown> {
     return this.request({ method: 'GET', url: '/admin/reports/drivers', params });
   }
+  async adminReportTaherPharmacy(params?: Record<string, unknown>): Promise<unknown> {
+    return this.request({ method: 'GET', url: '/admin/reports/taher-pharmacy', params });
+  }
   async adminReportDriverDetail(id: string, params?: Record<string, unknown>): Promise<unknown> {
     return this.request({ method: 'GET', url: `/admin/reports/drivers/${id}`, params });
   }
