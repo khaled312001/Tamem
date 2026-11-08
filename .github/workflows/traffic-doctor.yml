@@ -1,0 +1,96 @@
+name: Traffic doctor
+
+# Read-only look at why visitors get "403 Forbidden" when the site is busy.
+# Dispatch-only and changes nothing on the server.
+#
+# This repo is public: the log below may show counts, status codes, times, paths
+# (query strings stripped) and user-agent families — never an IP address, phone
+# number or token. IPs are replaced by a short per-run hash.
+
+on:
+  workflow_dispatch:
+    inputs:
+      days:
+        description: 'How many days of logs to look at'
+        default: '3'
+
+jobs:
+  doctor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: Inspect
+        uses: appleboy/ssh-action@v1.2.0
+        env:
+          DAYS: ${{ github.event.inputs.days }}
+        with:
+          host: ${{ secrets.HOSTINGER_SSH_HOST }}
+          port: ${{ secrets.HOSTINGER_SSH_PORT }}
+          username: ${{ secrets.HOSTINGER_SSH_USER }}
+          password: ${{ secrets.HOSTINGER_SSH_PASS }}
+          envs: DAYS
+          script: |
+            DAYS=${DAYS:-3}
+            H=$HOME
+            SALT=$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')
+            mask() { sed -E 's/([0-9]{1,3}\.){3}[0-9]{1,3}/x.x.x.x/g; s/([0-9a-fA-F]{1,4}:){3,7}[0-9a-fA-F]{0,4}/x:x::x/g; s/(token|key|secret|password|phone|otp)=[^& "]*/\1=***/Ig'; }
+
+            echo "### where the logs are"
+            for d in "$H/logs" "$H/.logs" "$H/domains/deliverytamem.com/logs" "$H/access-logs"; do
+              [ -d "$d" ] && { echo "$d:"; ls -la "$d" | tail -n +2 | head -30 | awk '{print "  ",$5,$6,$7,$8,$9}'; }
+            done
+            find "$H" -maxdepth 5 \( -iname '*access*log*' -o -iname '*error*log*' -o -iname '*.access' \) -not -path '*/node_modules/*' -mtime -"$DAYS" 2>/dev/null | head -20 > /tmp/logs.$$
+            echo "recent log files:"; sed 's/^/   /' /tmp/logs.$$
+
+            echo; echo "### access logs: status codes per day"
+            ACC=$(grep -i access /tmp/logs.$$)
+            for f in $ACC; do
+              echo "== $(basename "$f")"
+              (case "$f" in *.gz) zcat "$f";; *) cat "$f";; esac) > /tmp/acc.$$ 2>/dev/null
+              awk '{d=substr($4,2,11); s=$9; if (s ~ /^[0-9]{3}$/) c[d" "s]++} END{for(k in c) print k, c[k]}' /tmp/acc.$$ | sort | awk '$2!=200 && $2!=304 || 1' | column -t | head -60
+
+              echo "-- 403s per hour (busiest 15)"
+              awk '$9==403 {print substr($4,2,14)}' /tmp/acc.$$ | sort | uniq -c | sort -rn | head -15
+              echo "-- 403 paths (query stripped)"
+              awk '$9==403 {split($7,a,"?"); print $6, a[1]}' /tmp/acc.$$ | tr -d '"' | sort | uniq -c | sort -rn | head -15 | mask
+              echo "-- 403 user-agent families"
+              awk -F'"' '$3 ~ / 403 / {print $6}' /tmp/acc.$$ | sed -E 's/^(okhttp|Dart|Expo|Mozilla[^)]*\)|curl|python|Go-http|[A-Za-z]+bot|[^ \/]+).*/\1/' | cut -c1-70 | sort | uniq -c | sort -rn | head -10
+              echo "-- clients that got 403: distinct count, and how many requests/minute each made at its peak"
+              awk -v salt="$SALT" '$9==403 {ip[$1]++} END{for(i in ip) print i, ip[i]}' /tmp/acc.$$ | sort -k2 -rn | head -8 > /tmp/ip403.$$
+              echo "distinct IPs with 403: $(awk '$9==403{print $1}' /tmp/acc.$$ | sort -u | wc -l)"
+              while read ip n; do
+                tag=$(printf '%s%s' "$SALT" "$ip" | sha1sum | cut -c1-6)
+                peak=$(awk -v ip="$ip" '$1==ip {print substr($4,2,17)}' /tmp/acc.$$ | sort | uniq -c | sort -rn | head -1)
+                total=$(awk -v ip="$ip" '$1==ip' /tmp/acc.$$ | wc -l)
+                first403=$(awk -v ip="$ip" '$1==ip && $9==403 {print substr($4,2,20); exit}' /tmp/acc.$$)
+                echo "  client#$tag  403s=$n  all_requests=$total  peak_per_minute=[$peak]  first_403=$first403"
+              done < /tmp/ip403.$$
+              echo "-- busiest single clients overall (requests in their busiest minute)"
+              awk '{print $1, substr($4,2,17)}' /tmp/acc.$$ | sort | uniq -c | sort -rn | head -8 | while read c ip m; do
+                echo "  client#$(printf '%s%s' "$SALT" "$ip" | sha1sum | cut -c1-6)  $c req in minute $m"; done
+              rm -f /tmp/acc.$$
+            done
+
+            echo; echo "### error logs: throttling / bans / WAF (IPs masked)"
+            for f in $(grep -i error /tmp/logs.$$); do
+              echo "== $(basename "$f")"
+              (case "$f" in *.gz) zcat "$f";; *) cat "$f";; esac) 2>/dev/null \
+                | grep -iE 'throttl|banned|ban |too many|limit|denied|forbidden|modsec|imunify|blocked|bot' \
+                | sed -E 's/^\[[^]]*\] ?//' | mask | cut -c1-200 | sort | uniq -c | sort -rn | head -20
+            done
+            rm -f /tmp/logs.$$ /tmp/ip403.$$
+
+            echo; echo "### API request telemetry (requests that reached PHP)"
+            P=$H/domains/deliverytamem.com/public_html/backendtamem/uploads/.perf
+            ls -la "$P" 2>/dev/null | tail -5 | awk '{print "  ",$5,$6,$7,$8,$9}'
+            for f in $(ls -1 "$P"/*.ndjson 2>/dev/null | tail -"$DAYS"); do
+              echo "== $(basename "$f"): $(wc -l < "$f") requests"
+              head -c 300 "$f" | head -1 | sed -E 's/"(ip|ua|user|phone|token)":"[^"]*"/"\1":"***"/g' | cut -c1-300
+              echo "-- status codes"; grep -o '"status":[0-9]*' "$f" | sort | uniq -c | sort -rn | head -8
+              echo "-- busiest minutes"; grep -o '"t":"[^"]*"\|"ts":[0-9]*\|"time":"[^"]*"' "$f" | cut -c1-24 | sort | uniq -c | sort -rn | head -5
+            done
+
+            echo; echo "### .htaccess rules that can answer 403 (landing + dashboard)"
+            for f in "$H/domains/deliverytamem.com/public_html/.htaccess" "$H/domains/deliverytamem.com/public_html/super_admin/.htaccess"; do
+              echo "== $f"; grep -niE 'deny|require|\[F\]|forbidden|limit|block|ErrorDocument' "$f" 2>/dev/null | mask | head -20
+            done
