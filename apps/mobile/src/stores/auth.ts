@@ -45,7 +45,17 @@ interface AuthState {
   ) => Promise<{ user: User; tokens: AuthTokens }>;
 }
 
-export const useAuth = create<AuthState>((set) => ({
+/**
+ * The logout in flight, if any. Logout calls the API (to unregister the push
+ * token), and ANY 401 from the API calls logout — so without this guard a 401
+ * from the unregister call itself started another logout, which called
+ * unregister again, forever: one phone sent ~25 requests a second until the
+ * server's per-IP throttle banned its network (the daily "403 Forbidden").
+ * A logout that is already running is simply joined, never restarted.
+ */
+let clearing: Promise<void> | null = null;
+
+export const useAuth = create<AuthState>((set, get) => ({
   user: null,
   tokens: null,
   hydrated: false,
@@ -72,31 +82,41 @@ export const useAuth = create<AuthState>((set) => ({
     set({ user });
   },
 
-  clear: async () => {
-    // Stop pushes to this device BEFORE dropping the token — a shared phone
-    // must not keep receiving the previous user's order notifications. Fire it
-    // while still authenticated; ignore failures so logout never blocks.
-    try {
-      const { unregisterPushToken } = await import('../lib/push');
-      await unregisterPushToken();
-    } catch {
-      /* best-effort */
-    }
-    // Release the Google account too, so the next sign-in shows the account
-    // chooser instead of silently re-using the previous user's account on a
-    // shared phone. Native module: absent on web, and a no-op if never used.
-    try {
-      const { GoogleSignin } = await import('@react-native-google-signin/google-signin');
-      await GoogleSignin.signOut();
-    } catch {
-      /* not signed in with Google, or web */
-    }
-    await Promise.all([
-      secureStorage.deleteItem(ACCESS_KEY),
-      secureStorage.deleteItem(REFRESH_KEY),
-      secureStorage.deleteItem(USER_KEY),
-    ]);
-    set({ user: null, tokens: null });
+  clear: () => {
+    if (clearing) return clearing;
+    clearing = (async () => {
+      // Stop pushes to this device BEFORE dropping the token — a shared phone
+      // must not keep receiving the previous user's order notifications. Fire it
+      // while still authenticated; ignore failures so logout never blocks.
+      // Only while there is still a session to identify the phone with — a
+      // logged-out device has nothing to unregister.
+      if (get().tokens?.accessToken) {
+        try {
+          const { unregisterPushToken } = await import('../lib/push');
+          await unregisterPushToken();
+        } catch {
+          /* best-effort */
+        }
+      }
+      // Release the Google account too, so the next sign-in shows the account
+      // chooser instead of silently re-using the previous user's account on a
+      // shared phone. Native module: absent on web, and a no-op if never used.
+      try {
+        const { GoogleSignin } = await import('@react-native-google-signin/google-signin');
+        await GoogleSignin.signOut();
+      } catch {
+        /* not signed in with Google, or web */
+      }
+      await Promise.all([
+        secureStorage.deleteItem(ACCESS_KEY),
+        secureStorage.deleteItem(REFRESH_KEY),
+        secureStorage.deleteItem(USER_KEY),
+      ]);
+      set({ user: null, tokens: null });
+    })().finally(() => {
+      clearing = null;
+    });
+    return clearing;
   },
 
   register: async (payload) => {

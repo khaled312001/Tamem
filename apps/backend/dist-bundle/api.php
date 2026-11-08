@@ -11653,12 +11653,31 @@ if ($method === 'POST' && ($path === '/me/fcm-token' || $path === '/me/devices')
     jsonOk(['saved' => true]);
 }
 // Unregister on logout — stop pushing to a device the user signed out of.
+//
+// This must NEVER answer 401. The app calls it from its logout routine, and a
+// 401 from any request triggers that same logout routine, so a 401 here made
+// the phone call it again, forever: ~25 requests a second from one handset
+// (153k rejected calls in five days). That flood is what got whole IPs banned
+// by the server's per-IP throttle — the daily "403 Forbidden" in busy hours.
+// So: a genuine token that has merely EXPIRED still proves who the caller is
+// and still unregisters; no token or a forged one is a silent no-op with 200.
 if (($method === 'DELETE' || $method === 'POST') && $path === '/me/devices/unregister') {
-    $u = authUser();
+    $uid = '';
+    $auth = $_SERVER['HTTP_AUTHORIZATION'] ?? $_SERVER['REDIRECT_HTTP_AUTHORIZATION'] ?? '';
+    $parts = stripos($auth, 'Bearer ') === 0 ? explode('.', trim(substr($auth, 7))) : [];
+    if (count($parts) === 3) {
+        [$h, $p, $sig] = $parts;
+        $expected = rtrim(strtr(base64_encode(hash_hmac('sha256', "$h.$p", env('JWT_ACCESS_SECRET') ?: '', true)), '+/', '-_'), '=');
+        if (hash_equals($expected, $sig)) {
+            $pl = json_decode((string) base64_decode(strtr($p, '-_', '+/')), true) ?: [];
+            $uid = (string) ($pl['sub'] ?? '');
+        }
+    }
     $b = readJsonBody();
     $token = (string) ($b['fcmToken'] ?? $b['token'] ?? '');
-    if ($token !== '') db()->prepare('DELETE FROM `DeviceToken` WHERE token = ? AND userId = ?')->execute([$token, (string) ($u['sub'] ?? '')]);
-    try { db()->prepare('UPDATE `User` SET fcmToken = NULL WHERE id = ? AND fcmToken = ?')->execute([(string) ($u['sub'] ?? ''), $token]); } catch (Throwable $e) {}
+    if ($uid === '' || $token === '') jsonOk(['removed' => false]);
+    try { db()->prepare('DELETE FROM `DeviceToken` WHERE token = ? AND userId = ?')->execute([$token, $uid]); } catch (Throwable $e) {}
+    try { db()->prepare('UPDATE `User` SET fcmToken = NULL WHERE id = ? AND fcmToken = ?')->execute([$uid, $token]); } catch (Throwable $e) {}
     jsonOk(['removed' => true]);
 }
 

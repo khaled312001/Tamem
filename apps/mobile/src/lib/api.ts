@@ -51,6 +51,10 @@ export const api: TamemClient = new TamemClient({
     }
   },
   onUnauthorized: () => {
+    // Already signed out: a stray 401 (a public screen, a late request) has no
+    // session to end — logging out again and re-showing the alert is noise.
+    const { tokens, user } = useAuth.getState();
+    if (!tokens && !user) return;
     void useAuth.getState().clear();
     const now = Date.now();
     if (now - lastSessionExpiredAt > 5000) {
