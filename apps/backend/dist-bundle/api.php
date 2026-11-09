@@ -487,6 +487,19 @@ function db(): PDO {
 function b64url(string $s): string {
     return rtrim(strtr(base64_encode($s), '+/', '-_'), '=');
 }
+/**
+ * The payload of a token WE signed, expired or not; null when the signature is
+ * wrong or the token is malformed. Only for places where "it has expired" must
+ * not end a customer's session (see /auth/refresh and /me/devices).
+ */
+function jwtSignedPayload(string $tok, string $secret): ?array {
+    $parts = explode('.', trim($tok));
+    if (count($parts) !== 3 || $secret === '') return null;
+    [$h, $p, $sig] = $parts;
+    if (!hash_equals(b64url(hash_hmac('sha256', "$h.$p", $secret, true)), $sig)) return null;
+    $pl = json_decode((string) base64_decode(strtr($p, '-_', '+/')), true);
+    return is_array($pl) ? $pl : null;
+}
 function jwtSign(array $payload, string $secret, int $ttlSec): string {
     $header = ['alg' => 'HS256', 'typ' => 'JWT'];
     $now = time();
@@ -10518,7 +10531,12 @@ function issueTokens(string $uid, string $role): array {
                     : ((int) env('MOBILE_SESSION_TTL_HOURS', '720')) * 3600;
     return [
         'accessToken'  => jwtSign(['sub' => $uid, 'role' => $role], $a, $ttl),
-        'refreshToken' => jwtSign(['sub' => $uid, 'typ' => 'refresh'], $r, $isAdmin ? $ttl : 30 * 24 * 3600),
+        // The apps only refresh when the access token runs out — which used to
+        // be the same moment this one ran out (both 30 days), so every customer
+        // was logged out once a month. A year, renewed on every refresh, means
+        // someone who keeps using the app never has to sign in again.
+        'refreshToken' => jwtSign(['sub' => $uid, 'typ' => 'refresh'], $r,
+            $isAdmin ? $ttl : ((int) env('MOBILE_REFRESH_TTL_DAYS', '365')) * 86400),
     ];
 }
 function profileById(string $id): ?array {
@@ -10887,18 +10905,33 @@ if ($method === 'POST' && $path === '/auth/register') {
 if ($method === 'POST' && $path === '/auth/refresh') {
     $b = readJsonBody();
     $tok = (string) ($b['refreshToken'] ?? '');
-    if (strlen($tok) < 10) jsonErr('Refresh token غير صالح', 401, 'UNAUTHORIZED');
-    $parts = explode('.', $tok);
-    if (count($parts) !== 3) jsonErr('Refresh token غير صالح', 401, 'UNAUTHORIZED');
-    [$h, $p, $sig] = $parts;
-    $expected = b64url(hash_hmac('sha256', "$h.$p", env('JWT_REFRESH_SECRET') ?: '', true));
-    if (!hash_equals($expected, $sig)) jsonErr('Refresh token غير صالح', 401, 'UNAUTHORIZED');
-    $payload = json_decode((string) base64_decode(strtr($p, '-_', '+/')), true) ?: [];
-    if (($payload['exp'] ?? 0) < time()) jsonErr('Refresh token غير صالح', 401, 'UNAUTHORIZED');
+    $reject = static function (string $why): void {
+        error_log('[auth] refresh rejected: ' . $why);
+        jsonErr('Refresh token غير صالح', 401, 'UNAUTHORIZED');
+    };
+    if (strlen($tok) < 10) $reject('missing');
+    $payload = jwtSignedPayload($tok, (string) (env('JWT_REFRESH_SECRET') ?: ''));
+    if ($payload === null) $reject('signature');
     $st = db()->prepare('SELECT id, role, isActive FROM `User` WHERE id = ? LIMIT 1');
     $st->execute([$payload['sub'] ?? '']);
     $u = $st->fetch();
-    if (!$u || !(int) $u['isActive']) jsonErr('الحساب غير مفعّل', 401, 'UNAUTHORIZED');
+    if (!$u) $reject('no-user');
+    if (!(int) $u['isActive']) jsonErr('الحساب غير مفعّل', 401, 'UNAUTHORIZED');
+    /*
+     * An app refresh token that has run out is still accepted for a grace
+     * period. Until 2026-11-09 it was issued with the same 30 days as the
+     * access token, so by the time the app asked to refresh it had ALWAYS just
+     * expired — ~90% of refreshes failed and the customer was thrown back to
+     * the login screen every month. The signature still proves we issued it to
+     * this user, and the account is checked as active above. Admins keep the
+     * strict rule.
+     */
+    $exp = (int) ($payload['exp'] ?? 0);
+    if ($exp < time()) {
+        $isAdmin = in_array((string) $u['role'], ['ADMIN', 'SUPER_ADMIN'], true);
+        $graceDays = (int) env('MOBILE_REFRESH_GRACE_DAYS', '365');
+        if ($isAdmin || $exp < time() - $graceDays * 86400) $reject($isAdmin ? 'expired-admin' : 'expired-beyond-grace');
+    }
     // ⚠️ tokens live at data.* here, NOT data.tokens (matches auth.controller ok(res, tokens)).
     jsonOk(issueTokens($u['id'], (string) $u['role']));
 }
@@ -11860,11 +11893,19 @@ function registerDeviceToken(string $userId, ?string $token, ?string $platform):
     // Keep the legacy single-column mirror so nothing else that reads it breaks.
     try { db()->prepare('UPDATE `User` SET fcmToken = ?, updatedAt = NOW(3) WHERE id = ?')->execute([$token, $userId]); } catch (Throwable $e) {}
 }
+// Like unregister below, this must never answer 401. On Android, reading the
+// push token fires the app's token listener, which posts here; a 401 makes the
+// app log out, and logging out reads the token again — a loop the installed
+// apps ran at ~265 requests a minute from one logged-out phone. A token we
+// signed that has merely expired still says whose phone this is.
 if ($method === 'POST' && ($path === '/me/fcm-token' || $path === '/me/devices')) {
-    $u = authUser();
+    $auth = $_SERVER['HTTP_AUTHORIZATION'] ?? $_SERVER['REDIRECT_HTTP_AUTHORIZATION'] ?? '';
+    $pl = stripos($auth, 'Bearer ') === 0 ? jwtSignedPayload(substr($auth, 7), (string) (env('JWT_ACCESS_SECRET') ?: '')) : null;
+    $uid = (string) ($pl['sub'] ?? '');
     $b = readJsonBody();
     $token = (string) ($b['fcmToken'] ?? $b['token'] ?? '');
-    registerDeviceToken((string) ($u['sub'] ?? ''), $token, (string) ($b['platform'] ?? ''));
+    if ($uid === '' || $token === '') jsonOk(['saved' => false]);
+    registerDeviceToken($uid, $token, (string) ($b['platform'] ?? ''));
     jsonOk(['saved' => true]);
 }
 // Unregister on logout — stop pushing to a device the user signed out of.
