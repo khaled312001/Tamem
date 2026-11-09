@@ -27,6 +27,7 @@ interface Preview {
   staleCount?: number;
   openOrders: OpenOrder[];
   deliveredCount: number;
+  customerOrders?: number;
   unsettledCount: number;
   unsettledAmount: number;
   otherDrivers: { id: string; name: string; phone: string | null; status: string | null }[];
@@ -90,7 +91,11 @@ export function DeleteDriverDialog({
           : r.completed
             ? ` — اتقفل ${r.completed} طلب «تم التوصيل»`
             : '';
-      toast.success(`تم حذف المندوب${extra}`);
+      toast.success(
+        r.keptAsCustomer
+          ? `اتشال من المناديب${extra} — وفضل حسابه كعميل عشان عنده ${r.customerOrders} طلب عامله لنفسه`
+          : `تم حذف المندوب${extra}`,
+      );
       qc.invalidateQueries({ queryKey: ['admin', 'drivers'] });
       qc.invalidateQueries({ queryKey: ['admin', 'orders'] });
       onClose();
@@ -217,6 +222,12 @@ export function DeleteDriverDialog({
                 ليه {formatMoney(p.unsettledAmount)} من {p.unsettledCount} طلب لسه ماتسوّاش. لو
                 محتاج تسوّي حسابه اعملها قبل الحذف — بعده مش هيظهر في تقرير المناديب.
               </span>
+            </p>
+          )}
+          {!!p.customerOrders && (
+            <p className="rounded-xl bg-sky-50 text-sky-900 p-3">
+              المندوب ده عامل {p.customerOrders} طلب لنفسه كعميل. الطلبات دي مبيعات حقيقية مش
+              هتتمسح، فهيتشال من المناديب خالص ويفضل حسابه كعميل عادي بس.
             </p>
           )}
           <p className="text-xs text-muted-foreground">

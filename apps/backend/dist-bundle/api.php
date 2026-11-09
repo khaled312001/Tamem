@@ -9513,6 +9513,11 @@ if ($method === 'GET' && preg_match('#^/admin/drivers/([^/]+)/delete-preview$#',
         'staleCount' => count(array_filter($open, static fn ($o) => strtotime((string) $o['createdAt']) < time() - 2 * 86400)),
         'openOrders' => array_slice($open, 0, 50),
         'deliveredCount' => (int) $dc->fetchColumn(),
+        'customerOrders' => (function () use ($m): int {
+            $st = db()->prepare('SELECT COUNT(*) FROM `Order` WHERE customerId = ?');
+            $st->execute([$m[1]]);
+            return (int) $st->fetchColumn();
+        })(),
         'unsettledCount' => (int) $unsettled['c'],
         'unsettledAmount' => round((float) $unsettled['a'], 2),
         'otherDrivers' => array_map(static fn ($r) => [
@@ -9561,7 +9566,7 @@ if ($method === 'DELETE' && preg_match('#^/admin/drivers/([^/]+)$#', $path, $m))
     $pdo->prepare("UPDATE `DriverProfile` SET status = 'OFFLINE', updatedAt = NOW(3) WHERE userId = ?")->execute([$id]);
 
     $note = 'المندوب «' . $drvName . '» (اتحذف)';
-    $closed = []; $movedMain = []; $movedLegs = [];
+    $closed = []; $movedMain = []; $movedLegs = []; $customerOrders = 0;
     try {
         @set_time_limit(120);
         $pdo->beginTransaction();
@@ -9617,19 +9622,32 @@ if ($method === 'DELETE' && preg_match('#^/admin/drivers/([^/]+)$#', $path, $m))
             orderHistory($oid, $o['status'], 'DELIVERED', $adminId, 'ADMIN', 'اتقفل عند حذف ' . $note);
             $closed[] = $oid;
         }
-        // The history key forbids deleting a user it names. Keep every row (the
-        // order timelines and the attendance that reads them), point it at the
-        // admin doing this, and keep the driver's name in the reason.
-        $pdo->prepare("UPDATE `OrderStatusHistory`
-                          SET changedById = ?,
-                              reason = LEFT(CASE WHEN reason IS NULL OR reason = '' THEN ? ELSE CONCAT(reason, ' — ', ?) END, 500)
-                        WHERE changedById = ?")
-            ->execute([$adminId, $note, $note, $id]);
+        // Some drivers also ordered for themselves: they are the CUSTOMER on
+        // real, mostly delivered orders (Order.customerId is RESTRICT). Those
+        // are sales — deleting them is not an option. Such a person stops being
+        // a driver (profile, shifts, check-in all go) and stays only as the
+        // customer of his own orders, so nothing he bought disappears.
+        $cc = $pdo->prepare('SELECT COUNT(*) FROM `Order` WHERE customerId = ?');
+        $cc->execute([$id]);
+        $customerOrders = (int) $cc->fetchColumn();
         $pdo->prepare('DELETE FROM `DriverShift` WHERE driverId = ?')->execute([$id]);
         $pdo->prepare('UPDATE `DriverShiftSession` SET endedAt = NOW(3), updatedAt = NOW(3) WHERE driverId = ? AND endedAt IS NULL')->execute([$id]);
-        $pdo->prepare('DELETE FROM `DeviceToken` WHERE userId = ?')->execute([$id]);
         $pdo->prepare('DELETE FROM `DriverProfile` WHERE userId = ?')->execute([$id]);
-        $pdo->prepare("DELETE FROM `User` WHERE id = ? AND role = 'DRIVER'")->execute([$id]);
+        if ($customerOrders > 0) {
+            $pdo->prepare("UPDATE `User` SET role = 'CUSTOMER', isActive = ?, updatedAt = NOW(3) WHERE id = ? AND role = 'DRIVER'")
+                ->execute([(int) $drv['isActive'], $id]);
+        } else {
+            // The history key forbids deleting a user it names. Keep every row
+            // (the order timelines and the attendance that reads them), point it
+            // at the admin doing this, and keep the driver's name in the reason.
+            $pdo->prepare("UPDATE `OrderStatusHistory`
+                              SET changedById = ?,
+                                  reason = LEFT(CASE WHEN reason IS NULL OR reason = '' THEN ? ELSE CONCAT(reason, ' — ', ?) END, 500)
+                            WHERE changedById = ?")
+                ->execute([$adminId, $note, $note, $id]);
+            $pdo->prepare('DELETE FROM `DeviceToken` WHERE userId = ?')->execute([$id]);
+            $pdo->prepare("DELETE FROM `User` WHERE id = ? AND role = 'DRIVER'")->execute([$id]);
+        }
         $pdo->commit();
     } catch (Throwable $e) {
         if ($pdo->inTransaction()) $pdo->rollBack();
@@ -9665,6 +9683,7 @@ if ($method === 'DELETE' && preg_match('#^/admin/drivers/([^/]+)$#', $path, $m))
     error_log('[api.php] driver deleted: ' . $id . ' mode=' . ($mode ?: 'none') . ' closed=' . count($closed)
         . ' moved=' . (count($movedMain) + count($movedLegs)) . ' by=' . $adminId);
     jsonOk(['deleted' => true, 'mode' => $mode ?: null, 'completed' => count($closed),
+        'keptAsCustomer' => $customerOrders > 0, 'customerOrders' => $customerOrders,
         'reassigned' => count(array_unique(array_merge($movedMain, array_column($movedLegs, 0)))),
         'to' => $to ? ['id' => $to['id'], 'name' => $to['name']] : null]);
 }

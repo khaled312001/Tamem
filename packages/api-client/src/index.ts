@@ -575,6 +575,8 @@ export class TamemClient {
     completed?: number;
     reassigned?: number;
     to?: { id: string; name: string } | null;
+    keptAsCustomer?: boolean;
+    customerOrders?: number;
   }> {
     const res = await this.http.request({
       method: 'DELETE',
@@ -585,6 +587,8 @@ export class TamemClient {
       completed?: number;
       reassigned?: number;
       to?: { id: string; name: string } | null;
+      keptAsCustomer?: boolean;
+      customerOrders?: number;
     };
   }
 
