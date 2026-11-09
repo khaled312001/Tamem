@@ -9429,16 +9429,231 @@ if ($method === 'GET' && preg_match('#^/admin/drivers/([^/]+)/settlements$#', $p
         'note' => $r['note'], 'createdAt' => isoZ($r['createdAt']),
     ], $st->fetchAll())]);
 }
+/*
+ * Deleting a driver for good.
+ *
+ * It used to be two DELETEs, and it failed for almost every real driver:
+ * OrderStatusHistory.changedById is a RESTRICT key, so anyone who ever moved an
+ * order a step could not be removed at all. Where it did succeed it was worse —
+ * Order.assignedDriverId is SET NULL, so a driver still carrying orders vanished
+ * from them and those orders were left open with nobody on them.
+ *
+ * Now the open work is dealt with first, by the admin's choice:
+ *   complete  → every open order he carries is closed «تم التوصيل» (his share is
+ *               frozen first, exactly as a normal delivery does).
+ *   reassign  → every open order and delivery group he carries moves to another
+ *               registered driver, who is notified.
+ * Then his status-history rows are re-pointed (the key forbids deleting a user
+ * they name) with his name kept in the reason, his weekly shifts are removed so
+ * no ghost appears in attendance, and only then the account goes. All in one
+ * transaction: half a deletion is never left behind.
+ */
+const DRIVER_CLOSED_STATUSES = "('DELIVERED','COMPLETED','CANCELLED','REJECTED')";
+/** Every order a driver is still carrying: as the order's driver, or on one of its delivery groups. */
+function driverOpenWork(string $driverId): array {
+    $st = db()->prepare(
+        "SELECT o.id, o.orderNumber, o.status, o.createdAt, o.assignedDriverId, cu.name AS customerName
+           FROM `Order` o LEFT JOIN `User` cu ON cu.id = o.customerId
+          WHERE o.status NOT IN " . DRIVER_CLOSED_STATUSES . "
+            AND (o.assignedDriverId = ? OR EXISTS (
+                 SELECT 1 FROM `OrderLeg` l WHERE l.orderId = o.id AND l.driverId = ?
+                    AND l.status NOT IN " . DRIVER_CLOSED_STATUSES . "))
+          ORDER BY o.createdAt ASC");
+    $st->execute([$driverId, $driverId]);
+    $out = [];
+    foreach ($st->fetchAll() as $o) {
+        // Other drivers still out on another group of the same order.
+        $ot = db()->prepare("SELECT DISTINCT driverId FROM `OrderLeg`
+                              WHERE orderId = ? AND driverId IS NOT NULL AND driverId <> ?
+                                AND status NOT IN " . DRIVER_CLOSED_STATUSES);
+        $ot->execute([$o['id'], $driverId]);
+        $out[] = [
+            'id' => (string) $o['id'], 'orderNumber' => $o['orderNumber'], 'status' => $o['status'],
+            'createdAt' => isoZ($o['createdAt']), 'customerName' => $o['customerName'],
+            'isMain' => (string) $o['assignedDriverId'] === $driverId,
+            'otherDrivers' => array_map('strval', $ot->fetchAll(PDO::FETCH_COLUMN)),
+        ];
+    }
+    return $out;
+}
+if ($method === 'GET' && preg_match('#^/admin/drivers/([^/]+)/delete-preview$#', $path, $m)) {
+    $u = authUser(); if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
+    $dq = db()->prepare("SELECT id, name FROM `User` WHERE id = ? AND role = 'DRIVER' LIMIT 1");
+    $dq->execute([$m[1]]);
+    $drv = $dq->fetch();
+    if (!$drv) jsonErr('المندوب غير موجود', 404, 'NOT_FOUND');
+    $open = driverOpenWork($m[1]);
+    $un = db()->prepare("SELECT COUNT(*) c, COALESCE(SUM(COALESCE(driverDeliveryRevenue, 0)), 0) a FROM `Order`
+                          WHERE assignedDriverId = ? AND status IN ('DELIVERED','COMPLETED') AND driverSettlementStatus <> 'SETTLED'");
+    $un->execute([$m[1]]);
+    $unsettled = $un->fetch() ?: ['c' => 0, 'a' => 0];
+    $dc = db()->prepare("SELECT COUNT(*) FROM `Order` WHERE assignedDriverId = ? AND status IN ('DELIVERED','COMPLETED')");
+    $dc->execute([$m[1]]);
+    $others = db()->prepare("SELECT u.id, u.name, u.phone, u.isActive, dp.status FROM `User` u
+                              JOIN `DriverProfile` dp ON dp.userId = u.id
+                             WHERE u.role = 'DRIVER' AND u.id <> ? AND u.isActive = 1 ORDER BY u.name");
+    $others->execute([$m[1]]);
+    jsonOk([
+        'driver' => ['id' => $drv['id'], 'name' => $drv['name']],
+        'openCount' => count($open),
+        // Open for more than two days: almost always delivered and never closed.
+        'staleCount' => count(array_filter($open, static fn ($o) => strtotime((string) $o['createdAt']) < time() - 2 * 86400)),
+        'openOrders' => array_slice($open, 0, 50),
+        'deliveredCount' => (int) $dc->fetchColumn(),
+        'unsettledCount' => (int) $unsettled['c'],
+        'unsettledAmount' => round((float) $unsettled['a'], 2),
+        'otherDrivers' => array_map(static fn ($r) => [
+            'id' => $r['id'], 'name' => $r['name'], 'phone' => $r['phone'], 'status' => $r['status'],
+        ], $others->fetchAll()),
+    ]);
+}
 if ($method === 'DELETE' && preg_match('#^/admin/drivers/([^/]+)$#', $path, $m)) {
     $u = authUser(); if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
+    $id = $m[1];
+    $adminId = (string) ($u['sub'] ?? '');
+    $b = readJsonBody();
+    $mode = strtolower(trim((string) ($b['mode'] ?? $_GET['mode'] ?? '')));
+    $toId = trim((string) ($b['toDriverId'] ?? $_GET['toDriverId'] ?? ''));
     $pdo = db();
+
+    $dq = $pdo->prepare("SELECT u.id, u.name, u.isActive, dp.status FROM `User` u
+                          LEFT JOIN `DriverProfile` dp ON dp.userId = u.id
+                         WHERE u.id = ? AND u.role = 'DRIVER' LIMIT 1");
+    $dq->execute([$id]);
+    $drv = $dq->fetch();
+    if (!$drv) jsonErr('المندوب غير موجود', 404, 'NOT_FOUND');
+    $drvName = trim((string) $drv['name']) ?: 'مندوب';
+    $aq = $pdo->prepare('SELECT id FROM `User` WHERE id = ? LIMIT 1');
+    $aq->execute([$adminId]);
+    if (!$aq->fetchColumn()) jsonErr('حساب الأدمن غير موجود — سجّل دخول تاني', 401, 'UNAUTHORIZED');
+
+    $open = driverOpenWork($id);
+    if ($open && !in_array($mode, ['complete', 'reassign'], true)) {
+        jsonErr('المندوب معاه ' . count($open) . ' طلب مش مقفول — اختار تقفلهم أو تنقلهم لمندوب تاني', 409, 'DRIVER_HAS_OPEN_ORDERS');
+    }
+    $to = null;
+    if ($open && $mode === 'reassign') {
+        if ($toId === '' || $toId === $id) jsonErr('اختار المندوب اللي هتتنقل له الطلبات', 422, 'MISSING_TARGET');
+        $tq = $pdo->prepare("SELECT u.id, u.name, u.isActive FROM `User` u JOIN `DriverProfile` dp ON dp.userId = u.id
+                              WHERE u.id = ? AND u.role = 'DRIVER' LIMIT 1");
+        $tq->execute([$toId]);
+        $to = $tq->fetch();
+        if (!$to) jsonErr('المندوب المختار غير موجود', 422, 'TARGET_NOT_FOUND');
+        if (!(int) $to['isActive']) jsonErr('حساب المندوب المختار موقوف — اختار غيره', 409, 'TARGET_INACTIVE');
+    }
+
+    // Take him out of the pool first, so AUTO distribution cannot hand him a new
+    // order while the deletion runs. Put back exactly as it was if it fails.
+    $pdo->prepare("UPDATE `User` SET isActive = 0, updatedAt = NOW(3) WHERE id = ?")->execute([$id]);
+    $pdo->prepare("UPDATE `DriverProfile` SET status = 'OFFLINE', updatedAt = NOW(3) WHERE userId = ?")->execute([$id]);
+
+    $note = 'المندوب «' . $drvName . '» (اتحذف)';
+    $closed = []; $movedMain = []; $movedLegs = [];
     try {
+        @set_time_limit(120);
         $pdo->beginTransaction();
-        $pdo->prepare('DELETE FROM `DriverProfile` WHERE userId = ?')->execute([$m[1]]);
-        $pdo->prepare("DELETE FROM `User` WHERE id = ? AND role = 'DRIVER'")->execute([$m[1]]);
+        $open = driverOpenWork($id); // again, inside the transaction — the list may have changed
+        $legsOf = $pdo->prepare("SELECT id FROM `OrderLeg` WHERE orderId = ? AND driverId = ? AND status NOT IN " . DRIVER_CLOSED_STATUSES);
+        foreach ($open as $o) {
+            $oid = $o['id'];
+            if ($mode === 'reassign') {
+                if ($o['isMain']) {
+                    $pdo->prepare("UPDATE `Order` SET assignedDriverId = ?, updatedAt = NOW(3) WHERE id = ? AND assignedDriverId = ?")
+                        ->execute([$to['id'], $oid, $id]);
+                    $movedMain[] = $oid;
+                }
+                $legsOf->execute([$oid, $id]);
+                foreach ($legsOf->fetchAll(PDO::FETCH_COLUMN) as $lid) {
+                    $pdo->prepare("UPDATE `OrderLeg` SET driverId = ?, updatedAt = NOW(3) WHERE id = ?")->execute([$to['id'], $lid]);
+                    $movedLegs[] = [$oid, (string) $lid];
+                }
+                continue;
+            }
+            // complete
+            $pdo->prepare("UPDATE `OrderLeg` SET status = 'DELIVERED', updatedAt = NOW(3)
+                            WHERE orderId = ? AND driverId = ? AND status NOT IN " . DRIVER_CLOSED_STATUSES)->execute([$oid, $id]);
+            if ($o['isMain'] && $o['otherDrivers']) {
+                // His group is done, another driver is still out on the rest:
+                // the order stays open and becomes that driver's.
+                $pdo->prepare("UPDATE `Order` SET assignedDriverId = ?, updatedAt = NOW(3) WHERE id = ?")
+                    ->execute([$o['otherDrivers'][0], $oid]);
+                continue;
+            }
+            if (!$o['isMain']) continue; // only one group of somebody else's order — that order goes on
+            // Freeze his share now, while his profile (and its %) still exists —
+            // the same numbers snapshotDriverShare() writes on a normal delivery.
+            $sq = $pdo->prepare("SELECT o.deliveryFee, o.customData, dp.deliverySharePct FROM `Order` o
+                                   LEFT JOIN `DriverProfile` dp ON dp.userId = o.assignedDriverId WHERE o.id = ?");
+            $sq->execute([$oid]);
+            $sr = $sq->fetch() ?: [];
+            $fee = max(0.0, (float) ($sr['deliveryFee'] ?? 0));
+            $pct = $sr['deliverySharePct'] !== null ? (float) $sr['deliverySharePct'] : 0.0;
+            $driverRev = round(max($fee, orderPromoOriginalFee($sr['customData'] ?? null)) * $pct / 100, 2);
+            // Dated at the order's last real step, NOT now. Most of these were
+            // delivered weeks ago and simply never closed; stamping them today
+            // would pile weeks of deliveries and revenue onto today's reports.
+            $at = $pdo->prepare("SELECT GREATEST(o.createdAt, COALESCE((SELECT MAX(h.createdAt) FROM `OrderStatusHistory` h WHERE h.orderId = o.id), o.createdAt))
+                                   FROM `Order` o WHERE o.id = ?");
+            $at->execute([$oid]);
+            $doneAt = (string) ($at->fetchColumn() ?: gmdate('Y-m-d H:i:s'));
+            $pdo->prepare("UPDATE `Order` SET status = 'DELIVERED', deliveredAt = ?, completedAt = ?,
+                                  driverSharePct = ?, driverDeliveryRevenue = ?, companyDeliveryRevenue = ?, updatedAt = NOW(3)
+                            WHERE id = ?")
+                ->execute([$doneAt, $doneAt, $pct, $driverRev, round($fee - $driverRev, 2), $oid]);
+            $pdo->prepare("UPDATE `OrderLeg` SET status = 'DELIVERED', updatedAt = NOW(3) WHERE orderId = ?")->execute([$oid]);
+            orderHistory($oid, $o['status'], 'DELIVERED', $adminId, 'ADMIN', 'اتقفل عند حذف ' . $note);
+            $closed[] = $oid;
+        }
+        // The history key forbids deleting a user it names. Keep every row (the
+        // order timelines and the attendance that reads them), point it at the
+        // admin doing this, and keep the driver's name in the reason.
+        $pdo->prepare("UPDATE `OrderStatusHistory`
+                          SET changedById = ?,
+                              reason = LEFT(CASE WHEN reason IS NULL OR reason = '' THEN ? ELSE CONCAT(reason, ' — ', ?) END, 500)
+                        WHERE changedById = ?")
+            ->execute([$adminId, $note, $note, $id]);
+        $pdo->prepare('DELETE FROM `DriverShift` WHERE driverId = ?')->execute([$id]);
+        $pdo->prepare('UPDATE `DriverShiftSession` SET endedAt = NOW(3), updatedAt = NOW(3) WHERE driverId = ? AND endedAt IS NULL')->execute([$id]);
+        $pdo->prepare('DELETE FROM `DeviceToken` WHERE userId = ?')->execute([$id]);
+        $pdo->prepare('DELETE FROM `DriverProfile` WHERE userId = ?')->execute([$id]);
+        $pdo->prepare("DELETE FROM `User` WHERE id = ? AND role = 'DRIVER'")->execute([$id]);
         $pdo->commit();
-    } catch (PDOException $e) { if ($pdo->inTransaction()) $pdo->rollBack(); error_log('[api.php] driver delete: ' . $e->getMessage()); jsonErr('تعذّر الحذف — قد يكون السائق مرتبط بطلبات', 422, 'DELETE_FAILED'); }
-    jsonOk(['deleted' => true]);
+    } catch (Throwable $e) {
+        if ($pdo->inTransaction()) $pdo->rollBack();
+        error_log('[api.php] driver delete: ' . $e->getMessage());
+        try {
+            $pdo->prepare("UPDATE `User` SET isActive = ?, updatedAt = NOW(3) WHERE id = ?")->execute([(int) $drv['isActive'], $id]);
+            if ($drv['status'] !== null) $pdo->prepare("UPDATE `DriverProfile` SET status = ?, updatedAt = NOW(3) WHERE userId = ?")->execute([$drv['status'], $id]);
+        } catch (Throwable $e2) {}
+        jsonErr('تعذّر حذف المندوب — مفيش أي حاجة اتغيّرت، جرّب تاني', 422, 'DELETE_FAILED');
+    }
+
+    // Outside the transaction: what a normal assignment does for the new driver.
+    if ($to && ($movedMain || $movedLegs)) {
+        foreach ($movedMain as $oid) snapshotDriverShare($oid);
+        if (DRIVER_AUTO_BUSY) {
+            try { $pdo->prepare("UPDATE `DriverProfile` SET status = 'BUSY', updatedAt = NOW(3) WHERE userId = ?")->execute([$to['id']]); } catch (Throwable $e) {}
+        }
+        // Tell him (and each customer, who now has a different driver) after the
+        // admin already has the answer — a long list must not hold the page.
+        register_shutdown_function(static function () use ($movedMain, $movedLegs): void {
+            if (function_exists('fastcgi_finish_request')) @fastcgi_finish_request();
+            foreach (array_slice($movedMain, 0, 40) as $oid) {
+                try { notifyOrderParties($oid, 'DRIVER_ASSIGNED'); } catch (Throwable $e) {}
+            }
+            foreach (array_slice($movedLegs, 0, 40) as [$oid, $lid]) {
+                if (in_array($oid, $movedMain, true)) continue;
+                try {
+                    foreach (orderLegsFor($oid) as $lg) if ($lg['id'] === $lid) { notifyLegDriver($oid, $lg); break; }
+                } catch (Throwable $e) {}
+            }
+        });
+    }
+    error_log('[api.php] driver deleted: ' . $id . ' mode=' . ($mode ?: 'none') . ' closed=' . count($closed)
+        . ' moved=' . (count($movedMain) + count($movedLegs)) . ' by=' . $adminId);
+    jsonOk(['deleted' => true, 'mode' => $mode ?: null, 'completed' => count($closed),
+        'reassigned' => count(array_unique(array_merge($movedMain, array_column($movedLegs, 0)))),
+        'to' => $to ? ['id' => $to['id'], 'name' => $to['name']] : null]);
 }
 
 // ─── Customer update (plain User row) ──────────────────────────────────

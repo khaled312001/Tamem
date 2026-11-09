@@ -18,6 +18,7 @@ import { useEffect, useId, useState } from 'react';
 import type { ReactNode } from 'react';
 import { toast } from 'sonner';
 
+import { DeleteDriverDialog } from '../components/DeleteDriverDialog.js';
 import { SetPasswordDialog, type PasswordTarget } from '../components/SetPasswordDialog.js';
 import { DriverStatusBadge } from '../components/ui/Badge.js';
 import { Button } from '../components/ui/Button.js';
@@ -194,14 +195,9 @@ export function DriversPage() {
     },
   });
 
-  const deleteMut = useMutation({
-    mutationFn: (id: string) => api.adminDeleteDriver(id),
-    onSuccess: () => {
-      toast.success('تم حذف السائق');
-      qc.invalidateQueries({ queryKey: ['admin', 'drivers'] });
-    },
-    onError: (err: Error) => toast.error(err.message),
-  });
+  // Deletion runs through a dialog: a driver still carrying orders needs those
+  // orders closed or handed to someone else first.
+  const [deleting, setDeleting] = useState<{ id: string; name: string } | null>(null);
 
   return (
     <div className="space-y-4">
@@ -323,9 +319,7 @@ export function DriversPage() {
                   <KeyRound className="w-3 h-3" /> كلمة المرور
                 </button>
                 <button
-                  onClick={() => {
-                    if (confirm(`حذف السائق "${d.name}"؟`)) deleteMut.mutate(d.id);
-                  }}
+                  onClick={() => setDeleting({ id: d.id, name: d.name })}
                   className="inline-flex items-center gap-1 text-xs text-destructive hover:underline"
                 >
                   <Trash2 className="w-3 h-3" /> حذف
@@ -350,6 +344,7 @@ export function DriversPage() {
       {createOpen && <CreateDriverDialog onClose={() => setCreateOpen(false)} />}
       {editing && <EditDriverDialog driver={editing} onClose={() => setEditing(null)} />}
       <SetPasswordDialog target={passwordFor} onClose={() => setPasswordFor(null)} />
+      <DeleteDriverDialog driver={deleting} onClose={() => setDeleting(null)} />
       {viewingReviews && (
         <DriverReviewsDialog driver={viewingReviews} onClose={() => setViewingReviews(null)} />
       )}

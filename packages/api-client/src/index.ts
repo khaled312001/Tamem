@@ -564,8 +564,28 @@ export class TamemClient {
       data: { status },
     });
   }
-  async adminDeleteDriver(id: string): Promise<void> {
-    await this.http.request({ method: 'DELETE', url: `/admin/drivers/${id}` });
+  /**
+   * Delete a driver for good. A driver still carrying orders needs `mode`:
+   * `complete` closes them as delivered, `reassign` moves them to `toDriverId`.
+   */
+  async adminDeleteDriver(
+    id: string,
+    opts?: { mode: 'complete' | 'reassign'; toDriverId?: string },
+  ): Promise<{
+    completed?: number;
+    reassigned?: number;
+    to?: { id: string; name: string } | null;
+  }> {
+    const res = await this.http.request({
+      method: 'DELETE',
+      url: `/admin/drivers/${id}`,
+      data: opts ?? {},
+    });
+    return (res.data?.data ?? {}) as {
+      completed?: number;
+      reassigned?: number;
+      to?: { id: string; name: string } | null;
+    };
   }
 
   // ===== Admin Merchants =====
