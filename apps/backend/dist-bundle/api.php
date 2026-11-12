@@ -1333,10 +1333,8 @@ if ($method === 'GET' && $path === '/admin/reports/services') {
  * land in today's closing (the office counted 13 orders for a driver, the
  * report said 15).
  *
- * A day here is a driver's WORK day, 03:00 → 03:00 Cairo: night shifts run
- * past midnight (up to 3ص), and a night's orders — and its daily bonus —
- * belong to the day the shift started. About 1 order in 11 is placed between
- * midnight and 3ص.
+ * A day here is a driver's WORK day (see workDayOf): midnight → midnight
+ * Cairo from 2026-11-14, 03:00 → 03:00 before that.
  *
  * Takes YYYY-MM-DD; anything else is ignored rather than guessed.
  */
@@ -1351,10 +1349,36 @@ function driverReportDays(string $from, string $to, array &$where, array &$args)
         $args[] = gmdate('Y-m-d H:i:s', workDayEndTs($to));
     }
 }
-/** The work day (YYYY-MM-DD) an instant belongs to: it starts at 03:00 Cairo. PHP runs on Africa/Cairo. */
-function workDayOf(?int $ts = null): string { return date('Y-m-d', strtotime('-3 hours', $ts ?? time())); }
-function workDayStartTs(string $ymd): int { return (int) strtotime($ymd . ' 03:00:00'); }
-function workDayEndTs(string $ymd): int { return (int) strtotime($ymd . ' 03:00:00 +1 day'); }
+/*
+ * Where one driver work day ends and the next begins (Cairo; PHP runs on
+ * Africa/Cairo).
+ *
+ * It used to be 03:00 → 03:00, so a night shift's after-midnight orders
+ * counted for the day it started. On 2026-11-13 the owner moved it to
+ * midnight («الوردية تقفل الساعة 12 بليل»). Days before WORKDAY_MIDNIGHT_FROM
+ * keep the 03:00 boundary they were paid on: bonuses and deductions are
+ * recomputed from timestamps every time a report opens, so moving the line for
+ * past days would quietly change money already paid out. The last old-rule
+ * day is therefore short — it runs 03:00 → midnight — and no instant belongs
+ * to two days or to none.
+ */
+const WORKDAY_MIDNIGHT_FROM = '2026-11-14';
+const WORKDAY_OLD_START_HOUR = 3;
+function workDayStartHour(string $ymd): int { return $ymd >= WORKDAY_MIDNIGHT_FROM ? 0 : WORKDAY_OLD_START_HOUR; }
+/** The work day (YYYY-MM-DD) an instant belongs to. */
+function workDayOf(?int $ts = null): string {
+    $ts = $ts ?? time();
+    $cal = date('Y-m-d', $ts);
+    return $cal >= WORKDAY_MIDNIGHT_FROM ? $cal : date('Y-m-d', strtotime('-' . WORKDAY_OLD_START_HOUR . ' hours', $ts));
+}
+function workDayStartTs(string $ymd): int { return (int) strtotime(sprintf('%s %02d:00:00', $ymd, workDayStartHour($ymd))); }
+function workDayEndTs(string $ymd): int { return workDayStartTs(workDayShift($ymd, 1)); }
+/** A work day N days before/after another one (YYYY-MM-DD). */
+function workDayShift(string $ymd, int $days): string { return date('Y-m-d', (int) strtotime($ymd . ' ' . sprintf('%+d', $days) . ' day')); }
+/** The start of a work day as a Cairo DateTime (for the Telegram reports). */
+function workDayStartDT(string $ymd): DateTime {
+    return (new DateTime('@' . workDayStartTs($ymd)))->setTimezone(new DateTimeZone('Africa/Cairo'));
+}
 
 // «صيدلية الطاهر» — every order picked up from the pharmacy, with its exact times.
 // There is no merchant behind it: agents have always written the name in the
@@ -6209,10 +6233,17 @@ function driverIncentives(?string $driverId, string $fromDay, string $toDay): ar
                          WHERE changedByRole = 'DRIVER' AND createdAt >= ? AND createdAt < ?" . ($one ? ' AND changedById = ?' : '') . "
                          ORDER BY createdAt ASC");
     $q->execute($one ? [$sUtc, $eUtc, $driverId] : [$sUtc, $eUtc]);
-    $activity = [];
+    // $activity skips the first hours after a midnight boundary: 00:00–03:00 is
+    // the tail of LAST night's shift (some run to 2ص). Counted as arriving for
+    // today's 16:00 shift, a driver who delivered at 00:30 and turned up at
+    // 18:00 would read «on time». $activityAll keeps everything, for a shift
+    // that itself starts in those hours.
+    $activity = []; $activityAll = [];
     foreach ($q->fetchAll() as $r) {
         $ts = $utcTs($r['createdAt']); $day = workDayOf($ts);
-        if (!isset($activity[$r['d']][$day])) $activity[$r['d']][$day] = $ts;
+        if (!isset($activityAll[$r['d']][$day])) $activityAll[$r['d']][$day] = $ts;
+        $tailEnd = workDayStartTs($day) + (workDayStartHour($day) === 0 ? WORKDAY_OLD_START_HOUR * 3600 : 0);
+        if ($ts >= $tailEnd && !isset($activity[$r['d']][$day])) $activity[$r['d']][$day] = $ts;
     }
     $q = db()->prepare("SELECT driverId, workDay, kind, note FROM `DriverIncentiveWaiver` WHERE workDay BETWEEN ? AND ?" . ($one ? ' AND driverId = ?' : ''));
     $q->execute($one ? [$fromDay, $toDay, $driverId] : [$fromDay, $toDay]);
@@ -6240,14 +6271,17 @@ function driverIncentives(?string $driverId, string $fromDay, string $toDay): ar
             $start = $sched[$d][(int) date('w', strtotime($day))] ?? null;
             $status = 'off'; $arrival = null; $arrivalBy = null; $lateMin = 0;
             if ($start !== null) {
-                // A first shift that starts after midnight (before 3ص) is on the next calendar date.
-                $schedTs = (int) strtotime($day . ' ' . $start . ':00' . (hmToMin($start) < 180 ? ' +1 day' : ''));
+                // Under the old 03:00 day, a first shift that starts after midnight
+                // (before 3ص) is on the next calendar date.
+                $schedTs = (int) strtotime($day . ' ' . $start . ':00' . (hmToMin($start) < workDayStartHour($day) * 60 ? ' +1 day' : ''));
                 $dayEnd = workDayEndTs($day);
                 foreach ($sessions[$d] ?? [] as [$a, $b]) {
                     if ($a <= $schedTs && ($b === null || $b > $schedTs)) { $arrival = $schedTs; $arrivalBy = 'checkin'; break; }
                     if ($a > $schedTs && $a < $dayEnd && ($arrival === null || $a < $arrival)) { $arrival = $a; $arrivalBy = 'checkin'; }
                 }
-                $act = $activity[$d][$day] ?? null;
+                $act = hmToMin($start) < WORKDAY_OLD_START_HOUR * 60
+                    ? ($activityAll[$d][$day] ?? null)
+                    : ($activity[$d][$day] ?? null);
                 if ($act !== null && ($arrival === null || $act < $arrival)) { $arrival = max($act, $schedTs); $arrivalBy = 'activity'; }
                 if ($arrival !== null) {
                     $lateMin = max(0, intdiv($arrival - $schedTs, 60));
@@ -11338,7 +11372,7 @@ if ($method === 'POST' && $path === '/telegram/webhook') {
         } elseif ($chatType === 'private' && preg_match('#^/?(?:محاسبة|محاسبه|الحسابات|accounts)(.*)$#u', $text, $am)) {
             // Accountant view: per-driver tally. Bare = current shift; add
             // «امبارح» for the previous shift, «الاسبوع» for the last 7 days.
-            // Business day boundary is 3ص (shift runs 8ص→3ص).
+            // Business day boundary: workDayOf() (midnight from 2026-11-14).
             if (!tgSupervisorByChat($chatId)) {
                 tgSend($chatId, "الأمر ده للمشرفين 🙏");
             } else {
@@ -11347,14 +11381,13 @@ if ($method === 'POST' && $path === '/telegram/webhook') {
                     $utc = new DateTimeZone('UTC');
                     $tz = new DateTimeZone('Africa/Cairo');
                     $nowC = new DateTime('now', $tz);
-                    $shift = new DateTime('today', $tz); $shift->setTime(3, 0, 0);
-                    if ($nowC < $shift) $shift->modify('-1 day'); // most recent 3ص
+                    $wd = workDayOf(); $shift = workDayStartDT($wd); // current work day
                     if (mb_strpos($arg, 'امبارح') !== false || stripos($arg, 'yesterday') !== false) {
                         $title = 'محاسبة امبارح';
-                        $endD = (clone $shift); $startD = (clone $shift)->modify('-1 day');
+                        $endD = (clone $shift); $startD = workDayStartDT(workDayShift($wd, -1));
                     } elseif (mb_strpos($arg, 'اسبوع') !== false || mb_strpos($arg, 'أسبوع') !== false || stripos($arg, 'week') !== false) {
                         $title = 'محاسبة آخر ٧ أيام';
-                        $startD = (clone $shift)->modify('-6 day'); $endD = null;
+                        $startD = workDayStartDT(workDayShift($wd, -6)); $endD = null;
                     } else {
                         $title = 'محاسبة الوردية الحالية';
                         $startD = (clone $shift); $endD = null;
@@ -11430,8 +11463,8 @@ if ($method === 'POST' && $path === '/telegram/webhook') {
                 tgSend($chatId, "الأمر ده للمشرفين 🙏");
             } else {
                 $arg = trim($lm[1]); $utc = new DateTimeZone('UTC'); $tz = new DateTimeZone('Africa/Cairo');
-                $nowC = new DateTime('now', $tz); $shift = new DateTime('today', $tz); $shift->setTime(3, 0, 0); if ($nowC < $shift) $shift->modify('-1 day');
-                if (mb_strpos($arg, 'اسبوع') !== false || mb_strpos($arg, 'أسبوع') !== false || stripos($arg, 'week') !== false) { $title = 'الأفضل — آخر ٧ أيام'; $start = (clone $shift)->modify('-6 day'); }
+                $wd = workDayOf(); $shift = workDayStartDT($wd);
+                if (mb_strpos($arg, 'اسبوع') !== false || mb_strpos($arg, 'أسبوع') !== false || stripos($arg, 'week') !== false) { $title = 'الأفضل — آخر ٧ أيام'; $start = workDayStartDT(workDayShift($wd, -6)); }
                 else { $title = 'الأفضل — الوردية الحالية'; $start = (clone $shift); }
                 $start->setTimezone($utc);
                 $st = db()->prepare("SELECT u.name, COUNT(o.id) AS n
@@ -11454,8 +11487,7 @@ if ($method === 'POST' && $path === '/telegram/webhook') {
             if (!tgSupervisorByChat($chatId)) {
                 tgSend($chatId, "الأمر ده للمشرفين 🙏");
             } else {
-                $tz = new DateTimeZone('Africa/Cairo'); $nowC = new DateTime('now', $tz);
-                $shift = new DateTime('today', $tz); $shift->setTime(3, 0, 0); if ($nowC < $shift) $shift->modify('-1 day');
+                $shift = workDayStartDT(workDayOf());
                 $shift->setTimezone(new DateTimeZone('UTC')); $s = $shift->format('Y-m-d H:i:s');
                 $q1 = db()->prepare("SELECT COUNT(*) FROM `Order` WHERE createdAt >= ?"); $q1->execute([$s]); $created = (int) $q1->fetchColumn();
                 $q2 = db()->prepare("SELECT COUNT(*) FROM `Order` WHERE status IN ('DELIVERED','COMPLETED') AND COALESCE(deliveredAt, completedAt, updatedAt) >= ?"); $q2->execute([$s]); $delivered = (int) $q2->fetchColumn();
@@ -11552,10 +11584,8 @@ if ($method === 'POST' && $path === '/telegram/webhook') {
             if (!tgSupervisorByChat($chatId)) {
                 tgSend($chatId, "الأمر ده للمشرفين 🙏");
             } else {
-                // Shift-day start (3ص) so "today" = the current work day.
-                $tz = new DateTimeZone('Africa/Cairo'); $nowC = new DateTime('now', $tz);
-                $dayStart = new DateTime('today', $tz); $dayStart->setTime(3, 0, 0);
-                if ($nowC < $dayStart) $dayStart->modify('-1 day');
+                // Start of the current work day, so "today" = this work day.
+                $dayStart = workDayStartDT(workDayOf());
                 $dayStart->setTimezone(new DateTimeZone('UTC'));
                 $sUtc = $dayStart->format('Y-m-d H:i:s');
                 $open = db()->query("SELECT u.name, s.startedAt, s.offSchedule FROM `DriverShiftSession` s JOIN `User` u ON u.id = s.driverId WHERE s.endedAt IS NULL ORDER BY s.startedAt ASC")->fetchAll();
