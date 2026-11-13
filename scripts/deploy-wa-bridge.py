@@ -19,6 +19,7 @@ Credentials: TAMEM_SSH_PASS if set, else HANDOFF.md (git-ignored). Never printed
 Usage:
     python scripts/deploy-wa-bridge.py
     python scripts/deploy-wa-bridge.py --dry-run   # connect + check only
+    python scripts/deploy-wa-bridge.py --accept-qr # the number is unlinked: a QR counts as up
 
 Requires: pip install paramiko
 """
@@ -83,6 +84,10 @@ console.log(JSON.stringify(o));
 """
 
 DRY_RUN = "--dry-run" in sys.argv
+# The number is already unlinked (auth/ empty, the bridge shows a QR): nothing
+# can say "connected" until someone scans, so a fresh bridge serving a QR is
+# the healthy state to wait for. Only use when the live one was on a QR too.
+ACCEPT_QR = "--accept-qr" in sys.argv
 # On GitHub Actions the log is public (the repo is public): no phone numbers,
 # no bridge.log lines (they carry numbers), only states and counts.
 PUBLIC_LOG = bool(os.environ.get("CI"))
@@ -199,7 +204,10 @@ def main() -> None:
         start = time.time()
         while time.time() - start < limit:
             st = status()
-            if st.get("status") == "connected" and float(st.get("startedAt") or 0) >= t0:
+            ok = ("connected", "qr") if ACCEPT_QR else ("connected",)
+            if st.get("status") in ok and float(st.get("startedAt") or 0) >= t0:
+                if st.get("status") == "qr":
+                    print("bridge is up and serving a QR (number not linked) — scan it from the dashboard")
                 return True
             time.sleep(5)
         return False
