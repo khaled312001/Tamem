@@ -132,6 +132,9 @@ const WhatsAppPage = lazy(() =>
 const TelegramPage = lazy(() =>
   import('./routes/telegram.js').then((m) => ({ default: m.TelegramPage })),
 );
+const AccountingPage = lazy(() =>
+  import('./routes/accounting.js').then((m) => ({ default: m.AccountingPage })),
+);
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
   const user = useAuth((s) => s.user);
@@ -202,6 +205,7 @@ const routes: RouteObject[] = [
           { path: 'customers', element: <CustomersPage /> },
           { path: 'drivers', element: <DriversPage /> },
           { path: 'driver-shifts', element: <DriverShiftsPage /> },
+          { path: 'accounting', element: <AccountingPage /> },
           { path: 'merchants', element: <MerchantsPage /> },
           { path: 'merchants/:id/hours', element: <MerchantHoursPage /> },
           { path: 'merchants/:id/products-api', element: <MerchantProductsApiPage /> },

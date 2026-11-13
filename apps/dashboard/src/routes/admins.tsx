@@ -47,6 +47,7 @@ const ALL_PERMS: Array<{ key: string; label: string }> = [
   { key: 'coupons', label: 'الكوبونات' },
   { key: 'promos', label: 'العروض' },
   { key: 'reports', label: 'التقارير' },
+  { key: 'accounting', label: 'الحسابات (أرباح وشركاء)' },
   { key: 'reviews', label: 'التقييمات' },
   { key: 'whatsapp', label: 'ربط واتساب' },
   { key: 'broadcast', label: 'إشعار جماعي' },

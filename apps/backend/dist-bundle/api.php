@@ -927,6 +927,7 @@ $ADMIN_PERM_MAP = [
     'whatsapp' => 'whatsapp', 'broadcast' => 'broadcast', 'supervisors' => 'supervisors',
     'home-config' => 'home-settings', 'offers' => 'home-settings',
     'site-config' => 'site-settings', 'settings' => 'settings',
+    'accounting' => 'accounting',
 ];
 if (str_starts_with($path, '/admin/')) {
     $__admin = authUser();
@@ -7337,18 +7338,847 @@ if ($method === 'GET' && $path === '/admin/private-file') {
     $u = authUser();
     if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
     $ref = (string) ($_GET['ref'] ?? '');
-    if (!preg_match('#^private:(id-cards/[A-Za-z0-9_-]+/[A-Za-z0-9_-]+\.(jpg|png|webp|heic))$#', $ref, $pm)) jsonErr('ملف غير صحيح', 422, 'BAD_REF');
+    // ID cards (drivers' page) and receipts (the books). Receipts need the accounting permission.
+    if (!preg_match('#^private:((?:id-cards/[A-Za-z0-9_-]+/[A-Za-z0-9_-]+|receipts/\d{4}-\d{2}/[a-f0-9]+)\.(jpg|png|webp|heic|pdf))$#', $ref, $pm)) jsonErr('ملف غير صحيح', 422, 'BAD_REF');
+    $isReceipt = str_starts_with($pm[1], 'receipts/');
+    if (!$isReceipt && $pm[2] === 'pdf') jsonErr('ملف غير صحيح', 422, 'BAD_REF');
+    if ($isReceipt && !acctCan($u)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
     $base = realpath(privateFilesDir());
     $file = realpath(privateFilesDir() . '/' . $pm[1]);
     if (!$base || !$file || !str_starts_with($file, $base . DIRECTORY_SEPARATOR) || !is_file($file)) jsonErr('الملف مش موجود', 404, 'NOT_FOUND');
     while (ob_get_level() > 0) @ob_end_clean();
     http_response_code(200);
-    header('Content-Type: ' . ['jpg' => 'image/jpeg', 'png' => 'image/png', 'webp' => 'image/webp', 'heic' => 'image/heic'][$pm[2]]);
+    header('Content-Type: ' . ['jpg' => 'image/jpeg', 'png' => 'image/png', 'webp' => 'image/webp', 'heic' => 'image/heic', 'pdf' => 'application/pdf'][$pm[2]]);
     header('Cache-Control: private, no-store');
     header('X-Content-Type-Options: nosniff');
     header('Content-Length: ' . filesize($file));
     readfile($file);
     exit;
+}
+
+// ═══ الحسابات ═══════════════════════════════════════════════════════════════
+// The accountant's books. Order money is never typed in by hand: it is read from
+// the Order rows by the drivers report's rules (DELIVERED/COMPLETED, the driver
+// work day, the driver's snapshot share), so the books and the reports agree.
+// What the orders can't know (rent, fuel, installments, salaries, other income,
+// advances, partners' withdrawals and capital) lives in AcctEntry. A closed day
+// or month keeps a snapshot and refuses entry changes until a super admin
+// reopens it.
+//
+// Access is explicit: SUPER_ADMIN, or an ADMIN whose permission list holds
+// «accounting». An admin with no list configured (legacy "sees everything")
+// does NOT get the books — they hold profit and partners' shares.
+
+const ACCT_KINDS = ['EXPENSE', 'INCOME', 'ADVANCE', 'WITHDRAWAL', 'CAPITAL'];
+const ACCT_METHODS = ['CASH', 'BANK', 'WALLET'];
+const ACCT_PARTY_TYPES = ['EMPLOYEE', 'INVESTOR', 'OWNER'];
+const ACCT_DEFAULT_CATEGORIES = [
+    'EXPENSE' => ['إيجارات', 'أقساط موتوسيكلات', 'بنزين', 'فواتير (كهربا، نت، موبايل)', 'مرتبات', 'صيانة',
+                  'دعاية وإعلانات', 'أدوات ومستلزمات', 'رسوم وضرايب', 'مصروفات أخرى'],
+    'INCOME' => ['إعلانات التجار', 'اشتراكات', 'إيرادات أخرى'],
+    'ADVANCE' => ['سلفة'],
+    'WITHDRAWAL' => ['مسحوبات أرباح'],
+    'CAPITAL' => ['إيداع رأس مال'],
+];
+
+function ensureAcctSchema(): bool {
+    static $ok = null;
+    if ($ok !== null) return $ok;
+    $flag = ($d = rtDir()) ? $d . '/schema-acct-v1' : null;
+    if ($flag && is_file($flag)) return $ok = true;
+    if (db()->inTransaction()) return false;   // DDL commits implicitly
+    try {
+        db()->exec("CREATE TABLE IF NOT EXISTS `AcctEntry` (
+            id VARCHAR(30) NOT NULL PRIMARY KEY, kind VARCHAR(12) NOT NULL, category VARCHAR(60) NOT NULL,
+            amount DECIMAL(12,2) NOT NULL, entryDate DATE NOT NULL, method VARCHAR(10) NOT NULL DEFAULT 'CASH',
+            partyType VARCHAR(10) NULL, partyId VARCHAR(191) NULL, partyName VARCHAR(120) NULL,
+            note VARCHAR(500) NULL, receipt VARCHAR(255) NULL,
+            recurringId VARCHAR(30) NULL, recurringMonth CHAR(7) NULL,
+            createdById VARCHAR(191) NULL, createdAt DATETIME(3) NOT NULL, updatedAt DATETIME(3) NOT NULL,
+            KEY AcctEntry_date_idx (entryDate), KEY AcctEntry_party_idx (partyId),
+            UNIQUE KEY AcctEntry_recurring_uq (recurringId, recurringMonth)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+        db()->exec("CREATE TABLE IF NOT EXISTS `AcctRecurring` (
+            id VARCHAR(30) NOT NULL PRIMARY KEY, title VARCHAR(120) NOT NULL, category VARCHAR(60) NOT NULL,
+            amount DECIMAL(12,2) NOT NULL, dayOfMonth TINYINT NOT NULL DEFAULT 1, method VARCHAR(10) NOT NULL DEFAULT 'CASH',
+            startMonth CHAR(7) NOT NULL, endMonth CHAR(7) NULL,
+            partyType VARCHAR(10) NULL, partyId VARCHAR(191) NULL, note VARCHAR(300) NULL,
+            isActive TINYINT(1) NOT NULL DEFAULT 1, createdAt DATETIME(3) NOT NULL, updatedAt DATETIME(3) NOT NULL
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+        db()->exec("CREATE TABLE IF NOT EXISTS `AcctParty` (
+            id VARCHAR(30) NOT NULL PRIMARY KEY, type VARCHAR(10) NOT NULL, name VARCHAR(120) NOT NULL,
+            phone VARCHAR(30) NULL, monthlySalary DECIMAL(12,2) NULL, sharePct DECIMAL(5,2) NULL,
+            capital DECIMAL(12,2) NULL, note VARCHAR(300) NULL, isActive TINYINT(1) NOT NULL DEFAULT 1,
+            createdAt DATETIME(3) NOT NULL, updatedAt DATETIME(3) NOT NULL
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+        db()->exec("CREATE TABLE IF NOT EXISTS `AcctClose` (
+            type VARCHAR(5) NOT NULL, period VARCHAR(10) NOT NULL, snapshot MEDIUMTEXT NOT NULL,
+            note VARCHAR(300) NULL, closedById VARCHAR(191) NULL, closedByName VARCHAR(120) NULL,
+            closedAt DATETIME(3) NOT NULL, PRIMARY KEY (type, period)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+        if ($flag) @file_put_contents($flag, gmdate('c'));
+        return $ok = true;
+    } catch (Throwable $e) {
+        error_log('[api.php] acct schema: ' . $e->getMessage());
+        return $ok = false;
+    }
+}
+
+/** May this caller see the books? (see the block comment above) */
+function acctCan(array $u): bool {
+    $role = $u['role'] ?? '';
+    if ($role === 'SUPER_ADMIN') return true;
+    if ($role !== 'ADMIN') return false;
+    $st = db()->prepare('SELECT permissions FROM `User` WHERE id = ? LIMIT 1');
+    $st->execute([$u['sub'] ?? '']);
+    $p = json_decode((string) ($st->fetchColumn() ?: ''), true);
+    return is_array($p) && in_array('accounting', $p, true);
+}
+function requireAcct(): array {
+    $u = authUser();
+    if (!acctCan($u)) jsonErr('صفحة الحسابات محتاجة صلاحية «الحسابات» من مدير النظام', 403, 'FORBIDDEN');
+    if (!ensureAcctSchema()) jsonErr('الحسابات مش جاهزة حالياً — راجع سجل السيرفر', 503, 'NOT_READY');
+    return $u;
+}
+
+function acctYmd($v): ?string {
+    $s = trim((string) $v);
+    if (!preg_match('/^(\d{4})-(\d{2})-(\d{2})$/', $s, $m) || !checkdate((int) $m[2], (int) $m[3], (int) $m[1])) return null;
+    return ($s < '2024-01-01' || $s > date('Y-m-d', strtotime('+400 days'))) ? null : $s;
+}
+function acctYm($v): ?string {
+    $s = trim((string) $v);
+    if (!preg_match('/^\d{4}-(0[1-9]|1[0-2])$/', $s)) return null;
+    return ($s < '2024-01' || $s > date('Y-m', strtotime('+13 months'))) ? null : $s;
+}
+/** [first day, last day] of a YYYY-MM month. */
+function acctMonthDays(string $ym): array { return [$ym . '-01', date('Y-m-t', strtotime($ym . '-01'))]; }
+function acctMonthShift(string $ym, int $n): string { return date('Y-m', strtotime($ym . '-01 ' . ($n >= 0 ? '+' : '') . $n . ' months')); }
+/** Whole months from $a to $b (YYYY-MM), $b − $a. */
+function acctMonthDiff(string $a, string $b): int {
+    return ((int) substr($b, 0, 4) - (int) substr($a, 0, 4)) * 12 + (int) substr($b, 5, 2) - (int) substr($a, 5, 2);
+}
+function acctAmount($v): ?float {
+    if (!is_numeric($v)) return null;
+    $f = round((float) $v, 2);
+    return ($f > 0 && $f < 100000000) ? $f : null;
+}
+function acctText($v, int $max): string { return mb_substr(trim(preg_replace('/\s+/u', ' ', (string) $v)), 0, $max); }
+
+/** The closing that covers a day, if any: the month's first, then the day's. */
+function acctClosedOn(string $ymd): ?array {
+    $st = db()->prepare("SELECT type, period FROM `AcctClose`
+                          WHERE (type = 'MONTH' AND period = ?) OR (type = 'DAY' AND period = ?)
+                          ORDER BY type = 'MONTH' DESC LIMIT 1");
+    $st->execute([substr($ymd, 0, 7), $ymd]);
+    return $st->fetch() ?: null;
+}
+function acctRefuseClosed(string $ymd): void {
+    $c = acctClosedOn($ymd);
+    if (!$c) return;
+    jsonErr($c['type'] === 'MONTH'
+        ? "شهر {$c['period']} متقفل — افتحه الأول من «التقفيل الشهري» لو محتاج تعدّل"
+        : "يوم {$c['period']} متقفل — افتحه الأول من «التقفيل اليومي» لو محتاج تعدّل", 409, 'PERIOD_CLOSED');
+}
+function acctClosing(string $type, string $period): ?array {
+    $st = db()->prepare('SELECT type, period, snapshot, note, closedById, closedByName, closedAt FROM `AcctClose` WHERE type = ? AND period = ?');
+    $st->execute([$type, $period]);
+    $r = $st->fetch();
+    if (!$r) return null;
+    $snap = json_decode((string) $r['snapshot'], true) ?: [];
+    return ['type' => $r['type'], 'period' => $r['period'], 'note' => $r['note'], 'closedByName' => $r['closedByName'],
+            'closedAt' => isoZ($r['closedAt']), 'netProfit' => isset($snap['netProfit']) ? (float) $snap['netProfit'] : null,
+            'snapshot' => $snap];
+}
+
+/**
+ * Money from delivered orders on Cairo work days $from..$to (inclusive), counted
+ * like the drivers report. companyNet = commission + delivery fees − the drivers'
+ * share − coupon discounts: what Tamem keeps from the orders before its own
+ * expenses. (A free-delivery promo is already inside: the fee is 0 and the
+ * driver's share stays on the fee before the promo.)
+ */
+function acctOrderMoney(string $from, string $to, bool $detail): array {
+    $W = orderFeeWorthSql();
+    $st = db()->prepare("SELECT o.createdAt, o.assignedDriverId, o.paymentMethod,
+            COALESCE(o.finalPrice, o.quotedPrice, 0) AS sale, o.merchantSubtotal AS goods, o.deliveryFee AS fee,
+            COALESCE(o.discountAmount, 0) AS disc, COALESCE(o.platformCommission, 0) AS comm,
+            COALESCE(o.merchantPayout, 0) AS payout,
+            CASE WHEN o.assignedDriverId IS NULL THEN 0
+                 ELSE COALESCE(o.driverDeliveryRevenue, ROUND($W * COALESCE(dp.deliverySharePct, 0) / 100, 2)) END AS share
+        FROM `Order` o LEFT JOIN `DriverProfile` dp ON dp.userId = o.assignedDriverId
+        WHERE o.status IN ('DELIVERED','COMPLETED') AND o.createdAt >= ? AND o.createdAt < ?");
+    $st->execute([gmdate('Y-m-d H:i:s', workDayStartTs($from)), gmdate('Y-m-d H:i:s', workDayEndTs($to))]);
+    $zero = ['orders' => 0, 'sales' => 0.0, 'cashSales' => 0.0, 'goods' => 0.0, 'fees' => 0.0, 'commission' => 0.0,
+             'discounts' => 0.0, 'driverShares' => 0.0, 'merchantPayouts' => 0.0, 'companyNet' => 0.0, 'feeMissing' => 0];
+    $add = static function (array &$a, array $r): void {
+        $sale = (float) $r['sale']; $fee = $r['fee'] !== null ? (float) $r['fee'] : 0.0;
+        $a['orders']++;
+        $a['sales'] += $sale;
+        if (($r['paymentMethod'] ?? 'CASH') === 'CASH' || $r['paymentMethod'] === null) $a['cashSales'] += $sale;
+        $a['goods'] += (float) ($r['goods'] ?? 0);
+        $a['fees'] += $fee;
+        $a['commission'] += (float) $r['comm'];
+        $a['discounts'] += (float) $r['disc'];
+        $a['driverShares'] += (float) $r['share'];
+        $a['merchantPayouts'] += (float) $r['payout'];
+        $a['companyNet'] += (float) $r['comm'] + $fee - (float) $r['share'] - (float) $r['disc'];
+        if ($r['fee'] === null) $a['feeMissing']++;
+    };
+    $tot = $zero; $byDay = []; $byDriver = [];
+    while ($r = $st->fetch()) {
+        $add($tot, $r);
+        if (!$detail) continue;
+        $day = workDayOf((int) strtotime($r['createdAt'] . ' UTC'));
+        if (!isset($byDay[$day])) $byDay[$day] = $zero;
+        $add($byDay[$day], $r);
+        if ($r['assignedDriverId']) {
+            if (!isset($byDriver[$r['assignedDriverId']])) $byDriver[$r['assignedDriverId']] = $zero;
+            $add($byDriver[$r['assignedDriverId']], $r);
+        }
+    }
+    $round = static function (array $a): array { foreach ($a as $k => $v) if (is_float($v)) $a[$k] = round($v, 2); return $a; };
+    ksort($byDay);
+    return ['totals' => $round($tot), 'byDay' => array_map($round, $byDay), 'byDriver' => array_map($round, $byDriver)];
+}
+
+/** Bonus minus deductions actually paid to drivers for work days $from..$to (signed sum). */
+function acctIncentivesPaid(string $from, string $to): float {
+    try {
+        $st = db()->prepare('SELECT COALESCE(SUM(amount), 0) FROM `DriverIncentivePayout` WHERE workDay BETWEEN ? AND ?');
+        $st->execute([$from, $to]);
+        return round((float) $st->fetchColumn(), 2);
+    } catch (Throwable $e) { return 0.0; }   // table not created yet = nothing paid
+}
+
+/** The profit and loss of Cairo days $from..$to. $detail adds per-day and per-driver lines. */
+function acctPnl(string $from, string $to, bool $detail = false): array {
+    $om = acctOrderMoney($from, $to, $detail);
+    $o = $om['totals'];
+    $incentives = acctIncentivesPaid($from, $to);
+    $st = db()->prepare('SELECT kind, category, method, SUM(amount) a, COUNT(*) n FROM `AcctEntry` WHERE entryDate BETWEEN ? AND ? GROUP BY kind, category, method');
+    $st->execute([$from, $to]);
+    $sum = array_fill_keys(ACCT_KINDS, 0.0);
+    $cats = ['EXPENSE' => [], 'INCOME' => []];
+    $cash = [];
+    foreach (ACCT_METHODS as $mth) $cash[$mth] = ['in' => 0.0, 'out' => 0.0];
+    foreach ($st->fetchAll() as $r) {
+        $k = $r['kind']; $a = (float) $r['a'];
+        if (!isset($sum[$k])) continue;
+        $sum[$k] += $a;
+        if (isset($cats[$k])) {
+            $c = $r['category'];
+            if (!isset($cats[$k][$c])) $cats[$k][$c] = ['category' => $c, 'amount' => 0.0, 'count' => 0];
+            $cats[$k][$c]['amount'] += $a; $cats[$k][$c]['count'] += (int) $r['n'];
+        }
+        $mth = in_array($r['method'], ACCT_METHODS, true) ? $r['method'] : 'CASH';
+        $cash[$mth][in_array($k, ['INCOME', 'CAPITAL'], true) ? 'in' : 'out'] += $a;
+    }
+    $catList = static function (array $c): array {
+        $l = array_values(array_map(static fn ($x) => ['category' => $x['category'], 'amount' => round($x['amount'], 2), 'count' => $x['count']], $c));
+        usort($l, static fn ($a, $b) => $b['amount'] <=> $a['amount']);
+        return $l;
+    };
+    $operating = round($o['companyNet'] - $incentives, 2);
+    $net = round($operating + $sum['INCOME'] - $sum['EXPENSE'], 2);
+    $revenue = round($o['commission'] + $o['fees'] + $sum['INCOME'], 2);
+    $st = db()->prepare('SELECT COALESCE(SUM(amount), 0) a, COUNT(*) n FROM `DriverSettlement` WHERE createdAt >= ? AND createdAt < ?');
+    $st->execute([gmdate('Y-m-d H:i:s', workDayStartTs($from)), gmdate('Y-m-d H:i:s', workDayEndTs($to))]);
+    $settled = $st->fetch() ?: ['a' => 0, 'n' => 0];
+    $out = [
+        'from' => $from, 'to' => $to,
+        'orders' => $o,
+        'driverIncentives' => $incentives,
+        'operatingNet' => $operating,
+        'otherIncome' => round($sum['INCOME'], 2),
+        'incomeByCategory' => $catList($cats['INCOME']),
+        'expenses' => round($sum['EXPENSE'], 2),
+        'expensesByCategory' => $catList($cats['EXPENSE']),
+        'advances' => round($sum['ADVANCE'], 2),
+        'withdrawals' => round($sum['WITHDRAWAL'], 2),
+        'capital' => round($sum['CAPITAL'], 2),
+        'revenue' => $revenue,
+        'netProfit' => $net,
+        'marginPct' => $revenue > 0 ? round($net / $revenue * 100, 1) : null,
+        'cashByMethod' => array_map(static fn ($c) => ['in' => round($c['in'], 2), 'out' => round($c['out'], 2), 'net' => round($c['in'] - $c['out'], 2)], $cash),
+        'driverSettlements' => ['amount' => round((float) $settled['a'], 2), 'count' => (int) $settled['n']],
+    ];
+    if ($detail) {
+        $st = db()->prepare('SELECT entryDate d, kind, SUM(amount) a FROM `AcctEntry` WHERE entryDate BETWEEN ? AND ? GROUP BY entryDate, kind');
+        $st->execute([$from, $to]);
+        $ent = [];
+        foreach ($st->fetchAll() as $r) $ent[$r['d']][$r['kind']] = (float) $r['a'];
+        $days = [];
+        for ($d = $from; $d <= $to; $d = date('Y-m-d', strtotime($d . ' +1 day'))) {
+            $od = $om['byDay'][$d] ?? null;
+            $exp = $ent[$d]['EXPENSE'] ?? 0.0; $inc = $ent[$d]['INCOME'] ?? 0.0;
+            $cn = $od ? $od['companyNet'] : 0.0;
+            $days[] = ['day' => $d, 'orders' => $od ? $od['orders'] : 0, 'companyNet' => $cn,
+                       'income' => round($inc, 2), 'expenses' => round($exp, 2), 'net' => round($cn + $inc - $exp, 2)];
+            if (count($days) > 400) break;
+        }
+        $out['byDay'] = $days;
+        $out['byDriver'] = $om['byDriver'];
+    }
+    return $out;
+}
+
+/** Drivers' lines for a day/month sheet: orders money + settled, advances and what is still unpaid. */
+function acctDriverLines(array $byDriver, string $from, string $to): array {
+    $ids = array_keys($byDriver);
+    $st = db()->prepare("SELECT partyId, SUM(amount) a FROM `AcctEntry` WHERE kind = 'ADVANCE' AND partyType = 'DRIVER' AND entryDate BETWEEN ? AND ? GROUP BY partyId");
+    $st->execute([$from, $to]);
+    $adv = [];
+    foreach ($st->fetchAll() as $r) { $adv[$r['partyId']] = (float) $r['a']; if (!isset($byDriver[$r['partyId']])) $ids[] = $r['partyId']; }
+    $ids = array_values(array_unique($ids));
+    if (!$ids) return [];
+    $ph = implode(',', array_fill(0, count($ids), '?'));
+    $names = [];
+    $st = db()->prepare("SELECT id, name, phone FROM `User` WHERE id IN ($ph)");
+    $st->execute($ids);
+    foreach ($st->fetchAll() as $r) $names[$r['id']] = $r;
+    $st = db()->prepare("SELECT driverId, SUM(amount) a FROM `DriverSettlement` WHERE driverId IN ($ph) AND createdAt >= ? AND createdAt < ? GROUP BY driverId");
+    $st->execute(array_merge($ids, [gmdate('Y-m-d H:i:s', workDayStartTs($from)), gmdate('Y-m-d H:i:s', workDayEndTs($to))]));
+    $paid = [];
+    foreach ($st->fetchAll() as $r) $paid[$r['driverId']] = (float) $r['a'];
+    $W = orderFeeWorthSql();
+    $st = db()->prepare("SELECT o.assignedDriverId d, SUM(COALESCE(o.driverDeliveryRevenue, ROUND($W * COALESCE(dp.deliverySharePct, 0) / 100, 2))) a
+                           FROM `Order` o LEFT JOIN `DriverProfile` dp ON dp.userId = o.assignedDriverId
+                          WHERE o.assignedDriverId IN ($ph) AND o.status IN ('DELIVERED','COMPLETED') AND o.driverSettlementStatus <> 'SETTLED'
+                          GROUP BY o.assignedDriverId");
+    $st->execute($ids);
+    $open = [];
+    foreach ($st->fetchAll() as $r) $open[$r['d']] = (float) $r['a'];
+    $lines = [];
+    foreach ($ids as $id) {
+        $m = $byDriver[$id] ?? ['orders' => 0, 'sales' => 0.0, 'cashSales' => 0.0, 'fees' => 0.0, 'driverShares' => 0.0, 'companyNet' => 0.0];
+        $lines[] = [
+            'driverId' => $id, 'name' => $names[$id]['name'] ?? 'مندوب محذوف', 'phone' => $names[$id]['phone'] ?? null,
+            'orders' => $m['orders'], 'sales' => $m['sales'], 'cashSales' => $m['cashSales'], 'fees' => $m['fees'],
+            'share' => $m['driverShares'], 'company' => round($m['companyNet'], 2),
+            'settled' => round($paid[$id] ?? 0, 2), 'advances' => round($adv[$id] ?? 0, 2),
+            'unsettled' => round($open[$id] ?? 0, 2),
+        ];
+    }
+    usort($lines, static fn ($a, $b) => $b['orders'] <=> $a['orders'] ?: strcmp((string) $a['name'], (string) $b['name']));
+    return $lines;
+}
+
+function acctEntryRow(array $r, array $locked): array {
+    return [
+        'id' => $r['id'], 'kind' => $r['kind'], 'category' => $r['category'], 'amount' => (float) $r['amount'],
+        'entryDate' => $r['entryDate'], 'method' => $r['method'], 'partyType' => $r['partyType'], 'partyId' => $r['partyId'],
+        'partyName' => $r['partyName'], 'note' => $r['note'], 'receipt' => $r['receipt'],
+        'recurringId' => $r['recurringId'], 'createdByName' => $r['createdByName'] ?? null, 'createdAt' => isoZ($r['createdAt']),
+        'locked' => isset($locked['M' . substr($r['entryDate'], 0, 7)]) || isset($locked['D' . $r['entryDate']]),
+    ];
+}
+/** Closed periods overlapping $from..$to, keyed 'M2026-11' / 'D2026-11-13'. */
+function acctLockedSet(string $from, string $to): array {
+    $st = db()->prepare("SELECT type, period FROM `AcctClose` WHERE (type = 'DAY' AND period BETWEEN ? AND ?) OR (type = 'MONTH' AND period BETWEEN ? AND ?)");
+    $st->execute([$from, $to, substr($from, 0, 7), substr($to, 0, 7)]);
+    $s = [];
+    foreach ($st->fetchAll() as $r) $s[($r['type'] === 'MONTH' ? 'M' : 'D') . $r['period']] = true;
+    return $s;
+}
+function acctEntries(string $where, array $args, int $limit = 3000): array {
+    $st = db()->prepare("SELECT e.*, u.name AS createdByName FROM `AcctEntry` e LEFT JOIN `User` u ON u.id = e.createdById
+                          WHERE $where ORDER BY e.entryDate DESC, e.createdAt DESC LIMIT $limit");
+    $st->execute($args);
+    return $st->fetchAll();
+}
+
+/**
+ * Resolve and check who an entry is for. EMPLOYEE/INVESTOR/OWNER are AcctParty
+ * rows of that type; DRIVER is a driver's User id. Returns [type, id, name] or nulls.
+ */
+function acctParty(string $kind, $type, $id): array {
+    $type = strtoupper(trim((string) $type)); $id = trim((string) $id);
+    if ($type === '' || $id === '') {
+        if ($kind === 'ADVANCE') jsonErr('السلفة لازم تتسجّل على موظف أو مندوب', 422, 'PARTY_REQUIRED');
+        if (in_array($kind, ['WITHDRAWAL', 'CAPITAL'], true)) jsonErr('اختار الشريك أو المستثمر', 422, 'PARTY_REQUIRED');
+        return [null, null, null];
+    }
+    if ($type === 'DRIVER') {
+        $st = db()->prepare("SELECT name FROM `User` WHERE id = ? AND role = 'DRIVER'");
+        $st->execute([$id]);
+        $n = $st->fetchColumn();
+        if ($n === false) jsonErr('المندوب مش موجود', 422, 'BAD_PARTY');
+        return ['DRIVER', $id, (string) $n];
+    }
+    if (!in_array($type, ACCT_PARTY_TYPES, true)) jsonErr('نوع الشخص غير صحيح', 422, 'BAD_PARTY');
+    $st = db()->prepare('SELECT name, type FROM `AcctParty` WHERE id = ?');
+    $st->execute([$id]);
+    $p = $st->fetch();
+    if (!$p || $p['type'] !== $type) jsonErr('الشخص مش موجود', 422, 'BAD_PARTY');
+    if (in_array($kind, ['WITHDRAWAL', 'CAPITAL'], true) && !in_array($type, ['INVESTOR', 'OWNER'], true)) jsonErr('المسحوبات ورأس المال للشركاء والمستثمرين بس', 422, 'BAD_PARTY');
+    if ($kind === 'ADVANCE' && $type !== 'EMPLOYEE') jsonErr('السلفة لموظف أو مندوب', 422, 'BAD_PARTY');
+    return [$type, $id, (string) $p['name']];
+}
+
+/** Validate an entry body; $old = the stored row for a PATCH. Returns the column values. */
+function acctEntryInput(array $b, ?array $old = null): array {
+    $get = static fn (string $k) => array_key_exists($k, $b) ? $b[$k] : ($old[$k] ?? null);
+    $kind = strtoupper((string) $get('kind'));
+    if (!in_array($kind, ACCT_KINDS, true)) jsonErr('نوع الحركة غير صحيح', 422, 'BAD_KIND');
+    $cat = acctText($get('category'), 60);
+    if ($cat === '') $cat = ACCT_DEFAULT_CATEGORIES[$kind][0];
+    $amount = acctAmount($get('amount'));
+    if ($amount === null) jsonErr('اكتب مبلغ صحيح أكبر من صفر', 422, 'BAD_AMOUNT');
+    $date = acctYmd($get('entryDate'));
+    if ($date === null) jsonErr('التاريخ غير صحيح', 422, 'BAD_DATE');
+    $method = strtoupper((string) ($get('method') ?: 'CASH'));
+    if (!in_array($method, ACCT_METHODS, true)) jsonErr('طريقة الدفع غير صحيحة', 422, 'BAD_METHOD');
+    $partyChanged = $old === null || array_key_exists('partyType', $b) || array_key_exists('partyId', $b) || array_key_exists('kind', $b);
+    [$pt, $pid, $pname] = $partyChanged ? acctParty($kind, $get('partyType'), $get('partyId')) : [$old['partyType'], $old['partyId'], $old['partyName']];
+    $receipt = $get('receipt');
+    $receipt = ($receipt === null || $receipt === '') ? null : (string) $receipt;
+    if ($receipt !== null && !preg_match('#^(private:receipts/\d{4}-\d{2}/[a-f0-9]{16,40}\.(jpg|png|webp|heic|pdf)|https?://\S{1,240})$#', $receipt)) jsonErr('الإيصال غير صحيح', 422, 'BAD_RECEIPT');
+    return ['kind' => $kind, 'category' => $cat, 'amount' => $amount, 'entryDate' => $date, 'method' => $method,
+            'partyType' => $pt, 'partyId' => $pid, 'partyName' => $pname, 'note' => acctText($get('note'), 500) ?: null, 'receipt' => $receipt];
+}
+
+/** A recurring item's line for month $ym: is it due, posted, or outside its dates; which installment. */
+function acctRecurringLine(array $r, string $ym, array $posted): array {
+    $inRange = $r['startMonth'] <= $ym && ($r['endMonth'] === null || $r['endMonth'] >= $ym);
+    $n = acctMonthDiff($r['startMonth'], $ym) + 1;
+    $total = $r['endMonth'] !== null ? acctMonthDiff($r['startMonth'], $r['endMonth']) + 1 : null;
+    $p = $posted[$r['id']] ?? null;
+    return [
+        'id' => $r['id'], 'title' => $r['title'], 'category' => $r['category'], 'amount' => (float) $r['amount'],
+        'dayOfMonth' => (int) $r['dayOfMonth'], 'method' => $r['method'], 'startMonth' => $r['startMonth'], 'endMonth' => $r['endMonth'],
+        'partyType' => $r['partyType'], 'partyId' => $r['partyId'], 'note' => $r['note'], 'isActive' => (bool) $r['isActive'],
+        'installment' => $total !== null && $inRange ? ['n' => $n, 'of' => $total, 'left' => $total - $n] : null,
+        'status' => $p ? 'POSTED' : (($inRange && $r['isActive']) ? 'DUE' : 'OFF'),
+        'postedEntryId' => $p['id'] ?? null, 'postedAmount' => isset($p['amount']) ? (float) $p['amount'] : null,
+        'dueDate' => min($ym . '-' . sprintf('%02d', (int) $r['dayOfMonth']), acctMonthDays($ym)[1]),
+    ];
+}
+function acctRecurringFor(string $ym): array {
+    $rows = db()->query('SELECT * FROM `AcctRecurring` ORDER BY isActive DESC, dayOfMonth, title')->fetchAll();
+    $st = db()->prepare('SELECT id, recurringId, amount FROM `AcctEntry` WHERE recurringMonth = ? AND recurringId IS NOT NULL');
+    $st->execute([$ym]);
+    $posted = [];
+    foreach ($st->fetchAll() as $p) $posted[$p['recurringId']] = $p;
+    return array_map(static fn ($r) => acctRecurringLine($r, $ym, $posted), $rows);
+}
+/** Post one recurring item for $ym. Returns the new entry id, or null when it was already posted. */
+function acctPostRecurring(array $r, string $ym, ?string $by): ?string {
+    $line = acctRecurringLine($r, $ym, []);
+    acctRefuseClosed($line['dueDate']);
+    $name = null;
+    if ($r['partyType'] && $r['partyId']) {
+        $st = $r['partyType'] === 'DRIVER' ? db()->prepare('SELECT name FROM `User` WHERE id = ?') : db()->prepare('SELECT name FROM `AcctParty` WHERE id = ?');
+        $st->execute([$r['partyId']]);
+        $name = $st->fetchColumn() ?: null;
+    }
+    $id = newId();
+    $note = $line['installment'] ? "قسط {$line['installment']['n']} من {$line['installment']['of']}" : null;
+    try {
+        db()->prepare('INSERT INTO `AcctEntry` (id, kind, category, amount, entryDate, method, partyType, partyId, partyName, note, recurringId, recurringMonth, createdById, createdAt, updatedAt)
+                       VALUES (?, \'EXPENSE\', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(3), NOW(3))')
+            ->execute([$id, $r['category'], $r['amount'], $line['dueDate'], $r['method'], $r['partyType'], $r['partyId'], $name,
+                       trim($r['title'] . ($note ? ' (' . $note . ')' : '')), $r['id'], $ym, $by]);
+    } catch (PDOException $e) {
+        if ((int) ($e->errorInfo[1] ?? 0) === 1062) return null;
+        throw $e;
+    }
+    return $id;
+}
+
+/** The month sheet: P&L, partners' shares, payroll, drivers. Also what a month closing stores. */
+function acctMonthSheet(string $ym): array {
+    [$from, $to] = acctMonthDays($ym);
+    $p = acctPnl($from, $to, true);
+    $byDriver = $p['byDriver']; unset($p['byDriver']);
+    $st = db()->prepare('SELECT partyId, kind, SUM(amount) a FROM `AcctEntry` WHERE entryDate BETWEEN ? AND ? AND partyId IS NOT NULL GROUP BY partyId, kind');
+    $st->execute([$from, $to]);
+    $per = [];
+    foreach ($st->fetchAll() as $r) $per[$r['partyId']][$r['kind']] = (float) $r['a'];
+    $parties = db()->query('SELECT * FROM `AcctParty` ORDER BY type, name')->fetchAll();
+    $dist = max(0.0, $p['netProfit']);
+    $partners = []; $sharesTotal = 0.0; $payroll = [];
+    foreach ($parties as $x) {
+        $e = $per[$x['id']] ?? [];
+        if (in_array($x['type'], ['INVESTOR', 'OWNER'], true)) {
+            $pct = (float) ($x['sharePct'] ?? 0);
+            if (!$x['isActive'] && !$e) continue;
+            $share = round($dist * $pct / 100, 2);
+            $sharesTotal += $share;
+            $partners[] = ['id' => $x['id'], 'type' => $x['type'], 'name' => $x['name'], 'sharePct' => $pct, 'share' => $share,
+                           'withdrawals' => round($e['WITHDRAWAL'] ?? 0, 2), 'capital' => round($e['CAPITAL'] ?? 0, 2),
+                           'due' => round($share - ($e['WITHDRAWAL'] ?? 0), 2)];
+        } elseif ($x['type'] === 'EMPLOYEE') {
+            if (!$x['isActive'] && !$e) continue;
+            $salary = (float) ($x['monthlySalary'] ?? 0);
+            $adv = (float) ($e['ADVANCE'] ?? 0); $paid = (float) ($e['EXPENSE'] ?? 0);
+            $payroll[] = ['id' => $x['id'], 'name' => $x['name'], 'salary' => round($salary, 2), 'advances' => round($adv, 2),
+                          'paid' => round($paid, 2), 'remaining' => round($salary - $adv - $paid, 2), 'isActive' => (bool) $x['isActive']];
+        }
+    }
+    $due = array_values(array_filter(acctRecurringFor($ym), static fn ($l) => $l['status'] === 'DUE'));
+    return $p + [
+        'month' => $ym,
+        'distributable' => round($dist, 2),
+        'partners' => $partners,
+        'undistributed' => round($dist - $sharesTotal, 2),
+        'payroll' => $payroll,
+        'drivers' => acctDriverLines($byDriver, $from, $to),
+        'recurringDue' => ['count' => count($due), 'amount' => round(array_sum(array_column($due, 'amount')), 2)],
+    ];
+}
+function acctDaySheet(string $day): array {
+    $p = acctPnl($day, $day, true);
+    $byDriver = $p['byDriver']; unset($p['byDriver'], $p['byDay']);
+    $rows = acctEntries('e.entryDate = ?', [$day], 500);
+    $locked = acctLockedSet($day, $day);
+    return $p + [
+        'day' => $day,
+        'drivers' => acctDriverLines($byDriver, $day, $day),
+        'entries' => array_map(static fn ($r) => acctEntryRow($r, $locked), $rows),
+    ];
+}
+/** A month's net profit as the books state it: the closing's figure when closed, else live. */
+function acctMonthNet(string $ym): array {
+    $c = acctClosing('MONTH', $ym);
+    if ($c && $c['netProfit'] !== null) {
+        $s = $c['snapshot'];
+        return ['month' => $ym, 'revenue' => (float) ($s['revenue'] ?? 0), 'expenses' => (float) ($s['expenses'] ?? 0),
+                'operatingNet' => (float) ($s['operatingNet'] ?? 0), 'netProfit' => $c['netProfit'], 'orders' => (int) ($s['orders']['orders'] ?? 0), 'closed' => true];
+    }
+    [$from, $to] = acctMonthDays($ym);
+    $p = acctPnl($from, $to);
+    return ['month' => $ym, 'revenue' => $p['revenue'], 'expenses' => $p['expenses'], 'operatingNet' => $p['operatingNet'],
+            'netProfit' => $p['netProfit'], 'orders' => $p['orders']['orders'], 'closed' => false];
+}
+
+if (str_starts_with($path, '/admin/accounting')) {
+    $acctUser = requireAcct();
+    $acctIsSuper = ($acctUser['role'] ?? '') === 'SUPER_ADMIN';
+    $acctBy = $acctUser['sub'] ?? null;
+
+    if ($method === 'GET' && $path === '/admin/accounting/meta') {
+        $used = [];
+        foreach (db()->query('SELECT DISTINCT kind, category FROM `AcctEntry`')->fetchAll() as $r) $used[$r['kind']][] = $r['category'];
+        foreach (db()->query('SELECT DISTINCT category FROM `AcctRecurring`')->fetchAll() as $r) $used['EXPENSE'][] = $r['category'];
+        $cats = [];
+        foreach (ACCT_DEFAULT_CATEGORIES as $k => $def) $cats[$k] = array_values(array_unique(array_merge($def, $used[$k] ?? [])));
+        $parties = array_map(static fn ($p) => ['id' => $p['id'], 'type' => $p['type'], 'name' => $p['name'], 'phone' => $p['phone'],
+            'monthlySalary' => $p['monthlySalary'] !== null ? (float) $p['monthlySalary'] : null,
+            'sharePct' => $p['sharePct'] !== null ? (float) $p['sharePct'] : null,
+            'capital' => $p['capital'] !== null ? (float) $p['capital'] : null,
+            'note' => $p['note'], 'isActive' => (bool) $p['isActive']],
+            db()->query('SELECT * FROM `AcctParty` ORDER BY isActive DESC, type, name')->fetchAll());
+        $drivers = db()->query("SELECT id, name FROM `User` WHERE role = 'DRIVER' AND isActive = 1 ORDER BY name")->fetchAll();
+        jsonOk(['categories' => $cats, 'parties' => $parties, 'drivers' => $drivers, 'canReopen' => $acctIsSuper,
+                'today' => workDayOf(), 'thisMonth' => substr(workDayOf(), 0, 7)]);
+    }
+
+    if ($method === 'GET' && $path === '/admin/accounting/overview') {
+        $ym = acctYm($_GET['month'] ?? '') ?? substr(workDayOf(), 0, 7);
+        [$from, $to] = acctMonthDays($ym);
+        $cur = acctPnl($from, $to, true);
+        unset($cur['byDriver']);
+        $trend = [];
+        for ($i = 5; $i >= 1; $i--) $trend[] = acctMonthNet(acctMonthShift($ym, -$i));
+        $trend[] = ['month' => $ym, 'revenue' => $cur['revenue'], 'expenses' => $cur['expenses'], 'operatingNet' => $cur['operatingNet'],
+                    'netProfit' => $cur['netProfit'], 'orders' => $cur['orders']['orders'], 'closed' => acctClosing('MONTH', $ym) !== null];
+        $due = array_values(array_filter(acctRecurringFor($ym), static fn ($l) => $l['status'] === 'DUE'));
+        jsonOk($cur + ['month' => $ym, 'previous' => $trend[4], 'trend' => $trend,
+            'recurringDue' => ['count' => count($due), 'amount' => round(array_sum(array_column($due, 'amount')), 2)],
+            'closed' => acctClosing('MONTH', $ym) ? true : false]);
+    }
+
+    if ($method === 'GET' && $path === '/admin/accounting/entries') {
+        $today = workDayOf();
+        $from = acctYmd($_GET['from'] ?? '') ?? substr($today, 0, 8) . '01';
+        $to = acctYmd($_GET['to'] ?? '') ?? $today;
+        if ($to < $from) [$from, $to] = [$to, $from];
+        $w = ['e.entryDate BETWEEN ? AND ?']; $a = [$from, $to];
+        $kind = strtoupper(trim((string) ($_GET['kind'] ?? '')));
+        if (in_array($kind, ACCT_KINDS, true)) { $w[] = 'e.kind = ?'; $a[] = $kind; }
+        $cat = acctText($_GET['category'] ?? '', 60);
+        if ($cat !== '') { $w[] = 'e.category = ?'; $a[] = $cat; }
+        $pid = trim((string) ($_GET['partyId'] ?? ''));
+        if ($pid !== '') { $w[] = 'e.partyId = ?'; $a[] = $pid; }
+        $q = acctText($_GET['q'] ?? '', 60);
+        if ($q !== '') { $w[] = '(e.note LIKE ? OR e.partyName LIKE ? OR e.category LIKE ?)'; $like = '%' . addcslashes($q, '%_\\') . '%'; array_push($a, $like, $like, $like); }
+        $rows = acctEntries(implode(' AND ', $w), $a);
+        $locked = acctLockedSet($from, $to);
+        $tot = array_fill_keys(ACCT_KINDS, 0.0);
+        foreach ($rows as $r) $tot[$r['kind']] += (float) $r['amount'];
+        jsonOk(['from' => $from, 'to' => $to, 'rows' => array_map(static fn ($r) => acctEntryRow($r, $locked), $rows),
+                'totals' => array_map(static fn ($v) => round($v, 2), $tot), 'truncated' => count($rows) >= 3000]);
+    }
+
+    if ($method === 'POST' && $path === '/admin/accounting/entries') {
+        $v = acctEntryInput(readJsonBody());
+        acctRefuseClosed($v['entryDate']);
+        $id = newId();
+        db()->prepare('INSERT INTO `AcctEntry` (id, kind, category, amount, entryDate, method, partyType, partyId, partyName, note, receipt, createdById, createdAt, updatedAt)
+                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,NOW(3),NOW(3))')
+            ->execute([$id, $v['kind'], $v['category'], $v['amount'], $v['entryDate'], $v['method'], $v['partyType'], $v['partyId'],
+                       $v['partyName'], $v['note'], $v['receipt'], $acctBy]);
+        jsonOk(['id' => $id] + $v);
+    }
+
+    if (in_array($method, ['PATCH', 'DELETE'], true) && preg_match('#^/admin/accounting/entries/([A-Za-z0-9_-]+)$#', $path, $m)) {
+        $st = db()->prepare('SELECT * FROM `AcctEntry` WHERE id = ?');
+        $st->execute([$m[1]]);
+        $old = $st->fetch();
+        if (!$old) jsonErr('الحركة مش موجودة', 404, 'NOT_FOUND');
+        acctRefuseClosed($old['entryDate']);
+        if ($method === 'DELETE') {
+            db()->prepare('DELETE FROM `AcctEntry` WHERE id = ?')->execute([$m[1]]);
+            if ($old['receipt'] && preg_match('#^private:(receipts/\d{4}-\d{2}/[a-f0-9]+\.(jpg|png|webp|heic|pdf))$#', $old['receipt'], $rm)) @unlink(privateFilesDir() . '/' . $rm[1]);
+            jsonOk(['deleted' => true]);
+        }
+        $b = readJsonBody();
+        $v = acctEntryInput($b, $old);
+        if ($v['entryDate'] !== $old['entryDate']) acctRefuseClosed($v['entryDate']);
+        db()->prepare('UPDATE `AcctEntry` SET kind = ?, category = ?, amount = ?, entryDate = ?, method = ?, partyType = ?, partyId = ?, partyName = ?, note = ?, receipt = ?, updatedAt = NOW(3) WHERE id = ?')
+            ->execute([$v['kind'], $v['category'], $v['amount'], $v['entryDate'], $v['method'], $v['partyType'], $v['partyId'], $v['partyName'], $v['note'], $v['receipt'], $m[1]]);
+        if ($old['receipt'] && $old['receipt'] !== $v['receipt'] && preg_match('#^private:(receipts/\d{4}-\d{2}/[a-f0-9]+\.(jpg|png|webp|heic|pdf))$#', $old['receipt'], $rm)) @unlink(privateFilesDir() . '/' . $rm[1]);
+        jsonOk(['id' => $m[1]] + $v);
+    }
+
+    // A receipt photo or PDF, kept off the public web like the drivers' ID cards.
+    if ($method === 'POST' && $path === '/admin/accounting/receipt') {
+        $f = $_FILES['file'] ?? null;
+        if (!$f || ($f['error'] ?? 1) !== UPLOAD_ERR_OK) jsonErr('الملف مارفعش — جرّب تاني', 422, 'UPLOAD_FAILED');
+        if ((int) $f['size'] > 10 * 1048576) jsonErr('الملف أكبر من 10 ميجا', 422, 'FILE_TOO_LARGE');
+        $t = sniffUploadType((string) $f['tmp_name']);
+        if (!in_array($t, ['jpg', 'png', 'webp', 'heic', 'pdf'], true)) jsonErr('ارفع صورة أو PDF', 422, 'BAD_FILE_TYPE');
+        $sub = 'receipts/' . date('Y-m');
+        $dir = privateFilesDir() . '/' . $sub;
+        if (!is_dir($dir) && !@mkdir($dir, 0700, true)) { error_log('[api.php] receipts dir not writable'); jsonErr('تعذّر حفظ الملف', 500, 'UPLOAD_FAILED'); }
+        $name = bin2hex(random_bytes(10)) . '.' . $t;
+        if (!@move_uploaded_file((string) $f['tmp_name'], $dir . '/' . $name)) jsonErr('تعذّر حفظ الملف', 500, 'UPLOAD_FAILED');
+        jsonOk(['ref' => 'private:' . $sub . '/' . $name]);
+    }
+
+    // ── Fixed monthly costs: rent, installments, bills… posted month by month ──
+    if ($method === 'GET' && $path === '/admin/accounting/recurring') {
+        $ym = acctYm($_GET['month'] ?? '') ?? substr(workDayOf(), 0, 7);
+        jsonOk(['month' => $ym, 'items' => acctRecurringFor($ym)]);
+    }
+    if (($method === 'POST' && $path === '/admin/accounting/recurring')
+        || ($method === 'PATCH' && preg_match('#^/admin/accounting/recurring/([A-Za-z0-9_-]+)$#', $path, $m))) {
+        $b = readJsonBody();
+        $old = null;
+        if ($method === 'PATCH') {
+            $st = db()->prepare('SELECT * FROM `AcctRecurring` WHERE id = ?'); $st->execute([$m[1]]);
+            $old = $st->fetch();
+            if (!$old) jsonErr('البند مش موجود', 404, 'NOT_FOUND');
+        }
+        $get = static fn (string $k) => array_key_exists($k, $b) ? $b[$k] : ($old[$k] ?? null);
+        $title = acctText($get('title'), 120);
+        if ($title === '') jsonErr('اكتب اسم المصروف (مثلاً: إيجار المكتب)', 422, 'BAD_TITLE');
+        $cat = acctText($get('category'), 60) ?: 'مصروفات أخرى';
+        $amount = acctAmount($get('amount'));
+        if ($amount === null) jsonErr('اكتب مبلغ صحيح', 422, 'BAD_AMOUNT');
+        $dom = (int) $get('dayOfMonth');
+        if ($dom < 1 || $dom > 31) $dom = 1;
+        $method2 = strtoupper((string) ($get('method') ?: 'CASH'));
+        if (!in_array($method2, ACCT_METHODS, true)) $method2 = 'CASH';
+        $start = acctYm($get('startMonth')) ?? substr(workDayOf(), 0, 7);
+        $end = null;
+        if (array_key_exists('months', $b) && $b['months'] !== null && $b['months'] !== '') {
+            $n = (int) $b['months'];
+            if ($n < 1 || $n > 120) jsonErr('عدد الأقساط من 1 لـ 120', 422, 'BAD_MONTHS');
+            $end = acctMonthShift($start, $n - 1);
+        } elseif (array_key_exists('endMonth', $b) || $old) {
+            $raw = $get('endMonth');
+            $end = ($raw === null || $raw === '') ? null : acctYm($raw);
+            if ($raw !== null && $raw !== '' && $end === null) jsonErr('شهر النهاية غير صحيح', 422, 'BAD_END');
+        }
+        if ($end !== null && $end < $start) jsonErr('شهر النهاية قبل البداية', 422, 'BAD_END');
+        $pt = $get('partyType') ?: null; $pid = $get('partyId') ?: null;
+        if ($pt && $pid) { [$pt, $pid] = acctParty('EXPENSE', $pt, $pid); } else { $pt = null; $pid = null; }
+        $note = acctText($get('note'), 300) ?: null;
+        $active = array_key_exists('isActive', $b) ? ($b['isActive'] ? 1 : 0) : (int) ($old['isActive'] ?? 1);
+        if ($old) {
+            db()->prepare('UPDATE `AcctRecurring` SET title=?, category=?, amount=?, dayOfMonth=?, method=?, startMonth=?, endMonth=?, partyType=?, partyId=?, note=?, isActive=?, updatedAt=NOW(3) WHERE id=?')
+                ->execute([$title, $cat, $amount, $dom, $method2, $start, $end, $pt, $pid, $note, $active, $old['id']]);
+            jsonOk(['id' => $old['id']]);
+        }
+        $id = newId();
+        db()->prepare('INSERT INTO `AcctRecurring` (id, title, category, amount, dayOfMonth, method, startMonth, endMonth, partyType, partyId, note, isActive, createdAt, updatedAt) VALUES (?,?,?,?,?,?,?,?,?,?,?,1,NOW(3),NOW(3))')
+            ->execute([$id, $title, $cat, $amount, $dom, $method2, $start, $end, $pt, $pid, $note]);
+        jsonOk(['id' => $id]);
+    }
+    if ($method === 'DELETE' && preg_match('#^/admin/accounting/recurring/([A-Za-z0-9_-]+)$#', $path, $m)) {
+        $st = db()->prepare('SELECT COUNT(*) FROM `AcctEntry` WHERE recurringId = ?'); $st->execute([$m[1]]);
+        if ((int) $st->fetchColumn() > 0) {
+            // Its past months stay in the books; it just stops coming due.
+            db()->prepare('UPDATE `AcctRecurring` SET isActive = 0, updatedAt = NOW(3) WHERE id = ?')->execute([$m[1]]);
+            jsonOk(['deactivated' => true]);
+        }
+        db()->prepare('DELETE FROM `AcctRecurring` WHERE id = ?')->execute([$m[1]]);
+        jsonOk(['deleted' => true]);
+    }
+    if ($method === 'POST' && preg_match('#^/admin/accounting/recurring/([A-Za-z0-9_-]+)/post$#', $path, $m)) {
+        $b = readJsonBody();
+        $ym = acctYm($b['month'] ?? '') ?? jsonErr('الشهر غير صحيح', 422, 'BAD_MONTH');
+        $st = db()->prepare('SELECT * FROM `AcctRecurring` WHERE id = ?'); $st->execute([$m[1]]);
+        $r = $st->fetch();
+        if (!$r) jsonErr('البند مش موجود', 404, 'NOT_FOUND');
+        $line = acctRecurringLine($r, $ym, []);
+        if ($line['status'] === 'OFF') jsonErr('البند ده مش مستحق في الشهر ده', 422, 'NOT_DUE');
+        $id = acctPostRecurring($r, $ym, $acctBy);
+        if ($id === null) jsonErr('اتسجّل للشهر ده قبل كده', 409, 'ALREADY');
+        jsonOk(['entryId' => $id]);
+    }
+    if ($method === 'POST' && $path === '/admin/accounting/recurring/post-due') {
+        $b = readJsonBody();
+        $ym = acctYm($b['month'] ?? '') ?? jsonErr('الشهر غير صحيح', 422, 'BAD_MONTH');
+        $n = 0; $skipped = 0;
+        foreach (db()->query('SELECT * FROM `AcctRecurring` WHERE isActive = 1')->fetchAll() as $r) {
+            if (acctRecurringLine($r, $ym, [])['status'] !== 'DUE') continue;
+            if (acctClosedOn(acctRecurringLine($r, $ym, [])['dueDate'])) { $skipped++; continue; }
+            if (acctPostRecurring($r, $ym, $acctBy) !== null) $n++;
+        }
+        jsonOk(['posted' => $n, 'skippedClosed' => $skipped]);
+    }
+
+    // ── People: employees (salary), investors and owners (share of the profit) ──
+    if (($method === 'POST' && $path === '/admin/accounting/parties')
+        || ($method === 'PATCH' && preg_match('#^/admin/accounting/parties/([A-Za-z0-9_-]+)$#', $path, $m))) {
+        $b = readJsonBody();
+        $old = null;
+        if ($method === 'PATCH') {
+            $st = db()->prepare('SELECT * FROM `AcctParty` WHERE id = ?'); $st->execute([$m[1]]);
+            $old = $st->fetch();
+            if (!$old) jsonErr('الشخص مش موجود', 404, 'NOT_FOUND');
+        }
+        $get = static fn (string $k) => array_key_exists($k, $b) ? $b[$k] : ($old[$k] ?? null);
+        $type = strtoupper((string) $get('type'));
+        if (!in_array($type, ACCT_PARTY_TYPES, true)) jsonErr('اختار النوع: موظف، مستثمر أو شريك', 422, 'BAD_TYPE');
+        if ($old && $type !== $old['type']) jsonErr('النوع مايتغيرش بعد الإضافة — ضيف شخص جديد', 422, 'TYPE_LOCKED');
+        $name = acctText($get('name'), 120);
+        if ($name === '') jsonErr('اكتب الاسم', 422, 'BAD_NAME');
+        $num = static function ($v, float $max) { if ($v === null || $v === '') return null; if (!is_numeric($v) || (float) $v < 0 || (float) $v > $max) return false; return round((float) $v, 2); };
+        $salary = $type === 'EMPLOYEE' ? $num($get('monthlySalary'), 10000000) : null;
+        $pct = $type !== 'EMPLOYEE' ? $num($get('sharePct'), 100) : null;
+        $capital = $type !== 'EMPLOYEE' ? $num($get('capital'), 1000000000) : null;
+        if ($salary === false || $pct === false || $capital === false) jsonErr('راجع الأرقام (النسبة من 0 لـ 100)', 422, 'BAD_NUMBER');
+        $active = array_key_exists('isActive', $b) ? ($b['isActive'] ? 1 : 0) : (int) ($old['isActive'] ?? 1);
+        if ($pct && $active) {
+            $st = db()->prepare("SELECT COALESCE(SUM(sharePct), 0) FROM `AcctParty` WHERE type IN ('INVESTOR','OWNER') AND isActive = 1 AND id <> ?");
+            $st->execute([$old['id'] ?? '']);
+            $others = (float) $st->fetchColumn();
+            if ($others + $pct > 100.001) jsonErr('مجموع نسب الشركاء هيعدّي 100% (الباقيين واخدين ' . rtrim(rtrim(number_format($others, 2, '.', ''), '0'), '.') . '%)', 422, 'SHARES_OVER_100');
+        }
+        $phone = acctText($get('phone'), 30) ?: null;
+        $note = acctText($get('note'), 300) ?: null;
+        if ($old) {
+            db()->prepare('UPDATE `AcctParty` SET name=?, phone=?, monthlySalary=?, sharePct=?, capital=?, note=?, isActive=?, updatedAt=NOW(3) WHERE id=?')
+                ->execute([$name, $phone, $salary, $pct, $capital, $note, $active, $old['id']]);
+            // Keep the name on the party's entries in step, so the ledger reads right.
+            if ($name !== $old['name']) db()->prepare('UPDATE `AcctEntry` SET partyName = ? WHERE partyId = ? AND partyType = ?')->execute([$name, $old['id'], $type]);
+            jsonOk(['id' => $old['id']]);
+        }
+        $id = newId();
+        db()->prepare('INSERT INTO `AcctParty` (id, type, name, phone, monthlySalary, sharePct, capital, note, isActive, createdAt, updatedAt) VALUES (?,?,?,?,?,?,?,?,1,NOW(3),NOW(3))')
+            ->execute([$id, $type, $name, $phone, $salary, $pct, $capital, $note]);
+        jsonOk(['id' => $id]);
+    }
+    if ($method === 'DELETE' && preg_match('#^/admin/accounting/parties/([A-Za-z0-9_-]+)$#', $path, $m)) {
+        $st = db()->prepare('SELECT COUNT(*) FROM `AcctEntry` WHERE partyId = ?'); $st->execute([$m[1]]);
+        if ((int) $st->fetchColumn() > 0) {
+            db()->prepare('UPDATE `AcctParty` SET isActive = 0, updatedAt = NOW(3) WHERE id = ?')->execute([$m[1]]);
+            jsonOk(['deactivated' => true]);
+        }
+        db()->prepare('DELETE FROM `AcctParty` WHERE id = ?')->execute([$m[1]]);
+        jsonOk(['deleted' => true]);
+    }
+    // A person's statement, month by month (newest first).
+    if ($method === 'GET' && preg_match('#^/admin/accounting/parties/([A-Za-z0-9_-]+)/statement$#', $path, $m)) {
+        $st = db()->prepare('SELECT * FROM `AcctParty` WHERE id = ?'); $st->execute([$m[1]]);
+        $p = $st->fetch();
+        if (!$p) jsonErr('الشخص مش موجود', 404, 'NOT_FOUND');
+        $months = max(1, min(24, (int) ($_GET['months'] ?? 12)));
+        $last = substr(workDayOf(), 0, 7);
+        $first = max(acctMonthShift($last, -($months - 1)), substr((string) $p['createdAt'], 0, 7));
+        $st = db()->prepare("SELECT DATE_FORMAT(entryDate, '%Y-%m') ym, kind, SUM(amount) a FROM `AcctEntry` WHERE partyId = ? GROUP BY ym, kind");
+        $st->execute([$p['id']]);
+        $per = [];
+        foreach ($st->fetchAll() as $r) { $per[$r['ym']][$r['kind']] = (float) $r['a']; if ($r['ym'] < $first) $first = max($r['ym'], acctMonthShift($last, -23)); }
+        $lines = []; $balance = 0.0;
+        for ($ym = $first; $ym <= $last; $ym = acctMonthShift($ym, 1)) {
+            $e = $per[$ym] ?? [];
+            if ($p['type'] === 'EMPLOYEE') {
+                $salary = (float) ($p['monthlySalary'] ?? 0);
+                $lines[] = ['month' => $ym, 'salary' => $salary, 'advances' => round($e['ADVANCE'] ?? 0, 2), 'paid' => round($e['EXPENSE'] ?? 0, 2),
+                            'remaining' => round($salary - ($e['ADVANCE'] ?? 0) - ($e['EXPENSE'] ?? 0), 2)];
+            } else {
+                $mn = acctMonthNet($ym);
+                $share = round(max(0.0, $mn['netProfit']) * (float) ($p['sharePct'] ?? 0) / 100, 2);
+                $balance += $share - ($e['WITHDRAWAL'] ?? 0);
+                $lines[] = ['month' => $ym, 'netProfit' => $mn['netProfit'], 'closed' => $mn['closed'], 'share' => $share,
+                            'withdrawals' => round($e['WITHDRAWAL'] ?? 0, 2), 'capital' => round($e['CAPITAL'] ?? 0, 2), 'balance' => round($balance, 2)];
+            }
+        }
+        jsonOk(['party' => ['id' => $p['id'], 'type' => $p['type'], 'name' => $p['name'], 'sharePct' => $p['sharePct'] !== null ? (float) $p['sharePct'] : null,
+                            'monthlySalary' => $p['monthlySalary'] !== null ? (float) $p['monthlySalary'] : null, 'capital' => $p['capital'] !== null ? (float) $p['capital'] : null],
+                'lines' => array_reverse($lines)]);
+    }
+
+    // ── Closings ──
+    if ($method === 'GET' && $path === '/admin/accounting/day') {
+        $day = acctYmd($_GET['date'] ?? '') ?? workDayOf();
+        $sheet = acctDaySheet($day);
+        $c = acctClosing('DAY', $day);
+        $mc = acctClosing('MONTH', substr($day, 0, 7));
+        jsonOk($sheet + ['closed' => $c ? array_diff_key($c, ['snapshot' => 1]) + ['changed' => $c['netProfit'] !== null && abs($c['netProfit'] - $sheet['netProfit']) > 0.009] : null,
+                         'monthClosed' => $mc !== null, 'isFuture' => $day > workDayOf()]);
+    }
+    if ($method === 'GET' && $path === '/admin/accounting/month') {
+        $ym = acctYm($_GET['month'] ?? '') ?? substr(workDayOf(), 0, 7);
+        $sheet = acctMonthSheet($ym);
+        $c = acctClosing('MONTH', $ym);
+        jsonOk($sheet + ['closed' => $c ? array_diff_key($c, ['snapshot' => 1]) + ['changed' => $c['netProfit'] !== null && abs($c['netProfit'] - $sheet['netProfit']) > 0.009] : null,
+                         'ended' => acctMonthDays($ym)[1] < workDayOf()]);
+    }
+    if ($method === 'GET' && $path === '/admin/accounting/closings') {
+        $rows = db()->query("SELECT type, period, note, closedByName, closedAt, JSON_VALUE(snapshot, '$.netProfit') AS net FROM `AcctClose` ORDER BY closedAt DESC LIMIT 200")->fetchAll();
+        jsonOk(array_map(static fn ($r) => ['type' => $r['type'], 'period' => $r['period'], 'note' => $r['note'], 'closedByName' => $r['closedByName'],
+                                           'closedAt' => isoZ($r['closedAt']), 'netProfit' => $r['net'] !== null ? (float) $r['net'] : null], $rows));
+    }
+    if ($method === 'POST' && $path === '/admin/accounting/close') {
+        $b = readJsonBody();
+        $type = strtoupper((string) ($b['type'] ?? ''));
+        if ($type === 'DAY') {
+            $period = acctYmd($b['period'] ?? '') ?? jsonErr('اليوم غير صحيح', 422, 'BAD_PERIOD');
+            if ($period > workDayOf()) jsonErr('مينفعش تقفّل يوم لسه ماجاش', 422, 'FUTURE');
+            if (acctClosing('MONTH', substr($period, 0, 7))) jsonErr('الشهر كله متقفل بالفعل', 409, 'ALREADY_CLOSED');
+            $snap = acctDaySheet($period);
+        } elseif ($type === 'MONTH') {
+            $period = acctYm($b['period'] ?? '') ?? jsonErr('الشهر غير صحيح', 422, 'BAD_PERIOD');
+            if ($period > substr(workDayOf(), 0, 7)) jsonErr('مينفعش تقفّل شهر لسه ماجاش', 422, 'FUTURE');
+            $snap = acctMonthSheet($period);
+        } else {
+            jsonErr('نوع التقفيل غير صحيح', 422, 'BAD_TYPE');
+        }
+        $st = db()->prepare('SELECT name FROM `User` WHERE id = ?'); $st->execute([$acctBy]);
+        try {
+            db()->prepare('INSERT INTO `AcctClose` (type, period, snapshot, note, closedById, closedByName, closedAt) VALUES (?,?,?,?,?,?,NOW(3))')
+                ->execute([$type, $period, json_encode($snap, JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE), acctText($b['note'] ?? '', 300) ?: null, $acctBy, $st->fetchColumn() ?: null]);
+        } catch (PDOException $e) {
+            if ((int) ($e->errorInfo[1] ?? 0) === 1062) jsonErr('اتقفل قبل كده', 409, 'ALREADY_CLOSED');
+            throw $e;
+        }
+        jsonOk(['type' => $type, 'period' => $period, 'netProfit' => $snap['netProfit']]);
+    }
+    if ($method === 'DELETE' && preg_match('#^/admin/accounting/close/(DAY|MONTH)/([0-9-]{7,10})$#', $path, $m)) {
+        if (!$acctIsSuper) jsonErr('فتح التقفيل لمدير النظام بس', 403, 'FORBIDDEN');
+        $st = db()->prepare('DELETE FROM `AcctClose` WHERE type = ? AND period = ?');
+        $st->execute([$m[1], $m[2]]);
+        if (!$st->rowCount()) jsonErr('مش متقفل', 404, 'NOT_FOUND');
+        jsonOk(['reopened' => true]);
+    }
+
+    jsonErr('مش موجود', 404, 'NOT_FOUND');
 }
 
 // Today's board: every driver with scheduled-today, scheduled-now, and on-shift.

@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import {
   AlertTriangle,
+  Wallet,
   BarChart3,
   Bell,
   Box,
@@ -66,6 +67,10 @@ type NavItem = {
   // whose perm is in their list. `undefined` = always visible (no perm concept,
   // e.g. categories). `'__super'` = SUPER_ADMIN only.
   perm?: string;
+  // Hidden even from admins with no permission list (who otherwise see
+  // everything): only SUPER_ADMIN or an admin explicitly granted `perm`.
+  // The books hold profit and partners' shares.
+  explicit?: boolean;
 };
 
 type NavSection = { title: string; items: NavItem[] };
@@ -126,6 +131,7 @@ const NAV_SECTIONS: NavSection[] = [
     items: [
       { to: '/reports', icon: BarChart3, label: 'التقارير', end: true, perm: 'reports' },
       { to: '/reports/revenue', icon: TrendingUp, label: 'تقرير الإيرادات', perm: 'reports' },
+      { to: '/accounting', icon: Wallet, label: 'الحسابات', perm: 'accounting', explicit: true },
     ],
   },
   {
@@ -165,6 +171,7 @@ function visibleSections(
   const unrestricted = role === 'SUPER_ADMIN' || permissions == null;
   const allow = (item: NavItem): boolean => {
     if (item.perm === '__super') return role === 'SUPER_ADMIN';
+    if (item.explicit) return role === 'SUPER_ADMIN' || !!permissions?.includes(item.perm ?? '');
     if (unrestricted) return true;
     if (!item.perm) return true;
     return permissions!.includes(item.perm);
