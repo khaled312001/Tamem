@@ -7,7 +7,8 @@
  * the design's 1600×600 ratio. Text is only drawn when an offer has NO image,
  * so a banner that already contains its own artwork/copy is never doubled up.
  */
-import { memo, useCallback, useMemo, useRef, useState } from 'react';
+import { useIsFocused } from '@react-navigation/native';
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   FlatList,
   I18nManager,
@@ -34,9 +35,11 @@ const CAPTION_H = 74;
 interface Props {
   offers: Offer[];
   onPressOffer: (offer: Offer) => void;
+  /** Seconds between slides (admin-set in the dashboard); 0 = by hand only. */
+  autoplaySec?: number;
 }
 
-function OffersCarouselBase({ offers, onPressOffer }: Props) {
+function OffersCarouselBase({ offers, onPressOffer, autoplaySec = 4 }: Props) {
   const { width } = useWindowDimensions();
   const bannerWidth = width - H_PADDING * 2;
   const imageHeight = bannerWidth / BANNER_RATIO;
@@ -48,13 +51,43 @@ function OffersCarouselBase({ offers, onPressOffer }: Props) {
   const [index, setIndex] = useState(0);
   const listRef = useRef<FlatList<Offer>>(null);
 
+  // Turn the cards by themselves. A finger on the slider holds it, and the
+  // count starts again from zero once it lets go, so a card the customer just
+  // swiped to is never yanked away a moment later. Off-screen (another tab or
+  // a pushed screen) it stops, so it never scrolls where nobody is looking.
+  const focused = useIsFocused();
+  const [held, setHeld] = useState(false);
+  const [restart, setRestart] = useState(0);
+  const indexRef = useRef(0);
+  indexRef.current = index;
+  useEffect(() => {
+    if (!autoplaySec || offers.length < 2 || held || !focused) return;
+    const t = setInterval(() => {
+      const next = (indexRef.current + 1) % offers.length;
+      listRef.current?.scrollToIndex({ index: next, animated: true });
+    }, autoplaySec * 1000);
+    return () => clearInterval(t);
+  }, [autoplaySec, offers.length, held, focused, restart]);
+  const hold = useCallback(() => setHeld(true), []);
+  const release = useCallback(() => {
+    setHeld(false);
+    setRestart((n) => n + 1);
+  }, []);
+
   const onScroll = useCallback(
     (e: NativeSyntheticEvent<NativeScrollEvent>) => {
-      const x = e.nativeEvent.contentOffset.x;
-      const i = Math.round(x / bannerWidth);
+      // Native RTL reports the offset from the LEFT edge, while scrollToIndex
+      // counts from the right. Convert the same way VirtualizedList does, or
+      // the first card reads as the last one and autoplay "moves" to the card
+      // already on screen, so the slider never turns (seen on Android, v34).
+      const { contentOffset, contentSize, layoutMeasurement } = e.nativeEvent;
+      const x = I18nManager.isRTL
+        ? contentSize.width - (contentOffset.x + layoutMeasurement.width)
+        : contentOffset.x;
+      const i = Math.max(0, Math.min(offers.length - 1, Math.round(x / bannerWidth)));
       setIndex((prev) => (prev === i ? prev : i));
     },
-    [bannerWidth],
+    [bannerWidth, offers.length],
   );
 
   const renderItem = useCallback(
@@ -126,6 +159,11 @@ function OffersCarouselBase({ offers, onPressOffer }: Props) {
         pagingEnabled
         showsHorizontalScrollIndicator={false}
         onScroll={onScroll}
+        onScrollBeginDrag={hold}
+        onScrollEndDrag={release}
+        onTouchStart={hold}
+        onTouchEnd={release}
+        onTouchCancel={release}
         scrollEventThrottle={16}
         snapToInterval={bannerWidth}
         decelerationRate="fast"

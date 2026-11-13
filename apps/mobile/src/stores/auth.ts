@@ -1,3 +1,4 @@
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { create } from 'zustand';
 
 import type { AuthTokens, User, UserRole } from '@tamem/types';
@@ -7,6 +8,29 @@ import { secureStorage } from '../lib/secureStorage';
 const ACCESS_KEY = 'tamem_access_token';
 const REFRESH_KEY = 'tamem_refresh_token';
 const USER_KEY = 'tamem_user';
+/** Copy of the signed-in user (profile only, never a token) outside the
+ *  Keystore, so a failed secure read can't cost the customer their session. */
+const USER_MIRROR_KEY = '@tamem/user_mirror';
+
+function mirrorUser(user: User | null): void {
+  void (
+    user
+      ? AsyncStorage.setItem(USER_MIRROR_KEY, JSON.stringify(user))
+      : AsyncStorage.removeItem(USER_MIRROR_KEY)
+  ).catch(() => undefined);
+}
+
+function parseUser(json: string | null): User | null {
+  if (!json) return null;
+  try {
+    const u = JSON.parse(json) as User;
+    return u && typeof u === 'object' && u.id ? u : null;
+  } catch {
+    return null;
+  }
+}
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /** Signup-only role choice. DRIVER/ADMIN are admin-provisioned. */
 export type SignupRole = Extract<UserRole, 'CUSTOMER' | 'MERCHANT'>;
@@ -66,6 +90,7 @@ export const useAuth = create<AuthState>((set, get) => ({
       secureStorage.setItem(REFRESH_KEY, tokens.refreshToken),
       secureStorage.setItem(USER_KEY, JSON.stringify(user)),
     ]);
+    mirrorUser(user);
     set({ user, tokens });
   },
 
@@ -79,6 +104,7 @@ export const useAuth = create<AuthState>((set, get) => ({
 
   setUser: async (user) => {
     await secureStorage.setItem(USER_KEY, JSON.stringify(user));
+    mirrorUser(user);
     set({ user });
   },
 
@@ -112,6 +138,7 @@ export const useAuth = create<AuthState>((set, get) => ({
         secureStorage.deleteItem(REFRESH_KEY),
         secureStorage.deleteItem(USER_KEY),
       ]);
+      mirrorUser(null);
       set({ user: null, tokens: null });
     })().finally(() => {
       clearing = null;
@@ -130,6 +157,7 @@ export const useAuth = create<AuthState>((set, get) => ({
       secureStorage.setItem(REFRESH_KEY, tokens.refreshToken),
       secureStorage.setItem(USER_KEY, JSON.stringify(user)),
     ]);
+    mirrorUser(user);
     set({ user, tokens });
     return { user, tokens };
   },
@@ -146,31 +174,69 @@ export const useAuth = create<AuthState>((set, get) => ({
       secureStorage.setItem(REFRESH_KEY, tokens.refreshToken),
       secureStorage.setItem(USER_KEY, JSON.stringify(user)),
     ]);
+    mirrorUser(user);
     set({ user, tokens });
     return { user, tokens };
   },
 
   hydrate: async () => {
+    /*
+     * A signed-in customer must come back signed in. This used to read the
+     * three values at once and treat ANY failure as "no session", so a single
+     * Keystore hiccup at startup (or a lost user record) sent people to the
+     * login screen with a perfectly good refresh token still on the phone.
+     * Now: read one by one, try again on failure, take the user from the
+     * mirror if its secure copy is gone, and only the refresh token decides.
+     */
+    let accessToken: string | null = null;
+    let refreshToken: string | null = null;
+    let userJson: string | null = null;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        refreshToken = await secureStorage.getItem(REFRESH_KEY);
+        accessToken = await secureStorage.getItem(ACCESS_KEY);
+        userJson = await secureStorage.getItem(USER_KEY);
+        break;
+      } catch {
+        await sleep(300 * (attempt + 1));
+      }
+    }
+    if (!refreshToken) {
+      set({ hydrated: true });
+      return;
+    }
+    let user = parseUser(userJson);
+    if (!user) {
+      user = parseUser(await AsyncStorage.getItem(USER_MIRROR_KEY).catch(() => null));
+    }
+    // A missing access token is fine: the first call gets a 401 and the
+    // client refreshes with the refresh token.
+    const tokens: AuthTokens = { accessToken: accessToken ?? '', refreshToken };
+    if (user) {
+      set({ tokens, user, hydrated: true });
+      if (!userJson)
+        void secureStorage.setItem(USER_KEY, JSON.stringify(user)).catch(() => undefined);
+      return;
+    }
+    // Tokens but no user record anywhere: ask the server who this is.
+    set({ tokens });
     try {
-      const [accessToken, refreshToken, userJson] = await Promise.all([
-        secureStorage.getItem(ACCESS_KEY),
-        secureStorage.getItem(REFRESH_KEY),
-        secureStorage.getItem(USER_KEY),
-      ]);
-      if (accessToken && refreshToken && userJson) {
-        set({
-          tokens: { accessToken, refreshToken },
-          user: JSON.parse(userJson) as User,
-          hydrated: true,
-        });
-      } else {
-        set({ hydrated: true });
+      const { api } = await import('../lib/api');
+      const res = await api.raw.get('/me');
+      const me = (res.data?.data ?? null) as User | null;
+      if (me?.id) {
+        await secureStorage.setItem(USER_KEY, JSON.stringify(me)).catch(() => undefined);
+        mirrorUser(me);
+        set({ user: me, hydrated: true });
+        return;
       }
     } catch {
-      set({ hydrated: true });
+      /* no network or a dead session: fall through to the login screen */
     }
+    set({ tokens: null, hydrated: true });
   },
 }));
 
+// Memory first: every API call used to read the Keystore, in parallel.
 export const getAccessTokenAsync = async (): Promise<string | null> =>
-  secureStorage.getItem(ACCESS_KEY);
+  useAuth.getState().tokens?.accessToken || secureStorage.getItem(ACCESS_KEY);

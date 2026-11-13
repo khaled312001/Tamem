@@ -136,6 +136,11 @@ export function AppTabs() {
     <View style={{ flex: 1 }}>
       <Tabs.Navigator
         initialRouteName="HomeTab"
+        // Android back on any other tab lands on الرئيسية, and back on
+        // الرئيسية leaves the app. The default ('firstRoute') went to the
+        // first tab in the bar, which is السلة, so back from الإشعارات
+        // opened the cart.
+        backBehavior="initialRoute"
         screenOptions={{
           headerShown: false,
           // A blurred tab keeps its state but stops rendering — the Orders tab

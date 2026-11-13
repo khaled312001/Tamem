@@ -1,399 +1,326 @@
-import { zodResolver } from '@hookform/resolvers/zod';
-import { useNavigation, useRoute, type RouteProp } from '@react-navigation/native';
-import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { LinearGradient } from 'expo-linear-gradient';
-import * as Linking from 'expo-linking';
+import type { LucideIcon } from 'lucide-react-native';
 import {
-  AlertCircle,
-  Lock,
-  LogIn,
-  Phone,
+  Bike,
+  MapPin,
+  MapPinned,
+  MessageCircle,
+  Package,
+  ShieldCheck,
   Store,
-  Truck,
-  User as UserIcon,
 } from 'lucide-react-native';
-import { useState } from 'react';
-import { Controller, useForm, type Resolver } from 'react-hook-form';
+import { useEffect, useRef } from 'react';
 import {
+  AccessibilityInfo,
   Alert,
-  KeyboardAvoidingView,
-  Platform,
+  Animated,
+  Easing,
+  Image,
+  Linking,
   Pressable,
   ScrollView,
   StyleSheet,
   Text,
   View,
+  useWindowDimensions,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
-
-import { type LoginInput, loginSchema } from '@tamem/validators';
-import type { z } from 'zod';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { GoogleSignInButton } from '../components/GoogleSignInButton';
-import { IconField } from '../components/IconField';
-import { PasswordField } from '../components/PasswordField';
-import { PrimaryButton } from '../components/ui';
-import { api } from '../lib/api';
-import { authErrorMessage } from '../lib/authErrors';
-import { useSupportWhatsapp, waLink } from '../lib/contacts';
-import type { AuthStackParamList } from '../navigation/AuthStack';
-import { useAuth, type SignupRole } from '../stores/auth';
-import {
-  colors,
-  fontFamilies,
-  fontSizes,
-  gradients,
-  radii,
-  shadows,
-  spacing,
-} from '../theme/tokens';
+import { useAppContent } from '../lib/appContent';
+import { useContacts, waLink } from '../lib/contacts';
+import type { SignupRole } from '../stores/auth';
+import { colors, fontFamilies, fontSizes, radii, spacing } from '../theme/tokens';
 
-type NavProp = NativeStackNavigationProp<AuthStackParamList, 'Login'>;
-type LoginRouteProp = RouteProp<AuthStackParamList, 'Login'>;
+// Made in ChatGPT from the Tamem logo (2026-11-13), 1080×938: the rider
+// carries the logo on the box and the jacket, so no separate logo badge.
+const HERO = require('../assets/login-hero.jpg');
+const HERO_RATIO = 938 / 1080;
 
-/** What the fields actually hold, i.e. loginSchema BEFORE its transform. */
-type LoginFormValues = z.input<typeof loginSchema>;
+const FEATURES: { icon: LucideIcon; title: string; body: string }[] = [
+  { icon: Store, title: 'محلات ومطاعم بلدك', body: 'اطلب من محلات ومطاعم قفط من مكان واحد' },
+  { icon: Bike, title: 'توصيل سريع', body: 'جوه قفط في حدود 30 لـ 45 دقيقة' },
+  { icon: Package, title: 'شحن ومشاوير', body: 'ابعت أي حاجة لقنا والقرى اللي حوالينا' },
+  { icon: MapPinned, title: 'تابع طلبك', body: 'تعرف طلبك فين لحد ما يوصل بابك' },
+];
 
-// Errors now go through the shared lib/authErrors helper.
-
+/**
+ * The welcome screen, and the app's only way in: Google.
+ *
+ * It was a red header and a lone button, which said nothing to someone who
+ * just installed the app from a friend's link. Now it reads top to bottom:
+ * who we are (picture, logo, one line on what Tamem does), the one thing to
+ * do (the Google button, in the middle of the screen, with what happens next
+ * right under it), then what you get, and a WhatsApp line for anyone stuck.
+ *
+ * Signing in and making an account are the same tap; a first-time user is
+ * created on the server and asked for a phone number once (CollectPhoneScreen).
+ * There is no password anywhere, so no password form and no "forgot password".
+ */
 export function LoginScreen() {
-  const navigation = useNavigation<NavProp>();
-  const route = useRoute<LoginRouteProp>();
-  const initialRole = route.params?.initialRole;
-  const setSession = useAuth((s) => s.setSession);
-  const [loading, setLoading] = useState(false);
-  // Surface the auth error inline (red banner above the submit button) AND
-  // via Alert.alert — web's RN Alert sometimes flashes too quickly to read,
-  // so the inline banner is the reliable channel.
-  const [errorMsg, setErrorMsg] = useState<string | null>(null);
-  const supportWhatsapp = useSupportWhatsapp();
-  /** The role to sign up new Google users as. Default customer — the app no
-   *  longer asks "عميل أم تاجر؟" up front; merchants sign up via the merchant
-   *  link. The backend ignores role for returning users, so this is safe. */
-  const resolveGoogleRole = (): Promise<SignupRole | null | undefined> => {
-    return Promise.resolve(initialRole ?? 'CUSTOMER');
-  };
+  const { width, height } = useWindowDimensions();
+  const insets = useSafeAreaInsets();
+  const { aboutTaglineAr } = useAppContent();
+  const { supportWhatsapp } = useContacts();
 
-  // loginSchema ends in a .transform() that folds `phone` into `identifier`, so
-  // its INPUT (what the fields hold) and its OUTPUT (what onSubmit receives) are
-  // different shapes. Typing the form with only the output made every field name
-  // here a lie: `values.phone` was always undefined at submit, so login posted an
-  // empty identifier and the server answered "أدخل البريد وكلمة المرور" — for
-  // every user, on every build. tsc flagged all of it; the Android build never
-  // runs tsc, so it shipped. Keep all three generics.
-  const {
-    control,
-    handleSubmit,
-    formState: { errors },
-  } = useForm<LoginFormValues, unknown, LoginInput>({
-    // @hookform/resolvers v3 predates react-hook-form's TTransformedValues
-    // generic: zodResolver is typed as Resolver<TFieldValues> and cannot express
-    // "input shape in, transformed shape out". It DOES hand handleSubmit the
-    // parsed output at runtime, so the cast states what actually happens.
-    resolver: zodResolver(loginSchema) as unknown as Resolver<LoginFormValues, unknown, LoginInput>,
-    defaultValues: { phone: '', password: '' },
+  // Short enough that the button lands near the middle of a phone screen.
+  const heroH = Math.round(Math.min(width * 0.86, height * 0.36));
+
+  // New Google users are customers. The server keeps the role of an existing
+  // account, so this never turns a merchant into a customer.
+  const resolveGoogleRole = (): Promise<SignupRole | null | undefined> =>
+    Promise.resolve('CUSTOMER');
+
+  // The three blocks rise in one after the other. Skipped when the phone asks
+  // for less motion.
+  const a0 = useRef(new Animated.Value(0)).current;
+  const a1 = useRef(new Animated.Value(0)).current;
+  const a2 = useRef(new Animated.Value(0)).current;
+  const steps = useRef([a0, a1, a2]).current;
+  useEffect(() => {
+    let alive = true;
+    void AccessibilityInfo.isReduceMotionEnabled()
+      .catch(() => false)
+      .then((reduce) => {
+        if (!alive) return;
+        if (reduce) {
+          steps.forEach((v) => v.setValue(1));
+          return;
+        }
+        Animated.stagger(
+          110,
+          steps.map((v) =>
+            Animated.timing(v, {
+              toValue: 1,
+              duration: 420,
+              easing: Easing.out(Easing.cubic),
+              useNativeDriver: true,
+            }),
+          ),
+        ).start();
+      });
+    return () => {
+      alive = false;
+    };
+  }, [steps]);
+  const rise = (v: Animated.Value) => ({
+    opacity: v,
+    transform: [{ translateY: v.interpolate({ inputRange: [0, 1], outputRange: [14, 0] }) }],
   });
 
-  // No reset code — there is no OTP left anywhere in the app. A password is
-  // changed by the office, so say that plainly and offer the one tap that
-  // actually gets it done rather than a dead end.
-  const onForgotPassword = () => {
-    Alert.alert(
-      'نسيت كلمة المرور؟',
-      'كلمة المرور بتتغيّر عن طريق الإدارة. كلّمنا على واتساب وهنعدّلها لك على طول.',
-      [
-        { text: 'إلغاء', style: 'cancel' },
-        {
-          text: 'مراسلة الإدارة',
-          onPress: () => {
-            void Linking.openURL(
-              waLink(
-                supportWhatsapp,
-                'السلام عليكم، نسيت كلمة مرور حسابي في تطبيق تميم ومحتاج تعديلها.',
-              ),
-            );
-          },
-        },
-      ],
+  const askForHelp = () => {
+    const url = waLink(supportWhatsapp, 'السلام عليكم، محتاج مساعدة في الدخول على تطبيق تميم');
+    Linking.openURL(url).catch(() =>
+      Alert.alert('واتساب مش موجود', 'كلّمنا على رقم الدعم من صفحة «عن تميم».'),
     );
   };
 
-  const onSubmit = async (values: LoginInput) => {
-    setLoading(true);
-    setErrorMsg(null);
-    try {
-      // `identifier` is the transform's output: the phone already normalised to
-      // +20… (or a lowercased email). Never read `values.phone` here.
-      const res = await api.login(values.identifier, values.password, initialRole);
-      if (initialRole === 'MERCHANT' && res.user.role !== 'MERCHANT') {
-        Alert.alert('حساب غير تاجر', 'هذا الحساب ليس تاجر — هل تريد التسجيل كتاجر؟', [
-          { text: 'إلغاء', style: 'cancel' },
-          { text: 'التسجيل كتاجر', onPress: () => navigation.navigate('MerchantSignup') },
-        ]);
-        return;
-      }
-      await setSession(res.user, res.tokens);
-    } catch (err: unknown) {
-      const msg = authErrorMessage(err, 'login');
-      setErrorMsg(msg);
-      Alert.alert('تعذّر تسجيل الدخول', msg);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const roleBadgeLabel = initialRole === 'MERCHANT' ? 'تاجر' : 'عميل';
-  const RoleBadgeIcon = initialRole === 'MERCHANT' ? Store : UserIcon;
-  // Customers: Google only. The phone + password form is the merchants'
-  // entrance (their accounts are made by the office and have no Google link),
-  // reached from the small «دخول التجار» link at the bottom.
-  const isMerchant = initialRole === 'MERCHANT';
-
   return (
-    <SafeAreaView edges={['top']} style={styles.container}>
-      <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-        style={styles.flex}
+    <View style={styles.container}>
+      <ScrollView
+        contentContainerStyle={[styles.scroll, { paddingBottom: insets.bottom + spacing.lg }]}
+        showsVerticalScrollIndicator={false}
+        bounces={false}
       >
-        {/* ─────── Brand hero ─────── */}
-        <LinearGradient
-          colors={gradients.brand}
-          start={{ x: 0, y: 0 }}
-          end={{ x: 1, y: 1 }}
-          style={styles.hero}
+        {/* Who we are */}
+        <View
+          style={[styles.hero, { height: heroH + insets.top }]}
+          accessibilityLabel="مندوب تميم على موتوسيكل"
+          accessible
         >
-          <View style={styles.heroLogoCircle}>
-            <Truck size={28} color={colors.white} />
+          {/* Explicit size: on web an absolute-fill image keeps its natural
+              size and only a corner of the picture shows. Pinned to the top
+              and at least as tall as its own ratio, so what gets cut is the
+              plain cream at the bottom, never the rider's helmet. It starts
+              under the status bar for the same reason. */}
+          <Image
+            source={HERO}
+            style={{
+              position: 'absolute',
+              top: insets.top,
+              left: 0,
+              width,
+              height: Math.max(heroH, width * HERO_RATIO),
+            }}
+            resizeMode="cover"
+            accessibilityIgnoresInvertColors
+          />
+          <LinearGradient
+            colors={['rgba(252,248,244,0)', 'rgba(252,248,244,0.85)', colors.surface]}
+            locations={[0, 0.7, 1]}
+            style={styles.heroFade}
+          />
+        </View>
+
+        <Animated.View style={[styles.welcome, rise(a0)]}>
+          <View style={styles.placePill}>
+            <MapPin size={13} color={colors.brand.red} />
+            <Text style={styles.placeText} numberOfLines={1}>
+              {aboutTaglineAr}
+            </Text>
           </View>
-          <Text style={styles.heroTitle}>{isMerchant ? 'دخول التجار' : 'أهلاً بيك في تميم'}</Text>
-          <Text style={styles.heroSubtitle}>
-            {isMerchant
-              ? 'ادخل برقم المحل وكلمة المرور اللي اتبعتتلك من الإدارة'
-              : 'ادخل بحساب جوجل في ثانية، من غير كلمة مرور'}
+          <Text style={styles.title} accessibilityRole="header">
+            أهلاً بيك في تميم
           </Text>
-          {isMerchant && (
-            <View style={styles.roleBadge}>
-              <RoleBadgeIcon size={14} color={colors.white} />
-              <Text style={styles.roleBadgeText}>تسجيل دخول كـ {roleBadgeLabel}</Text>
-            </View>
-          )}
-        </LinearGradient>
+          <Text style={styles.subtitle}>
+            اطلب من محلات ومطاعم بلدك، أو ابعت أي حاجة لأي مكان، والمندوب يوصّلها لحد عندك.
+          </Text>
+        </Animated.View>
 
-        <ScrollView
-          contentContainerStyle={styles.scroll}
-          keyboardShouldPersistTaps="handled"
-          showsVerticalScrollIndicator={false}
-        >
-          {!isMerchant ? (
-            <View style={[styles.card, shadows.md]}>
-              <GoogleSignInButton
-                label="الدخول بحساب جوجل"
-                onResolveRole={resolveGoogleRole}
-                onError={(msg) => Alert.alert('خطأ', msg)}
-              />
-              <Text style={styles.googleNote}>
-                أول مرة؟ هيتعملك حساب على طول، وهنطلب رقم موبايلك مرة واحدة عشان المندوب يكلمك.
-              </Text>
-            </View>
-          ) : (
-            <View style={[styles.card, shadows.md]}>
-              <Text style={styles.fieldLabel}>رقم الهاتف</Text>
-              <Controller
-                control={control}
-                name="phone"
-                render={({ field: { value, onChange, onBlur } }) => (
-                  <IconField
-                    Icon={Phone}
-                    placeholder="مثال: 01070750167"
-                    keyboardType="phone-pad"
-                    value={value}
-                    onChangeText={onChange}
-                    onBlur={onBlur}
-                    error={errors.phone?.message}
-                    autoComplete="tel"
-                  />
-                )}
-              />
+        {/* The one thing to do */}
+        <Animated.View style={[styles.cta, rise(a1)]}>
+          <GoogleSignInButton
+            large
+            label="ادخل بحساب جوجل"
+            onResolveRole={resolveGoogleRole}
+            onError={(msg) => Alert.alert('مقدرناش ندخلك', msg)}
+          />
+          <View style={styles.trust}>
+            <ShieldCheck size={15} color={colors.success} />
+            <Text style={styles.trustText}>من غير كلمة سر. أول مرة؟ هيتعملك حساب على طول.</Text>
+          </View>
+        </Animated.View>
 
-              <View style={styles.fieldHeader}>
-                <Text style={styles.fieldLabel}>كلمة المرور</Text>
-                <Pressable onPress={onForgotPassword} hitSlop={8}>
-                  <Text style={styles.forgotText}>نسيت كلمة المرور؟</Text>
-                </Pressable>
-              </View>
-              <Controller
-                control={control}
-                name="password"
-                render={({ field: { value, onChange, onBlur } }) => (
-                  <PasswordField
-                    Icon={Lock}
-                    placeholder="••••••••"
-                    value={value}
-                    onChangeText={onChange}
-                    onBlur={onBlur}
-                    error={errors.password?.message}
-                    autoComplete="password"
-                  />
-                )}
-              />
-
-              {errorMsg ? (
-                <View style={styles.errorBanner}>
-                  <AlertCircle size={16} color={colors.danger} />
-                  <Text style={styles.errorBannerText}>{errorMsg}</Text>
+        {/* What you get */}
+        <Animated.View style={[styles.features, rise(a2)]}>
+          <Text style={styles.sectionTitle}>إيه اللي تقدر تعمله مع تميم</Text>
+          <View style={styles.grid}>
+            {FEATURES.map(({ icon: Icon, title, body }) => (
+              <View key={title} style={styles.tile}>
+                <View style={styles.tileIcon}>
+                  <Icon size={20} color={colors.brand.red} />
                 </View>
-              ) : null}
-
-              <View style={{ marginTop: spacing.lg }}>
-                <PrimaryButton
-                  label="تسجيل الدخول"
-                  onPress={handleSubmit(onSubmit)}
-                  loading={loading}
-                  Icon={LogIn}
-                />
+                <Text style={styles.tileTitle}>{title}</Text>
+                <Text style={styles.tileBody}>{body}</Text>
               </View>
-            </View>
-          )}
+            ))}
+          </View>
 
           <Pressable
-            onPress={() =>
-              isMerchant
-                ? navigation.setParams({ initialRole: undefined })
-                : navigation.setParams({ initialRole: 'MERCHANT' })
-            }
-            hitSlop={10}
-            style={({ pressed }) => [styles.switchLink, pressed && { opacity: 0.6 }]}
+            onPress={askForHelp}
+            style={({ pressed }) => [styles.help, pressed && { opacity: 0.7 }]}
+            accessibilityRole="link"
+            hitSlop={8}
           >
-            <Text style={styles.switchText}>
-              {isMerchant ? 'عميل؟ ادخل بجوجل' : 'صاحب محل؟ دخول التجار'}
+            <MessageCircle size={15} color={colors.text.muted} />
+            <Text style={styles.helpText}>
+              محتاج مساعدة؟ <Text style={styles.helpLink}>كلّمنا على واتساب</Text>
             </Text>
           </Pressable>
-        </ScrollView>
-      </KeyboardAvoidingView>
-    </SafeAreaView>
+        </Animated.View>
+      </ScrollView>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.surface },
-  flex: { flex: 1 },
-  // Hero
-  hero: {
-    paddingHorizontal: spacing.xl,
-    paddingTop: spacing.xl,
-    paddingBottom: spacing.xxl,
-    borderBottomLeftRadius: radii.xxl,
-    borderBottomRightRadius: radii.xxl,
+  scroll: { flexGrow: 1 },
+  // The sky at the top edge of the picture, so the strip under the status
+  // bar reads as part of it.
+  hero: { width: '100%', overflow: 'hidden', backgroundColor: '#E2C4C1' },
+  heroFade: { position: 'absolute', left: 0, right: 0, bottom: 0, height: '38%' },
+  welcome: { alignItems: 'center', paddingHorizontal: spacing.xl, marginTop: -spacing.lg },
+  placePill: {
+    flexDirection: 'row',
     alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: spacing.md,
+    paddingVertical: 4,
+    borderRadius: radii.pill,
+    backgroundColor: colors.brand.redLight,
+    maxWidth: '100%',
   },
-  heroLogoCircle: {
-    width: 72,
-    height: 72,
-    borderRadius: 36,
-    backgroundColor: 'rgba(255,255,255,0.18)',
+  placeText: { color: colors.brand.red, fontFamily: fontFamilies.bodyBold, fontSize: fontSizes.xs },
+  title: {
+    marginTop: spacing.sm,
+    color: colors.ink,
+    fontFamily: fontFamilies.headingBlack,
+    fontSize: 30,
+    lineHeight: 44,
+    textAlign: 'center',
+  },
+  subtitle: {
+    marginTop: 4,
+    color: colors.text.muted,
+    fontFamily: fontFamilies.body,
+    fontSize: fontSizes.md,
+    lineHeight: 26,
+    textAlign: 'center',
+  },
+  cta: {
+    paddingHorizontal: spacing.xl,
+    marginTop: spacing.xl,
+    width: '100%',
+    maxWidth: 440,
+    alignSelf: 'center',
+  },
+  trust: {
+    flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    marginBottom: spacing.md,
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.25)',
+    gap: 6,
+    marginTop: spacing.md,
   },
-  heroTitle: {
-    color: colors.white,
-    fontSize: fontSizes.xxl,
-    fontFamily: fontFamilies.headingBlack,
-  },
-  heroSubtitle: {
-    color: 'rgba(255,255,255,0.88)',
-    fontSize: fontSizes.sm,
-    fontFamily: fontFamilies.body,
+  trustText: {
+    color: colors.text.muted,
+    fontFamily: fontFamilies.bodyMedium,
+    fontSize: fontSizes.xs,
     textAlign: 'center',
-    marginTop: 6,
-    lineHeight: 22,
-    paddingHorizontal: spacing.md,
+    flexShrink: 1,
   },
-  // Scroll
-  scroll: {
-    padding: spacing.lg,
-    paddingTop: spacing.lg,
-    paddingBottom: spacing.xxl,
+  features: { paddingHorizontal: spacing.lg, marginTop: spacing.xxl },
+  sectionTitle: {
+    color: colors.ink,
+    fontFamily: fontFamilies.bodyExtraBold,
+    fontSize: fontSizes.md,
+    textAlign: 'right',
+    marginBottom: spacing.md,
   },
-  card: {
+  grid: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
+  tile: {
+    flexBasis: '48%',
+    flexGrow: 1,
+    padding: spacing.md,
+    borderRadius: radii.lg,
     backgroundColor: colors.white,
-    borderRadius: radii.xl,
     borderWidth: 1,
     borderColor: colors.line,
-    padding: spacing.lg,
-    marginTop: -spacing.xl,
   },
-  fieldLabel: {
-    fontSize: fontSizes.sm,
-    color: colors.ink,
-    fontFamily: fontFamilies.bodyBold,
-    marginBottom: 6,
-    marginTop: spacing.sm,
-  },
-  errorBanner: {
-    flexDirection: 'row',
+  tileIcon: {
+    width: 38,
+    height: 38,
+    borderRadius: 12,
     alignItems: 'center',
-    gap: spacing.sm,
-    marginTop: spacing.md,
-    backgroundColor: '#FBEAEA',
-    borderWidth: 1,
-    borderColor: '#F2C2C2',
-    borderRadius: radii.md,
-    paddingVertical: spacing.sm,
-    paddingHorizontal: spacing.md,
+    justifyContent: 'center',
+    backgroundColor: colors.brand.redLight,
+    marginBottom: spacing.sm,
   },
-  errorBannerText: {
-    flex: 1,
-    color: colors.danger,
-    fontFamily: fontFamilies.bodyBold,
+  tileTitle: {
+    color: colors.ink,
+    fontFamily: fontFamilies.bodyExtraBold,
     fontSize: fontSizes.sm,
-    lineHeight: 20,
     textAlign: 'right',
   },
-  fieldHeader: {
+  tileBody: {
+    marginTop: 2,
+    color: colors.text.muted,
+    fontFamily: fontFamilies.body,
+    fontSize: fontSizes.xs,
+    lineHeight: 19,
+    textAlign: 'right',
+  },
+  help: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: 6,
-    marginTop: spacing.md,
+    justifyContent: 'center',
+    gap: 6,
+    marginTop: spacing.xl,
   },
-  forgotText: {
+  helpText: { color: colors.text.muted, fontFamily: fontFamilies.body, fontSize: fontSizes.xs },
+  helpLink: {
     color: colors.brand.red,
-    fontSize: fontSizes.xs,
-    fontFamily: fontFamilies.bodyBold,
-  },
-  googleNote: {
-    marginTop: spacing.md,
-    color: colors.text.muted,
-    fontSize: fontSizes.xs,
-    fontFamily: fontFamilies.body,
-    textAlign: 'center',
-    lineHeight: 20,
-  },
-  switchLink: { alignSelf: 'center', marginTop: spacing.xl, paddingVertical: spacing.sm },
-  switchText: {
-    color: colors.text.muted,
-    fontSize: fontSizes.sm,
     fontFamily: fontFamilies.bodyBold,
     textDecorationLine: 'underline',
-  },
-  roleBadge: {
-    marginTop: spacing.md,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    paddingHorizontal: spacing.md,
-    paddingVertical: 6,
-    borderRadius: radii.pill,
-    backgroundColor: 'rgba(255,255,255,0.18)',
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.28)',
-  },
-  roleBadgeText: {
-    color: colors.white,
-    fontSize: fontSizes.xs,
-    fontFamily: fontFamilies.bodyExtraBold,
   },
 });

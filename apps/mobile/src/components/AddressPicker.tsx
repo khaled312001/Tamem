@@ -1,8 +1,8 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useQuery } from '@tanstack/react-query';
 import * as Location from 'expo-location';
-import { AlertTriangle, Crosshair, Home, MapPin } from 'lucide-react-native';
-import { useEffect, useState } from 'react';
+import { Check, Crosshair, Home, Info, MapPin } from 'lucide-react-native';
+import { useEffect, useRef, useState } from 'react';
 import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 
 import { api } from '../lib/api';
@@ -17,9 +17,9 @@ export interface PickedAddress {
    *  zone is what prices and routes the order. Null when the address has no pin. */
   lat: number | null;
   lng: number | null;
-  /** True when the user typed it freely. */
+  /** True when there is no GPS pin (typed details only). */
   isFreeText?: boolean;
-  /** Delivery zone metadata — IDs and the advisory delivery fee. */
+  /** Delivery zone — only set once city, village AND area are all chosen. */
   zone?: DeliveryZoneSelection | null;
   /** Saved-address id, so the active chip matches by identity not coordinates. */
   savedId?: string;
@@ -32,7 +32,7 @@ interface SavedAddress {
   lat?: number | null;
   lng?: number | null;
   isDefault?: boolean;
-  // Zone now comes straight from /me/addresses (server-persisted), so a pin-less
+  // Zone comes straight from /me/addresses (server-persisted), so a pin-less
   // but zoned address is usable without any local cache.
   cityId?: string | null;
   villageId?: string | null;
@@ -52,41 +52,116 @@ interface AddressPickerProps {
 
 const LAST_ADDRESS_KEY = '@tamem/last-delivery-address';
 
+const zoneComplete = (z?: DeliveryZoneSelection | null): z is DeliveryZoneSelection =>
+  !!(z?.cityId && z.villageId && z.areaId);
+const zoneLabel = (z: DeliveryZoneSelection) =>
+  [z.villageName, z.areaName].filter(Boolean).join(' — ');
+
 /**
- * Order-flow address picker. Three sources, in priority:
- *  1. Saved addresses pulled from /me/addresses (chips).
- *  2. "موقعي الحالي" via expo-location (always shown).
- *  3. Free-text input — saved in AsyncStorage for the next order.
+ * Where the order goes. Customers kept getting stuck here: typing the address
+ * or tapping «موقعي الحالي» threw away the zone they had just picked, the zone
+ * section only appeared after typing, and every order started from nothing.
  *
- * Replaces every order screen's silent fallback to قفط center coords.
+ * Now, top to bottom:
+ *  1. Their addresses as chips. The server saves the address of every order
+ *     (with its zone), so after the first order this is one tap, and the
+ *     address used last is filled in on its own.
+ *  2. The zone (city → village → area), always shown. قفط comes preselected
+ *     and «قفط المدينة» heads the village list.
+ *  3. Details (street, landmark, floor). Optional when the zone is complete:
+ *     the zone's name is sent instead.
+ *  4. «موقعي الحالي» adds a GPS pin and keeps everything else.
+ *
+ * Each part is held on its own and changing one never resets another. The
+ * parent gets a value only when the order can actually be placed with it:
+ * a complete zone or a pin, plus some text.
  */
 export function AddressPicker({ value, onChange, merchantId, merchantIds }: AddressPickerProps) {
-  const [freeText, setFreeText] = useState<string>(value?.isFreeText ? value.address : '');
+  const [text, setText] = useState<string>(value?.address ?? '');
+  const [zone, setZone] = useState<DeliveryZoneSelection | null>(value?.zone ?? null);
+  const [pin, setPin] = useState<{ lat: number; lng: number } | null>(
+    value?.lat != null && value?.lng != null ? { lat: value.lat, lng: value.lng } : null,
+  );
+  const [savedId, setSavedId] = useState<string | undefined>(value?.savedId);
   const [busy, setBusy] = useState(false);
+  // Something was already chosen (by the customer, or loaded from before), so
+  // the default address must not overwrite it when the list arrives.
+  const settled = useRef(!!value);
 
   const { data: saved } = useQuery<SavedAddress[]>({
     queryKey: ['my-addresses'],
     queryFn: () => api.raw.get('/me/addresses').then((r) => r.data.data),
     staleTime: 60_000,
+    // The server adds the address of each order to this list: fetch it fresh
+    // every time an order screen opens so the last one is there.
+    refetchOnMount: 'always',
   });
 
-  // On first mount, hydrate from last-used if no value yet.
+  // Push the combined value up whenever a part changes.
+  const first = useRef(true);
   useEffect(() => {
-    if (value) return;
+    if (first.current) {
+      first.current = false;
+      return;
+    }
+    const complete = zoneComplete(zone);
+    const address = text.trim() || (complete ? zoneLabel(zone) : '');
+    const next: PickedAddress | null =
+      address.length >= 3 && (complete || pin)
+        ? {
+            address,
+            lat: pin?.lat ?? null,
+            lng: pin?.lng ?? null,
+            isFreeText: !pin,
+            zone: complete ? zone : null,
+            savedId,
+          }
+        : // Not placeable yet. Keep what was typed so the checkout's message
+          // is about the missing zone, not a missing address.
+          address
+          ? { address, lat: null, lng: null, isFreeText: true, zone: null, savedId }
+          : null;
+    onChange(next);
+    if (address || zone?.cityId) {
+      void AsyncStorage.setItem(
+        LAST_ADDRESS_KEY,
+        JSON.stringify({
+          address: text.trim(),
+          lat: pin?.lat ?? null,
+          lng: pin?.lng ?? null,
+          zone,
+          savedId,
+        }),
+      );
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [text, zone, pin, savedId]);
+
+  // Start from the last address on this phone; failing that, from the
+  // customer's default (= the one their last order went to).
+  useEffect(() => {
+    if (settled.current) return;
     void AsyncStorage.getItem(LAST_ADDRESS_KEY).then((raw) => {
-      if (!raw) return;
+      if (settled.current || !raw) return;
       try {
-        const parsed = JSON.parse(raw) as PickedAddress;
-        if (parsed?.address) {
-          onChange(parsed);
-          if (parsed.isFreeText) setFreeText(parsed.address);
-        }
+        const p = JSON.parse(raw) as PickedAddress;
+        if (!p?.address && !p?.zone?.cityId) return;
+        settled.current = true;
+        setText(p.address ?? '');
+        setZone(p.zone ? { ...p.zone, quoteStatus: undefined } : null);
+        setPin(p.lat != null && p.lng != null ? { lat: p.lat, lng: p.lng } : null);
+        setSavedId(p.savedId);
       } catch {
         /* ignore */
       }
     });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+  useEffect(() => {
+    if (settled.current || !saved?.length) return;
+    const def = saved.find((a) => a.isDefault) ?? saved[0];
+    if (def) void pickSaved(def, true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [saved]);
 
   const useCurrentLocation = async () => {
     setBusy(true);
@@ -101,27 +176,24 @@ export function AddressPicker({ value, onChange, merchantId, merchantIds }: Addr
         return;
       }
       const pos = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
-      // Best-effort reverse geocoding.
-      let label = `موقع GPS (${pos.coords.latitude.toFixed(4)}, ${pos.coords.longitude.toFixed(4)})`;
-      try {
-        const geo = await Location.reverseGeocodeAsync({
-          latitude: pos.coords.latitude,
-          longitude: pos.coords.longitude,
-        });
-        if (geo[0]) {
+      settled.current = true;
+      setPin({ lat: pos.coords.latitude, lng: pos.coords.longitude });
+      setSavedId(undefined);
+      // Fill the details from the map only when nothing was typed: what the
+      // customer wrote («جنب مسجد النور») beats a street name from the map.
+      if (!text.trim()) {
+        try {
+          const geo = await Location.reverseGeocodeAsync({
+            latitude: pos.coords.latitude,
+            longitude: pos.coords.longitude,
+          });
           const g = geo[0];
-          label = [g.street, g.district, g.city, g.region].filter(Boolean).join(', ') || label;
+          const label = g ? [g.street, g.district, g.city].filter(Boolean).join('، ') : '';
+          if (label) setText(label);
+        } catch {
+          /* the pin alone is enough */
         }
-      } catch {
-        /* fall through */
       }
-      const picked: PickedAddress = {
-        address: label,
-        lat: pos.coords.latitude,
-        lng: pos.coords.longitude,
-      };
-      onChange(picked);
-      void AsyncStorage.setItem(LAST_ADDRESS_KEY, JSON.stringify(picked));
     } catch (err) {
       showToast({
         title: 'تعذّر قراءة موقعك',
@@ -133,144 +205,138 @@ export function AddressPicker({ value, onChange, merchantId, merchantIds }: Addr
     }
   };
 
-  const pickSaved = async (a: SavedAddress): Promise<void> => {
-    // Zone comes from the server record first (authoritative, survives
-    // reinstall), falling back to the local cache for older addresses. The GPS
-    // pin is optional — a zoned address with no pin is perfectly deliverable, so
-    // we no longer reject it as "incomplete".
-    const zone = a.zone ?? (await getAddressZone(a.id));
-    const hasPin = typeof a.lat === 'number' && typeof a.lng === 'number';
-    if (!zone && !hasPin) {
-      showToast({
-        title: 'العنوان غير مكتمل',
-        message: 'اختر المنطقة لهذا العنوان أو حدّد موقعه على الخريطة.',
-        tone: 'error',
-      });
-      return;
-    }
-    const picked: PickedAddress = {
-      address: a.address,
-      lat: hasPin ? (a.lat as number) : null,
-      lng: hasPin ? (a.lng as number) : null,
-      zone,
-      savedId: a.id,
-    };
-    onChange(picked);
-    setFreeText('');
-    void AsyncStorage.setItem(LAST_ADDRESS_KEY, JSON.stringify(picked));
-  };
+  async function pickSaved(a: SavedAddress, auto = false): Promise<void> {
+    // Zone from the server record first (survives a reinstall), falling back
+    // to the local cache for addresses saved before the server kept zones.
+    const z = a.zone ?? (await getAddressZone(a.id));
+    if (auto && settled.current) return;
+    settled.current = true;
+    setText(a.address);
+    setZone(z ? { ...z, quoteStatus: undefined } : null);
+    setPin(
+      typeof a.lat === 'number' && typeof a.lng === 'number' ? { lat: a.lat, lng: a.lng } : null,
+    );
+    setSavedId(a.id);
+  }
 
-  const handleFreeText = (text: string) => {
-    setFreeText(text);
-    if (text.trim().length < 6) {
-      onChange(null);
-      return;
-    }
-    // Free-text has no location AND no zone — the order screen MUST require a
-    // saved-address (zoned) or current-location before allowing submit. See the
-    // disabled-submit logic on each flow.
-    onChange({ address: text.trim(), lat: null, lng: null, isFreeText: true });
-  };
+  const complete = zoneComplete(zone);
+  const needsZone = !complete && !pin;
 
   return (
-    <View style={{ gap: spacing.sm }}>
-      {/* Saved addresses chips */}
+    <View style={{ gap: spacing.md }}>
+      {/* 1 — their addresses */}
       {saved && saved.length > 0 ? (
-        <View style={styles.chipsRow}>
-          {saved.map((a) => {
-            // Match by saved id (coords may be null), falling back to coords for
-            // addresses picked before savedId existed.
-            const active = value?.savedId
-              ? value.savedId === a.id
-              : value?.lat === a.lat && value?.lng === a.lng && !value?.isFreeText;
-            return (
-              <Pressable
-                key={a.id}
-                onPress={() => {
-                  void pickSaved(a);
-                }}
-                style={({ pressed }) => [
-                  styles.chip,
-                  active && styles.chipActive,
-                  pressed && { opacity: 0.85 },
-                ]}
-              >
-                <Home size={12} color={active ? colors.white : colors.brand.red} />
-                <Text style={[styles.chipText, active && styles.chipTextActive]} numberOfLines={1}>
-                  {a.label}
-                </Text>
-              </Pressable>
-            );
-          })}
+        <View style={{ gap: spacing.xs }}>
+          <Text style={styles.stepLabel}>عناوينك</Text>
+          <View style={styles.chipsRow}>
+            {saved.map((a) => {
+              const active = savedId === a.id;
+              return (
+                <Pressable
+                  key={a.id}
+                  onPress={() => {
+                    void pickSaved(a);
+                  }}
+                  style={({ pressed }) => [
+                    styles.chip,
+                    active && styles.chipActive,
+                    pressed && { opacity: 0.85 },
+                  ]}
+                >
+                  {active ? (
+                    <Check size={12} color={colors.white} />
+                  ) : (
+                    <Home size={12} color={colors.brand.red} />
+                  )}
+                  <Text
+                    style={[styles.chipText, active && styles.chipTextActive]}
+                    numberOfLines={1}
+                  >
+                    {a.label || a.address}
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </View>
         </View>
       ) : null}
 
+      {/* 2 — the zone: prices and routes the order */}
+      <View style={styles.zoneSection}>
+        <View style={styles.zoneHeader}>
+          <MapPin size={14} color={colors.brand.red} />
+          <Text style={styles.zoneTitle}>منطقة التوصيل</Text>
+        </View>
+        <DeliveryZonePicker
+          merchantId={merchantId}
+          merchantIds={merchantIds}
+          value={zone}
+          onChange={(z) => {
+            // قفط preselected on its own is not a choice: the default address
+            // may still arrive and replace it.
+            if (z?.villageId) settled.current = true;
+            // A different area is a different address; the same one coming
+            // back with its price is not.
+            if (
+              (z?.areaId || '') !== (zone?.areaId || '') ||
+              (z?.villageId || '') !== (zone?.villageId || '')
+            ) {
+              setSavedId(undefined);
+            }
+            setZone(z);
+          }}
+        />
+      </View>
+
+      {/* 3 — details */}
+      <View style={{ gap: spacing.xs }}>
+        <Text style={styles.stepLabel}>العنوان بالتفصيل</Text>
+        <View style={styles.freeTextField}>
+          <Home size={14} color={colors.text.muted} />
+          <TextInput
+            value={text}
+            onChangeText={(t) => {
+              settled.current = true;
+              setText(t);
+              setSavedId(undefined);
+            }}
+            placeholder="الشارع، علامة مميزة، الدور… (اختياري)"
+            placeholderTextColor={colors.text.muted}
+            style={styles.freeTextInput}
+            multiline
+          />
+        </View>
+      </View>
+
+      {/* 4 — GPS pin, optional */}
       <Pressable
         onPress={useCurrentLocation}
         disabled={busy}
         style={({ pressed }) => [styles.currentBtn, (pressed || busy) && { opacity: 0.85 }]}
       >
         <View style={styles.currentIcon}>
-          <Crosshair size={16} color={colors.brand.red} />
+          {pin ? (
+            <Check size={16} color={colors.success} />
+          ) : (
+            <Crosshair size={16} color={colors.brand.red} />
+          )}
         </View>
         <View style={{ flex: 1 }}>
           <Text style={styles.currentLabel}>
-            {busy ? 'جاري قراءة موقعك…' : 'استخدم موقعي الحالي'}
+            {busy ? 'جاري قراءة موقعك…' : pin ? 'موقعك اتحدد على الخريطة' : 'حدّد موقعي الحالي'}
           </Text>
-          {value && !value.isFreeText && value.address ? (
-            <Text style={styles.currentSub} numberOfLines={1}>
-              {value.address}
-            </Text>
-          ) : (
-            <Text style={styles.currentSub}>دقّة GPS أعلى للسائق</Text>
-          )}
+          <Text style={styles.currentSub}>
+            {pin ? 'اضغط تاني لو اتحركت' : 'اختياري، بيساعد المندوب يوصلك أسرع'}
+          </Text>
         </View>
       </Pressable>
 
-      <View style={styles.freeTextField}>
-        <MapPin size={14} color={colors.text.muted} />
-        <TextInput
-          value={freeText}
-          onChangeText={handleFreeText}
-          placeholder="أو اكتب عنوان آخر (شارع، علامة، طابق…)"
-          placeholderTextColor={colors.text.muted}
-          style={styles.freeTextInput}
-          multiline
-        />
-      </View>
-
-      {value?.isFreeText ? (
-        <View style={styles.warnBanner}>
-          <AlertTriangle size={14} color={colors.warning} />
-          <Text style={styles.warnText}>
-            كتبت العنوان يدوي بدون GPS. الإدارة هتتواصل معاك تأكيد الموقع قبل السائق.
+      {needsZone ? (
+        <View style={styles.infoBanner}>
+          <Info size={14} color={colors.brand.red} />
+          <Text style={styles.infoText}>
+            اختار القرية والمنطقة عشان نحسب التوصيل، أو حدّد موقعك الحالي.
           </Text>
-        </View>
-      ) : null}
-
-      {/* Zone refinement — only shown once the user has *some* address; this
-          way the cascading selects don't fire HTTP for users still on the
-          empty state. We keep the picker visible at all times so they can
-          re-pick if they originally saved without a zone. */}
-      {value ? (
-        <View style={styles.zoneSection}>
-          <View style={styles.zoneHeader}>
-            <MapPin size={14} color={colors.brand.red} />
-            <Text style={styles.zoneTitle}>منطقة التوصيل</Text>
-          </View>
-          <Text style={styles.zoneHint}>
-            لازم نحدد المدينة → القرية → النجع علشان نحسب رسوم التوصيل بدقة
-          </Text>
-          <DeliveryZonePicker
-            merchantId={merchantId}
-            merchantIds={merchantIds}
-            value={value.zone ?? null}
-            onChange={(zone) => {
-              const next: PickedAddress = { ...value, zone };
-              onChange(next);
-              void AsyncStorage.setItem(LAST_ADDRESS_KEY, JSON.stringify(next));
-            }}
-          />
         </View>
       ) : null}
     </View>
@@ -278,6 +344,11 @@ export function AddressPicker({ value, onChange, merchantId, merchantIds }: Addr
 }
 
 const styles = StyleSheet.create({
+  stepLabel: {
+    fontFamily: fontFamilies.bodyExtraBold,
+    color: colors.ink,
+    fontSize: fontSizes.sm,
+  },
   chipsRow: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.xs },
   chip: {
     flexDirection: 'row',
@@ -289,12 +360,14 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.sm,
     paddingVertical: 6,
     borderRadius: radii.pill,
+    maxWidth: '100%',
   },
   chipActive: { backgroundColor: colors.brand.red },
   chipText: {
     color: colors.brand.red,
     fontFamily: fontFamilies.bodyExtraBold,
     fontSize: fontSizes.xs,
+    flexShrink: 1,
   },
   chipTextActive: { color: colors.white },
   currentBtn: {
@@ -346,42 +419,29 @@ const styles = StyleSheet.create({
     minHeight: 40,
     paddingVertical: 4,
     textAlignVertical: 'top',
+    textAlign: 'right',
   },
-  warnBanner: {
+  infoBanner: {
     flexDirection: 'row',
     alignItems: 'flex-start',
     gap: spacing.xs,
-    backgroundColor: colors.warningLight,
-    borderColor: colors.warning,
-    borderWidth: 1,
+    backgroundColor: colors.brand.redLight,
     borderRadius: radii.md,
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.sm,
   },
-  warnText: {
+  infoText: {
     flex: 1,
-    color: '#9A6B16',
+    color: colors.brand.red,
     fontFamily: fontFamilies.bodyBold,
     fontSize: fontSizes.xs,
     lineHeight: 18,
   },
-  zoneSection: {
-    marginTop: spacing.sm,
-    paddingTop: spacing.md,
-    borderTopWidth: 1,
-    borderTopColor: colors.line,
-    gap: spacing.sm,
-  },
+  zoneSection: { gap: spacing.sm },
   zoneHeader: { flexDirection: 'row', alignItems: 'center', gap: spacing.xs },
   zoneTitle: {
     fontFamily: fontFamilies.bodyExtraBold,
     color: colors.ink,
     fontSize: fontSizes.sm,
-  },
-  zoneHint: {
-    fontFamily: fontFamilies.body,
-    color: colors.text.muted,
-    fontSize: fontSizes.xs,
-    lineHeight: 18,
   },
 });

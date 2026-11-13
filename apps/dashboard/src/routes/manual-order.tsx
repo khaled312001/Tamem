@@ -33,6 +33,7 @@ import {
 import { useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
 
+import { AddressSuggest } from '../components/AddressSuggest.js';
 import { PlacePicker, placeKey, type PlaceSuggestion } from '../components/PlacePicker.js';
 import { Button } from '../components/ui/Button.js';
 import { Dialog } from '../components/ui/Dialog.js';
@@ -133,13 +134,6 @@ export function ManualOrderDialog({
   });
   const matches = ((found?.items ?? []) as Row[]).filter((c) => c.role !== 'DRIVER');
 
-  const { data: customer } = useQuery({
-    queryKey: ['manual-order', 'customer-detail', customerId],
-    queryFn: () => api.adminGetCustomer(customerId!) as Promise<Row>,
-    enabled: !!customerId,
-  });
-  const savedAddresses: Row[] = customer?.savedAddresses ?? [];
-
   // ── address + zone ──
   const [address, setAddress] = useState('');
   const [cityId, setCityId] = useState('');
@@ -212,11 +206,20 @@ export function ManualOrderDialog({
   const [feeReason, setFeeReason] = useState('');
   const [feeLater, setFeeLater] = useState(false);
 
-  const pickSaved = (a: Row) => {
+  // A suggestion without a zone (typed by hand on an old order) fills the text
+  // only and leaves whatever zone the agent already chose.
+  const pickSaved = (a: {
+    address?: string | null;
+    cityId?: string | null;
+    villageId?: string | null;
+    areaId?: string | null;
+  }) => {
     setAddress(a.address ?? '');
-    setCityId(a.cityId ?? '');
-    setVillageId(a.villageId ?? '');
-    setAreaId(a.areaId ?? '');
+    if (a.cityId || a.villageId || a.areaId) {
+      setCityId(a.cityId ?? '');
+      setVillageId(a.villageId ?? '');
+      setAreaId(a.areaId ?? '');
+    }
   };
 
   const { data: merchants } = useQuery({
@@ -472,8 +475,8 @@ export function ManualOrderDialog({
             {searching && <p className="text-xs text-muted-foreground">جاري البحث…</p>}
             {!customerId && !searching && phone.trim().length >= 8 && matches.length === 0 && (
               <p className="text-xs text-muted-foreground leading-relaxed">
-                عميل جديد — هيتعمل له حساب بالرقم ده. لو حبّ ينزّل التطبيق بعد كده، يدخل بنفس الرقم
-                من «نسيت كلمة المرور» عشان يعيّن كلمة سر، وطلباته دي هيلاقيها في حسابه.
+                عميل جديد — هيتعمل له حساب بالرقم ده. لو نزّل التطبيق بعد كده ودخل بحساب جوجل وكتب
+                نفس الرقم، هيوصله كود على واتساب ويلاقي طلباته دي في حسابه.
               </p>
             )}
             {!customerId && matches.length > 0 && (
@@ -508,32 +511,17 @@ export function ManualOrderDialog({
 
           {/* 2 — address */}
           <Section icon={MapPin} title="العنوان">
-            {savedAddresses.length > 0 && (
-              <div className="flex flex-wrap gap-2">
-                {savedAddresses.map((a) => (
-                  <button
-                    key={a.id}
-                    type="button"
-                    onClick={() => pickSaved(a)}
-                    className={cn(
-                      'px-3 py-1.5 rounded-full text-xs font-bold border transition',
-                      address === a.address
-                        ? 'bg-brand-red text-white border-brand-red'
-                        : 'bg-card border-border hover:border-brand-red/50',
-                    )}
-                  >
-                    {a.label || 'عنوان'} — {String(a.address ?? '').slice(0, 28)}
-                  </button>
-                ))}
-              </div>
-            )}
-
             <Field label="العنوان بالتفصيل" required>
-              <Textarea
-                rows={2}
+              {/* The caller's saved addresses and the ones on their past
+                  orders, plus everything typed before: one tap fills the
+                  address and its zone. */}
+              <AddressSuggest
+                multiline
+                customerId={customerId}
                 value={address}
-                onChange={(e) => setAddress(e.target.value)}
-                placeholder="اسم الشارع، علامة مميزة، رقم الدور…"
+                onChange={setAddress}
+                onPick={(s) => pickSaved(s)}
+                placeholder="اسم الشارع، علامة مميزة، رقم الدور… أو اختار من اللي اتكتب قبل كده"
               />
             </Field>
 

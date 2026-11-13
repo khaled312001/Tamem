@@ -32,7 +32,7 @@
     },
     "android": {
       "package": "com.tamem.delivery",
-      "versionCode": 33,
+      "versionCode": 34,
       "googleServicesFile": "./google-services.json",
       "adaptiveIcon": {
         "foregroundImage": "./src/assets/icon.png",
@@ -55,7 +55,31 @@
         "googleMaps": {
           "apiKey": ""
         }
-      }
+      },
+      "intentFilters": [
+        {
+          "action": "VIEW",
+          "autoVerify": true,
+          "data": [
+            {
+              "scheme": "https",
+              "host": "deliverytamem.com",
+              "pathPrefix": "/s/"
+            },
+            {
+              "scheme": "https",
+              "host": "deliverytamem.com",
+              "pathPrefix": "/p/"
+            },
+            {
+              "scheme": "https",
+              "host": "deliverytamem.com",
+              "pathPrefix": "/o/"
+            }
+          ],
+          "category": ["BROWSABLE", "DEFAULT"]
+        }
+      ]
     },
     "plugins": [
       "expo-secure-store",
@@ -64,7 +88,7 @@
       [
         "expo-notifications",
         {
-          "icon": "./src/assets/icon.png",
+          "icon": "./src/assets/notification-icon.png",
           "color": "#E0301E",
           "defaultChannel": "default",
           "enableBackgroundRemoteNotifications": true

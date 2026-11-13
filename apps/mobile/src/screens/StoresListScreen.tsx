@@ -3,18 +3,17 @@ import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useQuery } from '@tanstack/react-query';
 import {
   ArrowDownUp,
-  MapPin,
   Package,
   Search,
+  SlidersHorizontal,
   Star,
   Store,
   WifiOff,
-  Check,
+  X,
 } from 'lucide-react-native';
 import { useMemo, useState } from 'react';
 import {
   FlatList,
-  Modal,
   Pressable,
   RefreshControl,
   ScrollView,
@@ -27,6 +26,7 @@ import {
 import { Image } from '../components/ui/CachedImage';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { FilterDrawer, type FilterGroup } from '../components/FilterDrawer';
 import { GradientHeader } from '../components/GradientHeader';
 import { HeartButton } from '../components/HeartButton';
 import { CardListSkeleton, EmptyState } from '../components/ui';
@@ -221,8 +221,95 @@ export function StoresListScreen() {
    * was to keep tapping and read the label each time — and to get back to the
    * one you wanted you had to go all the way round. The choices are listed now.
    */
-  const [sortOpen, setSortOpen] = useState(false);
   const sortLabel = SORT_LABELS[sortKey];
+
+  /*
+   * Filters. They were three rows of sideways-scrolling chips (type, city,
+   * section) plus a sort button: the rows ran off the screen and nothing said
+   * which ones were on. Now one button on the right opens a panel of lists,
+   * and what is on shows as chips beside it, each with an × to drop it.
+   */
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  const cityCount = (c: string) =>
+    (merchants ?? []).filter((m) => (m.city ?? '').trim() === c).length;
+  const filterGroups: FilterGroup[] = [
+    {
+      key: 'category',
+      title: 'نوع المحل',
+      value: activeCategory,
+      onChange: (v) => {
+        setActiveCategory(v);
+        setActiveSection(null);
+      },
+      options: [
+        { value: null, label: 'الكل' },
+        ...(categories ?? []).map((c) => ({ value: c.id, label: c.nameAr })),
+      ],
+    },
+    ...(cityOptions.length > 1 || activeCity
+      ? [
+          {
+            key: 'city',
+            title: 'المدينة',
+            value: activeCity,
+            onChange: setActiveCity,
+            options: [
+              { value: null, label: 'كل المدن' },
+              ...cityOptions.map((c) => ({ value: c, label: c, count: cityCount(c) })),
+            ],
+          },
+        ]
+      : []),
+    ...((sections?.length ?? 0) > 0 || activeSection
+      ? [
+          {
+            key: 'section',
+            title: 'القسم',
+            value: activeSection,
+            onChange: setActiveSection,
+            options: [
+              { value: null, label: 'كل الأقسام' },
+              ...(sections ?? []).map((x) => ({ value: x.name, label: x.name, count: x.count })),
+            ],
+          },
+        ]
+      : []),
+    {
+      key: 'sort',
+      title: 'الترتيب',
+      // «الموصى بها» is the default, so it reads as nothing chosen.
+      value: sortKey === 'recommended' ? null : sortKey,
+      onChange: (v) => setSortKey((v as SortKey | null) ?? 'recommended'),
+      options: (Object.keys(SORT_LABELS) as SortKey[]).map((k) => ({
+        value: k === 'recommended' ? null : k,
+        label: SORT_LABELS[k],
+      })),
+    },
+  ];
+  const activeChips: { key: string; label: string; clear: () => void }[] = [
+    ...(activeCategoryName
+      ? [
+          {
+            key: 'category',
+            label: activeCategoryName,
+            clear: () => {
+              setActiveCategory(null);
+              setActiveSection(null);
+            },
+          },
+        ]
+      : []),
+    ...(activeCity ? [{ key: 'city', label: activeCity, clear: () => setActiveCity(null) }] : []),
+    ...(activeSection
+      ? [{ key: 'section', label: activeSection, clear: () => setActiveSection(null) }]
+      : []),
+  ];
+  const resetFilters = () => {
+    setActiveCategory(null);
+    setActiveCity(null);
+    setActiveSection(null);
+    setSortKey('recommended');
+  };
 
   // One product card, reused by the section view and the search-fallback view.
   // The image falls back to the STORE LOGO when the product has no photo (many
@@ -336,149 +423,73 @@ export function StoresListScreen() {
         />
       </View>
 
+      {/* One row, starting on the right: the filter button, the sort, then
+          whatever is on as chips that drop with one tap. */}
       <View style={styles.toolbar}>
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          contentContainerStyle={styles.chipsRow}
-        >
-          <Pressable
-            onPress={() => {
-              setActiveCategory(null);
-              setActiveSection(null);
-            }}
-            style={[styles.chip, !activeCategory && styles.chipOn]}
-          >
-            <Text style={[styles.chipText, !activeCategory && styles.chipTextOn]}>الكل</Text>
-          </Pressable>
-          {(categories ?? []).map((c) => {
-            const isOn = activeCategory === c.id;
-            return (
-              <Pressable
-                key={c.id}
-                onPress={() => {
-                  setActiveCategory(isOn ? null : c.id);
-                  setActiveSection(null);
-                }}
-                style={[styles.chip, isOn && styles.chipOn]}
-              >
-                <Text style={[styles.chipText, isOn && styles.chipTextOn]}>{c.nameAr}</Text>
-              </Pressable>
-            );
-          })}
-        </ScrollView>
         <Pressable
-          onPress={() => setSortOpen(true)}
+          onPress={() => setFiltersOpen(true)}
+          style={({ pressed }) => [
+            styles.filterBtn,
+            activeChips.length > 0 && styles.filterBtnOn,
+            pressed && { opacity: 0.8 },
+          ]}
+          accessibilityRole="button"
+          accessibilityLabel="فلترة المحلات"
+        >
+          <SlidersHorizontal
+            size={15}
+            color={activeChips.length > 0 ? colors.white : colors.brand.red}
+          />
+          <Text style={[styles.filterBtnText, activeChips.length > 0 && { color: colors.white }]}>
+            فلترة
+          </Text>
+          {activeChips.length > 0 ? (
+            <View style={styles.filterBadge}>
+              <Text style={styles.filterBadgeText}>{activeChips.length}</Text>
+            </View>
+          ) : null}
+        </Pressable>
+        <Pressable
+          onPress={() => setFiltersOpen(true)}
           style={({ pressed }) => [styles.sortBtn, pressed && { opacity: 0.7 }]}
-          hitSlop={10}
+          hitSlop={6}
           accessibilityRole="button"
           accessibilityLabel={`ترتيب القائمة، الحالي: ${sortLabel}`}
         >
           <ArrowDownUp size={14} color={colors.brand.red} />
           <Text style={styles.sortText}>{sortLabel}</Text>
         </Pressable>
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={styles.chipsRow}
+        >
+          {activeChips.map((c) => (
+            <Pressable
+              key={c.key}
+              onPress={c.clear}
+              style={({ pressed }) => [styles.activeChip, pressed && { opacity: 0.8 }]}
+              accessibilityRole="button"
+              accessibilityLabel={`شيل فلتر ${c.label}`}
+            >
+              <Text style={styles.activeChipText} numberOfLines={1}>
+                {c.label}
+              </Text>
+              <X size={13} color={colors.brand.red} />
+            </Pressable>
+          ))}
+        </ScrollView>
       </View>
 
-      <Modal
-        visible={sortOpen}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setSortOpen(false)}
-      >
-        <Pressable style={styles.sortBackdrop} onPress={() => setSortOpen(false)}>
-          <Pressable style={styles.sortSheet} onPress={(e) => e.stopPropagation()}>
-            <Text style={styles.sortSheetTitle}>ترتيب المتاجر</Text>
-            {(Object.keys(SORT_LABELS) as SortKey[]).map((k) => {
-              const on = k === sortKey;
-              return (
-                <Pressable
-                  key={k}
-                  onPress={() => {
-                    setSortKey(k);
-                    setSortOpen(false);
-                  }}
-                  style={({ pressed }) => [styles.sortRow, pressed && { opacity: 0.7 }]}
-                  accessibilityRole="button"
-                  accessibilityState={{ selected: on }}
-                >
-                  <Text style={[styles.sortRowText, on && styles.sortRowTextOn]}>
-                    {SORT_LABELS[k]}
-                  </Text>
-                  {on ? <Check size={18} color={colors.brand.red} /> : null}
-                </Pressable>
-              );
-            })}
-          </Pressable>
-        </Pressable>
-      </Modal>
-
-      {/* City row. Only drawn when the results actually span more than one. */}
-      {cityOptions.length > 1 && (
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          contentContainerStyle={styles.cityRow}
-          style={styles.cityScroll}
-        >
-          <Pressable
-            onPress={() => setActiveCity(null)}
-            style={[styles.cityChip, !activeCity && styles.cityChipOn]}
-          >
-            <Text style={[styles.cityChipText, !activeCity && styles.cityChipTextOn]}>
-              كل المدن
-            </Text>
-          </Pressable>
-          {cityOptions.map((c) => {
-            const isOn = activeCity === c;
-            const n = (merchants ?? []).filter((m) => (m.city ?? '').trim() === c).length;
-            return (
-              <Pressable
-                key={c}
-                onPress={() => setActiveCity(isOn ? null : c)}
-                style={[styles.cityChip, isOn && styles.cityChipOn]}
-              >
-                <MapPin size={12} color={isOn ? colors.white : colors.brand.red} />
-                <Text style={[styles.cityChipText, isOn && styles.cityChipTextOn]}>
-                  {c} · {n}
-                </Text>
-              </Pressable>
-            );
-          })}
-        </ScrollView>
-      )}
-
-      {/* Shared sections (مشويات، بيتزا…) filtered across every merchant. */}
-      {(sections?.length ?? 0) > 0 && (
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          contentContainerStyle={styles.sectionRow}
-          style={styles.sectionScroll}
-        >
-          <Pressable
-            onPress={() => setActiveSection(null)}
-            style={[styles.sectionChip, !activeSection && styles.sectionChipOn]}
-          >
-            <Text style={[styles.sectionChipText, !activeSection && styles.sectionChipTextOn]}>
-              كل الأقسام
-            </Text>
-          </Pressable>
-          {(sections ?? []).map((s) => {
-            const on = activeSection === s.name;
-            return (
-              <Pressable
-                key={s.name}
-                onPress={() => setActiveSection(on ? null : s.name)}
-                style={[styles.sectionChip, on && styles.sectionChipOn]}
-              >
-                <Text style={[styles.sectionChipText, on && styles.sectionChipTextOn]}>
-                  {s.name} · {s.count}
-                </Text>
-              </Pressable>
-            );
-          })}
-        </ScrollView>
-      )}
+      <FilterDrawer
+        visible={filtersOpen}
+        onClose={() => setFiltersOpen(false)}
+        groups={filterGroups}
+        onReset={resetFilters}
+        resultLabel={
+          activeSection ? `عرض ${(sectionProducts ?? []).length} منتج` : `عرض ${sorted.length} محل`
+        }
+      />
 
       {activeSection ? (
         productsList(
@@ -598,58 +609,54 @@ const styles = StyleSheet.create({
   toolbar: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: spacing.sm,
-    paddingEnd: spacing.lg,
+    gap: spacing.xs,
+    paddingStart: spacing.lg,
+    paddingVertical: spacing.md,
   },
   chipsRow: {
-    paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.md,
     gap: spacing.xs,
+    paddingEnd: spacing.lg,
+    alignItems: 'center',
   },
-  sortBackdrop: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.35)',
-    justifyContent: 'flex-end',
-  },
-  sortSheet: {
-    backgroundColor: colors.white,
-    borderTopLeftRadius: radii.lg,
-    borderTopRightRadius: radii.lg,
-    padding: spacing.lg,
-    paddingBottom: spacing.xl,
-    gap: spacing.xs,
-  },
-  sortSheetTitle: {
-    fontFamily: fontFamilies.headingBlack,
-    fontSize: fontSizes.md,
-    color: colors.brand.dark,
-    marginBottom: spacing.sm,
-    textAlign: 'right',
-  },
-  sortRow: {
+  filterBtn: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    minHeight: 48,
-    paddingHorizontal: spacing.sm,
-    borderRadius: radii.md,
+    gap: 6,
+    paddingHorizontal: spacing.md,
+    minHeight: 36,
+    borderRadius: radii.pill,
+    borderWidth: 1,
+    borderColor: colors.brand.red,
+    backgroundColor: colors.white,
   },
-  sortRowText: {
-    fontFamily: fontFamilies.bodyMedium,
-    fontSize: fontSizes.md,
-    color: colors.text.primary,
-  },
-  sortRowTextOn: {
-    fontFamily: fontFamilies.bodyExtraBold,
+  filterBtnOn: { backgroundColor: colors.brand.red },
+  filterBtnText: {
     color: colors.brand.red,
+    fontFamily: fontFamilies.bodyExtraBold,
+    fontSize: fontSizes.xs,
+  },
+  filterBadge: {
+    minWidth: 18,
+    height: 18,
+    borderRadius: 9,
+    paddingHorizontal: 4,
+    backgroundColor: colors.white,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  filterBadgeText: {
+    color: colors.brand.red,
+    fontFamily: fontFamilies.bodyExtraBold,
+    fontSize: 11,
+    includeFontPadding: false,
   },
   sortBtn: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 4,
     backgroundColor: colors.brand.redLight,
-    paddingHorizontal: spacing.sm,
-    paddingVertical: 6,
+    paddingHorizontal: spacing.md,
+    minHeight: 36,
     borderRadius: radii.pill,
   },
   sortText: {
@@ -657,68 +664,24 @@ const styles = StyleSheet.create({
     fontFamily: fontFamilies.bodyExtraBold,
     fontSize: fontSizes.xs,
   },
-  chip: {
-    backgroundColor: colors.soft,
-    paddingHorizontal: spacing.md,
-    paddingVertical: 6,
-    borderRadius: radii.pill,
-    marginEnd: spacing.xs,
-  },
-  chipOn: { backgroundColor: colors.brand.red },
-  chipText: {
-    color: colors.ink,
-    fontSize: fontSizes.xs,
-    fontFamily: fontFamilies.bodyBold,
-  },
-  chipTextOn: { color: colors.white },
-  cityScroll: { flexGrow: 0 },
-  cityRow: {
-    gap: spacing.xs,
-    paddingHorizontal: spacing.md,
-    paddingBottom: spacing.xs,
-    alignItems: 'center',
-  },
-  cityChip: {
+  activeChip: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 4,
-    paddingHorizontal: spacing.md,
-    paddingVertical: 6,
+    maxWidth: 170,
+    paddingHorizontal: spacing.sm,
+    minHeight: 32,
     borderRadius: radii.pill,
-    borderWidth: 1,
-    borderColor: colors.brand.red,
     backgroundColor: colors.white,
+    borderWidth: 1,
+    borderColor: colors.line2,
   },
-  cityChipOn: { backgroundColor: colors.brand.red },
-  cityChipText: {
-    fontSize: 12,
+  activeChipText: {
+    color: colors.ink,
     fontFamily: fontFamilies.bodyBold,
-    color: colors.brand.red,
-    includeFontPadding: false,
-  },
-  cityChipTextOn: { color: colors.white },
-  sectionScroll: { flexGrow: 0 },
-  sectionRow: {
-    paddingHorizontal: spacing.lg,
-    paddingBottom: spacing.sm,
-    gap: spacing.xs,
-  },
-  sectionChip: {
-    backgroundColor: colors.white,
-    borderWidth: 1,
-    borderColor: colors.brand.red,
-    paddingHorizontal: spacing.md,
-    paddingVertical: 5,
-    borderRadius: radii.pill,
-    marginEnd: spacing.xs,
-  },
-  sectionChipOn: { backgroundColor: colors.brand.red },
-  sectionChipText: {
-    color: colors.brand.red,
     fontSize: fontSizes.xs,
-    fontFamily: fontFamilies.bodyBold,
+    flexShrink: 1,
   },
-  sectionChipTextOn: { color: colors.white },
   priceLine: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 2 },
   wasText: {
     fontSize: fontSizes.xs,

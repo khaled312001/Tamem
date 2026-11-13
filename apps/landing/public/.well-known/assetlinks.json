@@ -1,0 +1,12 @@
+[
+  {
+    "relation": ["delegate_permission/common.handle_all_urls"],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "com.tamem.delivery",
+      "sha256_cert_fingerprints": [
+        "4D:6E:FA:E6:A2:81:9C:F3:BF:11:CC:8A:F7:B9:CE:48:B4:9F:37:31:CA:2D:F7:87:EF:7E:F2:E1:1C:BE:0E:8C"
+      ]
+    }
+  }
+]

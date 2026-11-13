@@ -7,6 +7,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { AnimatedListItem } from '../components/AnimatedListItem';
 import { GradientHeader } from '../components/GradientHeader';
+import { PushPermissionBanner } from '../components/PushPermissionBanner';
 import { CardListSkeleton } from '../components/Skeleton';
 import { EmptyState } from '../components/ui';
 import { api } from '../lib/api';
@@ -176,6 +177,7 @@ export function NotificationsScreen() {
   return (
     <SafeAreaView edges={['top']} style={styles.container}>
       <GradientHeader greeting="الإشعارات" location="تنبيهات طلباتك والعروض" hideBack />
+      <PushPermissionBanner />
 
       {isLoading ? (
         <View style={styles.list}>

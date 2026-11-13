@@ -92,6 +92,17 @@
         <category android:name="android.intent.category.BROWSABLE"/>
         <data android:scheme="tamem"/>
       </intent-filter>
+      <!-- Share links: deliverytamem.com/s|p|o/<id> open the store / product /
+           offer page. Verified through /.well-known/assetlinks.json; without
+           verification the web page hands off via intent:// instead. -->
+      <intent-filter android:autoVerify="true">
+        <action android:name="android.intent.action.VIEW"/>
+        <category android:name="android.intent.category.DEFAULT"/>
+        <category android:name="android.intent.category.BROWSABLE"/>
+        <data android:scheme="https" android:host="deliverytamem.com" android:pathPrefix="/s/"/>
+        <data android:scheme="https" android:host="deliverytamem.com" android:pathPrefix="/p/"/>
+        <data android:scheme="https" android:host="deliverytamem.com" android:pathPrefix="/o/"/>
+      </intent-filter>
     </activity>
   </application>
 </manifest>

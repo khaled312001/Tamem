@@ -36,6 +36,7 @@ import { useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
 
 import { Badge } from '../components/ui/Badge.js';
+import { ShareLinkButton } from '../components/ShareLinkButton.js';
 import { Button } from '../components/ui/Button.js';
 import { ConfirmDialog } from '../components/ui/ConfirmDialog.js';
 import { Dialog, Drawer } from '../components/ui/Dialog.js';
@@ -769,6 +770,7 @@ export function ProductsPage() {
                                 >
                                   <Pencil className="w-4 h-4" />
                                 </button>
+                                <ShareLinkButton kind="p" id={String(p.id)} />
                                 <RowMenu
                                   onDuplicate={() => duplicateMut.mutate(p)}
                                   onHistory={() => setHistoryFor(p)}

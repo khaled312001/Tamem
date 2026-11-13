@@ -25,11 +25,13 @@ import {
   Smartphone,
   Sparkles,
   Store,
+  Timer,
 } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 
+import { copyShareLink } from '../components/ShareLinkButton.js';
 import { Button } from '../components/ui/Button.js';
 import { Field, Input, SearchInput, Textarea } from '../components/ui/Input.js';
 import { BroadcastDialog, type BroadcastOffer } from '../components/whatsapp/BroadcastDialog.js';
@@ -57,6 +59,9 @@ interface HomeConfig {
   serviceCards: Record<string, ServiceCardOverride> | null;
   spotlightCity: string | null;
   intercityCity: string | null;
+  /** Seconds between offer slides in the app; 0 = by hand only. Saved on its
+   *  own from the slider tab, never with the page's «حفظ». */
+  offersAutoplaySec?: number;
 }
 
 /** Admin override for one headline service card. Every field is optional; an
@@ -306,7 +311,9 @@ export function HomeSettingsPage() {
 
   const [form, setForm] = useState<HomeConfig | null>(null);
   useEffect(() => {
-    if (cfg && !form) setForm(cfg);
+    // The slider's autoplay is saved on its own (SliderTab), so it stays out of
+    // this form: otherwise «حفظ» here would write back the value it loaded.
+    if (cfg && !form) setForm({ ...cfg, offersAutoplaySec: undefined });
   }, [cfg, form]);
 
   const mutation = useMutation({
@@ -322,7 +329,7 @@ export function HomeSettingsPage() {
     return <CardSkeleton />;
   }
 
-  const dirty = JSON.stringify(form) !== JSON.stringify(cfg);
+  const dirty = JSON.stringify(form) !== JSON.stringify({ ...cfg, offersAutoplaySec: undefined });
 
   const toggleInArray = (key: keyof HomeConfig, value: string) => {
     setForm((prev) => {
@@ -444,7 +451,7 @@ export function HomeSettingsPage() {
           onChange={(ids) => update('featuredProductIds', ids.length ? ids : null)}
         />
       )}
-      {tab === 'slider' && <SliderTab />}
+      {tab === 'slider' && <SliderTab autoplaySec={cfg?.offersAutoplaySec ?? 4} />}
       {tab === 'trust' && <TrustTab form={form} update={update} />}
     </div>
   );
@@ -1415,7 +1422,60 @@ const EMPTY_OFFER = {
   isActive: true,
 };
 
-function SliderTab() {
+/**
+ * How often the offer cards turn by themselves in the app. Saved the moment a
+ * value is picked, like the slides below it.
+ */
+function AutoplayCard({ value }: { value: number }) {
+  const qc = useQueryClient();
+  const [v, setV] = useState(value);
+  useEffect(() => setV(value), [value]);
+  const save = useMutation({
+    mutationFn: (n: number) => api.adminUpdateHomeConfig({ offersAutoplaySec: n }),
+    onSuccess: (_d, n) => {
+      toast.success(n ? `الكروت هتتقلب لوحدها كل ${n} ثواني` : 'الكروت مش هتتحرك لوحدها');
+      qc.invalidateQueries({ queryKey: ['admin', 'home-config'] });
+    },
+    onError: (err: Error) => {
+      setV(value);
+      toast.error(err.message || 'فشل الحفظ');
+    },
+  });
+  return (
+    <div className="rounded-xl border border-border bg-card p-3 space-y-2">
+      <div className="flex flex-wrap items-center gap-2">
+        <Timer className="w-4 h-4 text-brand-red" />
+        <div className="font-bold text-sm">حركة الكروت التلقائية</div>
+        <div className="flex flex-wrap gap-1.5 ms-auto">
+          {[0, 3, 4, 5, 7, 10].map((n) => (
+            <button
+              key={n}
+              type="button"
+              disabled={save.isPending}
+              onClick={() => {
+                if (n === v) return;
+                setV(n);
+                save.mutate(n);
+              }}
+              className={`px-3 py-1 rounded-full text-xs font-bold border transition ${
+                v === n
+                  ? 'bg-brand-red text-white border-brand-red'
+                  : 'bg-card border-border hover:border-brand-red/50'
+              }`}
+            >
+              {n === 0 ? 'إيقاف' : `${n} ثواني`}
+            </button>
+          ))}
+        </div>
+      </div>
+      <div className="text-xs text-muted-foreground">
+        الكروت بتتقلب لوحدها كل المدة دي، ولما العميل يلمسها بتستنى لحد ما يسيبها.
+      </div>
+    </div>
+  );
+}
+
+function SliderTab({ autoplaySec }: { autoplaySec: number }) {
   const qc = useQueryClient();
   const [editing, setEditing] = useState<Partial<Offer> | null>(null);
   const isSuper = (useAuth((s) => s.user) as { role?: string } | null)?.role === 'SUPER_ADMIN';
@@ -1545,6 +1605,8 @@ function SliderTab() {
         </Button>
       </div>
 
+      <AutoplayCard value={autoplaySec} />
+
       {editing && <div ref={editorRef}>{editor}</div>}
 
       {list.length === 0 ? (
@@ -1600,6 +1662,13 @@ function SliderTab() {
                 </Button>
                 <Button variant="ghost" onClick={() => setEditing(o)}>
                   تعديل
+                </Button>
+                <Button
+                  variant="ghost"
+                  onClick={() => void copyShareLink('o', o.id)}
+                  title="رابط العرض: يفتح في التطبيق على صفحة العرض"
+                >
+                  نسخ الرابط
                 </Button>
                 {isSuper && (
                   <Button

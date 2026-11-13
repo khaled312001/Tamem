@@ -67,6 +67,8 @@ interface GoogleSignInButtonProps {
    * abort the sign-in.
    */
   onResolveRole?: () => Promise<SignupRole | null | undefined>;
+  /** The welcome screen's main button: taller, rounder, a little lifted. */
+  large?: boolean;
 }
 
 // Read at module load — Expo inlines EXPO_PUBLIC_* at build time.
@@ -78,11 +80,17 @@ const IOS_CLIENT_ID = process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID;
 const HAS_GOOGLE_CONFIG = Platform.OS !== 'web' && !!WEB_CLIENT_ID;
 
 export function GoogleSignInButton(props: GoogleSignInButtonProps) {
-  if (!HAS_GOOGLE_CONFIG) return <DisabledGoogleButton label={props.label} />;
+  if (!HAS_GOOGLE_CONFIG) return <DisabledGoogleButton label={props.label} large={props.large} />;
   return <ConfiguredGoogleButton {...props} />;
 }
 
-function ConfiguredGoogleButton({ label, onError, role, onResolveRole }: GoogleSignInButtonProps) {
+function ConfiguredGoogleButton({
+  label,
+  onError,
+  role,
+  onResolveRole,
+  large,
+}: GoogleSignInButtonProps) {
   const loginWithGoogle = useAuth((s) => s.loginWithGoogle);
   const [loading, setLoading] = useState(false);
   const [configError, setConfigError] = useState(false);
@@ -104,7 +112,7 @@ function ConfiguredGoogleButton({ label, onError, role, onResolveRole }: GoogleS
     }
   }, []);
 
-  if (configError) return <DisabledGoogleButton label={label} />;
+  if (configError) return <DisabledGoogleButton label={label} large={large} />;
 
   const onPress = async () => {
     if (loading) return;
@@ -175,14 +183,24 @@ function ConfiguredGoogleButton({ label, onError, role, onResolveRole }: GoogleS
     <Pressable
       onPress={onPress}
       disabled={loading}
-      style={({ pressed }) => [styles.btn, pressed && styles.pressed, loading && styles.disabled]}
+      style={({ pressed }) => [
+        styles.btn,
+        large && styles.btnLarge,
+        pressed && styles.pressed,
+        loading && styles.disabled,
+      ]}
+      accessibilityRole="button"
+      accessibilityLabel={label ?? 'الدخول بحساب جوجل'}
+      accessibilityState={{ busy: loading, disabled: loading }}
     >
       <View style={styles.row}>
-        <GoogleLogo size={20} />
+        <GoogleLogo size={large ? 22 : 20} />
         {loading ? (
           <ActivityIndicator size="small" color="#1f1f1f" style={styles.spinner} />
         ) : (
-          <Text style={styles.label}>{label ?? 'الدخول بحساب جوجل'}</Text>
+          <Text style={[styles.label, large && styles.labelLarge]}>
+            {label ?? 'الدخول بحساب جوجل'}
+          </Text>
         )}
         <View style={styles.spacer} />
       </View>
@@ -190,12 +208,14 @@ function ConfiguredGoogleButton({ label, onError, role, onResolveRole }: GoogleS
   );
 }
 
-function DisabledGoogleButton({ label }: { label?: string }) {
+function DisabledGoogleButton({ label, large }: { label?: string; large?: boolean }) {
   return (
-    <Pressable disabled style={[styles.btn, styles.disabled]}>
+    <Pressable disabled style={[styles.btn, large && styles.btnLarge, styles.disabled]}>
       <View style={styles.row}>
-        <GoogleLogo size={20} />
-        <Text style={styles.label}>{label ?? 'الدخول بحساب جوجل'}</Text>
+        <GoogleLogo size={large ? 22 : 20} />
+        <Text style={[styles.label, large && styles.labelLarge]}>
+          {label ?? 'الدخول بحساب جوجل'}
+        </Text>
         <View style={styles.spacer} />
       </View>
     </Pressable>
@@ -216,6 +236,22 @@ const styles = StyleSheet.create({
       ? { boxShadow: '0 1px 2px rgba(60,64,67,0.30), 0 1px 3px 1px rgba(60,64,67,0.15)' }
       : { elevation: 1 }),
   },
+  btnLarge: {
+    minHeight: 58,
+    borderRadius: radii.pill,
+    paddingHorizontal: spacing.xl,
+    borderColor: '#E3D9D3',
+    ...(Platform.OS === 'web'
+      ? { boxShadow: '0 10px 24px rgba(36,19,16,0.14)' }
+      : {
+          elevation: 6,
+          shadowColor: '#241310',
+          shadowOpacity: 0.16,
+          shadowRadius: 14,
+          shadowOffset: { width: 0, height: 8 },
+        }),
+  },
+  labelLarge: { fontSize: fontSizes.lg },
   pressed: { backgroundColor: '#F7F8F8' },
   disabled: { opacity: 0.6 },
   row: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },

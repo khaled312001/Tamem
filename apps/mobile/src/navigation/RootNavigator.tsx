@@ -1,9 +1,10 @@
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
-import { useEffect, useState } from 'react';
+import { useEffect } from 'react';
 
 import { OnboardingTour } from '../components/OnboardingTour';
 import { navigationRef, registerForPushNotifications, usePushTapNavigation } from '../lib/push';
+import { useShareLinks } from '../lib/shareLinks';
 import { connectSocket, disconnectSocket } from '../lib/socket';
 import { CollectPhoneScreen } from '../screens/CollectPhoneScreen';
 import { SplashScreen } from '../screens/SplashScreen';
@@ -33,7 +34,6 @@ const Stack = createNativeStackNavigator<RootStackParamList>();
 
 export function RootNavigator() {
   const { user, hydrated, hydrate } = useAuth();
-  const [introDismissed, setIntroDismissed] = useState(false);
 
   useEffect(() => {
     void hydrate();
@@ -53,11 +53,9 @@ export function RootNavigator() {
   // 1) Auth is still loading from storage — show splash without CTA
   if (!hydrated) return <SplashScreen />;
 
-  // 2) First-time visitor (no session) — show intro splash with "ابدأ الآن" CTA
-  //    until they tap it. Then we fall through to AuthStack.
-  if (!user && !introDismissed) {
-    return <SplashScreen onStart={() => setIntroDismissed(true)} />;
-  }
+  // 2) No session: straight to the welcome screen (LoginScreen). It used to
+  //    open on a red splash with «ابدأ الآن» first, a tap that led to a page
+  //    saying hello again. The welcome screen now introduces Tamem itself.
 
   // 3) Google first-login → mandatory phone collection before reaching the app
   const mustCollectPhone = !!user && needsPhoneCollection(user.phone);
@@ -65,6 +63,10 @@ export function RootNavigator() {
   return (
     <NavigationContainer ref={navigationRef}>
       <PushNavBridge />
+      <ShareLinkBridge
+        canOpen={!!user && !mustCollectPhone && user.role !== 'MERCHANT'}
+        dropLinks={!!user && user.role === 'MERCHANT'}
+      />
       <Stack.Navigator screenOptions={{ headerShown: false }}>
         {!user ? (
           <Stack.Screen name="Auth" component={AuthStack} />
@@ -88,5 +90,11 @@ export function RootNavigator() {
  *  inside the NavigationContainer tree. */
 function PushNavBridge(): null {
   usePushTapNavigation();
+  return null;
+}
+
+/** Opens deliverytamem.com/s|p|o/<id> links (and tamem://…) on their page. */
+function ShareLinkBridge({ canOpen, dropLinks }: { canOpen: boolean; dropLinks: boolean }): null {
+  useShareLinks(canOpen, dropLinks);
   return null;
 }

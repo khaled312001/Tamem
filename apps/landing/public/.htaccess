@@ -1,0 +1,10 @@
+# Tamem — landing + redirects
+RewriteEngine On
+
+# Legacy admin URL: /login → /super_admin/login
+RewriteRule ^login/?$ /super_admin/login [R=301,L]
+
+# Share links: /s/<store>, /p/<product>, /o/<offer>. The API shim renders a
+# preview page (og: tags for WhatsApp) that hands the link to the app on
+# Android. The app itself claims these paths through .well-known/assetlinks.json.
+RewriteRule ^([spo])/([A-Za-z0-9_-]{1,64})/?$ /backendtamem/api.php?path=/share/$1/$2 [QSA,L]

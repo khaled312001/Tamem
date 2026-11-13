@@ -1,7 +1,7 @@
 import { useMutation, useQuery } from '@tanstack/react-query';
-import { AlertTriangle, ChevronDown, MapPin, Truck } from 'lucide-react-native';
+import { AlertTriangle, ChevronDown, MapPin, Search, Truck } from 'lucide-react-native';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 
 import { api } from '../lib/api';
 import { colors, fontFamilies, fontSizes, radii, spacing } from '../theme/tokens';
@@ -55,6 +55,25 @@ interface ZoneOption {
   nameEn?: string | null;
   baseDeliveryPrice?: string | number | null;
   deliveryPrice?: string | number | null;
+}
+
+/** قفط first, then A→Z. The server orders them the same way; this keeps an
+ *  answer cached before that change in the right order too. */
+const HOME_CITY = 'قفط';
+function homeFirst(list: ZoneOption[], isHome: (o: ZoneOption) => boolean): ZoneOption[] {
+  return [...list].sort((a, b) => Number(isHome(b)) - Number(isHome(a)));
+}
+
+/** Arabic letters that people type either way: أ/إ/آ/ا, ة/ه, ى/ي. */
+function looseAr(s: string): string {
+  return s
+    .replace(/[\u064B-\u0652\u0640]/g, '')
+    .replace(/[أإآ]/g, 'ا')
+    .replace(/ة/g, 'ه')
+    .replace(/ى/g, 'ي')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
 }
 
 interface DeliveryWindow {
@@ -147,7 +166,10 @@ export function DeliveryZonePicker({
   // ─── Cities ────────────────────────────────────────────────────────────
   const citiesQuery = useQuery<ZoneOption[]>({
     queryKey: ['zones', 'cities'],
-    queryFn: () => api.raw.get('/zones/cities').then((r) => r.data.data),
+    queryFn: () =>
+      api.raw
+        .get('/zones/cities')
+        .then((r) => homeFirst(r.data.data ?? [], (c) => c.nameAr.trim() === HOME_CITY)),
     staleTime: 5 * 60_000,
   });
 
@@ -155,7 +177,11 @@ export function DeliveryZonePicker({
   const villagesQuery = useQuery<ZoneOption[]>({
     queryKey: ['zones', 'villages', value?.cityId ?? null],
     enabled: !!value?.cityId,
-    queryFn: () => api.raw.get(`/zones/cities/${value!.cityId}/villages`).then((r) => r.data.data),
+    queryFn: () =>
+      api.raw
+        .get(`/zones/cities/${value!.cityId}/villages`)
+        // «قفط المدينة» (the town itself) is where most orders go.
+        .then((r) => homeFirst(r.data.data ?? [], (v) => v.nameAr.includes('المدينة'))),
     staleTime: 5 * 60_000,
   });
 
@@ -168,30 +194,28 @@ export function DeliveryZonePicker({
     staleTime: 5 * 60_000,
   });
 
-  // ─── Auto-select قفط if it's the only city ─────────────────────────────
-  const autoSelectedCity = useRef(false);
+  // ─── No city yet: start on قفط (or the only city there is) ────────────
+  // Almost every order is inside قفط, so the customer goes straight to the
+  // village list. Anyone elsewhere changes it in one tap.
   useEffect(() => {
-    if (autoSelectedCity.current) return;
-    if (value?.cityId) {
-      autoSelectedCity.current = true;
-      return;
-    }
+    if (value?.cityId) return;
     const cities = citiesQuery.data;
-    if (cities && cities.length === 1) {
-      const only = cities[0];
-      if (!only) return;
-      autoSelectedCity.current = true;
-      onChange({
-        cityId: only.id,
-        cityName: only.nameAr,
-        villageId: '',
-        villageName: '',
-        areaId: '',
-        areaName: '',
-        deliveryFee: null,
-      });
-    }
-  }, [citiesQuery.data, value?.cityId, onChange]);
+    if (!cities?.length) return;
+    const home =
+      cities.find((c) => c.nameAr.trim() === HOME_CITY) ??
+      (cities.length === 1 ? cities[0] : undefined);
+    if (!home) return;
+    onChange({
+      cityId: home.id,
+      cityName: home.nameAr,
+      villageId: '',
+      villageName: '',
+      areaId: '',
+      areaName: '',
+      deliveryFee: null,
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [citiesQuery.data, value?.cityId]);
 
   // ─── Quote delivery once all three picked ──────────────────────────────
   const [quoteError, setQuoteError] = useState<string | null>(null);
@@ -563,6 +587,7 @@ function OptionList({
   emptyText: string;
   showPrice?: boolean;
 }) {
+  const [query, setQuery] = useState('');
   if (loading) {
     return (
       <View style={{ paddingVertical: spacing.xl, alignItems: 'center' }}>
@@ -577,9 +602,26 @@ function OptionList({
       </View>
     );
   }
+  const k = looseAr(query);
+  const shown = k ? options.filter((o) => looseAr(o.nameAr).includes(k)) : options;
   return (
     <View style={{ paddingBottom: spacing.md }}>
-      {options.map((opt) => {
+      {options.length > 8 ? (
+        <View style={styles.searchBox}>
+          <Search size={16} color={colors.text.muted} />
+          <TextInput
+            value={query}
+            onChangeText={setQuery}
+            placeholder="دوّر بالاسم…"
+            placeholderTextColor={colors.text.muted}
+            style={styles.searchInput}
+          />
+        </View>
+      ) : null}
+      {shown.length === 0 ? (
+        <Text style={[styles.emptyText, { paddingVertical: spacing.lg }]}>مفيش اسم كده</Text>
+      ) : null}
+      {shown.map((opt) => {
         const selected = opt.id === selectedId;
         const price = opt.deliveryPrice ?? opt.baseDeliveryPrice;
         const priceNum =
@@ -751,6 +793,25 @@ const styles = StyleSheet.create({
     color: colors.text.muted,
     fontSize: fontSizes.xs,
     marginTop: 2,
+    textAlign: 'right',
+  },
+  searchBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    borderWidth: 1,
+    borderColor: colors.line2,
+    borderRadius: radii.md,
+    paddingHorizontal: spacing.md,
+    marginBottom: spacing.sm,
+    backgroundColor: colors.surface,
+  },
+  searchInput: {
+    flex: 1,
+    fontFamily: fontFamilies.body,
+    fontSize: fontSizes.sm,
+    color: colors.ink,
+    paddingVertical: spacing.sm,
     textAlign: 'right',
   },
   emptyText: {

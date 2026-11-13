@@ -134,6 +134,8 @@ export interface HomeConfig {
   /** Merchant city the inter-city restaurants rail draws from — stores in
    *  another city that still deliver here. null hides that rail. */
   intercityCity: string | null;
+  /** Seconds between offer slides, set by the admin; 0 = by hand only. */
+  offersAutoplaySec?: number;
 }
 
 /** The reorderable/hideable sections of the home screen. Keep in sync with the

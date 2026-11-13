@@ -6,14 +6,22 @@
 import { useNavigation, useRoute, type RouteProp } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useQuery } from '@tanstack/react-query';
-import { ShoppingBag, Store } from 'lucide-react-native';
-import { ScrollView, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
+import { Share2, ShoppingBag, Store } from 'lucide-react-native';
+import {
+  ActivityIndicator,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
+  useWindowDimensions,
+} from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { ScreenHeader } from '../components/ScreenHeader';
 import { Image } from '../components/ui/CachedImage';
 import { EmptyState, PrimaryButton } from '../components/ui';
 import { api } from '../lib/api';
+import { shareItem } from '../lib/shareLinks';
 import type { HomeStackParamList } from '../navigation/HomeStack';
 import type { Offer } from './home/homeData';
 import { colors, fontFamilies, radii, shadows, spacing } from '../theme/tokens';
@@ -28,7 +36,7 @@ export function OfferDetailScreen() {
   const { params } = useRoute<Rt>();
   const { width } = useWindowDimensions();
   // Same cache entry the home slider filled, so this opens instantly.
-  const { data } = useQuery<Offer[]>({
+  const { data, isLoading } = useQuery<Offer[]>({
     queryKey: ['offers'],
     queryFn: () => api.raw.get('/offers').then((r) => r.data.data),
     staleTime: 60_000,
@@ -38,8 +46,26 @@ export function OfferDetailScreen() {
 
   return (
     <SafeAreaView edges={['top']} style={styles.container}>
-      <ScreenHeader title="العرض" />
-      {!offer ? (
+      <ScreenHeader
+        title="العرض"
+        rightIcon={offer ? Share2 : undefined}
+        rightLabel="شارك العرض"
+        onPressRight={
+          offer
+            ? () =>
+                shareItem('o', offer.id, [
+                  `🎁 ${offer.titleAr || offer.title}`,
+                  offer.descriptionAr,
+                  'على تطبيق تميم للتوصيل 🚚',
+                ])
+            : undefined
+        }
+      />
+      {/* Opened from a shared link the offers list isn't cached yet: wait for
+          it instead of flashing «العرض ده خلص». */}
+      {!offer && isLoading ? (
+        <ActivityIndicator style={{ marginTop: spacing.xxl }} color={colors.brand.red} />
+      ) : !offer ? (
         <EmptyState title="العرض ده خلص" subtitle="شوف العروض التانية في الصفحة الرئيسية" />
       ) : (
         <ScrollView contentContainerStyle={styles.scroll}>

@@ -362,7 +362,11 @@ export function HomeV2Screen() {
         return <MainServicesSection services={services} overrides={homeConfig?.serviceCards} />;
       case 'offersSlider':
         return bannerOffers.length > 0 ? (
-          <OffersCarousel offers={bannerOffers} onPressOffer={onPressOffer} />
+          <OffersCarousel
+            offers={bannerOffers}
+            onPressOffer={onPressOffer}
+            autoplaySec={homeConfig?.offersAutoplaySec ?? 4}
+          />
         ) : null;
       case 'categories':
         return (

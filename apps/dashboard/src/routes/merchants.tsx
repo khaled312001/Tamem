@@ -39,6 +39,7 @@ import { toast } from 'sonner';
 
 import { MerchantExportDialog, MerchantImportDialog } from '../components/MerchantImportExport.js';
 import { MerchantLogo } from '../components/MerchantLogo.js';
+import { ShareLinkButton } from '../components/ShareLinkButton.js';
 import { Button } from '../components/ui/Button.js';
 import { ConfirmDialog } from '../components/ui/ConfirmDialog.js';
 import { SetPasswordDialog, type PasswordTarget } from '../components/SetPasswordDialog.js';
@@ -731,6 +732,7 @@ export function MerchantsPage() {
                         >
                           <Pencil className="w-4 h-4" />
                         </button>
+                        <ShareLinkButton kind="s" id={String(m.id)} />
                         <MerchantMenu
                           merchant={m}
                           onDelete={() => setConfirmDel(m)}
@@ -839,6 +841,7 @@ export function MerchantsPage() {
                   >
                     <Pencil className="w-4 h-4" />
                   </button>
+                  <ShareLinkButton kind="s" id={String(m.id)} />
                   <MerchantMenu
                     merchant={m}
                     onDelete={() => setConfirmDel(m)}

@@ -12,7 +12,6 @@ import {
   Linking,
   Pressable,
   RefreshControl,
-  Share,
   StyleSheet,
   Text,
   TextInput,
@@ -27,6 +26,7 @@ import { EmptyState, PrimaryButton } from '../components/ui';
 import { api } from '../lib/api';
 import { LIST_PERF } from '../lib/listPerf';
 import { productPrice } from '../lib/productPrice';
+import { shareItem } from '../lib/shareLinks';
 import { useDebouncedValue } from '../lib/useDebouncedValue';
 import { addToCart, setItemQuantity, useCart } from '../stores/cart';
 import { CartBar } from './merchant-detail/CartBar';
@@ -248,22 +248,19 @@ export function MerchantDetailScreen() {
   }, [data, hasCoords, navigation]);
 
   /**
-   * Share. There is no public web page per store yet, so the message carries
-   * the store name, its address and a maps pin — everything the recipient needs
-   * without a link that would 404.
+   * Share the store's link (deliverytamem.com/s/<id>). With the app installed
+   * it opens straight on this page; without it the link shows a preview card
+   * and the install button. The link is the only URL in the message, since
+   * WhatsApp builds its preview from the first one it finds.
    */
   const shareStore = useCallback(() => {
     if (!data) return;
-    const lines = [
+    shareItem('s', merchantId, [
       `🏪 ${data.storeNameAr}`,
-      data.category?.nameAr ?? '',
-      data.addressLine ?? '',
-      hasCoords ? `📍 https://maps.google.com/?q=${data.lat},${data.lng}` : '',
-      '',
+      [data.category?.nameAr, data.city].filter(Boolean).join(' · '),
       'اطلب منه على تطبيق تميم للتوصيل 🚚',
-    ].filter(Boolean);
-    void Share.share({ message: lines.join('\n') }).catch(() => undefined);
-  }, [data, hasCoords]);
+    ]);
+  }, [data, merchantId]);
 
   // Derived from `data`, so these must come after the query above.
   const isClosed = !(data?.openness?.isOpenNow ?? data?.isOpen ?? true);

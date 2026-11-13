@@ -928,6 +928,8 @@ $ADMIN_PERM_MAP = [
     'home-config' => 'home-settings', 'offers' => 'home-settings',
     'site-config' => 'site-settings', 'settings' => 'settings',
     'accounting' => 'accounting',
+    // Reading a customer's login code is customer support.
+    'otp-lookup' => 'customers',
 ];
 if (str_starts_with($path, '/admin/')) {
     $__admin = authUser();
@@ -3998,7 +4000,7 @@ function notifyOrderParties(string $orderId, string $status, ?string $reason = n
                 && !tgOrderTooOld($o['createdAt'] ?? null)
                 && tgDriverChatId((string) $o['assignedDriverId']) === null) {
                 $bu = tgBotUsername();
-                $link = $bu ? ("\nاربطه من اللينك ده 👇\nhttps://t.me/" . $bu . '?start=drv_' . $o['assignedDriverId']) : '';
+                $link = $bu ? ("\nاربطه من اللينك ده 👇\nhttps://t.me/" . $bu . '?start=' . tgLinkCode('drv', (string) $o['assignedDriverId'])) : '';
                 tgSendGroup("⚠️ *المندوب مش رابط تلجرام*\nالأوردر #{$no} اتسند لـ " . ($ctx['driverName'] ?: 'المندوب') . " — بس هو لسه مش رابط البوت، فكارت الأوردر مش هيوصله ع الخاص." . $link);
             }
         }
@@ -4814,7 +4816,7 @@ if ($method === 'GET' && $path === '/admin/telegram') {
                 'id' => $r['id'], 'name' => $r['name'], 'phone' => $r['phone'],
                 'linked' => !empty($r['telegramChatId']),
                 'telegramUsername' => $r['telegramUsername'] ?: null,
-                'deepLink' => $botUsername ? ('https://t.me/' . $botUsername . '?start=drv_' . $r['id']) : null,
+                'deepLink' => $botUsername ? ('https://t.me/' . $botUsername . '?start=' . tgLinkCode('drv', (string) $r['id'])) : null,
             ];
         }
     } catch (Throwable $e) { /* leave empty */ }
@@ -4830,7 +4832,7 @@ if ($method === 'GET' && $path === '/admin/telegram') {
                 'id' => $r['id'], 'name' => $r['name'], 'phone' => $r['whatsappPhone'],
                 'linked' => !empty($r['telegramChatId']),
                 'telegramUsername' => $r['telegramUsername'] ?: null,
-                'deepLink' => $botUsername ? ('https://t.me/' . $botUsername . '?start=sup_' . $r['id']) : null,
+                'deepLink' => $botUsername ? ('https://t.me/' . $botUsername . '?start=' . tgLinkCode('sup', (string) $r['id'])) : null,
             ];
         }
     } catch (Throwable $e) { /* leave empty */ }
@@ -5235,6 +5237,20 @@ if ($method === 'GET' && str_starts_with($path, '/admin/reports/revenue')) {
 
 // A few singular /admin/* GETs where the dashboard reads specific fields
 // from the response object. Returning a list would crash them.
+/** Seconds between offer slides in the app (admin-set, default 4); 0 = by hand only. */
+function offersAutoplaySec(): int {
+    try {
+        $st = db()->prepare("SELECT `value` FROM `Setting` WHERE `key` = 'offers_autoplay_sec' LIMIT 1");
+        $st->execute();
+        $v = $st->fetchColumn();
+        if ($v === false || $v === null) return 4;
+        $n = (int) json_decode((string) $v, true);
+        return $n <= 0 ? 0 : max(2, min(15, $n));
+    } catch (Throwable $e) {
+        return 4;
+    }
+}
+
 if ($method === 'GET' && $path === '/admin/home-config') {
     authUser();
     $rows = db()->query('SELECT * FROM `HomeConfig` ORDER BY id ASC LIMIT 1')->fetchAll();
@@ -5255,6 +5271,7 @@ if ($method === 'GET' && $path === '/admin/home-config') {
         foreach (['showPromoBanner', 'showTrustStrip'] as $b) {
             if (isset($row[$b])) $row[$b] = (bool) (int) $row[$b];
         }
+        $row['offersAutoplaySec'] = offersAutoplaySec();
         jsonOk($row);
     } else {
         jsonOk([
@@ -5957,6 +5974,139 @@ function placeSuggestions(): array {
     foreach ($places as $p) if ($p['n'] >= 2) $items[] = ['kind' => 'place', 'name' => $p['best'], 'count' => $p['n']];
     usort($items, fn($a, $b) => [$b['count'], $a['kind'] === 'merchant' ? 0 : 1, $a['name']] <=> [$a['count'], $b['kind'] === 'merchant' ? 0 : 1, $b['name']]);
     return array_slice($items, 0, 400);
+}
+
+/**
+ * Keep the address a customer just ordered to, so the next order starts from it.
+ *
+ * Customers typed the same address on every order and lost it on a reinstall:
+ * the app only kept the last one on the phone. Now the server saves it as a
+ * CustomerAddress (with its zone, which is what prices it) and makes it the
+ * default, because the address used last is the likeliest next one. The same
+ * address again (same spelling after placeKey(), same area) only becomes the
+ * default; nothing is duplicated. Ten addresses at most per customer.
+ * Never fails the order: any error is logged and ignored.
+ */
+function rememberCustomerAddress(string $uid, string $addr, $lat, $lng, $cityId, $villageId, $areaId): void {
+    try {
+        $addr = trim($addr);
+        if ($uid === '' || mb_strlen($addr) < 3 || mb_strlen($addr) > 300) return;
+        $hasPin = $lat !== null && $lng !== null;
+        if (!$villageId && !$areaId && !$hasPin) return;
+        $st = db()->prepare('SELECT id, address, areaId, isDefault FROM `CustomerAddress` WHERE userId = ?');
+        $st->execute([$uid]);
+        $rows = $st->fetchAll();
+        $k = placeKey($addr);
+        foreach ($rows as $r) {
+            if (placeKey((string) $r['address']) === $k && (string) ($r['areaId'] ?? '') === (string) ($areaId ?? '')) {
+                if (!(int) $r['isDefault']) {
+                    db()->prepare('UPDATE `CustomerAddress` SET isDefault = 0 WHERE userId = ?')->execute([$uid]);
+                    db()->prepare('UPDATE `CustomerAddress` SET isDefault = 1, updatedAt = NOW(3) WHERE id = ?')->execute([$r['id']]);
+                }
+                return;
+            }
+        }
+        if (count($rows) >= 10) return;
+        // Name it after its place («قفط المدينة — الحي الشرقي»), which reads
+        // better on a chip than «عنوان 3».
+        $label = '';
+        if ($villageId || $areaId) {
+            $z = db()->prepare('SELECT v.nameAr vn, a.nameAr an FROM `Village` v LEFT JOIN `Area` a ON a.id = ?
+                                 WHERE v.id = COALESCE(?, (SELECT villageId FROM `Area` WHERE id = ?)) LIMIT 1');
+            $z->execute([$areaId, $villageId, $areaId]);
+            if ($zr = $z->fetch()) $label = trim(implode(' — ', array_filter([(string) ($zr['vn'] ?? ''), (string) ($zr['an'] ?? '')])));
+        }
+        if ($label === '') $label = count($rows) === 0 ? 'عنواني' : 'عنوان ' . (count($rows) + 1);
+        db()->prepare('UPDATE `CustomerAddress` SET isDefault = 0 WHERE userId = ?')->execute([$uid]);
+        db()->prepare('INSERT INTO `CustomerAddress` (id, userId, label, address, lat, lng, notes, isDefault, cityId, villageId, areaId, createdAt, updatedAt) VALUES (?,?,?,?,?,?,NULL,1,?,?,?,NOW(3),NOW(3))')
+            ->execute([newId(), $uid, mb_substr($label, 0, 80), $addr, $hasPin ? (float) $lat : null, $hasPin ? (float) $lng : null,
+                $cityId ?: null, $villageId ?: null, $areaId ?: null]);
+    } catch (Throwable $e) {
+        error_log('rememberCustomerAddress: ' . $e->getMessage());
+    }
+}
+
+/**
+ * Delivery addresses typed before, for «إلى» on the two manual-order screens.
+ *  - common: what agents and customers wrote over the last 180 days, spellings
+ *    merged on placeKey(), shown in the most used one, with the zone it was
+ *    most often sent to. Typed once is noise; twice is a real address.
+ *  - customer: one caller's own addresses (saved ones first, then the ones on
+ *    their orders, newest first) when the screen already knows who is calling.
+ */
+function addressSuggestCommon(): array {
+    $since = gmdate('Y-m-d H:i:s', time() - 180 * 86400);
+    $q = db()->prepare("SELECT TRIM(o.deliveryAddress) a, o.cityId, o.villageId, o.areaId, COUNT(*) n,
+                               v.nameAr vn, ar.nameAr an
+                          FROM `Order` o
+                          LEFT JOIN `Village` v ON v.id = o.villageId
+                          LEFT JOIN `Area` ar ON ar.id = o.areaId
+                         WHERE o.deliveryAddress IS NOT NULL AND TRIM(o.deliveryAddress) <> '' AND o.createdAt >= ?
+                           AND o.parentOrderId IS NULL AND o.status NOT IN ('CANCELLED','REJECTED')
+                           AND CHAR_LENGTH(o.deliveryAddress) <= 160
+                         GROUP BY TRIM(o.deliveryAddress), o.cityId, o.villageId, o.areaId, v.nameAr, ar.nameAr");
+    $q->execute([$since]);
+    $by = [];
+    foreach ($q->fetchAll() as $r) {
+        $k = placeKey((string) $r['a']); $n = (int) $r['n'];
+        if ($k === '' || mb_strlen($k) < 3) continue;
+        $by[$k] ??= ['n' => 0, 'bestN' => 0, 'row' => null];
+        $by[$k]['n'] += $n;
+        if ($n > $by[$k]['bestN']) { $by[$k]['bestN'] = $n; $by[$k]['row'] = $r; }
+    }
+    $out = [];
+    foreach ($by as $x) {
+        if ($x['n'] < 2) continue;
+        $r = $x['row'];
+        $out[] = ['address' => (string) $r['a'], 'count' => $x['n'], 'cityId' => $r['cityId'] ?: null,
+                  'villageId' => $r['villageId'] ?: null, 'areaId' => $r['areaId'] ?: null,
+                  'zone' => trim(implode(' — ', array_filter([(string) ($r['vn'] ?? ''), (string) ($r['an'] ?? '')])))];
+    }
+    usort($out, fn($a, $b) => [$b['count'], $a['address']] <=> [$a['count'], $b['address']]);
+    return array_slice($out, 0, 300);
+}
+function addressSuggestCustomer(string $cid): array {
+    $rows = [];
+    $st = db()->prepare("SELECT ca.label, ca.address, ca.cityId, ca.villageId, ca.areaId, v.nameAr vn, ar.nameAr an
+                           FROM `CustomerAddress` ca
+                           LEFT JOIN `Village` v ON v.id = ca.villageId LEFT JOIN `Area` ar ON ar.id = ca.areaId
+                          WHERE ca.userId = ? ORDER BY ca.isDefault DESC, ca.updatedAt DESC LIMIT 10");
+    $st->execute([$cid]);
+    foreach ($st->fetchAll() as $r) $rows[] = $r + ['saved' => true];
+    $st = db()->prepare("SELECT NULL label, TRIM(o.deliveryAddress) address, o.cityId, o.villageId, o.areaId, v.nameAr vn, ar.nameAr an, MAX(o.createdAt) last
+                           FROM `Order` o
+                           LEFT JOIN `Village` v ON v.id = o.villageId LEFT JOIN `Area` ar ON ar.id = o.areaId
+                          WHERE o.customerId = ? AND o.parentOrderId IS NULL AND o.deliveryAddress IS NOT NULL AND TRIM(o.deliveryAddress) <> ''
+                          GROUP BY TRIM(o.deliveryAddress), o.cityId, o.villageId, o.areaId, v.nameAr, ar.nameAr
+                          ORDER BY last DESC LIMIT 20");
+    $st->execute([$cid]);
+    foreach ($st->fetchAll() as $r) $rows[] = $r + ['saved' => false];
+    $seen = []; $out = [];
+    foreach ($rows as $r) {
+        $k = placeKey((string) $r['address']);
+        if ($k === '' || isset($seen[$k])) continue;
+        $seen[$k] = true;
+        $out[] = ['address' => (string) $r['address'], 'label' => $r['label'] ?: null, 'saved' => $r['saved'],
+                  'cityId' => $r['cityId'] ?: null, 'villageId' => $r['villageId'] ?: null, 'areaId' => $r['areaId'] ?: null,
+                  'zone' => trim(implode(' — ', array_filter([(string) ($r['vn'] ?? ''), (string) ($r['an'] ?? '')])))];
+        if (count($out) >= 8) break;
+    }
+    return $out;
+}
+// GET /admin/addresses/suggest[?customerId=] — the common list is cached 10
+// minutes like the «من» one; a caller's own list is read fresh.
+if ($method === 'GET' && $path === '/admin/addresses/suggest') {
+    $u = authUser();
+    if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
+    $file = ($d = rtDir()) ? $d . '/cache/address-suggest.json' : null;
+    $common = null;
+    if ($file && is_file($file) && @filemtime($file) > time() - 600) $common = json_decode((string) @file_get_contents($file), true);
+    if (!is_array($common)) {
+        $common = addressSuggestCommon();
+        if ($file) rtWrite($file, json_encode($common, JSON_UNESCAPED_UNICODE));
+    }
+    $cid = trim((string) ($_GET['customerId'] ?? ''));
+    jsonOk(['common' => $common, 'customer' => $cid !== '' ? addressSuggestCustomer($cid) : []]);
 }
 
 // GET /admin/places/suggest — see placeSuggestions(). Cached 10 minutes: both
@@ -7454,7 +7604,9 @@ if ($method === 'POST' && $path === '/driver-portal/login') {
     $ip = passcodeClientIp();
     $phone = normPhoneEg((string) ($b['phone'] ?? '')) ?? '';
     [$byIp, $byPhone, $all] = portalFails($ip, $phone);
-    if ($byIp >= 12 || $byPhone >= 6 || $all >= 300) {
+    // No cap on the total: 300 wrong tries from anywhere used to lock every
+    // driver out for an hour.
+    if ($byIp >= 12 || $byPhone >= 6) {
         header('Retry-After: 3600');
         jsonErr('محاولات كتير — استنى ساعة وجرّب تاني، أو كلّم الإدارة', 429, 'TOO_MANY');
     }
@@ -9898,7 +10050,7 @@ if ($method === 'POST' && $path === '/admin/zones/cities') {
 }
 if ($method === 'GET' && preg_match('#^/admin/zones/cities/([^/]+)/villages$#', $path, $m)) {
     authUser();
-    $st = db()->prepare("SELECT v.*, (SELECT COUNT(*) FROM `Area` a WHERE a.villageId = v.id) AS areaCount FROM `Village` v WHERE v.cityId = ? ORDER BY v.nameAr");
+    $st = db()->prepare("SELECT v.*, (SELECT COUNT(*) FROM `Area` a WHERE a.villageId = v.id) AS areaCount FROM `Village` v WHERE v.cityId = ? ORDER BY (v.nameAr LIKE '%المدينة%') DESC, v.nameAr");
     $st->execute([$m[1]]);
     zoneList(array_map(fn($r) => ['id' => $r['id'], 'cityId' => $r['cityId'], 'nameAr' => $r['nameAr'], 'nameEn' => $r['nameEn'], 'baseDeliveryPrice' => $r['baseDeliveryPrice'], 'isActive' => (bool)(int)$r['isActive'], 'areaCount' => (int)$r['areaCount']], $st->fetchAll()));
 }
@@ -10422,6 +10574,21 @@ if ($method === 'GET' && preg_match('#^/admin/(customers)$#', $path, $m)) {
 // cuid() lookalike — 25 chars starting with "c" so it plays nicely with
 // Prisma's default @id.  We don't need Prisma's exact algorithm, just IDs
 // unique enough for the rows we insert here.
+/**
+ * The Telegram /start code for linking a driver or supervisor. It was just
+ * «drv_<userId>», and every customer sees their driver's id in the order
+ * screen, so anyone could send /start drv_<id> and take over that driver's
+ * order cards (names, phones, addresses, cash). Now the code carries an HMAC
+ * only the server can make, and the links come from the dashboard.
+ */
+function tgLinkSig(string $kind, string $id): string {
+    $k = (string) (env('TG_LINK_SECRET') ?: env('JWT_ACCESS_SECRET') ?: '');
+    return substr(hash_hmac('sha256', "tglink|$kind|$id", $k), 0, 12);
+}
+function tgLinkCode(string $kind, string $id): string {
+    return $kind . '_' . $id . '_' . tgLinkSig($kind, $id);
+}
+
 function newId(): string {
     return 'c' . strtolower(bin2hex(random_bytes(12)));
 }
@@ -11119,6 +11286,14 @@ if ($method === 'PATCH' && $path === '/admin/home-config') {
         $args[] = $u['sub'] ?? null;
         db()->prepare("UPDATE `HomeConfig` SET " . implode(',', $sets) . " WHERE id = 'singleton'")->execute($args);
     }
+    // Kept in Setting, not a new HomeConfig column: Prisma owns that table and
+    // a `db push` would drop a column it doesn't know.
+    if (array_key_exists('offersAutoplaySec', $b)) {
+        $n = (int) $b['offersAutoplaySec'];
+        $n = $n <= 0 ? 0 : max(2, min(15, $n));
+        db()->prepare('INSERT INTO `Setting` (`key`,`value`,`description`,`updatedAt`,`updatedById`) VALUES (?,?,?,NOW(3),?) ON DUPLICATE KEY UPDATE `value`=VALUES(`value`), `updatedAt`=VALUES(`updatedAt`), `updatedById`=VALUES(`updatedById`)')
+            ->execute(['offers_autoplay_sec', json_encode($n), 'ثواني حركة سلايدر العروض في التطبيق (0 = يدوي)', $u['sub'] ?? null]);
+    }
     jsonOk(['ok' => true]);
 }
 
@@ -11719,8 +11894,15 @@ if ($method === 'DELETE' && preg_match('#^/admin/drivers/([^/]+)$#', $path, $m))
 if ($method === 'PATCH' && preg_match('#^/admin/customers/([^/]+)$#', $path, $m)) {
     $u = authUser(); if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
     $id = $m[1]; $b = readJsonBody(); $ucols = tableColumns('User'); $sets = []; $args = [];
+    // Customers only, and only what the customer form edits. It used to write
+    // any User column on any account: permissions, email, googleId or a reset
+    // hash on the super admin, i.e. any admin could become one.
+    $chk = db()->prepare("SELECT 1 FROM `User` WHERE id = ? AND role = 'CUSTOMER' LIMIT 1");
+    $chk->execute([$id]);
+    if (!$chk->fetchColumn()) jsonErr('العميل غير موجود', 404, 'NOT_FOUND');
+    $editable = ['name', 'phone', 'email', 'city', 'governorate', 'avatarUrl', 'secondaryPhones', 'isActive', 'defaultAddress'];
     foreach ($b as $k => $v) {
-        if (isset($ucols[$k]) && !in_array($k, ['id', 'role', 'passwordHash', 'createdAt', 'updatedAt'], true)) {
+        if (isset($ucols[$k]) && in_array($k, $editable, true)) {
             if ($k === 'phone') { $ph = (string)$v; $cl = preg_replace('/[\s\-()]/', '', $ph); if (preg_match('/^(?:\+?20|0)?(1[0125]\d{8})$/', $cl, $mm)) $v = '+20' . $mm[1]; }
             $sets[] = "`$k` = ?"; $args[] = coerceForColumn($v, $ucols[$k]);
         }
@@ -11728,7 +11910,8 @@ if ($method === 'PATCH' && preg_match('#^/admin/customers/([^/]+)$#', $path, $m)
     try {
         if ($sets) { $sets[] = '`updatedAt` = NOW(3)'; $args[] = $id; db()->prepare('UPDATE `User` SET ' . implode(',', $sets) . ' WHERE id = ?')->execute($args); }
     } catch (PDOException $e) { if ((int)($e->errorInfo[1] ?? 0) === 1062) jsonErr('رقم الهاتف مستخدم بالفعل', 409, 'DUPLICATE'); throw $e; }
-    $r = db()->prepare('SELECT * FROM `User` WHERE id = ?'); $r->execute([$id]);
+    $r = db()->prepare('SELECT id, name, phone, email, avatarUrl, role, isActive, isPhoneVerified, city, governorate, defaultAddress, secondaryPhones, createdAt, updatedAt FROM `User` WHERE id = ?');
+    $r->execute([$id]);
     jsonOk(jsonizeRow($r->fetch()) ?: []);
 }
 /**
@@ -13031,6 +13214,12 @@ if ($method === 'POST' && $path === '/auth/otp/request') {
         header('Retry-After: 3600');
         jsonErr('طلبات كتير من نفس الشبكة — جرّب بعد شوية', 429, 'TOO_MANY');
     }
+    // Eight codes a day per number: enough for a real person, and it keeps a
+    // script from messaging one number all day or farming fresh guesses.
+    if (!rateHit('otp-send', $phone, 8, 86400)) {
+        header('Retry-After: 86400');
+        jsonErr('طلبت أكواد كتير النهارده — جرّب بكرة أو كلّم الإدارة', 429, 'TOO_MANY');
+    }
     $code = str_pad((string) random_int(0, 999999), 6, '0', STR_PAD_LEFT);
     // Plaintext is kept alongside the hash ON PURPOSE: a short-lived (5-min),
     // single-use support fallback so the admin can read the code to a customer
@@ -13048,20 +13237,37 @@ if ($method === 'POST' && $path === '/auth/otp/verify') {
     $phone = normPhoneEg((string) ($b['phone'] ?? ''));
     $code = trim((string) ($b['code'] ?? ''));
     if (!$phone || !preg_match('/^\d{4,6}$/', $code)) jsonErr('كود التحقق غير صحيح', 401, 'UNAUTHORIZED');
-    $st = db()->prepare('SELECT * FROM `OtpCode` WHERE phone = ? AND consumedAt IS NULL AND expiresAt > NOW(3) ORDER BY createdAt DESC LIMIT 1');
-    $st->execute([$phone]);
-    $row = $st->fetch();
-    if (!$row) jsonErr('كود التحقق منتهي أو غير موجود', 401, 'UNAUTHORIZED');
-    if ((int) $row['attempts'] >= 5) jsonErr('تم تجاوز عدد المحاولات — اطلب كوداً جديداً', 401, 'UNAUTHORIZED');
-    if (!hash_equals((string) $row['codeHash'], hash('sha256', $code))) {
-        db()->prepare('UPDATE `OtpCode` SET attempts = attempts + 1 WHERE id = ?')->execute([$row['id']]);
-        jsonErr('كود التحقق غير صحيح', 401, 'UNAUTHORIZED');
+    // Read, compare and count under one lock per number (see guessGuard), with
+    // ten wrong guesses a day for the number across all its codes.
+    $row = null; $why = '';
+    $right = guessGuard('otp', $phone, 10, 86400, function () use ($phone, $code, &$row, &$why) {
+        $st = db()->prepare('SELECT * FROM `OtpCode` WHERE phone = ? AND consumedAt IS NULL AND expiresAt > NOW(3) ORDER BY createdAt DESC LIMIT 1');
+        $st->execute([$phone]);
+        $row = $st->fetch() ?: null;
+        if (!$row) { $why = 'none'; return null; }
+        if ((int) $row['attempts'] >= 5) { $why = 'spent'; return null; }
+        if (!hash_equals((string) $row['codeHash'], hash('sha256', $code))) {
+            db()->prepare('UPDATE `OtpCode` SET attempts = attempts + 1 WHERE id = ?')->execute([$row['id']]);
+            return false;
+        }
+        db()->prepare('UPDATE `OtpCode` SET consumedAt = NOW(3) WHERE id = ?')->execute([$row['id']]);
+        return true;
+    });
+    if ($right === 'locked') {
+        header('Retry-After: 86400');
+        jsonErr('محاولات غلط كتير على الرقم ده — جرّب بكرة أو كلّم الإدارة', 429, 'TOO_MANY');
     }
-    db()->prepare('UPDATE `OtpCode` SET consumedAt = NOW(3) WHERE id = ?')->execute([$row['id']]);
-    $st = db()->prepare('SELECT id, name, phone, role FROM `User` WHERE phone = ? LIMIT 1');
+    if ($why === 'none') jsonErr('كود التحقق منتهي أو غير موجود', 401, 'UNAUTHORIZED');
+    if ($why === 'spent') jsonErr('تم تجاوز عدد المحاولات — اطلب كوداً جديداً', 401, 'UNAUTHORIZED');
+    if ($right !== true) jsonErr('كود التحقق غير صحيح', 401, 'UNAUTHORIZED');
+    $st = db()->prepare('SELECT id, name, phone, role, isActive FROM `User` WHERE phone = ? LIMIT 1');
     $st->execute([$phone]);
     $u = $st->fetch();
     if (!$u) jsonErr('المستخدم غير موجود', 401, 'UNAUTHORIZED');
+    // A WhatsApp code is a customer's key, never the office's: the office can
+    // read these codes (/admin/otp-lookup), so one admin could sign in as another.
+    if (in_array((string) $u['role'], ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('الحساب ده بيدخل من لوحة التحكم بس', 403, 'FORBIDDEN');
+    if (!(int) $u['isActive']) jsonErr('الحساب غير مفعّل', 403, 'INACTIVE');
     db()->prepare('UPDATE `User` SET isPhoneVerified = 1, updatedAt = NOW(3) WHERE id = ?')->execute([$u['id']]);
     // Node returns {id,name,phone} with no role here — but the mobile store
     // persists this object as the session user and RootNavigator switches on
@@ -13081,6 +13287,11 @@ if ($method === 'GET' && $path === '/admin/otp-lookup') {
     $u = authUser(); if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
     $phone = normPhoneEg((string) ($_GET['phone'] ?? ''));
     if (!$phone) jsonErr('رقم هاتف مصري غير صحيح', 422, 'VALIDATION_ERROR');
+    // Customers (or a number with no account yet) only. Staff codes stay sealed.
+    $own = db()->prepare('SELECT role FROM `User` WHERE phone = ? LIMIT 1');
+    $own->execute([$phone]);
+    $ownRole = (string) ($own->fetchColumn() ?: '');
+    if ($ownRole !== '' && $ownRole !== 'CUSTOMER') jsonErr('الرقم ده مش لعميل', 403, 'FORBIDDEN');
     $st = db()->prepare(
         "SELECT codePlain, attempts, consumedAt, expiresAt, createdAt, (expiresAt > NOW(3)) AS notExpired
            FROM `OtpCode` WHERE phone = ? ORDER BY createdAt DESC LIMIT 1"
@@ -13142,10 +13353,21 @@ if ($method === 'POST' && $path === '/telegram/webhook') {
             && in_array($text, ['➕ أوردر خارجي', 'أوردر خارجي', 'اوردر خارجي', '/اوردر_خارجي', '/extorder'], true)) {
             tgStartExtOrder((string) $chatId);
         } elseif ($chatType === 'private' && preg_match('#^/start\s+drv_([A-Za-z0-9_-]+)#', $text, $mm)) {
-            $drvId = $mm[1];
+            $drvId = '';
+            if (preg_match('#^([A-Za-z0-9_-]+)_([a-f0-9]{12})$#', $mm[1], $sg) && hash_equals(tgLinkSig('drv', $sg[1]), $sg[2])) $drvId = $sg[1];
             $uname = trim((string) ($msg['from']['username'] ?? ''));
             $ok = false;
-            try {
+            // Already linked to another Telegram: the office unlinks first.
+            $held = null;
+            if ($drvId !== '') {
+                try { $hq = db()->prepare('SELECT telegramChatId FROM `DriverProfile` WHERE userId = ? LIMIT 1'); $hq->execute([$drvId]); $held = $hq->fetchColumn() ?: null; } catch (Throwable $e) {}
+            }
+            if ($drvId === '') {
+                tgSend($chatId, "اللينك ده قديم أو مش صحيح. اطلب من الإدارة لينك الربط الجديد.");
+            } elseif ($held !== null && (string) $held !== (string) $chatId) {
+                error_log('[api.php] tg link refused: driver ' . $drvId . ' already linked');
+                tgSend($chatId, "الحساب ده مربوط بتلجرام تاني. لو غيّرت موبايلك، خلّي الإدارة تفك الربط وتبعتلك اللينك من جديد.");
+            } else try {
                 // One Telegram account = ONE driver. Clear this chatId off any OTHER
                 // driver first, so the same phone can't end up linked to two drivers
                 // (which tangles orders and blocks delivery). Then link it here.
@@ -13155,7 +13377,9 @@ if ($method === 'POST' && $path === '/telegram/webhook') {
                 $st->execute([(string) $chatId, $uname !== '' ? $uname : null, $drvId]);
                 $ok = $st->rowCount() > 0;
             } catch (Throwable $e) { error_log('[api.php] tg link: ' . $e->getMessage()); }
-            if ($ok) {
+            if ($drvId === '' || ($held !== null && (string) $held !== (string) $chatId)) {
+                // answered above
+            } elseif ($ok) {
                 $dn = '';
                 try { $q = db()->prepare("SELECT name FROM `User` WHERE id = ? LIMIT 1"); $q->execute([$drvId]); $dn = (string) ($q->fetchColumn() ?: ''); } catch (Throwable $e) {}
                 tgSend($chatId, "تم ربط حسابك بتميم ✅\nأهلاً " . ($dn ?: 'كابتن') . " — هتوصلك طلباتك هنا على تلجرام.\nاستخدم الأزرار تحت 👇", tgDriverMenu());
@@ -13163,17 +13387,29 @@ if ($method === 'POST' && $path === '/telegram/webhook') {
                 tgSend($chatId, "مش لاقيين كود الربط. تواصل مع الإدارة عشان يبعتولك اللينك الصح.");
             }
         } elseif ($chatType === 'private' && preg_match('#^/start\s+sup_([A-Za-z0-9_-]+)#', $text, $ms)) {
-            $supId = $ms[1];
+            $supId = '';
+            if (preg_match('#^([A-Za-z0-9_-]+)_([a-f0-9]{12})$#', $ms[1], $sg) && hash_equals(tgLinkSig('sup', $sg[1]), $sg[2])) $supId = $sg[1];
             $uname = trim((string) ($msg['from']['username'] ?? ''));
             $ok = false;
-            try {
+            $held = null;
+            if ($supId !== '') {
+                try { $hq = db()->prepare('SELECT telegramChatId FROM `Supervisor` WHERE id = ? LIMIT 1'); $hq->execute([$supId]); $held = $hq->fetchColumn() ?: null; } catch (Throwable $e) {}
+            }
+            if ($supId === '') {
+                tgSend($chatId, "اللينك ده قديم أو مش صحيح. اطلب من الإدارة لينك الربط الجديد.");
+            } elseif ($held !== null && (string) $held !== (string) $chatId) {
+                error_log('[api.php] tg sup link refused: ' . $supId . ' already linked');
+                tgSend($chatId, "الحساب ده مربوط بتلجرام تاني. خلّي الإدارة تفك الربط وتبعتلك اللينك من جديد.");
+            } else try {
                 db()->prepare("UPDATE `Supervisor` SET telegramChatId = NULL WHERE telegramChatId = ? AND id <> ?")
                     ->execute([(string) $chatId, $supId]);
                 $st = db()->prepare("UPDATE `Supervisor` SET telegramChatId = ?, telegramUsername = ?, updatedAt = NOW(3) WHERE id = ?");
                 $st->execute([(string) $chatId, $uname !== '' ? $uname : null, $supId]);
                 $ok = $st->rowCount() > 0;
             } catch (Throwable $e) { error_log('[api.php] tg sup link: ' . $e->getMessage()); }
-            if ($ok) {
+            if ($supId === '' || ($held !== null && (string) $held !== (string) $chatId)) {
+                // answered above
+            } elseif ($ok) {
                 $sn = '';
                 try { $q = db()->prepare("SELECT name FROM `Supervisor` WHERE id = ? LIMIT 1"); $q->execute([$supId]); $sn = (string) ($q->fetchColumn() ?: ''); } catch (Throwable $e) {}
                 tgSend($chatId, "تم ربط حسابك كمشرف في تميم ✅\nأهلاً " . ($sn ?: 'أستاذ') . " — هتوصلك الطلبات هنا على تلجرام.\nاستخدم الأزرار تحت 👇", tgSupervisorMenu());
@@ -13750,19 +13986,91 @@ if ($method === 'POST' && $path === '/telegram/webhook') {
     jsonOk(['ok' => true]);
 }
 
+/*
+ * Wrong-guess budget per account (or phone), for codes and passwords.
+ *
+ * A 6-digit code is only safe while guesses are scarce. Counting tries per
+ * code wasn't enough: a fresh code could be asked for every minute, so the
+ * guesses never ran out, and the counter was read then written back, so ten
+ * requests sent together all saw «4 tries» and each got its guess. Here the
+ * failures for one key live in one file, and the check runs while holding an
+ * exclusive lock on it: parallel guesses wait in line and every one counts.
+ * Old failures drop out of the window by themselves.
+ *
+ * $check runs under the lock and returns true (right), false (wrong, counted)
+ * or null (nothing was guessed, e.g. no live code). Result: 'locked' when the
+ * budget is spent (the check is not even run), else what $check returned.
+ * Without a runtime dir it fails open, as the API did before.
+ */
+function guardFile(string $kind, string $key): ?string {
+    $d = rtDir();
+    if (!$d) return null;
+    if (!is_dir($d . '/guard')) @mkdir($d . '/guard', 0700, true);
+    return is_dir($d . '/guard') ? $d . '/guard/' . $kind . '-' . substr(hash('sha256', $key), 0, 32) : null;
+}
+/** @return int[] failure times still inside the window */
+function guardTimes($fh, int $windowSec): array {
+    rewind($fh);
+    $cut = time() - $windowSec;
+    $out = [];
+    foreach (explode(',', (string) stream_get_contents($fh)) as $t) {
+        if ((int) $t >= $cut) $out[] = (int) $t;
+    }
+    return $out;
+}
+function guessGuard(string $kind, string $key, int $max, int $windowSec, callable $check, bool $clearOnOk = false) {
+    $f = guardFile($kind, $key);
+    $fh = $f ? @fopen($f, 'c+') : false;
+    if (!$fh) return $check();
+    flock($fh, LOCK_EX);
+    $times = guardTimes($fh, $windowSec);
+    if (count($times) >= $max) { flock($fh, LOCK_UN); fclose($fh); return 'locked'; }
+    $ok = $check();
+    if ($ok === false || ($ok === true && $clearOnOk)) {
+        if ($ok === false) $times[] = time();
+        else $times = [];
+        ftruncate($fh, 0); rewind($fh);
+        fwrite($fh, implode(',', array_slice($times, -300)));
+        fflush($fh);
+    }
+    flock($fh, LOCK_UN); fclose($fh);
+    return $ok;
+}
+/** Counts one event (a code sent, a file uploaded); false once $max were already counted in the window. */
+function rateHit(string $kind, string $key, int $max, int $windowSec): bool {
+    return guessGuard($kind, $key, $max, $windowSec, fn () => false) !== 'locked';
+}
+function guessLocked(string $kind, string $key, int $max, int $windowSec): bool {
+    $f = guardFile($kind, $key);
+    $fh = ($f && is_file($f)) ? @fopen($f, 'r') : false;
+    if (!$fh) return false;
+    flock($fh, LOCK_SH);
+    $n = count(guardTimes($fh, $windowSec));
+    flock($fh, LOCK_UN); fclose($fh);
+    return $n >= $max;
+}
+
 if ($method === 'POST' && $path === '/auth/forgot-password') {
     $b = readJsonBody();
     $raw = trim((string) ($b['identifier'] ?? $b['phone'] ?? $b['email'] ?? ''));
     // Accept an email OR an Egyptian phone.
     if (str_contains($raw, '@')) {
-        $st = db()->prepare('SELECT id, phone, email FROM `User` WHERE email = ? LIMIT 1');
+        $st = db()->prepare('SELECT id, phone, email, role, isActive, (passwordResetExpiresAt IS NOT NULL AND passwordResetExpiresAt > DATE_ADD(NOW(3), INTERVAL 9 MINUTE)) AS justSent FROM `User` WHERE email = ? LIMIT 1');
         $st->execute([strtolower($raw)]);
     } else {
         $phone = normPhoneEg($raw) ?? $raw;
-        $st = db()->prepare('SELECT id, phone, email FROM `User` WHERE phone = ? LIMIT 1');
+        $st = db()->prepare('SELECT id, phone, email, role, isActive, (passwordResetExpiresAt IS NOT NULL AND passwordResetExpiresAt > DATE_ADD(NOW(3), INTERVAL 9 MINUTE)) AS justSent FROM `User` WHERE phone = ? LIMIT 1');
         $st->execute([$phone]);
     }
     $u = $st->fetch();
+    // No code for office accounts: a code that resets the super admin is the
+    // super admin. They change passwords from the dashboard. One code a minute
+    // and six a day per account; the answer stays the same either way.
+    if ($u && (in_array((string) $u['role'], ['ADMIN', 'SUPER_ADMIN'], true) || !(int) $u['isActive'])) {
+        error_log('[api.php] forgot-password refused for ' . $u['role'] . ' ' . $u['id']);
+        $u = null;
+    }
+    if ($u && ((int) $u['justSent'] || !rateHit('reset-send', (string) $u['id'], 6, 86400))) $u = null;
     if ($u) {
         $code = str_pad((string) random_int(0, 999999), 6, '0', STR_PAD_LEFT);
         db()->prepare('UPDATE `User` SET passwordResetHash = ?, passwordResetExpiresAt = DATE_ADD(NOW(3), INTERVAL 10 MINUTE), updatedAt = NOW(3) WHERE id = ?')
@@ -13794,17 +14102,27 @@ if ($method === 'POST' && $path === '/auth/reset-password') {
     // Expiry compared in SQL (NOW(3)) — see the OTP cooldown note above.
     // Look up by email or phone, matching how forgot-password was requested.
     if (str_contains($raw, '@')) {
-        $st = db()->prepare('SELECT id, name, phone, role, passwordResetHash, (passwordResetExpiresAt IS NOT NULL AND passwordResetExpiresAt < NOW(3)) AS isExpired FROM `User` WHERE email = ? LIMIT 1');
+        $st = db()->prepare('SELECT id, name, phone, role, isActive, passwordResetHash, (passwordResetExpiresAt IS NOT NULL AND passwordResetExpiresAt < NOW(3)) AS isExpired FROM `User` WHERE email = ? LIMIT 1');
         $st->execute([strtolower($raw)]);
     } else {
         $phone = normPhoneEg($raw) ?? $raw;
-        $st = db()->prepare('SELECT id, name, phone, role, passwordResetHash, (passwordResetExpiresAt IS NOT NULL AND passwordResetExpiresAt < NOW(3)) AS isExpired FROM `User` WHERE phone = ? LIMIT 1');
+        $st = db()->prepare('SELECT id, name, phone, role, isActive, passwordResetHash, (passwordResetExpiresAt IS NOT NULL AND passwordResetExpiresAt < NOW(3)) AS isExpired FROM `User` WHERE phone = ? LIMIT 1');
         $st->execute([$phone]);
     }
     $u = $st->fetch();
-    if (!$u || !$u['passwordResetHash']) jsonErr('كود التحقق غير صحيح أو منتهي', 401, 'UNAUTHORIZED');
+    if (!$u || !$u['passwordResetHash'] || in_array((string) $u['role'], ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('كود التحقق غير صحيح أو منتهي', 401, 'UNAUTHORIZED');
+    if (!(int) $u['isActive']) jsonErr('الحساب غير مفعّل', 403, 'INACTIVE');
     if ((int) $u['isExpired']) jsonErr('انتهت صلاحية كود التحقق — اطلب كوداً جديداً', 401, 'UNAUTHORIZED');
-    if (!hash_equals((string) $u['passwordResetHash'], hash('sha256', $code))) jsonErr('كود التحقق غير صحيح', 401, 'UNAUTHORIZED');
+    // Eight wrong codes a day per account, whatever number of codes was asked
+    // for: guessing one in a million stops being a plan.
+    $right = guessGuard('reset', (string) $u['id'], 8, 86400,
+        fn () => hash_equals((string) $u['passwordResetHash'], hash('sha256', $code)));
+    if ($right === 'locked') {
+        db()->prepare('UPDATE `User` SET passwordResetHash = NULL, passwordResetExpiresAt = NULL WHERE id = ?')->execute([$u['id']]);
+        header('Retry-After: 86400');
+        jsonErr('محاولات غلط كتير — جرّب بكرة أو كلّم الإدارة', 429, 'TOO_MANY');
+    }
+    if ($right !== true) jsonErr('كود التحقق غير صحيح', 401, 'UNAUTHORIZED');
     db()->prepare('UPDATE `User` SET passwordHash = ?, passwordResetHash = NULL, passwordResetExpiresAt = NULL, updatedAt = NOW(3) WHERE id = ?')
         ->execute([password_hash($new, PASSWORD_BCRYPT), $u['id']]);
     jsonOk(['user' => ['id' => $u['id'], 'name' => $u['name'], 'phone' => $u['phone'], 'role' => $u['role']], 'tokens' => issueTokens($u['id'], (string) $u['role'])]);
@@ -13825,14 +14143,23 @@ if ($method === 'POST' && $path === '/auth/google') {
     // aud must be one of our client IDs, else anyone's token would log in.
     $auds = array_filter(array_map('trim', explode(',', $clientId . ',' . (env('GOOGLE_CLIENT_ID_ANDROID', '') ?: '') . ',' . (env('GOOGLE_CLIENT_ID_IOS', '') ?: ''))));
     if ($auds && !in_array((string) ($tk['aud'] ?? ''), $auds, true)) jsonErr('Google token غير صالح', 401, 'UNAUTHORIZED');
+    // Only an address Google itself verified may find an existing account.
+    $verified = in_array(strtolower((string) ($tk['email_verified'] ?? '')), ['true', '1'], true) || ($tk['email_verified'] ?? null) === true;
+    if (!$verified) jsonErr('إيميل جوجل ده مش متأكد منه — جرّب حساب تاني', 401, 'UNAUTHORIZED');
     $sub = (string) $tk['sub']; $email = strtolower((string) $tk['email']);
-    $st = db()->prepare('SELECT id, name, phone, email, role FROM `User` WHERE googleId = ? LIMIT 1');
+    $st = db()->prepare('SELECT id, name, phone, email, role, isActive FROM `User` WHERE googleId = ? LIMIT 1');
     $st->execute([$sub]);
     $u = $st->fetch();
     if (!$u) {
-        $st = db()->prepare('SELECT id, name, phone, email, role FROM `User` WHERE email = ? LIMIT 1');
+        $st = db()->prepare('SELECT id, name, phone, email, role, isActive FROM `User` WHERE email = ? LIMIT 1');
         $st->execute([$email]);
         $u = $st->fetch();
+        // The app is for customers and stores. An office or driver account is
+        // never joined to a Google login by matching the email.
+        if ($u && !in_array((string) $u['role'], ['CUSTOMER', 'MERCHANT'], true)) {
+            error_log('[api.php] google link refused for ' . $u['role'] . ' ' . $u['id']);
+            jsonErr('الإيميل ده لحساب موظف — ادخل من لوحة التحكم', 403, 'FORBIDDEN');
+        }
         if ($u) {
             db()->prepare('UPDATE `User` SET googleId = ?, isPhoneVerified = 1, updatedAt = NOW(3) WHERE id = ?')->execute([$sub, $u['id']]);
         } else {
@@ -13851,6 +14178,8 @@ if ($method === 'POST' && $path === '/auth/google') {
                     . '<p>تم إنشاء حسابك في تطبيق <b>تميم للتوصيل</b> عبر Google بنجاح. يسعدنا انضمامك إلينا! 🚚</p>'));
         }
     }
+    if (in_array((string) $u['role'], ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('الحساب ده بيدخل من لوحة التحكم بس', 403, 'FORBIDDEN');
+    if (isset($u['isActive']) && !(int) $u['isActive']) jsonErr('الحساب غير مفعّل', 403, 'INACTIVE');
     jsonOk(['user' => ['id' => $u['id'], 'name' => $u['name'], 'phone' => $u['phone'], 'email' => $u['email'], 'role' => $u['role']], 'tokens' => issueTokens($u['id'], (string) $u['role'])]);
 }
 
@@ -13875,8 +14204,17 @@ if ($method === 'PATCH' && $path === '/me') {
         $st = db()->prepare('SELECT id FROM `User` WHERE phone = ? AND id <> ? LIMIT 1');
         $st->execute([$ph, $uid]);
         if ($st->fetch()) {
+            // A new Google account typing the number of an older customer
+            // account can take that account over with a WhatsApp code
+            // (POST /me/phone/claim/start); the app reads details.claimable.
+            $me = db()->prepare('SELECT phone, googleId FROM `User` WHERE id = ? LIMIT 1');
+            $me->execute([$uid]);
+            $me = $me->fetch() ?: [];
+            $claimable = !empty($me['googleId']) && strpos((string) ($me['phone'] ?? ''), 'g_') === 0
+                && phoneClaimTarget($uid, $ph) !== null;
             http_response_code(409);
-            echo json_encode(['error' => ['code' => 'CONFLICT', 'message' => 'Phone already used', 'messageAr' => 'هذا الرقم مستخدم بحساب آخر']], JSON_UNESCAPED_UNICODE);
+            echo json_encode(['error' => ['code' => 'CONFLICT', 'message' => 'Phone already used', 'messageAr' => 'هذا الرقم مستخدم بحساب آخر',
+                'details' => ['claimable' => $claimable]]], JSON_UNESCAPED_UNICODE);
             exit;
         }
         $sets[] = '`phone` = ?'; $args[] = $ph;
@@ -13888,6 +14226,135 @@ if ($method === 'PATCH' && $path === '/me') {
     $p = profileById($uid);
     if (!$p) jsonErr('المستخدم غير موجود', 404, 'NOT_FOUND');
     jsonOk($p); // must be the FULL user — the app writes this back over its session
+}
+
+/**
+ * «الرقم ده متسجل بحساب تاني» right after Google sign-in.
+ *
+ * The app signs in with Google only, but most customers already have an
+ * account: the office made one for their first phone order, or they signed up
+ * with phone + password before. Their Google sign-in creates a fresh empty
+ * account, and the number they type belongs to the old one. Only the office
+ * could tie the two together, and it had no tool for it.
+ *
+ * Now the customer proves the number is theirs with a code sent to it on
+ * WhatsApp (the same proof the old password reset used), and the Google login
+ * moves onto the old account: its orders, addresses, wallet and points stay
+ * where they are. The empty Google-only account is closed.
+ *
+ * Only an active CUSTOMER account not already tied to a Google account can be
+ * claimed this way. Drivers, merchants and staff still go through the office.
+ * The code lives in a runtime file, not in passwordResetHash, so it never
+ * cancels a reset link the office sent. Five wrong tries burn it.
+ */
+function phoneClaimMine(string $uid): array {
+    $st = db()->prepare('SELECT id, phone, googleId, email, avatarUrl, name FROM `User` WHERE id = ? AND isActive = 1 LIMIT 1');
+    $st->execute([$uid]);
+    $me = $st->fetch();
+    if (!$me || empty($me['googleId']) || strpos((string) $me['phone'], 'g_') !== 0)
+        jsonErr('الخطوة دي لحساب جوجل جديد بس', 409, 'NOT_CLAIMABLE');
+    return $me;
+}
+function phoneClaimTarget(string $uid, string $ph): ?array {
+    $st = db()->prepare('SELECT id, role, googleId, email, avatarUrl FROM `User` WHERE phone = ? AND id <> ? AND isActive = 1 LIMIT 1');
+    $st->execute([$ph, $uid]);
+    $t = $st->fetch();
+    return ($t && ($t['role'] ?? '') === 'CUSTOMER' && empty($t['googleId'])) ? $t : null;
+}
+function phoneClaimFile(string $targetId): ?string {
+    $d = rtDir();
+    if (!$d) return null;
+    if (!is_dir($d . '/claim')) @mkdir($d . '/claim', 0700, true);
+    return $d . '/claim/' . preg_replace('/[^A-Za-z0-9_-]/', '', $targetId) . '.json';
+}
+
+// POST /me/phone/claim/start {phone} — send the code to that number.
+if ($method === 'POST' && $path === '/me/phone/claim/start') {
+    $u = authUser();
+    $uid = (string) ($u['sub'] ?? '');
+    phoneClaimMine($uid);
+    $b = readJsonBody();
+    $ph = normPhoneEg((string) ($b['phone'] ?? ''));
+    if (!$ph) jsonErr('رقم الموبايل مش صحيح', 422, 'VALIDATION_ERROR');
+    $t = phoneClaimTarget($uid, $ph);
+    if (!$t) jsonErr('الرقم ده مش ممكن يتربط من التطبيق، كلّم الإدارة', 409, 'NOT_CLAIMABLE');
+    $file = phoneClaimFile((string) $t['id']);
+    if (!$file) jsonErr('حصلت مشكلة، جرّب تاني بعد شوية', 503, 'UNAVAILABLE');
+    $cur = is_file($file) ? json_decode((string) @file_get_contents($file), true) : null;
+    // Someone else's live claim on this number is left alone: overwriting it
+    // would let a stranger keep the real owner from ever finishing.
+    if (is_array($cur) && ($cur['by'] ?? '') !== $uid && (int) ($cur['exp'] ?? 0) > time()) {
+        jsonErr('فيه طلب ربط شغال على الرقم ده، جرّب بعد 10 دقايق أو كلّم الإدارة', 409, 'CLAIM_BUSY');
+    }
+    // One code a minute, so this can't be used to flood someone's WhatsApp.
+    $wait = (is_array($cur) && ($cur['by'] ?? '') === $uid) ? 60 - (time() - (int) ($cur['sentAt'] ?? 0)) : 0;
+    if ($wait > 0) jsonOk(['sent' => true, 'retryIn' => $wait]);
+    // A Google account gets five codes a day and a number gets five: trying a
+    // list of numbers, or one number all day, runs out fast.
+    if (!rateHit('claim-send-by', $uid, 5, 86400) || !rateHit('claim-send-to', (string) $t['id'], 5, 86400)) {
+        header('Retry-After: 86400');
+        jsonErr('طلبت أكواد كتير النهارده — جرّب بكرة أو كلّم الإدارة', 429, 'TOO_MANY');
+    }
+    $code = str_pad((string) random_int(0, 999999), 6, '0', STR_PAD_LEFT);
+    rtWrite($file, json_encode(['hash' => hash('sha256', $uid . '|' . $code), 'by' => $uid, 'exp' => time() + 600,
+                                'sentAt' => time(), 'tries' => 0]));
+    waEnqueue($ph, "تميم للتوصيل 🚚\nكود ربط رقمك بحساب جوجل: *$code*\nصالح 10 دقايق. لو مش انت اللي طلبته تجاهل الرسالة.",
+              ['expiresAt' => (time() + 600) * 1000]);
+    jsonOk(['sent' => true, 'retryIn' => 60]);
+}
+
+// POST /me/phone/claim {phone, code} — move this Google login onto that account.
+if ($method === 'POST' && $path === '/me/phone/claim') {
+    $u = authUser();
+    $uid = (string) ($u['sub'] ?? '');
+    $me = phoneClaimMine($uid);
+    $b = readJsonBody();
+    $ph = normPhoneEg((string) ($b['phone'] ?? ''));
+    $code = preg_replace('/\D/', '', (string) ($b['code'] ?? ''));
+    if (!$ph || strlen($code) !== 6) jsonErr('اكتب الكود اللي وصلك (6 أرقام)', 422, 'VALIDATION_ERROR');
+    $t = phoneClaimTarget($uid, $ph);
+    if (!$t) jsonErr('الرقم ده مش ممكن يتربط من التطبيق، كلّم الإدارة', 409, 'NOT_CLAIMABLE');
+    $file = phoneClaimFile((string) $t['id']);
+    // Read, compare and count under one lock per number, ten wrong a day.
+    $tries = 0;
+    $right = guessGuard('claim', (string) $t['id'], 10, 86400, function () use ($file, $uid, $code, &$tries) {
+        $cur = ($file && is_file($file)) ? json_decode((string) @file_get_contents($file), true) : null;
+        if (!is_array($cur) || ($cur['by'] ?? '') !== $uid || (int) ($cur['exp'] ?? 0) < time() || (int) ($cur['tries'] ?? 0) >= 5) return null;
+        if (!hash_equals((string) $cur['hash'], hash('sha256', $uid . '|' . $code))) {
+            $cur['tries'] = $tries = (int) ($cur['tries'] ?? 0) + 1;
+            rtWrite($file, json_encode($cur));
+            return false;
+        }
+        @unlink($file);
+        return true;
+    });
+    if ($right === 'locked') {
+        header('Retry-After: 86400');
+        jsonErr('محاولات غلط كتير على الرقم ده — جرّب بكرة أو كلّم الإدارة', 429, 'TOO_MANY');
+    }
+    if ($right === null) jsonErr('الكود خلص، اطلب كود جديد', 410, 'CODE_EXPIRED');
+    if ($right !== true) jsonErr($tries >= 5 ? 'الكود اتقفل بعد محاولات كتير، اطلب كود جديد' : 'الكود غلط، راجعه تاني', 400, 'BAD_CODE');
+    $pdo = db();
+    $pdo->beginTransaction();
+    try {
+        // Free the Google id and email first: both are unique.
+        $pdo->prepare("UPDATE `User` SET isActive = 0, googleId = NULL, email = NULL, fcmToken = NULL,
+                              phone = CONCAT('merged_', SUBSTRING(id, 1, 10)), updatedAt = NOW(3) WHERE id = ?")->execute([$uid]);
+        $pdo->prepare('UPDATE `User` SET googleId = ?, email = COALESCE(email, ?), avatarUrl = COALESCE(avatarUrl, ?),
+                              isPhoneVerified = 1, updatedAt = NOW(3) WHERE id = ?')
+            ->execute([$me['googleId'], $me['email'] ?: null, $me['avatarUrl'] ?: null, $t['id']]);
+        // The minute on the empty account: a phone token and maybe an address.
+        foreach (['DeviceToken', 'CustomerAddress', 'Notification'] as $tbl) {
+            try { $pdo->prepare("UPDATE `$tbl` SET userId = ? WHERE userId = ?")->execute([$t['id'], $uid]); } catch (Throwable $e) {}
+        }
+        $pdo->commit();
+    } catch (Throwable $e) {
+        $pdo->rollBack();
+        error_log('phone claim: ' . $e->getMessage());
+        jsonErr('حصلت مشكلة في الربط، جرّب تاني', 500, 'CLAIM_FAILED');
+    }
+    $p = profileById((string) $t['id']);
+    jsonOk(['user' => $p, 'tokens' => issueTokens((string) $t['id'], 'CUSTOMER')]);
 }
 
 if ($method === 'DELETE' && $path === '/me') {
@@ -14179,6 +14646,139 @@ if (preg_match('#^/me/addresses/([^/]+)$#', $path, $mm) && in_array($method, ['P
 if ($method === 'GET' && $path === '/categories') {
     $rows = db()->query('SELECT * FROM `Category` WHERE isActive = 1 ORDER BY sortOrder ASC, nameAr ASC')->fetchAll();
     jsonOk(array_map(fn($r) => boolCast($r, ['isActive']), $rows));
+}
+
+// ═══ SHARE LINKS (public HTML) ═════════════════════════════════════════
+// deliverytamem.com/s/<store>, /p/<product>, /o/<offer> are rewritten here by
+// the landing's .htaccess (path=/share/<kind>/<id>). The page carries real
+// og: tags so WhatsApp/Facebook draw a card with the name and picture, and on
+// Android it hands the link to the app (intent://) — if the app isn't there,
+// Chrome comes back to this same page with ?app=0 and the install button.
+// Read-only, no auth, nothing beyond what /merchants/:id, /products/:id and
+// /offers already return publicly.
+if ($method === 'GET' && preg_match('#^/share/([spo])/([A-Za-z0-9_-]{1,64})/?$#', $path, $mm)) {
+    $kind = $mm[1];
+    $id = $mm[2];
+    $base = rtrim((string) env('SHARE_BASE_URL', 'https://deliverytamem.com'), '/');
+    $play = 'https://play.google.com/store/apps/details?id=com.tamem.delivery';
+    $httpsImg = static function ($u): ?string {
+        $u = trim((string) ($u ?? ''));
+        return preg_match('#^https://[^\s"\'<>]+$#i', $u) ? $u : null;
+    };
+    $title = null; $desc = ''; $img = null; $label = ''; $lines = [];
+    try {
+        if ($kind === 's') {
+            $st = db()->prepare('SELECT m.storeNameAr, m.storeName, m.description, m.logoUrl, m.coverUrl, m.city, m.addressLine, c.nameAr AS c_nameAr FROM `MerchantProfile` m LEFT JOIN `Category` c ON c.id = m.categoryId WHERE m.id = ? LIMIT 1');
+            $st->execute([$id]);
+            if ($r = $st->fetch()) {
+                $label = 'محل';
+                $title = (string) ($r['storeNameAr'] ?: $r['storeName']);
+                $lines = array_values(array_filter([(string) ($r['c_nameAr'] ?? ''), (string) ($r['city'] ?? '')]));
+                $desc = trim((string) ($r['description'] ?? '')) ?: ('اطلب من ' . $title . ' على تطبيق تميم للتوصيل');
+                $img = $httpsImg($r['coverUrl']) ?? $httpsImg($r['logoUrl']);
+            }
+        } elseif ($kind === 'p') {
+            $st = db()->prepare('SELECT p.nameAr, p.name, p.description, p.imageUrl, p.price, p.salePrice, p.isAvailable, m.storeNameAr AS m_name, m.logoUrl AS m_logo, m.coverUrl AS m_cover FROM `Product` p LEFT JOIN `MerchantProfile` m ON m.id = p.merchantId WHERE p.id = ? AND p.isHidden = 0 LIMIT 1');
+            $st->execute([$id]);
+            if ($r = $st->fetch()) {
+                $label = 'منتج';
+                $title = (string) ($r['nameAr'] ?: $r['name']);
+                $price = (float) ($r['salePrice'] ?? 0) > 0 ? (float) $r['salePrice'] : (float) ($r['price'] ?? 0);
+                $priceTxt = $price > 0 ? (rtrim(rtrim(number_format($price, 2, '.', ''), '0'), '.') . ' ج.م') : '';
+                $lines = array_values(array_filter([
+                    $priceTxt,
+                    $r['m_name'] ? ('من ' . $r['m_name']) : '',
+                    (int) $r['isAvailable'] ? '' : 'مش متاح دلوقتي',
+                ]));
+                $desc = trim((string) ($r['description'] ?? '')) ?: implode(' · ', $lines);
+                $img = $httpsImg($r['imageUrl']) ?? $httpsImg($r['m_cover']) ?? $httpsImg($r['m_logo']);
+            }
+        } else {
+            ensureOfferDescSchema();
+            $st = db()->prepare('SELECT title, titleAr, descriptionAr, imageUrl FROM `Offer` WHERE id = ? AND isActive = 1 AND (startsAt IS NULL OR startsAt <= NOW(3)) AND (endsAt IS NULL OR endsAt >= NOW(3)) LIMIT 1');
+            $st->execute([$id]);
+            if ($r = $st->fetch()) {
+                $label = 'عرض';
+                $title = (string) ($r['titleAr'] ?: $r['title']);
+                $desc = trim((string) ($r['descriptionAr'] ?? '')) ?: 'عرض على تطبيق تميم للتوصيل';
+                $img = $httpsImg($r['imageUrl']);
+            }
+        }
+    } catch (Throwable $e) {
+        error_log('share page: ' . $e->getMessage());
+        $title = null;
+    }
+
+    $found = $title !== null && $title !== '';
+    $selfUrl = $base . '/' . $kind . '/' . $id;
+    $appUrl = 'tamem://' . $kind . '/' . $id;
+    $intent = 'intent://' . $kind . '/' . $id . '#Intent;scheme=tamem;package=com.tamem.delivery;S.browser_fallback_url='
+        . rawurlencode($selfUrl . '?app=0') . ';end';
+    if (!$found) {
+        $title = $kind === 'o' ? 'العرض ده خلص' : 'الرابط ده مش متاح دلوقتي';
+        $desc = 'شوف المحلات والعروض التانية على تطبيق تميم للتوصيل';
+        $lines = [];
+    }
+    $ogImg = $img ?? ($base . '/og-image.jpg');
+    $h = static fn($s) => htmlspecialchars((string) $s, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+    $short = mb_substr(preg_replace('/\s+/u', ' ', $desc), 0, 180);
+
+    http_response_code($found ? 200 : 404);
+    header('Content-Type: text/html; charset=utf-8');
+    header('Cache-Control: public, max-age=300');
+    header('X-Content-Type-Options: nosniff');
+    header('Referrer-Policy: strict-origin-when-cross-origin');
+    header("Content-Security-Policy: default-src 'none'; img-src https: data:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'");
+    $linesHtml = '';
+    foreach ($lines as $l) $linesHtml .= '<span class="chip">' . $h($l) . '</span>';
+    $imgHtml = $img ? '<div class="pic pic-' . $kind . '"><img src="' . $h($img) . '" alt="" referrerpolicy="no-referrer"></div>' : '';
+    $labelHtml = ($found && $label) ? '<span class="kind">' . $h($label) . '</span>' : '';
+    $pageTitle = $found ? ($title . ' | تميم للتوصيل') : 'تميم للتوصيل';
+    echo '<!doctype html><html lang="ar" dir="rtl"><head><meta charset="utf-8">'
+        . '<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">'
+        . '<title>' . $h($pageTitle) . '</title>'
+        . '<meta name="description" content="' . $h($short) . '">'
+        . '<meta property="og:type" content="website"><meta property="og:site_name" content="تميم للتوصيل">'
+        . '<meta property="og:locale" content="ar_EG">'
+        . '<meta property="og:title" content="' . $h($found ? $title : 'تميم للتوصيل') . '">'
+        . '<meta property="og:description" content="' . $h($short) . '">'
+        . '<meta property="og:url" content="' . $h($selfUrl) . '">'
+        . '<meta property="og:image" content="' . $h($ogImg) . '">'
+        . '<meta name="twitter:card" content="summary_large_image">'
+        . '<meta name="theme-color" content="#E0301E">'
+        . '<link rel="icon" href="' . $h($base . '/favicon.png') . '">'
+        . '<style>'
+        . ':root{--red:#E0301E;--red2:#B82414;--orange:#EC7A2C;--ink:#241310;--muted:#6b625b;--bg:#FCF8F4;--card:#fff;--line:#F0E4DA}'
+        . '*{box-sizing:border-box}html,body{margin:0}body{background:var(--bg);color:var(--ink);font-family:system-ui,-apple-system,"Segoe UI",Tahoma,"Noto Sans Arabic",sans-serif;line-height:1.6;min-height:100vh;display:flex;flex-direction:column;align-items:center}'
+        . '.top{width:100%;background:linear-gradient(135deg,var(--red),var(--orange));padding:22px 16px 64px;text-align:center;color:#fff}'
+        . '.brand{display:inline-flex;align-items:center;gap:10px;font-weight:800;font-size:20px;text-decoration:none;color:#fff}'
+        . '.brand img{width:40px;height:40px;border-radius:12px;background:#fff;object-fit:cover}'
+        . 'main{width:100%;max-width:460px;padding:0 16px 32px;margin-top:-44px}'
+        . '.card{background:var(--card);border-radius:22px;box-shadow:0 10px 30px rgba(36,19,16,.10);overflow:hidden;border:1px solid var(--line)}'
+        . '.pic{aspect-ratio:16/9;background:#FDEAE2}.pic img{width:100%;height:100%;object-fit:cover;display:block}'
+        . '.pic-o{aspect-ratio:1600/600}.pic-p{aspect-ratio:4/3;background:#fff;border-bottom:1px solid var(--line)}.pic-p img{object-fit:contain}'
+        . '.body{padding:18px 18px 20px}.kind{display:inline-block;background:#FDEAE2;color:var(--red2);font-weight:700;font-size:13px;border-radius:999px;padding:2px 12px}'
+        . 'h1{font-size:22px;margin:8px 0 6px}.desc{color:var(--muted);margin:0 0 10px;font-size:15px;white-space:pre-line}'
+        . '.chips{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:6px}.chip{background:#F7EFE7;border-radius:999px;padding:2px 10px;font-size:13px;font-weight:600}'
+        . '.btn{display:flex;align-items:center;justify-content:center;gap:8px;min-height:52px;border-radius:999px;font-weight:800;font-size:17px;text-decoration:none;margin-top:12px}'
+        . '.primary{background:var(--red);color:#fff;box-shadow:0 6px 16px rgba(224,48,30,.30)}.ghost{background:#fff;color:var(--ink);border:1.5px solid var(--line)}'
+        . '.note{color:var(--muted);font-size:13px;text-align:center;margin-top:12px}.foot{color:var(--muted);font-size:12px;text-align:center;margin-top:18px}.foot a{color:inherit}'
+        . '</style></head><body>'
+        . '<header class="top"><a class="brand" href="' . $h($base . '/') . '"><img src="' . $h($base . '/logo.png') . '" alt="">تميم للتوصيل</a></header>'
+        . '<main><div class="card">' . $imgHtml . '<div class="body">' . $labelHtml
+        . '<h1>' . $h($title) . '</h1>'
+        . ($linesHtml ? '<div class="chips">' . $linesHtml . '</div>' : '')
+        . '<p class="desc">' . $h($desc) . '</p>'
+        . ($found ? '<a class="btn primary" id="open" href="' . $h($appUrl) . '">افتح في تطبيق تميم</a>' : '')
+        . '<a class="btn ' . ($found ? 'ghost' : 'primary') . '" href="' . $h($play) . '">نزّل التطبيق من جوجل بلاي</a>'
+        . ($found ? '<p class="note">لو التطبيق متسطب عندك هيفتح على الصفحة دي على طول.</p>' : '')
+        . '</div></div>'
+        . '<p class="foot"><a href="' . $h($base . '/') . '">deliverytamem.com</a></p></main>'
+        . ($found ? '<script>(function(){var a=/Android/i.test(navigator.userAgent||"");var o=document.getElementById("open");'
+            . 'var i=' . json_encode($intent, JSON_UNESCAPED_SLASHES) . ';if(a&&o){o.href=i;}'
+            . 'if(a&&!/[?&]app=0(&|$)/.test(location.search)){location.replace(i);}})();</script>' : '')
+        . '</body></html>';
+    exit;
 }
 
 if ($method === 'GET' && $path === '/offers') {
@@ -14627,11 +15227,13 @@ if (preg_match('#^/services/([^/]+)$#', $path, $mm) && $method === 'GET') {
 
 // ═══ ZONES (public) ════════════════════════════════════════════════════
 if ($method === 'GET' && $path === '/zones/cities') {
-    $rows = db()->query('SELECT id, nameAr, nameEn FROM `City` WHERE isActive = 1 ORDER BY nameAr')->fetchAll();
+    // «قفط» first: almost every order is there.
+    $rows = db()->query("SELECT id, nameAr, nameEn FROM `City` WHERE isActive = 1 ORDER BY (nameAr = 'قفط') DESC, nameAr")->fetchAll();
     jsonOk($rows);
 }
 if (preg_match('#^/zones/cities/([^/]+)/villages$#', $path, $mm) && $method === 'GET') {
-    $st = db()->prepare('SELECT id, nameAr, nameEn, baseDeliveryPrice FROM `Village` WHERE cityId = ? AND isActive = 1 ORDER BY nameAr');
+    // The town itself («قفط المدينة») first, then the villages A→Z.
+    $st = db()->prepare("SELECT id, nameAr, nameEn, baseDeliveryPrice FROM `Village` WHERE cityId = ? AND isActive = 1 ORDER BY (nameAr LIKE '%المدينة%') DESC, nameAr");
     $st->execute([$mm[1]]);
     jsonOk($st->fetchAll());
 }
@@ -15944,9 +16546,22 @@ function fcmSendToToken(string $token, string $title, string $body, array $data)
     if ($code === 200) return ['ok' => true];
     $d = json_decode((string) $resp, true);
     $status = $d['error']['status'] ?? ('HTTP ' . $code);
-    $dead = $code === 404 || in_array($status, ['UNREGISTERED', 'NOT_FOUND', 'INVALID_ARGUMENT'], true);
-    error_log("[fcm] send failed ($status): " . substr((string) $resp, 0, 200));
-    return ['ok' => false, 'reason' => $status, 'dead' => $dead];
+    // FCM's own reason sits in error.details[].errorCode. SENDER_ID_MISMATCH
+    // means the phone's token belongs to another Firebase sender: app builds
+    // from Aug to Nov 2026 shipped a google-services.json with the wrong
+    // project_number (718814135093, the Google sign-in project), so this
+    // project can't reach them. They are kept for now, because enabling FCM
+    // in that project would make them work again without an app update.
+    // FCM_DROP_SENDER_MISMATCH=1 deletes them once the fixed build is out.
+    $ec = '';
+    foreach ((array) ($d['error']['details'] ?? []) as $x) {
+        if (is_array($x) && !empty($x['errorCode'])) $ec = (string) $x['errorCode'];
+    }
+    $dead = $code === 404 || in_array($status, ['UNREGISTERED', 'NOT_FOUND', 'INVALID_ARGUMENT'], true)
+        || $ec === 'UNREGISTERED'
+        || ($ec === 'SENDER_ID_MISMATCH' && env('FCM_DROP_SENDER_MISMATCH', '') === '1');
+    if ($ec !== 'SENDER_ID_MISMATCH') error_log("[fcm] send failed ($status): " . substr((string) $resp, 0, 200));
+    return ['ok' => false, 'reason' => $ec ?: $status, 'dead' => $dead];
 }
 /** Fan a push out to every device a user has registered. Invalid tokens are
  *  pruned; transient failures are counted for later cleanup. Best-effort. */
@@ -16289,6 +16904,7 @@ if ($method === 'POST' && $path === '/orders/cart') {
             $pm, 'PENDING', 'EGP', $coupon ? $coupon['code'] : null, $discount ?: null,
             $grandSub, $fee, $final, null, ($b['scheduledFor'] ?? null) ?: null, $deliveryLegs, 'APP']);
     orderHistory($parentId, null, 'NEW', $uid, 'CUSTOMER', 'Order placed from cart');
+    if (($u['role'] ?? '') === 'CUSTOMER') rememberCustomerAddress($uid, $addr, $cartLat, $cartLng, ($b['cityId'] ?? null) ?: null, ($b['villageId'] ?? null) ?: null, ($b['areaId'] ?? null) ?: null);
     // العرض اتصرف فعلاً → احرق الرقم دلوقتي. التسجيل وقت الحذف بس مكانش
     // كافي: العميل بيمسح حسابه من التطبيق (DELETE /me) ويسجّل تاني بنفس
     // الرقم فيرجع «عميل جديد» — الحرق وقت الاستخدام بيقفل ده مهما اتزاد
@@ -16544,6 +17160,7 @@ if ($method === 'POST' && $path === '/orders') {
             ->execute([newId(), $id, $i, (string) ($p['recipientName'] ?? ''), (string) ($p['recipientPhone'] ?? ''), (string) ($p['address'] ?? ''), (float) $p['lat'], (float) $p['lng'], ($p['notes'] ?? null) ?: null]);
     }
     orderHistory($id, null, 'NEW', $uid, 'CUSTOMER', 'Order placed');
+    if (($u['role'] ?? '') === 'CUSTOMER' && $deliveryAddress !== '') rememberCustomerAddress($uid, $deliveryAddress, $dLat, $dLng, $cityId, $villageId, $areaId);
     notifyUser($uid, 'ORDER_STATUS', 'Order received', 'تم استلام طلبك', "Order $no received", "طلبك رقم $no تم استلامه وجاري مراجعته", ['orderId' => $id, 'orderNumber' => $no]);
     // New-order WhatsApp fan-out — customer + supervisor + group + extra
     // recipients, all through the editable notification templates (one source
@@ -16923,7 +17540,12 @@ function sniffUploadType(string $tmp): ?string {
 }
 
 if ($method === 'POST' && $path === '/uploads') {
-    authUser();
+    $__up = authUser();
+    // Anyone can make a customer account, and each upload lands in the web
+    // root: 40 files a day is plenty for photos and voice notes on orders.
+    if (($__up['role'] ?? '') === 'CUSTOMER' && !rateHit('upload', (string) ($__up['sub'] ?? ''), 40, 86400)) {
+        jsonErr('رفعت ملفات كتير النهارده — جرّب بكرة', 429, 'TOO_MANY');
+    }
     if (empty($_FILES['file']) || ($_FILES['file']['error'] ?? 1) !== UPLOAD_ERR_OK) jsonErr('لم يتم رفع أي ملف', 422, 'VALIDATION_ERROR');
     $f = $_FILES['file'];
     $max = (int) env('UPLOAD_MAX_BYTES', '10485760');
@@ -17171,6 +17793,7 @@ if ($method === 'GET' && $path === '/home-config') {
         $cfg = db()->query('SELECT * FROM `HomeConfig` LIMIT 1')->fetch() ?: [];
     }
     $cfg = boolCast(jsonizeRow($cfg), ['showPromoBanner', 'showTrustStrip']);
+    $cfg['offersAutoplaySec'] = offersAutoplaySec();
     // heroGradient / visibleServiceKeys / featuredMerchantIds / featuredOfferIds
     // are spread + .includes()-ed client-side — must be arrays or null, never {}.
     foreach (['heroGradient', 'visibleServiceKeys', 'featuredMerchantIds', 'featuredOfferIds', 'featuredProductIds', 'sectionLayout', 'serviceCards'] as $k) {
@@ -17266,9 +17889,14 @@ if ($method === 'POST' && $path === '/auth/merchant-login') {
         $stmt->execute([$p1, $p2, $p3]);
     }
     $user = $stmt->fetch();
-    if (!$user || !$user['passwordHash']) jsonErr('بيانات الدخول غير صحيحة', 401, 'INVALID_CREDS');
-
-    if (!password_verify($password, $user['passwordHash'])) {
+    $lkey = $user ? (string) ($user['email'] && str_contains($raw, '@') ? strtolower((string) $user['email']) : (string) $user['phone']) : strtolower($raw);
+    if (guessLocked('login15', $lkey, 10, 900) || guessLocked('login60', $lkey, 30, 3600)) {
+        header('Retry-After: 900');
+        jsonErr('محاولات دخول غلط كتير — استنى ربع ساعة وجرّب تاني', 429, 'TOO_MANY');
+    }
+    if (!$user || !$user['passwordHash'] || !password_verify($password, $user['passwordHash'])) {
+        rateHit('login15', $lkey, 1000, 900);
+        rateHit('login60', $lkey, 1000, 3600);
         jsonErr('بيانات الدخول غير صحيحة', 401, 'INVALID_CREDS');
     }
     if (!(int) $user['isActive']) jsonErr('الحساب غير مفعّل', 403, 'INACTIVE');
@@ -17926,10 +18554,21 @@ if ($method === 'POST' && $path === '/auth/login') {
         $col = 'phone';
     }
 
+    // Wrong passwords per account: 10 in 15 minutes, 30 in an hour. Counted on
+    // the identifier typed, so a name that has no account looks the same.
+    if (guessLocked('login15', $identifier, 10, 900) || guessLocked('login60', $identifier, 30, 3600)) {
+        header('Retry-After: 900');
+        jsonErr('محاولات دخول غلط كتير — استنى ربع ساعة وجرّب تاني', 429, 'TOO_MANY');
+    }
+    $loginFail = function () use ($identifier) {
+        rateHit('login15', $identifier, 1000, 900);
+        rateHit('login60', $identifier, 1000, 3600);
+        jsonErr('بيانات الدخول غير صحيحة', 401, 'INVALID_CREDS');
+    };
     $stmt = db()->prepare("SELECT id, name, phone, email, role, isActive, passwordHash FROM `User` WHERE `$col` = ? LIMIT 1");
     $stmt->execute([$identifier]);
     $user = $stmt->fetch();
-    if (!$user) jsonErr('بيانات الدخول غير صحيحة', 401, 'INVALID_CREDS');
+    if (!$user) $loginFail();
     // An account created by a phone order has no password yet. "Wrong
     // credentials" sent those customers in circles — there was no password to
     // get right. Point them at the reset flow, which is how they claim it.
@@ -17938,9 +18577,7 @@ if ($method === 'POST' && $path === '/auth/login') {
     }
 
     // password_verify handles $2a$ / $2b$ / $2y$ bcrypt hashes
-    if (!password_verify($password, $user['passwordHash'])) {
-        jsonErr('بيانات الدخول غير صحيحة', 401, 'INVALID_CREDS');
-    }
+    if (!password_verify($password, $user['passwordHash'])) $loginFail();
     if (!(int) $user['isActive']) jsonErr('الحساب غير مفعّل', 403, 'INACTIVE');
 
     $role = (string) $user['role'];

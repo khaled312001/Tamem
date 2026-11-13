@@ -21,6 +21,33 @@ if (Platform.OS !== 'web') {
   nativeStore = require('expo-secure-store');
 }
 
+/*
+ * The Android Keystore behind expo-secure-store can fail when several reads
+ * and writes run at the same time (every API call used to read the token, in
+ * parallel with the refresh writing new ones), and the session lives here: one
+ * failed read at startup put a signed-in customer back on the login screen.
+ * So the native store runs one operation at a time, and a failed one is tried
+ * again before giving up.
+ */
+let chain: Promise<unknown> = Promise.resolve();
+function serial<T>(op: () => Promise<T>): Promise<T> {
+  const run = chain.then(op, op);
+  chain = run.catch(() => undefined);
+  return run;
+}
+async function withRetry<T>(op: () => Promise<T>, tries = 3): Promise<T> {
+  let last: unknown;
+  for (let i = 0; i < tries; i++) {
+    try {
+      return await serial(op);
+    } catch (e) {
+      last = e;
+      await new Promise((r) => setTimeout(r, 120 * (i + 1)));
+    }
+  }
+  throw last;
+}
+
 export const secureStorage = {
   async getItem(key: string): Promise<string | null> {
     if (Platform.OS === 'web') {
@@ -30,7 +57,7 @@ export const secureStorage = {
         return null;
       }
     }
-    return nativeStore!.getItemAsync(key);
+    return withRetry(() => nativeStore!.getItemAsync(key));
   },
 
   async setItem(key: string, value: string): Promise<void> {
@@ -42,7 +69,7 @@ export const secureStorage = {
       }
       return;
     }
-    await nativeStore!.setItemAsync(key, value);
+    await withRetry(() => nativeStore!.setItemAsync(key, value));
   },
 
   async deleteItem(key: string): Promise<void> {
@@ -54,6 +81,7 @@ export const secureStorage = {
       }
       return;
     }
-    await nativeStore!.deleteItemAsync(key);
+    // Logout must always finish, even if the store misbehaves.
+    await withRetry(() => nativeStore!.deleteItemAsync(key)).catch(() => undefined);
   },
 };

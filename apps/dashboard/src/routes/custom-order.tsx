@@ -24,6 +24,7 @@ import { ArrowLeftRight, CheckCircle2, Loader2, MapPin, Search, Truck, User } fr
 import { useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
 
+import { AddressSuggest } from '../components/AddressSuggest.js';
 import { PlacePicker } from '../components/PlacePicker.js';
 import { Button } from '../components/ui/Button.js';
 import { Dialog } from '../components/ui/Dialog.js';
@@ -314,9 +315,11 @@ export function CustomOrderDialog({
             )}
           </Field>
           <Field label="إلى (مكان التسليم)">
-            <Input
+            <AddressSuggest
+              customerId={customerId}
               value={dropoff}
-              onChange={(e) => setDropoff(e.target.value)}
+              onChange={setDropoff}
+              onPick={(s) => setDropoff(s.address)}
               placeholder="مثال: قنا — شارع الجمهورية، برج النيل"
             />
           </Field>

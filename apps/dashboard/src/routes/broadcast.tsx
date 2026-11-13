@@ -78,10 +78,22 @@ const TEMPLATES: { label: string; titleAr: string; bodyAr: string; kind: Kind }[
     kind: 'ALERT',
   },
   {
-    label: 'تحديث جديد',
-    titleAr: 'تحديث التطبيق متاح',
-    bodyAr:
-      'حدّث تطبيق تميم لآخر إصدار وتمتع بشاشات أسرع، خريطة محسّنة، ودعم لكل وسائل الدفع المصرية.',
+    // The first line is what a locked phone shows; the steps are for the
+    // customer who taps it. A tap can't open the store on the old app (its push
+    // only knows the Notifications screen), so the way there is spelled out.
+    label: 'تحديث التطبيق',
+    titleAr: 'تحديث جديد لتطبيق تميم متاح دلوقتي',
+    bodyAr: [
+      'نزّلنا نسخة جديدة من تميم، أسرع وأسهل في الطلب. حدّث التطبيق عشان توصلك كل المميزات الجديدة.',
+      '',
+      'طريقة التحديث:',
+      '1. افتح متجر Google Play',
+      '2. ابحث عن «Delivery Tamem» أو «تميم للتوصيل»',
+      '3. اضغط «تحديث» واستنى لحد ما يخلص',
+      '4. افتح تميم، ولو طلب منك تسجيل الدخول ادخل بحساب جوجل',
+      '',
+      'لو زرار «تحديث» مش ظاهر، اقفل المتجر وافتحه تاني بعد شوية.',
+    ].join('\n'),
     kind: 'ANNOUNCEMENT',
   },
   {

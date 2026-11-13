@@ -12,7 +12,17 @@ import { useNavigation, useRoute, type RouteProp } from '@react-navigation/nativ
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useQuery } from '@tanstack/react-query';
 import { LinearGradient } from 'expo-linear-gradient';
-import { Clock, Minus, Package, Plus, ShoppingCart, Star, Store, Zap } from 'lucide-react-native';
+import {
+  Clock,
+  Minus,
+  Package,
+  Plus,
+  Share2,
+  ShoppingCart,
+  Star,
+  Store,
+  Zap,
+} from 'lucide-react-native';
 import { useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
@@ -40,6 +50,7 @@ import type { NativeScrollEvent, NativeSyntheticEvent } from 'react-native';
 import { HeartButton } from '../components/HeartButton';
 import { ImageViewer } from '../components/ImageViewer';
 import { activeDiscountPct, applyPct, productPrice } from '../lib/productPrice';
+import { shareItem } from '../lib/shareLinks';
 import { addToCart } from '../stores/cart';
 import { ProductOptions } from './product-detail/ProductOptions';
 import { BackChevron } from '../theme/rtl';
@@ -185,6 +196,20 @@ export function ProductDetailScreen() {
     off: discountPct,
     hasDiscount: hasSale,
   } = productPrice(data);
+
+  // deliverytamem.com/p/<id>: opens this page in the app, or a preview card
+  // with the install button for someone without it.
+  const shareProduct = () =>
+    shareItem('p', data.id, [
+      `🛍️ ${data.nameAr}`,
+      [
+        effectivePrice > 0 ? `${effectivePrice} ج.م` : '',
+        data.merchant?.storeNameAr ? `من ${data.merchant.storeNameAr}` : '',
+      ]
+        .filter(Boolean)
+        .join(' · '),
+      'اطلبه على تطبيق تميم للتوصيل 🚚',
+    ]);
 
   // A live % discount applies to the chosen SIZE price too (add-ons stay full
   // price) — same rule the server charges with. salePrice/percentage on the
@@ -342,7 +367,18 @@ export function ProductDetailScreen() {
             {/* Wishlist. Without this there was no way to add a PRODUCT to
                 favourites anywhere in the app, so «قائمة الرغبات» could only
                 ever be empty. */}
-            <HeartButton collection="product" id={data.id} merchantName={data.nameAr} size="md" />
+            <View style={styles.floatActions}>
+              <HeartButton collection="product" id={data.id} merchantName={data.nameAr} size="md" />
+              <Pressable
+                onPress={shareProduct}
+                style={({ pressed }) => [styles.floatingBack, pressed && { opacity: 0.7 }]}
+                hitSlop={8}
+                accessibilityRole="button"
+                accessibilityLabel="شارك المنتج"
+              >
+                <Share2 size={19} color={colors.ink} />
+              </Pressable>
+            </View>
             {hasSale && (
               <View style={styles.discountBadge}>
                 <Text
@@ -661,6 +697,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
   },
+  floatActions: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
   floatingBack: {
     width: 40,
     height: 40,
