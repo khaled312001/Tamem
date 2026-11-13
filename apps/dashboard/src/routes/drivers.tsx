@@ -212,7 +212,7 @@ export function DriversPage() {
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-black text-brand-dark">السائقون</h1>
+          <h1 className="text-2xl font-black text-brand-dark">السائقون (المناديب)</h1>
           <p className="text-sm text-muted-foreground mt-1">{total} سائق</p>
         </div>
         <Button onClick={() => setCreateOpen(true)}>

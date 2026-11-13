@@ -37,7 +37,7 @@ const ALL_PERMS: Array<{ key: string; label: string }> = [
   { key: 'alerts', label: 'التنبيهات' },
   { key: 'orders', label: 'الطلبات' },
   { key: 'customers', label: 'العملاء' },
-  { key: 'drivers', label: 'السائقون' },
+  { key: 'drivers', label: 'السائقون (المناديب)' },
   { key: 'merchants', label: 'التجار' },
   { key: 'services', label: 'الخدمات' },
   { key: 'products', label: 'المنتجات' },

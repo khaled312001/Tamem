@@ -98,7 +98,7 @@ const NAV_SECTIONS: NavSection[] = [
     title: 'الأشخاص',
     items: [
       { to: '/customers', icon: Users, label: 'العملاء', perm: 'customers' },
-      { to: '/drivers', icon: Truck, label: 'السائقون', perm: 'drivers' },
+      { to: '/drivers', icon: Truck, label: 'السائقون (المناديب)', perm: 'drivers' },
       { to: '/driver-shifts', icon: CalendarDays, label: 'ورديات المناديب', perm: 'drivers' },
       { to: '/merchants', icon: Store, label: 'التجار', perm: 'merchants' },
       {
