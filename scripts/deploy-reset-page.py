@@ -12,19 +12,28 @@ the landing has no CI deploy of its own, so it ships through this script.
 Safety model matches deploy-api.py: upload beside the live file, then rename,
 so a half-finished upload can never be what a customer opens.
 
+The drivers' portal (deliverytamem.com/captain/: name + phone, ID card, shift
+booking) is the same kind of page and ships the same way with --page captain.
+
 Usage:
     python scripts/deploy-reset-page.py --dry-run
     python scripts/deploy-reset-page.py
+    python scripts/deploy-reset-page.py --page captain
 """
 
 import os
 import re
 import sys
 
+# page -> the API call its file must contain (checked on the server after the swap)
+PAGES = {"reset": "auth/reset-link", "captain": "driver-portal/login"}
+PAGE = sys.argv[sys.argv.index("--page") + 1] if "--page" in sys.argv else "reset"
+if PAGE not in PAGES:
+    sys.exit(f"Unknown page {PAGE!r} — one of: {', '.join(PAGES)}")
 LOCAL = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), "..", "apps", "landing", "public", "reset", "index.html")
+    os.path.join(os.path.dirname(__file__), "..", "apps", "landing", "public", PAGE, "index.html")
 )
-REMOTE_DIR = "/home/u748721963/domains/deliverytamem.com/public_html/reset"
+REMOTE_DIR = f"/home/u748721963/domains/deliverytamem.com/public_html/{PAGE}"
 REMOTE = REMOTE_DIR + "/index.html"
 HOST, PORT, USER = "77.37.37.207", 65002, "u748721963"
 
@@ -97,7 +106,7 @@ def main() -> None:
     # Verified ON THE SERVER, not over HTTPS: Hostinger's WAF answers 403 to
     # datacenter IPs, so a public fetch from a CI runner proves nothing.
     print(run(
-        f"grep -q 'auth/reset-link' '{REMOTE}' && stat -c 'live: %s bytes, %y' '{REMOTE}'"
+        f"grep -q '{PAGES[PAGE]}' '{REMOTE}' && stat -c 'live: %s bytes, %y' '{REMOTE}'"
         f" || echo 'MISSING the API call — check the file'"
     ))
     cli.close()

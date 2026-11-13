@@ -6188,16 +6188,22 @@ function shiftCoversOwnDay(string $start, string $end, int $mins): bool {
 function shiftSpillsInto(string $start, string $end, int $mins): bool {
     return shiftIsOvernight($start, $end) && $mins < hmToMin($end); // 0:00 … end next day
 }
-function driverShiftsForDay(string $driverId, int $dow): array {
-    $st = db()->prepare("SELECT id, startTime, endTime FROM `DriverShift` WHERE driverId = ? AND dayOfWeek = ? AND isActive = 1 ORDER BY startTime");
-    $st->execute([$driverId, $dow]);
+/**
+ * A driver's shifts on a weekday. With $onDay (YYYY-MM-DD, that weekday's
+ * date), a booked seat that only starts later is left out — see «حجز الورديات».
+ */
+function driverShiftsForDay(string $driverId, int $dow, ?string $onDay = null): array {
+    $dated = $onDay !== null && ensureShiftBookingSchema();
+    $st = db()->prepare("SELECT id, startTime, endTime FROM `DriverShift` WHERE driverId = ? AND dayOfWeek = ? AND isActive = 1"
+        . ($dated ? " AND (validFrom IS NULL OR validFrom <= ?)" : '') . " ORDER BY startTime");
+    $st->execute($dated ? [$driverId, $dow, $onDay] : [$driverId, $dow]);
     return $st->fetchAll();
 }
 function driverScheduledNow(string $driverId): bool {
     [$dow, $mins] = nowCairo();
-    foreach (driverShiftsForDay($driverId, $dow) as $sh) if (shiftCoversOwnDay($sh['startTime'], $sh['endTime'], $mins)) return true;
+    foreach (driverShiftsForDay($driverId, $dow, date('Y-m-d')) as $sh) if (shiftCoversOwnDay($sh['startTime'], $sh['endTime'], $mins)) return true;
     // An overnight shift from YESTERDAY may still be running past midnight today.
-    foreach (driverShiftsForDay($driverId, ($dow + 6) % 7) as $sh) if (shiftSpillsInto($sh['startTime'], $sh['endTime'], $mins)) return true;
+    foreach (driverShiftsForDay($driverId, ($dow + 6) % 7, date('Y-m-d', strtotime('-1 day'))) as $sh) if (shiftSpillsInto($sh['startTime'], $sh['endTime'], $mins)) return true;
     return false;
 }
 function driverOpenSession(string $driverId): ?array {
@@ -6368,12 +6374,29 @@ function driverIncentives(?string $driverId, string $fromDay, string $toDay): ar
         $day = workDayOf($utcTs($r['createdAt']));
         $orders[$r['d']][$day] = ($orders[$r['d']][$day] ?? 0) + 1;
     }
-    // First shift start per weekday (0 = الأحد, as in «جدول المناديب»).
-    $q = db()->prepare("SELECT driverId, dayOfWeek, MIN(startTime) s FROM `DriverShift` WHERE isActive = 1"
-        . ($one ? ' AND driverId = ?' : '') . " GROUP BY driverId, dayOfWeek");
+    // Shifts per weekday (0 = الأحد, as in «جدول المناديب»), with the dates a
+    // booked seat was in force: each day is judged on the schedule it HAD, so
+    // booking today never makes last Saturday an absence, and dropping a seat
+    // after a no-show never erases one. Rows without dates count every day.
+    $dated = ensureShiftBookingSchema();
+    $q = db()->prepare("SELECT driverId, dayOfWeek, startTime" . ($dated ? ", validFrom, validTo, isActive" : '') . " FROM `DriverShift` WHERE "
+        . ($dated ? "(isActive = 1 OR validTo IS NOT NULL)" : "isActive = 1") . ($one ? ' AND driverId = ?' : ''));
     $q->execute($one ? [$driverId] : []);
     $sched = [];
-    foreach ($q->fetchAll() as $r) $sched[$r['driverId']][(int) $r['dayOfWeek']] = substr((string) $r['s'], 0, 5);
+    foreach ($q->fetchAll() as $r) {
+        $sched[$r['driverId']][(int) $r['dayOfWeek']][] = [substr((string) $r['startTime'], 0, 5),
+            $r['validFrom'] ?? null, $r['validTo'] ?? null, (int) ($r['isActive'] ?? 1)];
+    }
+    // First shift start on that date, or null.
+    $startOn = static function (array $rows, string $day): ?string {
+        $first = null;
+        foreach ($rows as [$st, $vf, $vt, $act]) {
+            if ($vf !== null && $day < (string) $vf) continue;
+            if ($vt !== null ? $day >= (string) $vt : !$act) continue;
+            if ($first === null || $st < $first) $first = $st;
+        }
+        return $first;
+    };
     // Check-ins overlapping the range (one left open from before still counts).
     $q = db()->prepare("SELECT driverId, startedAt, endedAt FROM `DriverShiftSession`
                          WHERE startedAt < ? AND (endedAt IS NULL OR endedAt > ?)" . ($one ? ' AND driverId = ?' : ''));
@@ -6421,7 +6444,7 @@ function driverIncentives(?string $driverId, string $fromDay, string $toDay): ar
             foreach ($tiers as $t) { if ($n >= $t['orders']) $tier = $t; elseif ($next === null) $next = $t; }
             $raw = ['BONUS' => $tier ? (float) $tier['amount'] : 0.0, 'LATE' => 0.0, 'ABSENCE' => 0.0];
 
-            $start = $sched[$d][(int) date('w', strtotime($day))] ?? null;
+            $start = $startOn($sched[$d][(int) date('w', strtotime($day))] ?? [], $day);
             $status = 'off'; $arrival = null; $arrivalBy = null; $lateMin = 0;
             if ($start !== null) {
                 // Under the old 03:00 day, a first shift that starts after midnight
@@ -6770,6 +6793,564 @@ if ($method === 'POST' && $path === '/admin/driver-shifts/send') {
     if ($sent === 0) jsonErr('تعذّر الإرسال للجروب', 502, 'SEND_FAILED');
     jsonOk(['ok' => true, 'drivers' => count($blocks), 'messages' => $sent]);
 }
+// ══════════ «حجز الورديات» — shift seats the drivers book themselves ═════════
+/*
+ * The office publishes SEATS: per weekday a few time windows (08–12, 12–16,
+ * 16–20, 20–00 by default), each with a number of places. A driver books one
+ * from the hidden portal page (deliverytamem.com/captain/) the way a bus seat
+ * is booked: once taken it is his, every week, until he or the office frees
+ * it. 4 hours = one seat, 8 = two (shiftBookingRules().maxHoursPerDay). The
+ * day ends at midnight (WORKDAY_MIDNIGHT_FROM): after 00:00 is the next day.
+ *
+ * A booking IS a DriverShift row tagged with its slotId, so attendance, the
+ * daily bonus and deductions and «جدول المناديب» all see it with no extra code.
+ *
+ * Bookings are DATED (validFrom / validTo, validTo exclusive), and that is not
+ * optional: driverIncentives() recomputes past days from the schedule. Without
+ * dates, a seat booked today would turn every past Saturday into an absence,
+ * and a seat dropped after a no-show would quietly erase the absence.
+ */
+const SHIFT_DEFAULT_WINDOWS = [['08:00', '12:00'], ['12:00', '16:00'], ['16:00', '20:00'], ['20:00', '00:00']];
+
+/**
+ * Creates the tables and DriverShift's three columns once. Returns false if
+ * they are not there.
+ *
+ * Collation: on production DriverShift is utf8mb4_uca1400_ai_ci (an earlier
+ * CREATE TABLE took the server default) while User and the Prisma tables are
+ * utf8mb4_unicode_ci. MariaDB refuses `=` between the two (error 1267), so a
+ * join from DriverShift to User needs `COLLATE utf8mb4_unicode_ci`, and the
+ * new tables name their collation explicitly.
+ */
+function ensureShiftBookingSchema(): bool {
+    static $ok = null;
+    if ($ok !== null) return $ok;
+    $flag = ($d = rtDir()) ? $d . '/schema-shift-booking-v1' : null;
+    if ($flag && is_file($flag)) return $ok = true;
+    // DDL commits implicitly: never run it under somebody else's transaction.
+    if (db()->inTransaction()) return false;
+    try {
+        db()->exec("CREATE TABLE IF NOT EXISTS `ShiftSlot` (
+            id VARCHAR(30) NOT NULL PRIMARY KEY, dayOfWeek TINYINT NOT NULL,
+            startTime VARCHAR(5) NOT NULL, endTime VARCHAR(5) NOT NULL,
+            capacity INT NOT NULL DEFAULT 3, isActive TINYINT(1) NOT NULL DEFAULT 1,
+            createdAt DATETIME(3) NOT NULL, updatedAt DATETIME(3) NOT NULL,
+            KEY ShiftSlot_day_idx (dayOfWeek, startTime)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+        db()->exec("CREATE TABLE IF NOT EXISTS `DriverIdReview` (
+            driverId VARCHAR(191) NOT NULL PRIMARY KEY, status VARCHAR(12) NOT NULL,
+            note VARCHAR(255) NULL, submittedAt DATETIME(3) NULL,
+            reviewedById VARCHAR(191) NULL, reviewedAt DATETIME(3) NULL
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+        $cols = array_column(db()->query("SHOW COLUMNS FROM `DriverShift`")->fetchAll(), 'Field');
+        $add = [];
+        if (!in_array('slotId', $cols, true)) { $add[] = 'ADD COLUMN `slotId` VARCHAR(30) NULL'; $add[] = 'ADD KEY `DriverShift_slotId_idx` (`slotId`)'; }
+        if (!in_array('validFrom', $cols, true)) $add[] = 'ADD COLUMN `validFrom` DATE NULL';
+        if (!in_array('validTo', $cols, true)) $add[] = 'ADD COLUMN `validTo` DATE NULL';
+        if ($add) db()->exec('ALTER TABLE `DriverShift` ' . implode(', ', $add));
+        if ($flag) @file_put_contents($flag, gmdate('c'));
+        return $ok = true;
+    } catch (Throwable $e) {
+        error_log('[api.php] shift-booking schema: ' . $e->getMessage());
+        return $ok = false;
+    }
+}
+
+function shiftBookingRules(): array {
+    $s = notifReadSetting('shift_booking');
+    return [
+        'maxHoursPerDay' => max(1, min(16, (int) ($s['maxHoursPerDay'] ?? 8))),
+        'requireIdCard' => array_key_exists('requireIdCard', $s) ? (bool) $s['requireIdCard'] : true,
+        'open' => array_key_exists('open', $s) ? (bool) $s['open'] : true,
+        'note' => mb_substr(trim((string) ($s['note'] ?? '')), 0, 300),
+    ];
+}
+/** [start, end] in minutes from the day's midnight; an end at or before the start is the next midnight-or-later. */
+function slotSpan(string $start, string $end): array {
+    $a = hmToMin($start); $b = hmToMin($end);
+    return [$a, $b <= $a ? $b + 1440 : $b];
+}
+
+/** Every open slot with its seats; with $forDriver, which ones are his; with $names, who sits where. */
+function shiftSlotsWithSeats(?string $forDriver = null, bool $names = false): array {
+    if (!ensureShiftBookingSchema()) return [];
+    $slots = db()->query("SELECT id, dayOfWeek, startTime, endTime, capacity FROM `ShiftSlot` WHERE isActive = 1 ORDER BY dayOfWeek, startTime")->fetchAll();
+    $by = [];
+    foreach (db()->query("SELECT ds.id, ds.slotId, ds.driverId, ds.validFrom, ds.createdAt, u.name, u.phone
+                            FROM `DriverShift` ds LEFT JOIN `User` u ON u.id = ds.driverId COLLATE utf8mb4_unicode_ci
+                           WHERE ds.slotId IS NOT NULL AND ds.isActive = 1 ORDER BY ds.createdAt")->fetchAll() as $b) {
+        $by[$b['slotId']][] = $b;
+    }
+    $out = [];
+    foreach ($slots as $s) {
+        $list = $by[$s['id']] ?? [];
+        $row = [
+            'id' => $s['id'], 'dayOfWeek' => (int) $s['dayOfWeek'], 'startTime' => $s['startTime'], 'endTime' => $s['endTime'],
+            'capacity' => (int) $s['capacity'], 'taken' => count($list),
+            'hours' => round(shiftMinutes($s['startTime'], $s['endTime']) / 60, 1),
+        ];
+        if ($forDriver !== null) {
+            $mine = array_values(array_filter($list, fn($b) => $b['driverId'] === $forDriver));
+            $row['mine'] = (bool) $mine;
+            $row['mineFrom'] = $mine ? $mine[0]['validFrom'] : null;
+        }
+        if ($names) {
+            $row['bookings'] = array_map(fn($b) => [
+                'shiftId' => $b['id'], 'driverId' => $b['driverId'], 'name' => $b['name'], 'phone' => $b['phone'],
+                'validFrom' => $b['validFrom'], 'bookedAt' => $b['createdAt'] ? gmdate('Y-m-d\TH:i:s\Z', (int) strtotime($b['createdAt'] . ' UTC')) : null,
+            ], $list);
+        }
+        $out[] = $row;
+    }
+    return $out;
+}
+
+/**
+ * Book one seat. The slot row is locked, so two drivers can never both take
+ * the last seat. The office ($byOffice) may go past the hours-per-day cap,
+ * never past the seats. The booking counts from today if the slot is later
+ * today, otherwise from tomorrow — so it never reaches back into a day that
+ * has already been worked or missed.
+ */
+function bookShiftSeat(string $slotId, string $driverId, bool $byOffice): array {
+    if (!ensureShiftBookingSchema()) jsonErr('الحجز مش جاهز حالياً — جرّب بعد شوية', 503, 'NOT_READY');
+    $R = shiftBookingRules();
+    $pdo = db();
+    $pdo->beginTransaction();
+    $fail = function (string $msg, int $code, string $err) use ($pdo) { $pdo->rollBack(); jsonErr($msg, $code, $err); };
+    $st = $pdo->prepare("SELECT * FROM `ShiftSlot` WHERE id = ? AND isActive = 1 FOR UPDATE");
+    $st->execute([$slotId]);
+    $slot = $st->fetch();
+    if (!$slot) $fail('الوردية دي مش موجودة — حدّث الصفحة', 404, 'NOT_FOUND');
+    $dow = (int) $slot['dayOfWeek'];
+    $q = $pdo->prepare("SELECT slotId, startTime, endTime FROM `DriverShift`
+                         WHERE driverId = ? AND dayOfWeek = ? AND isActive = 1 AND slotId IS NOT NULL");
+    $q->execute([$driverId, $dow]);
+    $mine = $q->fetchAll();
+    foreach ($mine as $m) if ($m['slotId'] === $slotId) $fail('الوردية دي محجوزة لك بالفعل', 409, 'ALREADY');
+    $c = $pdo->prepare("SELECT COUNT(*) FROM `DriverShift` WHERE slotId = ? AND isActive = 1");
+    $c->execute([$slotId]);
+    if ((int) $c->fetchColumn() >= (int) $slot['capacity']) $fail('الوردية دي اتملت — اختار وردية تانية', 409, 'FULL');
+    [$a, $b] = slotSpan($slot['startTime'], $slot['endTime']);
+    $mins = $b - $a;
+    foreach ($mine as $m) {
+        [$x, $y] = slotSpan($m['startTime'], $m['endTime']);
+        if ($a < $y && $x < $b) $fail('الوردية دي متداخلة مع وردية حاجزها في نفس اليوم', 409, 'OVERLAP');
+        $mins += $y - $x;
+    }
+    if (!$byOffice && $mins > $R['maxHoursPerDay'] * 60) {
+        $fail('أقصى حاجة ' . $R['maxHoursPerDay'] . ' ساعات في اليوم — الغي وردية الأول لو عايز تبدّل', 409, 'TOO_MANY_HOURS');
+    }
+    $today = date('Y-m-d');
+    $from = ((int) date('w') === $dow && (int) strtotime($today . ' ' . $slot['startTime']) > time())
+        ? $today : date('Y-m-d', strtotime('+1 day'));
+    $id = newId();
+    $pdo->prepare("INSERT INTO `DriverShift` (id, driverId, dayOfWeek, startTime, endTime, isActive, slotId, validFrom, createdAt, updatedAt)
+                   VALUES (?,?,?,?,?,1,?,?,NOW(3),NOW(3))")
+        ->execute([$id, $driverId, $dow, $slot['startTime'], $slot['endTime'], $slotId, $from]);
+    $pdo->commit();
+    return ['shiftId' => $id, 'validFrom' => $from];
+}
+
+/**
+ * Free a seat. The days it was in force stay in force, so a missed shift stays
+ * missed: if today's slot has already started, today still counts. A booking
+ * that never took effect is simply removed.
+ */
+function endShiftSeat(array $row): string {
+    $today = date('Y-m-d');
+    $started = (int) date('w') === (int) $row['dayOfWeek'] && (int) strtotime($today . ' ' . $row['startTime']) <= time();
+    $to = $started ? date('Y-m-d', strtotime('+1 day')) : $today;
+    if (!empty($row['validFrom']) && $to <= (string) $row['validFrom']) {
+        db()->prepare("DELETE FROM `DriverShift` WHERE id = ?")->execute([$row['id']]);
+        return 'removed';
+    }
+    db()->prepare("UPDATE `DriverShift` SET isActive = 0, validTo = ?, updatedAt = NOW(3) WHERE id = ?")->execute([$to, $row['id']]);
+    return 'ended';
+}
+
+// ── ID card: stored OUTSIDE the web root, never by a public URL ──
+function privateFilesDir(): string {
+    return rtrim((string) (env('PRIVATE_DIR') ?: dirname(__DIR__, 2) . '/.private-files'), '/\\');
+}
+/** MISSING · PENDING · APPROVED · REJECTED, with the office's note. */
+function driverIdStatus(string $driverId, ?string $front, ?string $back): array {
+    $rev = null;
+    if (ensureShiftBookingSchema()) {
+        $st = db()->prepare("SELECT status, note, submittedAt, reviewedAt FROM `DriverIdReview` WHERE driverId = ?");
+        $st->execute([$driverId]);
+        $rev = $st->fetch() ?: null;
+    }
+    $has = trim((string) $front) !== '' && trim((string) $back) !== '';
+    $status = !$has ? 'MISSING' : (string) ($rev['status'] ?? 'PENDING');
+    // Rejected but re-uploaded since: back to the office.
+    return ['status' => $status, 'note' => $rev['note'] ?? null, 'hasFront' => trim((string) $front) !== '', 'hasBack' => trim((string) $back) !== ''];
+}
+
+// ── the drivers' portal: name + phone, then a 4-hour token for this page only ──
+function portalKey(): string {
+    $s = (string) (env('JWT_ACCESS_SECRET') ?: '');
+    if ($s === '') jsonErr('الخدمة مش متاحة حالياً', 503, 'NOT_READY');
+    // Its own key: a portal token is never a valid app/dashboard token.
+    return hash('sha256', "driver-portal\n" . $s);
+}
+function portalTokenFor(string $driverId): string {
+    $p = rtrim(strtr(base64_encode((string) json_encode(['d' => $driverId, 'exp' => time() + 4 * 3600])), '+/', '-_'), '=');
+    return $p . '.' . hash_hmac('sha256', $p, portalKey());
+}
+function portalDriver(): array {
+    $auth = (string) ($_SERVER['HTTP_AUTHORIZATION'] ?? $_SERVER['REDIRECT_HTTP_AUTHORIZATION'] ?? '');
+    $parts = explode('.', stripos($auth, 'Bearer ') === 0 ? trim(substr($auth, 7)) : '');
+    if (count($parts) !== 2 || !hash_equals(hash_hmac('sha256', $parts[0], portalKey()), $parts[1])) {
+        jsonErr('ادخل باسمك ورقمك تاني', 401, 'PORTAL_AUTH');
+    }
+    $p = json_decode((string) base64_decode(strtr($parts[0], '-_', '+/')), true) ?: [];
+    if ((int) ($p['exp'] ?? 0) < time() || empty($p['d'])) jsonErr('الجلسة خلصت — ادخل باسمك ورقمك تاني', 401, 'PORTAL_AUTH');
+    $st = db()->prepare("SELECT u.id, u.name, u.phone, u.isActive, u.createdAt, dp.vehicleType, dp.vehiclePlate, dp.governorate,
+                                dp.deliverySharePct, dp.idCardFrontUrl, dp.idCardBackUrl, dp.telegramChatId
+                           FROM `User` u JOIN `DriverProfile` dp ON dp.userId = u.id
+                          WHERE u.id = ? AND u.role = 'DRIVER' LIMIT 1");
+    $st->execute([(string) $p['d']]);
+    $d = $st->fetch();
+    if (!$d || !(int) $d['isActive']) jsonErr('الحساب ده مش متاح — كلّم الإدارة', 403, 'PORTAL_INACTIVE');
+    return $d;
+}
+/** Words of a person's name, spelled one way: «عبد الرحمن» = «عبدالرحمن», ى/ي, ة/ه, أ/ا. */
+function personNameWords(string $s): array {
+    $s = mb_strtolower(trim($s), 'UTF-8');
+    $s = preg_replace('/[\x{064B}-\x{065F}\x{0670}\x{0640}]/u', '', $s) ?? $s;
+    $s = strtr($s, ['أ' => 'ا', 'إ' => 'ا', 'آ' => 'ا', 'ى' => 'ي', 'ة' => 'ه', 'ؤ' => 'و', 'ئ' => 'ي']);
+    $s = preg_replace('/[^\p{L}\p{N}]+/u', ' ', $s) ?? $s;
+    $s = preg_replace('/(^|\s)(عبد|ابو)\s+/u', '$1$2', ' ' . $s) ?? $s;
+    return array_values(array_filter(explode(' ', trim($s)), fn($w) => $w !== ''));
+}
+/** The typed name fits the registered one: same first name, and every typed word is in it. */
+function personNameMatches(string $typed, string $registered): bool {
+    $t = personNameWords($typed); $r = personNameWords($registered);
+    if (!$t || !$r || $t[0] !== $r[0]) return false;
+    foreach ($t as $w) if (!in_array($w, $r, true)) return false;
+    return true;
+}
+/** Failed portal logins in the last hour: [same IP, same phone, all]. */
+function portalFails(string $ip, string $phone): array {
+    $d = rtDir();
+    if (!$d || !is_file($d . '/portal-fails')) return [0, 0, 0];
+    $cut = time() - 3600; $i = 0; $p = 0; $all = 0;
+    foreach (explode("\n", (string) @file_get_contents($d . '/portal-fails')) as $line) {
+        $x = explode(' ', trim($line));
+        if ((int) ($x[0] ?? 0) < $cut) continue;
+        $all++;
+        if (($x[1] ?? '') === $ip) $i++;
+        if ($phone !== '' && ($x[2] ?? '') === $phone) $p++;
+    }
+    return [$i, $p, $all];
+}
+function portalNoteFail(string $ip, string $phone): void {
+    if (!$d = rtDir()) return;
+    $cut = time() - 3600; $keep = [];
+    foreach (explode("\n", (string) @file_get_contents($d . '/portal-fails')) as $line) {
+        $line = trim($line);
+        if ($line !== '' && (int) explode(' ', $line)[0] >= $cut) $keep[] = $line;
+    }
+    $keep[] = time() . ' ' . str_replace(' ', '', $ip) . ' ' . ($phone !== '' ? $phone : '-');
+    rtWrite($d . '/portal-fails', implode("\n", array_slice($keep, -2000)));
+}
+function portalPayload(array $d): array {
+    $id = driverIdStatus($d['id'], $d['idCardFrontUrl'] ?? null, $d['idCardBackUrl'] ?? null);
+    $days = [];
+    foreach (SHIFT_DAYS_AR as $dow => $label) $days[] = ['dayOfWeek' => $dow, 'label' => $label];
+    return [
+        'driver' => [
+            'name' => $d['name'], 'phone' => $d['phone'],
+            'vehicleType' => $d['vehicleType'] ?: null, 'vehiclePlate' => $d['vehiclePlate'] ?: null,
+            'governorate' => $d['governorate'] ?: null,
+            'sharePct' => $d['deliverySharePct'] !== null ? (float) $d['deliverySharePct'] : null,
+            'joinedAt' => $d['createdAt'] ? substr((string) $d['createdAt'], 0, 10) : null,
+            'telegramLinked' => !empty($d['telegramChatId']),
+        ],
+        'idCard' => $id,
+        'rules' => shiftBookingRules(),
+        'days' => $days,
+        'today' => (int) date('w'),
+        'slots' => shiftSlotsWithSeats($d['id']),
+    ];
+}
+
+if ($method === 'POST' && $path === '/driver-portal/login') {
+    $b = readJsonBody();
+    $ip = passcodeClientIp();
+    $phone = normPhoneEg((string) ($b['phone'] ?? '')) ?? '';
+    [$byIp, $byPhone, $all] = portalFails($ip, $phone);
+    if ($byIp >= 12 || $byPhone >= 6 || $all >= 300) {
+        header('Retry-After: 3600');
+        jsonErr('محاولات كتير — استنى ساعة وجرّب تاني، أو كلّم الإدارة', 429, 'TOO_MANY');
+    }
+    $name = trim((string) ($b['name'] ?? ''));
+    if ($phone === '' || mb_strlen($name) < 2) jsonErr('اكتب اسمك ورقم موبايلك صح', 422, 'VALIDATION_ERROR');
+    $st = db()->prepare("SELECT u.id, u.name, u.isActive FROM `User` u JOIN `DriverProfile` dp ON dp.userId = u.id
+                          WHERE u.phone = ? AND u.role = 'DRIVER' LIMIT 1");
+    $st->execute([$phone]);
+    $u = $st->fetch();
+    // One answer for «no such phone» and «wrong name»: the page must not tell
+    // a stranger which numbers belong to our drivers.
+    if (!$u || !personNameMatches($name, (string) $u['name'])) {
+        portalNoteFail($ip, $phone);
+        jsonErr('الاسم أو الرقم مش مطابقين لبيانات أي مندوب عندنا — اكتب اسمك زي ما هو مسجّل، أو كلّم الإدارة', 401, 'NO_MATCH');
+    }
+    if (!(int) $u['isActive']) jsonErr('الحساب ده مش متاح — كلّم الإدارة', 403, 'PORTAL_INACTIVE');
+    jsonOk(['token' => portalTokenFor((string) $u['id']), 'expiresIn' => 4 * 3600]);
+}
+if ($method === 'GET' && $path === '/driver-portal/me') {
+    jsonOk(portalPayload(portalDriver()));
+}
+if ($method === 'POST' && $path === '/driver-portal/bookings') {
+    $d = portalDriver();
+    $R = shiftBookingRules();
+    if (!$R['open']) jsonErr('الحجز مقفول دلوقتي من الإدارة', 409, 'CLOSED');
+    if ($R['requireIdCard']) {
+        $id = driverIdStatus($d['id'], $d['idCardFrontUrl'], $d['idCardBackUrl']);
+        if ($id['status'] === 'MISSING') jsonErr('ارفع صورة بطاقتك (وش وضهر) الأول عشان تقدر تحجز', 409, 'ID_REQUIRED');
+        if ($id['status'] === 'REJECTED') jsonErr('صورة البطاقة اترفضت — ارفعها تاني الأول', 409, 'ID_REQUIRED');
+    }
+    $slotId = trim((string) (readJsonBody()['slotId'] ?? ''));
+    if ($slotId === '') jsonErr('اختار الوردية', 422, 'VALIDATION_ERROR');
+    $r = bookShiftSeat($slotId, (string) $d['id'], false);
+    jsonOk($r + ['me' => portalPayload($d)]);
+}
+if ($method === 'DELETE' && preg_match('#^/driver-portal/bookings/([^/]+)$#', $path, $m)) {
+    $d = portalDriver();
+    if (!shiftBookingRules()['open']) jsonErr('الحجز مقفول دلوقتي من الإدارة — كلّمهم لو محتاج تغيّر', 409, 'CLOSED');
+    if (!ensureShiftBookingSchema()) jsonErr('الحجز مش جاهز حالياً', 503, 'NOT_READY');
+    $st = db()->prepare("SELECT id, dayOfWeek, startTime, validFrom FROM `DriverShift` WHERE driverId = ? AND slotId = ? AND isActive = 1 LIMIT 1");
+    $st->execute([$d['id'], $m[1]]);
+    $row = $st->fetch();
+    if (!$row) jsonErr('الوردية دي مش محجوزة لك', 404, 'NOT_FOUND');
+    $how = endShiftSeat($row);
+    jsonOk(['released' => $how, 'me' => portalPayload($d)]);
+}
+if ($method === 'POST' && $path === '/driver-portal/id-card') {
+    $d = portalDriver();
+    if (!ensureShiftBookingSchema()) jsonErr('الخدمة مش جاهزة حالياً', 503, 'NOT_READY');
+    if (driverIdStatus($d['id'], $d['idCardFrontUrl'], $d['idCardBackUrl'])['status'] === 'APPROVED') {
+        jsonErr('بطاقتك اتراجعت واتقبلت خلاص — لو محتاج تغيّرها كلّم الإدارة', 409, 'ALREADY_APPROVED');
+    }
+    $safeId = preg_replace('/[^A-Za-z0-9_-]/', '', (string) $d['id']);
+    $dir = privateFilesDir() . '/id-cards/' . $safeId;
+    $saved = [];
+    foreach (['front' => 'idCardFrontUrl', 'back' => 'idCardBackUrl'] as $side => $col) {
+        $f = $_FILES[$side] ?? null;
+        if (!$f || ($f['error'] ?? UPLOAD_ERR_NO_FILE) === UPLOAD_ERR_NO_FILE) continue;
+        if (($f['error'] ?? 1) !== UPLOAD_ERR_OK) jsonErr('الصورة مارفعتش — جرّب تاني', 422, 'UPLOAD_FAILED');
+        if ((int) $f['size'] > 12 * 1048576) jsonErr('الصورة كبيرة قوي — صوّرها تاني', 422, 'FILE_TOO_LARGE');
+        $t = sniffUploadType((string) $f['tmp_name']);
+        if (!in_array($t, ['jpg', 'png', 'webp', 'heic'], true)) jsonErr('ارفع صورة (JPG أو PNG)', 422, 'BAD_FILE_TYPE');
+        if (!is_dir($dir) && !@mkdir($dir, 0700, true)) { error_log('[api.php] id-card dir not writable'); jsonErr('تعذّر حفظ الصورة', 500, 'UPLOAD_FAILED'); }
+        $name = $side . '-' . date('Ymd') . '-' . bin2hex(random_bytes(6)) . '.' . $t;
+        if (!@move_uploaded_file((string) $f['tmp_name'], $dir . '/' . $name)) jsonErr('تعذّر حفظ الصورة', 500, 'UPLOAD_FAILED');
+        $saved[$col] = 'private:id-cards/' . $safeId . '/' . $name;
+    }
+    if (!$saved) jsonErr('اختار صورة البطاقة', 422, 'MISSING');
+    $sets = implode(', ', array_map(fn($c) => "`$c` = ?", array_keys($saved)));
+    db()->prepare("UPDATE `DriverProfile` SET $sets, updatedAt = NOW(3) WHERE userId = ?")->execute([...array_values($saved), $d['id']]);
+    // The file it replaced, if it was ours, goes — an old ID photo is a liability, not an archive.
+    foreach ($saved as $col => $_) {
+        $old = (string) ($d[$col] ?? '');
+        if (str_starts_with($old, 'private:id-cards/' . $safeId . '/')) @unlink(privateFilesDir() . '/' . substr($old, 8));
+    }
+    db()->prepare("INSERT INTO `DriverIdReview` (driverId, status, note, submittedAt) VALUES (?, 'PENDING', NULL, NOW(3))
+                   ON DUPLICATE KEY UPDATE status = 'PENDING', note = NULL, submittedAt = NOW(3), reviewedById = NULL, reviewedAt = NULL")
+        ->execute([$d['id']]);
+    $d = array_merge($d, $saved);
+    jsonOk(['saved' => array_keys($saved), 'me' => portalPayload($d)]);
+}
+
+// ── the office side ──
+function requireShiftAdmin(): array {
+    $u = authUser();
+    if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
+    if (!ensureShiftBookingSchema()) jsonErr('جدول الحجز مش جاهز — راجع سجل السيرفر', 503, 'NOT_READY');
+    return $u;
+}
+if ($method === 'GET' && $path === '/admin/shift-booking') {
+    requireShiftAdmin();
+    $slots = shiftSlotsWithSeats(null, true);
+    $hours = [];
+    foreach ($slots as $s) foreach ($s['bookings'] as $b) $hours[$b['driverId']] = ($hours[$b['driverId']] ?? 0) + $s['hours'];
+    $drivers = [];
+    $rows = db()->query("SELECT u.id, u.name, u.phone, dp.idCardFrontUrl, dp.idCardBackUrl, r.status AS rStatus, r.note AS rNote, r.submittedAt
+                           FROM `User` u JOIN `DriverProfile` dp ON dp.userId = u.id
+                           LEFT JOIN `DriverIdReview` r ON r.driverId = u.id COLLATE utf8mb4_unicode_ci
+                          WHERE u.role = 'DRIVER' AND u.isActive = 1 ORDER BY u.name")->fetchAll();
+    foreach ($rows as $r) {
+        $has = trim((string) $r['idCardFrontUrl']) !== '' && trim((string) $r['idCardBackUrl']) !== '';
+        $drivers[] = [
+            'id' => $r['id'], 'name' => $r['name'], 'phone' => $r['phone'],
+            'weeklyHours' => round($hours[$r['id']] ?? 0, 1),
+            'idStatus' => !$has ? 'MISSING' : ($r['rStatus'] ?: 'PENDING'),
+            'idNote' => $r['rNote'], 'idSubmittedAt' => $r['submittedAt'],
+            'idFront' => $r['idCardFrontUrl'] ?: null, 'idBack' => $r['idCardBackUrl'] ?: null,
+        ];
+    }
+    $days = [];
+    foreach (SHIFT_DAYS_AR as $dow => $label) $days[] = ['dayOfWeek' => $dow, 'label' => $label];
+    jsonOk(['slots' => $slots, 'drivers' => $drivers, 'rules' => shiftBookingRules(), 'days' => $days,
+        'portalUrl' => rtrim((string) (env('SITE_URL') ?: 'https://deliverytamem.com'), '/') . '/captain/']);
+}
+if ($method === 'PUT' && $path === '/admin/shift-booking/rules') {
+    $u = requireShiftAdmin();
+    $b = readJsonBody();
+    $cur = shiftBookingRules();
+    $new = [
+        'maxHoursPerDay' => isset($b['maxHoursPerDay']) ? max(1, min(16, (int) $b['maxHoursPerDay'])) : $cur['maxHoursPerDay'],
+        'requireIdCard' => array_key_exists('requireIdCard', $b) ? (bool) $b['requireIdCard'] : $cur['requireIdCard'],
+        'open' => array_key_exists('open', $b) ? (bool) $b['open'] : $cur['open'],
+        'note' => array_key_exists('note', $b) ? mb_substr(trim((string) $b['note']), 0, 300) : $cur['note'],
+    ];
+    notifWriteSetting('shift_booking', $new, $u['sub'] ?? null);
+    jsonOk($new);
+}
+// New seats: {days:[0..6], startTime, endTime, capacity}. An identical open slot on a day is skipped.
+if ($method === 'POST' && $path === '/admin/shift-slots') {
+    requireShiftAdmin();
+    $b = readJsonBody();
+    $start = trim((string) ($b['startTime'] ?? '')); $end = trim((string) ($b['endTime'] ?? ''));
+    $cap = (int) ($b['capacity'] ?? 0);
+    $days = array_values(array_unique(array_filter(array_map('intval', (array) ($b['days'] ?? [])), fn($d) => $d >= 0 && $d <= 6)));
+    if (!hhmmOk($start) || !hhmmOk($end) || $start === $end) jsonErr('اكتب وقت بداية ونهاية صح', 422, 'VALIDATION_ERROR');
+    if ($cap < 1 || $cap > 50) jsonErr('عدد الأماكن من 1 لـ 50', 422, 'VALIDATION_ERROR');
+    if (!$days) jsonErr('اختار يوم واحد على الأقل', 422, 'VALIDATION_ERROR');
+    $dup = db()->prepare("SELECT 1 FROM `ShiftSlot` WHERE dayOfWeek = ? AND startTime = ? AND endTime = ? AND isActive = 1 LIMIT 1");
+    $ins = db()->prepare("INSERT INTO `ShiftSlot` (id, dayOfWeek, startTime, endTime, capacity, isActive, createdAt, updatedAt) VALUES (?,?,?,?,?,1,NOW(3),NOW(3))");
+    $n = 0;
+    foreach ($days as $dow) {
+        $dup->execute([$dow, $start, $end]);
+        if ($dup->fetch()) continue;
+        $ins->execute([newId(), $dow, $start, $end, $cap]); $n++;
+    }
+    jsonOk(['created' => $n]);
+}
+// The standard week: 08–12, 12–16, 16–20, 20–00 on every day that has no seats yet.
+if ($method === 'POST' && $path === '/admin/shift-slots/defaults') {
+    requireShiftAdmin();
+    $cap = (int) (readJsonBody()['capacity'] ?? 3);
+    if ($cap < 1 || $cap > 50) jsonErr('عدد الأماكن من 1 لـ 50', 422, 'VALIDATION_ERROR');
+    $have = array_map('intval', array_column(db()->query("SELECT DISTINCT dayOfWeek FROM `ShiftSlot` WHERE isActive = 1")->fetchAll(), 'dayOfWeek'));
+    $ins = db()->prepare("INSERT INTO `ShiftSlot` (id, dayOfWeek, startTime, endTime, capacity, isActive, createdAt, updatedAt) VALUES (?,?,?,?,?,1,NOW(3),NOW(3))");
+    $n = 0;
+    for ($dow = 0; $dow <= 6; $dow++) {
+        if (in_array($dow, $have, true)) continue;
+        foreach (SHIFT_DEFAULT_WINDOWS as [$s, $e]) { $ins->execute([newId(), $dow, $s, $e, $cap]); $n++; }
+    }
+    jsonOk(['created' => $n]);
+}
+/*
+ * Change a slot. Fewer seats than are taken is refused (free someone first).
+ * New hours apply from tomorrow: today's sitters keep today's hours, and past
+ * days keep the hours they were judged on.
+ */
+if ($method === 'PATCH' && preg_match('#^/admin/shift-slots/([^/]+)$#', $path, $m)) {
+    requireShiftAdmin();
+    $b = readJsonBody();
+    $st = db()->prepare("SELECT * FROM `ShiftSlot` WHERE id = ? AND isActive = 1"); $st->execute([$m[1]]);
+    $slot = $st->fetch();
+    if (!$slot) jsonErr('الوردية مش موجودة', 404, 'NOT_FOUND');
+    $c = db()->prepare("SELECT COUNT(*) FROM `DriverShift` WHERE slotId = ? AND isActive = 1"); $c->execute([$m[1]]);
+    $taken = (int) $c->fetchColumn();
+    $cap = isset($b['capacity']) ? (int) $b['capacity'] : (int) $slot['capacity'];
+    if ($cap < 1 || $cap > 50) jsonErr('عدد الأماكن من 1 لـ 50', 422, 'VALIDATION_ERROR');
+    if ($cap < $taken) jsonErr("فيه $taken مندوب حاجزين — شيل حد الأول قبل ما تقلّل الأماكن", 409, 'BELOW_TAKEN');
+    $start = isset($b['startTime']) ? trim((string) $b['startTime']) : $slot['startTime'];
+    $end = isset($b['endTime']) ? trim((string) $b['endTime']) : $slot['endTime'];
+    if (!hhmmOk($start) || !hhmmOk($end) || $start === $end) jsonErr('اكتب وقت بداية ونهاية صح', 422, 'VALIDATION_ERROR');
+    $pdo = db();
+    $pdo->beginTransaction();
+    try {
+        $pdo->prepare("UPDATE `ShiftSlot` SET capacity = ?, startTime = ?, endTime = ?, updatedAt = NOW(3) WHERE id = ?")->execute([$cap, $start, $end, $m[1]]);
+        $moved = 0;
+        if ($start !== $slot['startTime'] || $end !== $slot['endTime']) {
+            $tomorrow = date('Y-m-d', strtotime('+1 day'));
+            $rows = $pdo->prepare("SELECT * FROM `DriverShift` WHERE slotId = ? AND isActive = 1"); $rows->execute([$m[1]]);
+            foreach ($rows->fetchAll() as $r) {
+                if ((string) $r['validFrom'] >= $tomorrow) {
+                    $pdo->prepare("UPDATE `DriverShift` SET startTime = ?, endTime = ?, updatedAt = NOW(3) WHERE id = ?")->execute([$start, $end, $r['id']]);
+                } else {
+                    $pdo->prepare("UPDATE `DriverShift` SET isActive = 0, validTo = ?, updatedAt = NOW(3) WHERE id = ?")->execute([$tomorrow, $r['id']]);
+                    $pdo->prepare("INSERT INTO `DriverShift` (id, driverId, dayOfWeek, startTime, endTime, isActive, slotId, validFrom, createdAt, updatedAt) VALUES (?,?,?,?,?,1,?,?,NOW(3),NOW(3))")
+                        ->execute([newId(), $r['driverId'], $r['dayOfWeek'], $start, $end, $m[1], $tomorrow]);
+                }
+                $moved++;
+            }
+        }
+        $pdo->commit();
+    } catch (Throwable $e) {
+        if ($pdo->inTransaction()) $pdo->rollBack();
+        error_log('[api.php] shift slot update: ' . $e->getMessage());
+        jsonErr('تعذّر الحفظ', 500, 'SAVE_FAILED');
+    }
+    jsonOk(['ok' => true, 'moved' => $moved]);
+}
+// Remove a slot: everyone on it is freed (dated, like a driver cancelling).
+if ($method === 'DELETE' && preg_match('#^/admin/shift-slots/([^/]+)$#', $path, $m)) {
+    requireShiftAdmin();
+    $rows = db()->prepare("SELECT id, dayOfWeek, startTime, validFrom FROM `DriverShift` WHERE slotId = ? AND isActive = 1"); $rows->execute([$m[1]]);
+    $freed = 0;
+    foreach ($rows->fetchAll() as $r) { endShiftSeat($r); $freed++; }
+    db()->prepare("UPDATE `ShiftSlot` SET isActive = 0, updatedAt = NOW(3) WHERE id = ?")->execute([$m[1]]);
+    jsonOk(['deleted' => true, 'freed' => $freed]);
+}
+// The office seats a driver ({driverId}) — capacity still applies, the hours cap does not.
+if ($method === 'POST' && preg_match('#^/admin/shift-slots/([^/]+)/bookings$#', $path, $m)) {
+    requireShiftAdmin();
+    $driverId = trim((string) (readJsonBody()['driverId'] ?? ''));
+    $st = db()->prepare("SELECT 1 FROM `User` u JOIN `DriverProfile` dp ON dp.userId = u.id WHERE u.id = ? AND u.role = 'DRIVER' AND u.isActive = 1");
+    $st->execute([$driverId]);
+    if (!$st->fetch()) jsonErr('اختار مندوب', 422, 'VALIDATION_ERROR');
+    jsonOk(bookShiftSeat($m[1], $driverId, true));
+}
+if ($method === 'DELETE' && preg_match('#^/admin/shift-slots/([^/]+)/bookings/([^/]+)$#', $path, $m)) {
+    requireShiftAdmin();
+    $st = db()->prepare("SELECT id, dayOfWeek, startTime, validFrom FROM `DriverShift` WHERE slotId = ? AND driverId = ? AND isActive = 1 LIMIT 1");
+    $st->execute([$m[1], $m[2]]);
+    $row = $st->fetch();
+    if (!$row) jsonErr('المندوب مش حاجز الوردية دي', 404, 'NOT_FOUND');
+    jsonOk(['released' => endShiftSeat($row)]);
+}
+// ID card review: {status: APPROVED|REJECTED, note?}
+if ($method === 'POST' && preg_match('#^/admin/drivers/([^/]+)/id-review$#', $path, $m)) {
+    $u = requireShiftAdmin();
+    $b = readJsonBody();
+    $status = strtoupper(trim((string) ($b['status'] ?? '')));
+    if (!in_array($status, ['APPROVED', 'REJECTED'], true)) jsonErr('اختار قبول أو رفض', 422, 'VALIDATION_ERROR');
+    $note = mb_substr(trim((string) ($b['note'] ?? '')), 0, 255) ?: null;
+    if ($status === 'REJECTED' && $note === null) jsonErr('اكتب سبب الرفض عشان المندوب يعرف يصلّح إيه', 422, 'VALIDATION_ERROR');
+    $st = db()->prepare("SELECT dp.idCardFrontUrl, dp.idCardBackUrl FROM `DriverProfile` dp WHERE dp.userId = ?"); $st->execute([$m[1]]);
+    $p = $st->fetch();
+    if (!$p) jsonErr('المندوب مش موجود', 404, 'NOT_FOUND');
+    if (trim((string) $p['idCardFrontUrl']) === '' || trim((string) $p['idCardBackUrl']) === '') jsonErr('المندوب لسه مارفعش البطاقة كاملة', 409, 'ID_MISSING');
+    db()->prepare("INSERT INTO `DriverIdReview` (driverId, status, note, submittedAt, reviewedById, reviewedAt) VALUES (?,?,?,NULL,?,NOW(3))
+                   ON DUPLICATE KEY UPDATE status = VALUES(status), note = VALUES(note), reviewedById = VALUES(reviewedById), reviewedAt = NOW(3)")
+        ->execute([$m[1], $status, $note, $u['sub'] ?? null]);
+    jsonOk(['status' => $status]);
+}
+// A private file (an ID photo) for the office only — streamed, never cached, never public.
+if ($method === 'GET' && $path === '/admin/private-file') {
+    $u = authUser();
+    if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
+    $ref = (string) ($_GET['ref'] ?? '');
+    if (!preg_match('#^private:(id-cards/[A-Za-z0-9_-]+/[A-Za-z0-9_-]+\.(jpg|png|webp|heic))$#', $ref, $pm)) jsonErr('ملف غير صحيح', 422, 'BAD_REF');
+    $base = realpath(privateFilesDir());
+    $file = realpath(privateFilesDir() . '/' . $pm[1]);
+    if (!$base || !$file || !str_starts_with($file, $base . DIRECTORY_SEPARATOR) || !is_file($file)) jsonErr('الملف مش موجود', 404, 'NOT_FOUND');
+    while (ob_get_level() > 0) @ob_end_clean();
+    http_response_code(200);
+    header('Content-Type: ' . ['jpg' => 'image/jpeg', 'png' => 'image/png', 'webp' => 'image/webp', 'heic' => 'image/heic'][$pm[2]]);
+    header('Cache-Control: private, no-store');
+    header('X-Content-Type-Options: nosniff');
+    header('Content-Length: ' . filesize($file));
+    readfile($file);
+    exit;
+}
+
 // Today's board: every driver with scheduled-today, scheduled-now, and on-shift.
 if ($method === 'GET' && $path === '/admin/shifts/today') {
     $u = authUser(); if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
@@ -6778,10 +7359,10 @@ if ($method === 'GET' && $path === '/admin/shifts/today') {
     $out = [];
     $prevDow = ($dow + 6) % 7;
     foreach ($drivers as $d) {
-        $today = driverShiftsForDay($d['id'], $dow);
+        $today = driverShiftsForDay($d['id'], $dow, date('Y-m-d'));
         // Overnight shifts from yesterday that are still running past midnight —
         // the driver IS expected today (until the shift's end) because of them.
-        $carry = array_values(array_filter(driverShiftsForDay($d['id'], $prevDow), fn($s) => shiftIsOvernight($s['startTime'], $s['endTime'])));
+        $carry = array_values(array_filter(driverShiftsForDay($d['id'], $prevDow, date('Y-m-d', strtotime('-1 day'))), fn($s) => shiftIsOvernight($s['startTime'], $s['endTime'])));
         $scheduledNow = false;
         foreach ($today as $s) if (shiftCoversOwnDay($s['startTime'], $s['endTime'], $mins)) { $scheduledNow = true; break; }
         if (!$scheduledNow) foreach ($carry as $s) if (shiftSpillsInto($s['startTime'], $s['endTime'], $mins)) { $scheduledNow = true; break; }
@@ -9542,6 +10123,13 @@ if ($method === 'PATCH' && preg_match('#^/admin/drivers/([^/]+)$#', $path, $m)) 
         if (array_key_exists('avatarUrl', $b)) { $av = trim((string) $b['avatarUrl']); $us[] = '`avatarUrl` = ?'; $ua[] = $av !== '' ? $av : null; }
         if ($us) { $us[] = '`updatedAt` = NOW(3)'; $ua[] = $id; $pdo->prepare('UPDATE `User` SET ' . implode(',', $us) . ' WHERE id = ?')->execute($ua); }
         $dcols = tableColumns('DriverProfile'); $ds = []; $da = [];
+        // ID photos a driver uploaded from his page are private files; when the
+        // office replaces or removes one, its old file is deleted after commit.
+        $oldIds = [];
+        if (array_key_exists('idCardFrontUrl', $b) || array_key_exists('idCardBackUrl', $b)) {
+            $os = $pdo->prepare('SELECT idCardFrontUrl, idCardBackUrl FROM `DriverProfile` WHERE userId = ?'); $os->execute([$id]);
+            $oldIds = $os->fetch() ?: [];
+        }
         foreach (['vehicleType', 'vehiclePlate', 'nationalId', 'governorate', 'status', 'notes', 'vehicleImageUrl', 'idCardFrontUrl', 'idCardBackUrl'] as $f) {
             if (array_key_exists($f, $b) && isset($dcols[$f])) { $ds[] = "`$f` = ?"; $da[] = coerceForColumn($b[$f], $dcols[$f]); }
         }
@@ -9558,6 +10146,14 @@ if ($method === 'PATCH' && preg_match('#^/admin/drivers/([^/]+)$#', $path, $m)) 
         if ($pdo->inTransaction()) $pdo->rollBack();
         if ((int)($e->errorInfo[1] ?? 0) === 1062) jsonErr('رقم الهاتف مستخدم بالفعل', 409, 'DUPLICATE');
         error_log('[api.php] driver update: ' . $e->getMessage()); jsonErr('تعذّر التحديث', 422, 'UPDATE_FAILED');
+    }
+    $own = 'private:id-cards/' . preg_replace('/[^A-Za-z0-9_-]/', '', $id) . '/';
+    foreach (['idCardFrontUrl', 'idCardBackUrl'] as $f) {
+        $old = (string) ($oldIds[$f] ?? '');
+        if ($old !== '' && array_key_exists($f, $b) && (string) $b[$f] !== $old
+            && str_starts_with($old, $own) && preg_match('#^private:(id-cards/[A-Za-z0-9_-]+/[A-Za-z0-9_-]+\.(jpg|png|webp|heic))$#', $old, $om)) {
+            @unlink(privateFilesDir() . '/' . $om[1]);
+        }
     }
     $r = $pdo->prepare('SELECT * FROM `User` WHERE id = ?'); $r->execute([$id]);
     jsonOk(jsonizeRow($r->fetch()) ?: []);
@@ -9836,6 +10432,13 @@ if ($method === 'DELETE' && preg_match('#^/admin/drivers/([^/]+)$#', $path, $m))
             $pdo->prepare("DELETE FROM `User` WHERE id = ? AND role = 'DRIVER'")->execute([$id]);
         }
         $pdo->commit();
+        // His ID photos go with the profile: kept on disk they are only a liability.
+        try {
+            $idDir = privateFilesDir() . '/id-cards/' . preg_replace('/[^A-Za-z0-9_-]/', '', $id);
+            foreach (glob($idDir . '/*') ?: [] as $f) @unlink($f);
+            @rmdir($idDir);
+            if (ensureShiftBookingSchema()) $pdo->prepare('DELETE FROM `DriverIdReview` WHERE driverId = ?')->execute([$id]);
+        } catch (Throwable $e) { error_log('[api.php] driver delete id-card cleanup: ' . $e->getMessage()); }
     } catch (Throwable $e) {
         if ($pdo->inTransaction()) $pdo->rollBack();
         error_log('[api.php] driver delete: ' . $e->getMessage());

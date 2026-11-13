@@ -1,0 +1,533 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <!-- The drivers' own page: shared by link only, never indexed, never in the sitemap. -->
+    <meta name="robots" content="noindex, nofollow, noarchive" />
+    <meta name="googlebot" content="noindex, nofollow" />
+    <meta name="referrer" content="no-referrer" />
+    <meta name="theme-color" content="#e0301e" />
+    <title>صفحة الكابتن — تميم للتوصيل</title>
+    <link rel="icon" href="/favicon.png" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Cairo:wght@700;800;900&family=Tajawal:wght@400;500;700&display=swap"
+      rel="stylesheet"
+    />
+    <style>
+      :root {
+        --red: #e0301e;
+        --red-dark: #b82414;
+        --gold: #f2a93b;
+        --green: #15803d;
+        --green-bg: #e9f7ee;
+        --amber-bg: #fff6e5;
+        --amber: #9a5b00;
+        --ink: #2b2622;
+        --muted: #6b6461;
+        --surface: #fcf8f4;
+        --card: #ffffff;
+        --border: #e8ded4;
+        --seat: #eadfd5;
+      }
+      * { box-sizing: border-box; }
+      html { -webkit-text-size-adjust: 100%; }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        background: var(--surface);
+        color: var(--ink);
+        font-family: Tajawal, system-ui, sans-serif;
+        font-size: 15px;
+        line-height: 1.6;
+      }
+      .wrap { max-width: 560px; margin: 0 auto; padding: 0 16px 48px; }
+      header.hero {
+        background: linear-gradient(135deg, var(--red), var(--red-dark));
+        color: #fff;
+        padding: 22px 16px 26px;
+        text-align: center;
+        border-radius: 0 0 24px 24px;
+        margin-bottom: 16px;
+      }
+      header.hero .mark { font-size: 30px; line-height: 1; margin-bottom: 6px; }
+      h1, h2, h3 { font-family: Cairo, sans-serif; margin: 0; }
+      header.hero h1 { font-size: 21px; font-weight: 900; }
+      header.hero p { margin: 4px 0 0; font-size: 14px; opacity: 0.92; }
+      .card {
+        background: var(--card);
+        border: 1px solid var(--border);
+        border-radius: 18px;
+        padding: 16px;
+        margin-bottom: 14px;
+        box-shadow: 0 6px 18px rgba(36, 19, 16, 0.05);
+      }
+      .card h2 { font-size: 17px; font-weight: 800; margin-bottom: 10px; display: flex; align-items: center; gap: 8px; }
+      .num {
+        display: inline-grid; place-items: center; width: 24px; height: 24px; border-radius: 50%;
+        background: var(--red); color: #fff; font-size: 13px; font-weight: 800; flex-shrink: 0;
+      }
+      .num.done { background: var(--green); }
+      label { display: block; font-weight: 700; font-size: 14px; margin-bottom: 6px; }
+      .field { margin-bottom: 14px; }
+      input[type='text'], input[type='tel'] {
+        width: 100%; padding: 12px 14px; font-family: inherit; font-size: 16px;
+        border: 1px solid var(--border); border-radius: 12px; background: #fff; color: var(--ink); outline: none;
+      }
+      input:focus { border-color: var(--red); box-shadow: 0 0 0 3px rgba(224, 48, 30, 0.15); }
+      input[type='tel'] { direction: ltr; text-align: left; }
+      button { font-family: inherit; }
+      .btn {
+        display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+        padding: 12px 16px; border: 0; border-radius: 12px; background: var(--red); color: #fff;
+        font-family: Cairo, sans-serif; font-weight: 800; font-size: 15px; cursor: pointer; min-height: 46px;
+      }
+      .btn.block { width: 100%; }
+      .btn.ghost { background: transparent; color: var(--ink); border: 1px solid var(--border); }
+      .btn.small { min-height: 38px; padding: 8px 12px; font-size: 14px; }
+      .btn.green { background: var(--green); }
+      .btn:disabled { opacity: 0.5; cursor: default; }
+      .hint { font-size: 13px; color: var(--muted); margin: 8px 0 0; }
+      .msg { font-size: 14px; border-radius: 12px; padding: 10px 12px; margin: 0 0 12px; }
+      .msg.err { background: #fdecea; color: #8c1b10; }
+      .msg.ok { background: var(--green-bg); color: #15603a; }
+      .msg.warn { background: var(--amber-bg); color: var(--amber); }
+      dl.info { display: grid; grid-template-columns: auto 1fr; gap: 6px 12px; margin: 0; font-size: 14px; }
+      dl.info dt { color: var(--muted); }
+      dl.info dd { margin: 0; font-weight: 700; word-break: break-word; }
+      .badge { display: inline-block; padding: 2px 10px; border-radius: 999px; font-size: 12px; font-weight: 800; }
+      .b-missing { background: #fdecea; color: #8c1b10; }
+      .b-pending { background: var(--amber-bg); color: var(--amber); }
+      .b-approved { background: var(--green-bg); color: var(--green); }
+      .b-rejected { background: #fdecea; color: #8c1b10; }
+      .ids { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 10px 0; }
+      .idbox {
+        position: relative; aspect-ratio: 16 / 10; border: 2px dashed var(--border); border-radius: 14px;
+        display: grid; place-items: center; text-align: center; overflow: hidden; cursor: pointer; background: #fffaf6;
+        color: var(--muted); font-size: 13px; font-weight: 700;
+      }
+      .idbox img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+      .idbox input { display: none; }
+      .idbox .ic { font-size: 26px; display: block; }
+      .days { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 4px; margin: 4px -4px 12px; padding-inline: 4px; scrollbar-width: none; }
+      .days::-webkit-scrollbar { display: none; }
+      .day {
+        flex: 0 0 auto; padding: 8px 12px; border-radius: 12px; border: 1px solid var(--border); background: #fff;
+        font-weight: 800; font-size: 14px; cursor: pointer; color: var(--ink); position: relative;
+      }
+      .day.on { background: var(--red); border-color: var(--red); color: #fff; }
+      .day small { display: block; font-size: 11px; font-weight: 700; opacity: 0.8; }
+      .day .dot { position: absolute; top: 5px; inset-inline-start: 6px; width: 7px; height: 7px; border-radius: 50%; background: var(--green); }
+      .slot { border: 1px solid var(--border); border-radius: 14px; padding: 12px; margin-bottom: 10px; background: #fff; }
+      .slot.mine { border-color: var(--green); background: #f3fbf6; }
+      .slot.full:not(.mine) { opacity: 0.6; }
+      .slot .top { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+      .slot .time { font-family: Cairo, sans-serif; font-weight: 900; font-size: 17px; }
+      .slot .sub { font-size: 13px; color: var(--muted); }
+      .seats { display: flex; flex-wrap: wrap; gap: 5px; margin: 10px 0; align-items: center; }
+      .seat { width: 22px; height: 22px; border-radius: 6px 6px 3px 3px; background: var(--seat); position: relative; }
+      .seat.t { background: #b9aca2; }
+      .seat.me { background: var(--green); }
+      .seat::after { content: ''; position: absolute; left: 3px; right: 3px; bottom: -4px; height: 3px; border-radius: 2px; background: inherit; filter: brightness(0.85); }
+      .seats .more { font-size: 12px; color: var(--muted); font-weight: 700; }
+      .legend { display: flex; gap: 12px; font-size: 12px; color: var(--muted); margin-bottom: 10px; flex-wrap: wrap; }
+      .legend span { display: inline-flex; align-items: center; gap: 5px; }
+      .legend i { width: 12px; height: 12px; border-radius: 3px; display: inline-block; }
+      .mylist { margin: 0; padding: 0; list-style: none; }
+      .mylist li { display: flex; justify-content: space-between; gap: 8px; padding: 8px 0; border-bottom: 1px dashed var(--border); font-size: 14px; }
+      .mylist li:last-child { border-bottom: 0; }
+      .toast {
+        position: fixed; left: 50%; bottom: 18px; transform: translateX(-50%) translateY(20px); opacity: 0;
+        background: var(--ink); color: #fff; padding: 10px 16px; border-radius: 12px; font-size: 14px; max-width: calc(100% - 32px);
+        transition: all 0.2s; z-index: 50; text-align: center;
+      }
+      .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+      .toast.err { background: #8c1b10; }
+      .row { display: flex; gap: 8px; align-items: center; justify-content: space-between; }
+      .center { text-align: center; }
+      [hidden] { display: none !important; }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --surface: #1a1210; --card: #241a17; --ink: #f5ece4; --muted: #b4a79c; --border: #3a2b26; --seat: #3a2d28;
+          --green-bg: #12301f; --amber-bg: #3a2a10; --amber: #f5c26b;
+        }
+        input[type='text'], input[type='tel'] { background: #2e211d; }
+        .slot, .day { background: #2a1f1b; }
+        .slot.mine { background: #15291d; }
+        .idbox { background: #2a1f1b; }
+        .seat.t { background: #7c6b62; }
+        .msg.ok { color: #a7ebc0; }
+        .msg.err { background: #3a1612; color: #ffb9ad; }
+        .b-approved { color: #8be0aa; }
+      }
+    </style>
+  </head>
+  <body>
+    <header class="hero">
+      <div class="mark">🛵</div>
+      <h1 id="title">صفحة الكابتن</h1>
+      <p id="sub">بياناتك · صورة البطاقة · حجز الورديات</p>
+    </header>
+
+    <main class="wrap">
+      <!-- 1. who are you -->
+      <section id="login" class="card" hidden>
+        <h2>ادخل باسمك ورقمك</h2>
+        <div id="loginErr" class="msg err" hidden></div>
+        <form id="loginForm" autocomplete="on">
+          <div class="field">
+            <label for="name">اسمك زي ما هو مسجّل عندنا</label>
+            <input id="name" type="text" autocomplete="name" placeholder="مثال: محمد أحمد" />
+          </div>
+          <div class="field">
+            <label for="phone">رقم موبايلك</label>
+            <input id="phone" type="tel" inputmode="tel" autocomplete="tel" placeholder="01xxxxxxxxx" />
+          </div>
+          <button class="btn block" id="loginBtn" type="submit">دخول</button>
+        </form>
+        <p class="hint">الصفحة دي للمناديب المسجّلين في تميم بس. لو مش عارف تدخل، كلّم الإدارة.</p>
+        <a class="btn ghost block" id="waHelp" style="margin-top: 10px; text-decoration: none" href="#">كلّم الإدارة على واتساب</a>
+      </section>
+
+      <p id="loading" class="hint center">لحظة واحدة…</p>
+
+      <!-- 2. the driver's page -->
+      <div id="app" hidden>
+        <section class="card">
+          <h2><span class="num done">1</span> بياناتك عندنا</h2>
+          <dl class="info" id="info"></dl>
+          <p class="hint">لو فيه حاجة غلط في بياناتك كلّم الإدارة يعدّلوها.</p>
+        </section>
+
+        <section class="card" id="idCard">
+          <h2><span class="num" id="idNum">2</span> صورة البطاقة <span id="idBadge" class="badge"></span></h2>
+          <div id="idMsg" class="msg" hidden></div>
+          <button class="btn ghost small" id="idChange" hidden>غيّر الصور</button>
+          <div id="idForm">
+            <p class="hint" style="margin-top: 0">صوّر بطاقتك الشخصية وش وضهر، في مكان منوّر، والكلام باين وواضح.</p>
+            <div class="ids">
+              <label class="idbox" id="boxFront">
+                <input type="file" accept="image/*" id="fileFront" />
+                <span><span class="ic">🪪</span>وش البطاقة</span>
+              </label>
+              <label class="idbox" id="boxBack">
+                <input type="file" accept="image/*" id="fileBack" />
+                <span><span class="ic">🔄</span>ضهر البطاقة</span>
+              </label>
+            </div>
+            <button class="btn block" id="idSend" disabled>ارفع صور البطاقة</button>
+            <p class="hint">الصور بتوصل للإدارة بس، ومش بتظهر لأي حد تاني.</p>
+          </div>
+        </section>
+
+        <section class="card">
+          <h2><span class="num" id="bookNum">3</span> احجز ورديتك</h2>
+          <div id="ruleNote" class="msg warn" hidden></div>
+          <p class="hint" style="margin-top: 0" id="rulesText"></p>
+          <div id="bookLock" class="msg warn" hidden></div>
+          <div class="days" id="days"></div>
+          <div class="legend">
+            <span><i style="background: var(--seat)"></i>فاضي</span>
+            <span><i style="background: #b9aca2"></i>محجوز</span>
+            <span><i style="background: var(--green)"></i>بتاعك</span>
+          </div>
+          <div id="dayHours" class="hint" style="margin: 0 0 10px"></div>
+          <div id="slots"></div>
+        </section>
+
+        <section class="card">
+          <h2>ورديات الأسبوع بتاعتك</h2>
+          <ul class="mylist" id="mine"></ul>
+          <p class="hint">الحجز ثابت كل أسبوع لحد ما تلغيه. اليوم بيقفل الساعة 12 بالليل، واللي بعدها بيتحسب على اليوم اللي بعده.</p>
+        </section>
+
+        <button class="btn ghost block" id="logout">خروج</button>
+      </div>
+    </main>
+
+    <div class="toast" id="toast"></div>
+
+    <script>
+      (function () {
+        'use strict';
+        // Only a local dev host may point the page at another API (?api=…):
+        // on the real site a crafted link must never send a driver's name and
+        // phone anywhere but our own server.
+        var API = 'https://backendtamem.deliverytamem.com/api/v1';
+        var qs = new URLSearchParams(location.search);
+        if (/^(localhost|127\.0\.0\.1)$/.test(location.hostname) && qs.get('api')) API = qs.get('api');
+        var SUPPORT_WA = 'https://wa.me/201070750169?text=' + encodeURIComponent('السلام عليكم، أنا مندوب ومش عارف أدخل صفحة الكابتن.');
+        var KEY = 'tamem-captain';
+
+        var $ = function (id) { return document.getElementById(id); };
+        var state = { token: null, me: null, day: null, busy: false };
+        $('waHelp').href = SUPPORT_WA;
+
+        try { state.token = sessionStorage.getItem(KEY); } catch (e) {}
+
+        function toast(text, bad) {
+          var t = $('toast');
+          t.textContent = text;
+          t.className = 'toast show' + (bad ? ' err' : '');
+          clearTimeout(toast._t);
+          toast._t = setTimeout(function () { t.className = 'toast'; }, 3200);
+        }
+        function msgOf(j, fallback) {
+          var e = j && j.error;
+          return (e && (e.messageAr || e.message)) || fallback;
+        }
+        function call(method, path, body, isForm) {
+          var h = {};
+          if (state.token) h.Authorization = 'Bearer ' + state.token;
+          if (body && !isForm) h['Content-Type'] = 'application/json';
+          return fetch(API + path, { method: method, headers: h, body: body ? (isForm ? body : JSON.stringify(body)) : undefined })
+            .then(function (r) {
+              return r.json().catch(function () { return {}; }).then(function (j) {
+                if (r.status === 401 && path !== '/driver-portal/login') { signOut('الجلسة خلصت — ادخل تاني.'); throw new Error('auth'); }
+                if (!r.ok) throw new Error(msgOf(j, 'حصلت مشكلة — جرّب تاني.'));
+                return j.data;
+              });
+            }, function () { throw new Error('مفيش اتصال بالنت — جرّب تاني.'); });
+        }
+        function signOut(note) {
+          state.token = null; state.me = null;
+          try { sessionStorage.removeItem(KEY); } catch (e) {}
+          $('app').hidden = true; $('loading').hidden = true; $('login').hidden = false;
+          $('title').textContent = 'صفحة الكابتن';
+          $('sub').textContent = 'بياناتك · صورة البطاقة · حجز الورديات';
+          if (note) { $('loginErr').textContent = note; $('loginErr').hidden = false; }
+        }
+
+        // ── time & text helpers ──
+        function t12(hm) {
+          var h = parseInt(hm.slice(0, 2), 10), m = hm.slice(3, 5);
+          if (h === 0 && m === '00') return '12 بالليل';
+          var suf = h < 12 ? 'ص' : 'م';
+          var hh = h % 12 === 0 ? 12 : h % 12;
+          return hh + (m !== '00' ? ':' + m : '') + ' ' + suf;
+        }
+        function esc(s) {
+          return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+            return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+          });
+        }
+        function fmtDate(ymd) {
+          if (!ymd) return '';
+          var p = ymd.split('-');
+          return parseInt(p[2], 10) + '/' + parseInt(p[1], 10);
+        }
+
+        // ── render ──
+        function render() {
+          var me = state.me, d = me.driver;
+          var first = (d.name || '').split(' ')[0];
+          $('title').textContent = 'أهلاً يا كابتن ' + first;
+          $('sub').textContent = 'كمّل الخطوات تحت';
+          var rows = [
+            ['الاسم', d.name], ['الموبايل', String(d.phone || '').replace(/^\+20/, '0')], ['المركبة', d.vehicleType], ['رقم اللوحة', d.vehiclePlate],
+            ['المحافظة', d.governorate], ['نسبتك من التوصيل', d.sharePct != null ? d.sharePct + '٪' : null],
+            ['معانا من', d.joinedAt], ['تليجرام', d.telegramLinked ? 'مربوط ✓' : 'مش مربوط'],
+          ];
+          $('info').innerHTML = rows.filter(function (r) { return r[1]; }).map(function (r) {
+            return '<dt>' + esc(r[0]) + '</dt><dd' + (r[0] === 'الموبايل' ? ' dir="ltr" style="text-align:right"' : '') + '>' + esc(r[1]) + '</dd>';
+          }).join('');
+
+          // ID card
+          var id = me.idCard, st = id.status;
+          var B = { MISSING: ['b-missing', 'لسه مارفعتهاش'], PENDING: ['b-pending', 'مستنية مراجعة'], APPROVED: ['b-approved', 'اتقبلت ✓'], REJECTED: ['b-rejected', 'اترفضت'] }[st];
+          $('idBadge').className = 'badge ' + B[0];
+          $('idBadge').textContent = B[1];
+          $('idNum').className = 'num' + (st === 'APPROVED' || st === 'PENDING' ? ' done' : '');
+          var m = $('idMsg');
+          m.hidden = true;
+          if (st === 'REJECTED') { m.className = 'msg err'; m.textContent = 'الإدارة رفضت الصورة' + (id.note ? ': ' + id.note : '') + ' — صوّرها تاني وارفعها.'; m.hidden = false; }
+          if (st === 'PENDING') { m.className = 'msg ok'; m.textContent = 'وصلتنا صور بطاقتك والإدارة هتراجعها. تقدر تحجز ورديتك دلوقتي.'; m.hidden = false; }
+          if (st === 'APPROVED') { m.className = 'msg ok'; m.textContent = 'بطاقتك اتراجعت واتقبلت.'; m.hidden = false; }
+          // Waiting for review: the boxes fold away behind «غيّر الصور».
+          $('idForm').hidden = st === 'APPROVED' || (st === 'PENDING' && !state.idEdit);
+          $('idChange').hidden = !(st === 'PENDING' && !state.idEdit);
+          if (st === 'PENDING') $('idSend').textContent = 'ارفع الصور الجديدة بدلها';
+
+          // booking
+          var R = me.rules;
+          $('rulesText').textContent = 'كل وردية مكانها محدود زي كراسي الأتوبيس — اللي يحجز الأول ياخدها. تقدر تشتغل لحد ' + R.maxHoursPerDay + ' ساعات في اليوم (مثلاً ورديتين × 4 ساعات).';
+          $('ruleNote').hidden = !R.note; $('ruleNote').textContent = R.note || '';
+          var lock = '';
+          if (!R.open) lock = 'الحجز مقفول دلوقتي من الإدارة — تقدر تشوف ورديّاتك بس.';
+          else if (R.requireIdCard && (st === 'MISSING' || st === 'REJECTED')) lock = 'ارفع صورة البطاقة الأول (الخطوة 2) عشان تقدر تحجز.';
+          $('bookLock').hidden = !lock; $('bookLock').textContent = lock;
+          state.locked = !!lock;
+          var anyMine = me.slots.some(function (s) { return s.mine; });
+          $('bookNum').className = 'num' + (anyMine ? ' done' : '');
+          if (state.day === null) state.day = me.today;
+
+          $('days').innerHTML = me.days.map(function (x) {
+            var has = me.slots.some(function (s) { return s.dayOfWeek === x.dayOfWeek && s.mine; });
+            return '<button class="day' + (x.dayOfWeek === state.day ? ' on' : '') + '" data-d="' + x.dayOfWeek + '">' +
+              (has ? '<span class="dot"></span>' : '') + esc(x.label) + (x.dayOfWeek === me.today ? '<small>النهارده</small>' : '<small>&nbsp;</small>') + '</button>';
+          }).join('');
+
+          // Bring the chosen day into view (Friday sits off-screen on a phone).
+          // A relative scrollLeft works the same in RTL and LTR, and never
+          // scrolls the page itself.
+          var strip = $('days'), on = strip.querySelector('.day.on');
+          if (on) {
+            var sr = strip.getBoundingClientRect(), or = on.getBoundingClientRect();
+            strip.scrollLeft += (or.left + or.width / 2) - (sr.left + sr.width / 2);
+          }
+
+          var list = me.slots.filter(function (s) { return s.dayOfWeek === state.day; });
+          var mineH = list.reduce(function (a, s) { return a + (s.mine ? s.hours : 0); }, 0);
+          $('dayHours').textContent = list.length ? 'حاجز ' + mineH + ' من ' + R.maxHoursPerDay + ' ساعات اليوم ده' : '';
+          $('slots').innerHTML = list.length ? list.map(function (s) {
+            var full = s.taken >= s.capacity;
+            var seats = '', shown = Math.min(s.capacity, 12);
+            var others = s.taken - (s.mine ? 1 : 0);
+            for (var i = 0; i < shown; i++) {
+              var cls = i === 0 && s.mine ? 'seat me' : i < (s.mine ? 1 : 0) + others ? 'seat t' : 'seat';
+              seats += '<span class="' + cls + '"></span>';
+            }
+            if (s.capacity > shown) seats += '<span class="more">+' + (s.capacity - shown) + '</span>';
+            var free = s.capacity - s.taken;
+            var btn;
+            if (s.mine) btn = '<button class="btn ghost small" data-cancel="' + s.id + '">الغي الحجز</button>';
+            else if (full) btn = '<button class="btn small" disabled>مكتملة</button>';
+            else btn = '<button class="btn small green" data-book="' + s.id + '"' + (state.locked ? ' disabled' : '') + '>احجز</button>';
+            return '<div class="slot' + (s.mine ? ' mine' : '') + (full ? ' full' : '') + '">' +
+              '<div class="top"><div><div class="time">' + t12(s.startTime) + ' ← ' + t12(s.endTime) + '</div>' +
+              '<div class="sub">' + s.hours + ' ساعات · ' + (s.mine ? 'بتاعتك' + (s.mineFrom ? ' (من ' + fmtDate(s.mineFrom) + ')' : '') : free > 0 ? 'فاضي ' + free + ' من ' + s.capacity : 'مكتملة') + '</div></div>' + btn + '</div>' +
+              '<div class="seats">' + seats + '</div></div>';
+          }).join('') : '<p class="hint">مفيش ورديات متاحة اليوم ده.</p>';
+
+          var dayName = {};
+          me.days.forEach(function (x) { dayName[x.dayOfWeek] = x.label; });
+          var mine = me.slots.filter(function (s) { return s.mine; });
+          $('mine').innerHTML = mine.length ? me.days.map(function (x) {
+            return mine.filter(function (s) { return s.dayOfWeek === x.dayOfWeek; }).map(function (s) {
+              return '<li><b>' + esc(dayName[s.dayOfWeek]) + '</b><span>' + t12(s.startTime) + ' ← ' + t12(s.endTime) + '</span></li>';
+            }).join('');
+          }).join('') : '<li><span class="hint" style="margin:0">لسه ماحجزتش أي وردية.</span></li>';
+        }
+
+        function load() {
+          $('loading').hidden = false;
+          return call('GET', '/driver-portal/me').then(function (me) {
+            state.me = me;
+            $('loading').hidden = true; $('login').hidden = true; $('app').hidden = false;
+            render();
+          }).catch(function (e) {
+            if (e.message !== 'auth') { $('loading').hidden = true; toast(e.message, true); if (!state.me) signOut(e.message); }
+          });
+        }
+
+        // ── login ──
+        $('loginForm').addEventListener('submit', function (e) {
+          e.preventDefault();
+          var name = $('name').value.trim(), phone = $('phone').value.trim();
+          $('loginErr').hidden = true;
+          if (name.length < 2 || phone.replace(/\D/g, '').length < 10) {
+            $('loginErr').textContent = 'اكتب اسمك ورقم موبايلك صح.'; $('loginErr').hidden = false; return;
+          }
+          $('loginBtn').disabled = true; $('loginBtn').textContent = 'لحظة…';
+          call('POST', '/driver-portal/login', { name: name, phone: phone }).then(function (r) {
+            state.token = r.token;
+            try { sessionStorage.setItem(KEY, r.token); } catch (e2) {}
+            return load();
+          }).catch(function (err) {
+            $('loginErr').textContent = err.message; $('loginErr').hidden = false;
+          }).then(function () { $('loginBtn').disabled = false; $('loginBtn').textContent = 'دخول'; });
+        });
+        $('logout').addEventListener('click', function () { signOut(); });
+
+        // ── day tabs & seats ──
+        $('days').addEventListener('click', function (e) {
+          var b = e.target.closest('[data-d]');
+          if (!b) return;
+          state.day = parseInt(b.getAttribute('data-d'), 10);
+          render();
+        });
+        $('slots').addEventListener('click', function (e) {
+          var b = e.target.closest('[data-book],[data-cancel]');
+          if (!b || state.busy) return;
+          var book = b.getAttribute('data-book'), cancel = b.getAttribute('data-cancel');
+          if (cancel && !confirm('متأكد إنك عايز تلغي الوردية دي؟ مكانها هيبقى متاح لغيرك.')) return;
+          state.busy = true; b.disabled = true;
+          (book ? call('POST', '/driver-portal/bookings', { slotId: book }) : call('DELETE', '/driver-portal/bookings/' + encodeURIComponent(cancel)))
+            .then(function (r) {
+              state.me = r.me; render();
+              toast(book ? 'اتحجزت ✓ — ' + (r.validFrom ? 'تبدأ من ' + fmtDate(r.validFrom) : '') : 'اتلغى الحجز');
+            })
+            .catch(function (err) {
+              if (err.message === 'auth') return;
+              toast(err.message, true);
+              load();
+            })
+            .then(function () { state.busy = false; });
+        });
+
+        // ── ID card ──
+        var files = { front: null, back: null };
+        function pick(side, input, box) {
+          input.addEventListener('change', function () {
+            var f = input.files && input.files[0];
+            if (!f) return;
+            if (!/^image\//.test(f.type) && !/\.(jpe?g|png|webp|heic)$/i.test(f.name)) { toast('اختار صورة', true); return; }
+            shrink(f).then(function (blob) {
+              files[side] = blob;
+              var old = box.querySelector('img');
+              if (old) old.remove();
+              var img = document.createElement('img');
+              img.alt = '';
+              img.src = URL.createObjectURL(blob);
+              box.appendChild(img);
+              var st = state.me && state.me.idCard;
+              var needBoth = !st || !st.hasFront || !st.hasBack || st.status === 'REJECTED';
+              $('idSend').disabled = needBoth ? !(files.front && files.back) : !(files.front || files.back);
+            });
+          });
+        }
+        // Phone photos are 3–8 MB; 1600px is plenty to read an ID and uploads
+        // on a weak connection. Anything the browser cannot draw goes as-is.
+        function shrink(file) {
+          return new Promise(function (resolve) {
+            var url = URL.createObjectURL(file), img = new Image();
+            img.onload = function () {
+              var max = 1600, w = img.naturalWidth, h = img.naturalHeight, k = Math.min(1, max / Math.max(w, h));
+              var c = document.createElement('canvas');
+              c.width = Math.round(w * k); c.height = Math.round(h * k);
+              c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+              URL.revokeObjectURL(url);
+              c.toBlob(function (b) { resolve(b && b.size > 0 ? b : file); }, 'image/jpeg', 0.85);
+            };
+            img.onerror = function () { URL.revokeObjectURL(url); resolve(file); };
+            img.src = url;
+          });
+        }
+        pick('front', $('fileFront'), $('boxFront'));
+        pick('back', $('fileBack'), $('boxBack'));
+        $('idChange').addEventListener('click', function () { state.idEdit = true; render(); });
+        $('idSend').addEventListener('click', function () {
+          var fd = new FormData();
+          if (files.front) fd.append('front', files.front, 'front.jpg');
+          if (files.back) fd.append('back', files.back, 'back.jpg');
+          $('idSend').disabled = true; $('idSend').textContent = 'جاري الرفع…';
+          call('POST', '/driver-portal/id-card', fd, true).then(function (r) {
+            files = { front: null, back: null };
+            state.idEdit = false;
+            ['boxFront', 'boxBack'].forEach(function (b) { var i = $(b).querySelector('img'); if (i) i.remove(); });
+            $('fileFront').value = ''; $('fileBack').value = '';
+            state.me = r.me; render();
+            toast('وصلت صور البطاقة ✓');
+          }).catch(function (err) {
+            if (err.message !== 'auth') toast(err.message, true);
+            $('idSend').disabled = false;
+          }).then(function () { if ($('idSend').textContent === 'جاري الرفع…') $('idSend').textContent = 'ارفع صور البطاقة'; });
+        });
+
+        if (state.token) load(); else { $('loading').hidden = true; $('login').hidden = false; }
+      })();
+    </script>
+  </body>
+</html>

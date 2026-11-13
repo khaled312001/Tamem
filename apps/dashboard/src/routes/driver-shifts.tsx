@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
+  Armchair,
   CalendarDays,
   Clock,
   Copy,
@@ -21,6 +22,7 @@ import { Dialog } from '../components/ui/Dialog.js';
 import { api } from '../lib/api.js';
 import { SearchInput } from '../components/ui/Input.js';
 import { IncentiveRulesPanel } from './driver-incentives.js';
+import { ShiftBookingPanel } from './shift-booking.js';
 
 // Arabic week, Saturday-first. dayOfWeek matches PHP 'w' (0=Sun … 6=Sat).
 const DAYS: { d: number; l: string }[] = [
@@ -79,7 +81,9 @@ function sinceLabel(iso: string | null): string {
 }
 
 export function DriverShiftsPage() {
-  const [tab, setTab] = useState<'today' | 'week' | 'incentives'>('today');
+  const [tab, setTab] = useState<'today' | 'week' | 'booking' | 'incentives'>(() =>
+    new URLSearchParams(window.location.search).get('tab') === 'booking' ? 'booking' : 'today',
+  );
   return (
     <div className="mx-auto max-w-5xl space-y-4">
       <div className="flex items-center gap-2 text-xl font-black">
@@ -92,11 +96,22 @@ export function DriverShiftsPage() {
         <TabBtn active={tab === 'week'} onClick={() => setTab('week')}>
           <CalendarDays className="h-4 w-4" /> الجدول الأسبوعي
         </TabBtn>
+        <TabBtn active={tab === 'booking'} onClick={() => setTab('booking')}>
+          <Armchair className="h-4 w-4" /> حجز الأماكن
+        </TabBtn>
         <TabBtn active={tab === 'incentives'} onClick={() => setTab('incentives')}>
           <Trophy className="h-4 w-4" /> البونص والخصومات
         </TabBtn>
       </div>
-      {tab === 'today' ? <TodayBoard /> : tab === 'week' ? <WeeklyGrid /> : <IncentiveRulesPanel />}
+      {tab === 'today' ? (
+        <TodayBoard />
+      ) : tab === 'week' ? (
+        <WeeklyGrid />
+      ) : tab === 'booking' ? (
+        <ShiftBookingPanel />
+      ) : (
+        <IncentiveRulesPanel />
+      )}
     </div>
   );
 }

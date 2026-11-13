@@ -31,6 +31,7 @@ import { EmptyState, TableSkeleton } from '../components/ui/Skeleton.js';
 import { api } from '../lib/api.js';
 import { useDebounced } from '../lib/useListQuery.js';
 import { uploadFile } from '../lib/uploadFile.js';
+import { PrivateImage } from './shift-booking.js';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Row = any;
@@ -108,7 +109,15 @@ function ImageUploadField({
         htmlFor={inputId}
         className={`relative ${box} w-full rounded-xl border-2 border-dashed border-border overflow-hidden flex items-center justify-center cursor-pointer bg-muted/30 hover:border-brand-red/60 transition`}
       >
-        {value ? (
+        {value.startsWith('private:') ? (
+          // A photo the driver uploaded from his page lives off the public web.
+          <PrivateImage
+            refId={value}
+            alt={label}
+            link={false}
+            className="w-full h-full object-cover"
+          />
+        ) : value ? (
           <img src={value} alt={label} className="w-full h-full object-cover" />
         ) : (
           <div className="flex flex-col items-center gap-1 text-muted-foreground">
