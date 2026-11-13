@@ -2409,12 +2409,31 @@ if ($method === 'POST' && $path === '/internal/alerts/sweep') {
 //   queue/*.json → we write outgoing messages {to, text}; bridge sends + deletes
 //   control/*.json → we write {action:'logout'} etc.
 function waDir(): string { $d = __DIR__ . '/uploads/.wa'; if (!is_dir($d)) @mkdir($d, 0755, true); return $d; }
+// More than one number. 'main' is the original session (uploads/.wa itself);
+// every extra line has its own folder under uploads/.wa/lines/<id> with the
+// same layout (status.json, queue/, control/, dead/). See wa-bridge.js.
+function waLineId(string $id): ?string {
+    return ($id === 'main' || preg_match('/^[a-z0-9]{6,16}$/', $id)) ? $id : null;
+}
+function waLineDir(string $line): string {
+    if ($line === 'main') return waDir();
+    $d = waDir() . '/lines/' . $line;
+    if (!is_dir($d)) @mkdir($d, 0755, true);
+    return $d;
+}
 // Queue an outgoing WhatsApp message for the Baileys bridge to send.
-function waEnqueue(?string $to, string $text): void {
+//   $opt['line']      which number sends it: 'main' (default) or an extra line id
+//   $opt['staff']     true = staff/oversight (no per-number cap), false = customer
+//   $opt['expiresAt'] ms epoch; the bridge drops it if it could not go out by then
+//   $opt['bulk']      an offer broadcast: slow lane, daily cap, daytime only
+//   $opt['image']     absolute path or URL of a picture to send with the text
+function waEnqueue(?string $to, string $text, array $opt = []): bool {
     $to = trim((string)$to);
-    if ($to === '' || $text === '') return;
+    if ($to === '' || $text === '') return false;
     $dir = waDir();
-    @mkdir($dir . '/queue', 0755, true);
+    $line = waLineId((string) ($opt['line'] ?? 'main')) ?? 'main';
+    $qdir = waLineDir($line) . '/queue';
+    @mkdir($qdir, 0755, true);
     @mkdir($dir . '/dedupe', 0755, true);
     // Idempotency. The same (recipient, text) within a short window is a
     // DUPLICATE TRIGGER — a double-clicked button, a status change whose handler
@@ -2423,24 +2442,32 @@ function waEnqueue(?string $to, string $text): void {
     // flow re-sends identical text to the same number within seconds (OTPs embed
     // a unique code, so they never collide). Drop the repeat.
     $key = hash('sha256', $to . '|' . $text);
-    $marker = $dir . '/dedupe/' . $key . '.txt';
+    $bulk = !empty($opt['bulk']);
     $now = time();
     $TTL = 180; // 3 minutes
-    $last = @file_get_contents($marker);
-    if ($last !== false && is_numeric($last) && ($now - (int) $last) < $TTL) {
-        return; // identical message already enqueued moments ago — skip
-    }
-    @file_put_contents($marker, (string) $now);
-    // Occasional cheap GC so markers don't accumulate forever.
-    if (random_int(1, 50) === 1) {
-        foreach (glob($dir . '/dedupe/*.txt') ?: [] as $f) {
-            if (($now - (int) @filemtime($f)) > $TTL) @unlink($f);
+    // A broadcast is de-duplicated by its builder (one row per number); a
+    // marker file per recipient would only litter dedupe/ by the thousand.
+    if (!$bulk) {
+        $marker = $dir . '/dedupe/' . $key . '.txt';
+        $last = @file_get_contents($marker);
+        if ($last !== false && is_numeric($last) && ($now - (int) $last) < $TTL) {
+            return false; // identical message already enqueued moments ago — skip
+        }
+        @file_put_contents($marker, (string) $now);
+        // Occasional cheap GC so markers don't accumulate forever.
+        if (random_int(1, 50) === 1) {
+            foreach (glob($dir . '/dedupe/*.txt') ?: [] as $f) {
+                if (($now - (int) @filemtime($f)) > $TTL) @unlink($f);
+            }
         }
     }
     // The bridge also honours this key as a second line of defence against a
     // send that delivered but threw (timeout) and would otherwise be retried.
-    @file_put_contents($dir . '/queue/' . bin2hex(random_bytes(8)) . '.json',
-        json_encode(['to' => $to, 'text' => $text, 'dedupe' => $key], JSON_UNESCAPED_UNICODE));
+    $msg = ['to' => $to, 'text' => $text, 'dedupe' => $key];
+    foreach (['staff', 'expiresAt', 'image'] as $k) if (array_key_exists($k, $opt) && $opt[$k] !== null) $msg[$k] = $opt[$k];
+    if ($bulk) $msg['bulk'] = true;
+    return (bool) @file_put_contents($qdir . '/' . ($bulk ? 'b-' : '') . bin2hex(random_bytes(8)) . '.json',
+        json_encode($msg, JSON_UNESCAPED_UNICODE));
 }
 function orderStatusLabelAr(string $s): string {
     return [
@@ -3901,6 +3928,12 @@ function notifyOrderParties(string $orderId, string $status, ?string $reason = n
             notifyUser((string) $o['customerId'], 'ORDER_STATUS', $custPushAr[0], $custPushAr[0], $custPushAr[1], $custPushAr[1],
                 ['orderId' => $orderId, 'orderNumber' => $no, 'screen' => 'OrderTracking', 'status' => $status]);
         }
+        // ── CUSTOMER WhatsApp: the ONE order confirmation (once per order, from
+        // the number the admin picked). Every other update stays push + email.
+        if (in_array($status, ['ACCEPTED', 'DRIVER_ASSIGNED', 'PICKED_UP'], true)) {
+            $cl = waSendOrderConfirm($orderId, $o, $ctx);
+            if ($cl) $log[] = $cl;
+        }
 
         // ── DRIVER ── NO private message any more. The action buttons live on
         // the group card itself (see the OVERSIGHT block below), and the assigned
@@ -4002,12 +4035,16 @@ function notifyOrderParties(string $orderId, string $status, ?string $reason = n
     }
     return $log;
 }
-function waStatus(): array {
-    $f = waDir() . '/status.json';
+function waStatus(string $line = 'main'): array {
+    $ldir = waLineDir($line);
+    $f = $ldir . '/status.json';
     $j = is_file($f) ? json_decode((string) @file_get_contents($f), true) : null;
+    $pending = count(glob($ldir . '/queue/*.json') ?: []);
+    $pendingBulk = count(glob($ldir . '/queue/b-*.json') ?: []);
     if (!is_array($j)) {
-        return ['status' => 'disconnected', 'qrDataUrl' => null, 'phone' => null, 'startedAt' => null,
-                'lastError' => 'خدمة الواتساب لسه بتشتغل… لو استمر، حدّث الصفحة بعد دقيقة.'];
+        return ['status' => $line === 'main' ? 'disconnected' : 'connecting', 'qrDataUrl' => null, 'phone' => null, 'startedAt' => null,
+                'pendingMessages' => $pending, 'pendingBulk' => $pendingBulk, 'bulkSentToday' => 0, 'downForMinutes' => 0,
+                'lastError' => $line === 'main' ? 'خدمة الواتساب لسه بتشتغل… لو استمر، حدّث الصفحة بعد دقيقة.' : null];
     }
     // Bridge heartbeats every ~15s; if the file is stale the process is down.
     $downMs = time() * 1000 - (int) ($j['ts'] ?? 0);
@@ -4016,7 +4053,6 @@ function waStatus(): array {
     // admin should see that nothing is lost — and how long it has really been
     // down. The old copy promised "back in a minute", which was wrong whenever
     // the reviver was late.
-    $pending = count(glob(waDir() . '/queue/*.json') ?: []);
     $mins = (int) floor(max(0, $downMs) / 60000);
     $since = $mins < 1 ? 'أقل من دقيقة' : ($mins < 60 ? "$mins دقيقة" : floor($mins / 60) . ' ساعة و' . ($mins % 60) . ' دقيقة');
     $downMsg = "خدمة الواتساب متوقفة منذ $since — بتشتغل تلقائياً."
@@ -4027,6 +4063,9 @@ function waStatus(): array {
         'phone' => $j['phone'] ?? null,
         'startedAt' => $j['startedAt'] ?? null,
         'pendingMessages' => $pending,
+        'pendingBulk' => $pendingBulk,
+        // The bridge counts in Cairo days, like PHP here.
+        'bulkSentToday' => (($j['bulkDay'] ?? '') === date('Y-m-d')) ? (int) ($j['bulkSentToday'] ?? 0) : 0,
         'downForMinutes' => $stale ? $mins : 0,
         'lastError' => $stale ? $downMsg : ($j['lastError'] ?? null),
     ];
@@ -4058,6 +4097,339 @@ if ($method === 'POST' && $path === '/admin/whatsapp/start') {
     // The bridge always runs and shows a QR when unauthenticated, so "start"
     // just returns the current status; the page then polls for the QR.
     jsonOk(waStatus());
+}
+
+// ═══ WhatsApp lines: more than one number ═══════════════════════════════
+// The Setting `whatsapp_lines` is the source of truth; uploads/.wa/lines.json
+// is the copy the bridge reads (it starts a session per listed line).
+//   lines[]  {id, label, offers, bulkPerDay, createdAt}   extra numbers
+//   main     {offers, bulkPerDay}                          the original number
+//   confirm  {enabled, line, text}   the ONE WhatsApp message a customer gets
+//                                    per order, and which number sends it
+//   removed[] ids deleted by an admin: only these get unlinked and wiped
+const WA_MAX_LINES = 5;
+const WA_CONFIRM_DEFAULT = "أهلاً {{customerName}} 👋\nطلبك رقم #{{orderNumber}} اتأكد ✅\nالإجمالي: {{price}}\nالعنوان: {{deliveryAddress}}\nهنبلغك أول ما يتحرك. شكراً إنك اخترت تميم 🧡";
+const WA_OPTOUT_FOOTER = "لو مش عايز توصلك عروض تاني ابعت كلمة «إيقاف»";
+function waBulkCap($v): int { $n = (int) ($v ?? 80); return max(10, min(300, $n > 0 ? $n : 80)); }
+function waLinesCfg(): array {
+    $c = notifReadSetting('whatsapp_lines');
+    $lines = [];
+    foreach ((array) ($c['lines'] ?? []) as $l) {
+        $id = waLineId((string) ($l['id'] ?? ''));
+        if (!$id || $id === 'main') continue;
+        $lines[] = [
+            'id' => $id,
+            'label' => mb_substr(trim((string) ($l['label'] ?? '')), 0, 40) ?: 'رقم إضافي',
+            'offers' => !empty($l['offers']),
+            'bulkPerDay' => waBulkCap($l['bulkPerDay'] ?? null),
+            'createdAt' => $l['createdAt'] ?? null,
+        ];
+    }
+    $main = (array) ($c['main'] ?? []);
+    $cf = (array) ($c['confirm'] ?? []);
+    $line = waLineId((string) ($cf['line'] ?? 'main')) ?? 'main';
+    if ($line !== 'main' && !in_array($line, array_column($lines, 'id'), true)) $line = 'main';
+    return [
+        'lines' => $lines,
+        'main' => ['offers' => !empty($main['offers']), 'bulkPerDay' => waBulkCap($main['bulkPerDay'] ?? null)],
+        'confirm' => ['enabled' => !empty($cf['enabled']), 'line' => $line, 'text' => (string) ($cf['text'] ?? '')],
+        'removed' => array_values(array_filter((array) ($c['removed'] ?? []), fn($x) => is_string($x) && waLineId($x) && $x !== 'main')),
+    ];
+}
+function waSaveLinesCfg(array $cfg, ?string $uid): void {
+    $cfg['removed'] = array_slice(array_values(array_unique($cfg['removed'] ?? [])), -20);
+    notifWriteSetting('whatsapp_lines', $cfg, $uid);
+    $out = ['ts' => (int) (microtime(true) * 1000), 'main' => ['bulkPerDay' => $cfg['main']['bulkPerDay']],
+            'lines' => array_map(fn($l) => ['id' => $l['id'], 'bulkPerDay' => $l['bulkPerDay']], $cfg['lines']),
+            'removed' => $cfg['removed']];
+    // temp file + rename: the bridge never reads a half-written list.
+    $tmp = waDir() . '/lines.json.' . bin2hex(random_bytes(3));
+    if (@file_put_contents($tmp, json_encode($out)) !== false) @rename($tmp, waDir() . '/lines.json');
+}
+function waLineLabel(array $cfg, string $id): string {
+    if ($id === 'main') return 'الرقم الأساسي';
+    foreach ($cfg['lines'] as $l) if ($l['id'] === $id) return $l['label'];
+    return $id;
+}
+/** Numbers that answered an offer with «إيقاف» (the bridge records them). */
+function waOptOuts(): array {
+    $set = [];
+    foreach (@file(waDir() . '/optout.txt', FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: [] as $d) {
+        $p = normPhoneEg('+' . preg_replace('/\D/', '', $d));
+        if ($p) $set[$p] = true;
+    }
+    return $set;
+}
+function waRequireSuper(): array {
+    $u = authUser();
+    if (($u['role'] ?? '') !== 'SUPER_ADMIN') jsonErr('الإعداد ده للسوبر أدمن بس', 403, 'FORBIDDEN');
+    return $u;
+}
+function waLinesPayload(): array {
+    $cfg = waLinesCfg();
+    $rows = [['id' => 'main', 'label' => 'الرقم الأساسي', 'main' => true, 'offers' => $cfg['main']['offers'],
+              'bulkPerDay' => $cfg['main']['bulkPerDay'], 'createdAt' => null] + waStatus('main')];
+    foreach ($cfg['lines'] as $l) $rows[] = $l + ['main' => false] + waStatus($l['id']);
+    return ['lines' => $rows, 'maxLines' => WA_MAX_LINES,
+            'confirm' => $cfg['confirm'] + ['defaultText' => WA_CONFIRM_DEFAULT],
+            'optOuts' => count(waOptOuts())];
+}
+/**
+ * The order confirmation: the ONLY WhatsApp message a customer gets for an
+ * order (everything else is push + email). Sent once, from the number the
+ * admin picked, the first time the order reaches a confirmed stage.
+ */
+function waSendOrderConfirm(string $orderId, array $o, array $ctx): ?string {
+    $cfg = waLinesCfg();
+    $cf = $cfg['confirm'];
+    if (empty($cf['enabled'])) return null;
+    $phone = normPhoneEg((string) ($o['cust_phone'] ?? ''));
+    if (!$phone) return null;
+    // Fresh orders only: a status change on a day-old order is a clean-up, and
+    // a "your order is confirmed" for it would only confuse the customer.
+    $created = strtotime(((string) ($o['createdAt'] ?? '')) . ' UTC');
+    if (!$created || time() - $created > 12 * 3600) return null;
+    $dir = waDir() . '/confirmed';
+    if (!is_dir($dir)) @mkdir($dir, 0755, true);
+    // 'x' = create-or-fail: two requests racing on the same order cannot both win.
+    $fh = @fopen($dir . '/' . preg_replace('/[^A-Za-z0-9_-]/', '', $orderId), 'x');
+    if (!$fh) return null;
+    fwrite($fh, (string) time());
+    fclose($fh);
+    if (random_int(1, 40) === 1) {
+        foreach (glob($dir . '/*') ?: [] as $f) if (time() - (int) @filemtime($f) > 3 * 86400) @unlink($f);
+    }
+    $text = notifRender($cf['text'] !== '' ? $cf['text'] : WA_CONFIRM_DEFAULT, $ctx);
+    if ($text === '') return null;
+    $ok = waEnqueue($phone, $text, ['line' => $cf['line'], 'staff' => false,
+        'expiresAt' => (time() + 3 * 3600) * 1000]);
+    return $ok ? 'واتساب تأكيد للعميل (' . waLineLabel($cfg, $cf['line']) . ')' : null;
+}
+/** Uploaded picture URL → the file on this disk, which the bridge can read directly. */
+function waLocalUpload(string $url): ?string {
+    if (!preg_match('#/uploads/([A-Za-z0-9_.-]+\.(?:jpg|jpeg|png|webp))$#i', $url, $m)) return null;
+    $f = realpath(__DIR__ . '/uploads/' . $m[1]);
+    return ($f && is_file($f)) ? $f : null;
+}
+/** Who an offer broadcast goes to: active customers with a valid number, newest first. */
+function waBroadcastAudience(string $audience, int $days): array {
+    $where = "u.role = 'CUSTOMER' AND u.isActive = 1 AND u.phone IS NOT NULL AND u.phone <> ''";
+    $args = [];
+    if ($audience === 'ordered' || $audience === 'recent') {
+        $sub = "SELECT 1 FROM `Order` o WHERE o.customerId = u.id AND o.status IN ('DELIVERED','COMPLETED')";
+        if ($audience === 'recent') { $sub .= ' AND o.createdAt >= ?'; $args[] = gmdate('Y-m-d H:i:s', time() - $days * 86400); }
+        $where .= " AND EXISTS ($sub)";
+    }
+    $st = db()->prepare("SELECT u.id, u.name, u.phone FROM `User` u WHERE $where ORDER BY u.createdAt DESC");
+    $st->execute($args);
+    $opt = waOptOuts();
+    // Numbers that got an offer in the last 24 h are skipped: two broadcasts a
+    // day to the same person is how a number gets reported.
+    $recent = json_decode((string) @file_get_contents(waDir() . '/bulk-recent.json'), true) ?: [];
+    $seen = []; $out = []; $skippedOpt = 0; $skippedRecent = 0;
+    foreach ($st->fetchAll() as $r) {
+        $p = normPhoneEg((string) $r['phone']);
+        if (!$p || isset($seen[$p])) continue;
+        $seen[$p] = true;
+        if (isset($opt[$p])) { $skippedOpt++; continue; }
+        if (isset($recent[$p]) && time() - (int) $recent[$p] < 86400) { $skippedRecent++; continue; }
+        $out[] = ['phone' => $p, 'name' => trim((string) $r['name'])];
+    }
+    return ['rows' => $out, 'skippedOptOut' => $skippedOpt, 'skippedRecent' => $skippedRecent];
+}
+
+if ($method === 'GET' && $path === '/admin/whatsapp/lines') {
+    authUser();
+    jsonOk(waLinesPayload());
+}
+if ($method === 'POST' && $path === '/admin/whatsapp/lines') {
+    $u = waRequireSuper();
+    $b = readJsonBody();
+    $cfg = waLinesCfg();
+    if (count($cfg['lines']) >= WA_MAX_LINES) jsonErr('وصلت لأقصى عدد أرقام (' . WA_MAX_LINES . ')', 422, 'TOO_MANY_LINES');
+    $label = mb_substr(trim((string) ($b['label'] ?? '')), 0, 40);
+    if ($label === '') $label = 'رقم ' . (count($cfg['lines']) + 2);
+    $id = bin2hex(random_bytes(4));
+    $cfg['lines'][] = ['id' => $id, 'label' => $label, 'offers' => !empty($b['offers']),
+                       'bulkPerDay' => waBulkCap($b['bulkPerDay'] ?? null), 'createdAt' => gmdate('c')];
+    waSaveLinesCfg($cfg, $u['sub'] ?? null);
+    jsonOk(waLinesPayload(), 201);
+}
+if (in_array($method, ['PATCH', 'PUT'], true) && preg_match('#^/admin/whatsapp/lines/([a-z0-9]{4,16})$#', $path, $m)) {
+    $u = waRequireSuper();
+    $b = readJsonBody();
+    $cfg = waLinesCfg();
+    $id = $m[1];
+    if ($id === 'main') {
+        if (array_key_exists('offers', $b)) $cfg['main']['offers'] = !empty($b['offers']);
+        if (array_key_exists('bulkPerDay', $b)) $cfg['main']['bulkPerDay'] = waBulkCap($b['bulkPerDay']);
+    } else {
+        $found = false;
+        foreach ($cfg['lines'] as &$l) {
+            if ($l['id'] !== $id) continue;
+            $found = true;
+            if (array_key_exists('label', $b)) { $lb = mb_substr(trim((string) $b['label']), 0, 40); if ($lb !== '') $l['label'] = $lb; }
+            if (array_key_exists('offers', $b)) $l['offers'] = !empty($b['offers']);
+            if (array_key_exists('bulkPerDay', $b)) $l['bulkPerDay'] = waBulkCap($b['bulkPerDay']);
+        }
+        unset($l);
+        if (!$found) jsonErr('الرقم ده مش موجود', 404, 'NOT_FOUND');
+    }
+    waSaveLinesCfg($cfg, $u['sub'] ?? null);
+    jsonOk(waLinesPayload());
+}
+if ($method === 'DELETE' && preg_match('#^/admin/whatsapp/lines/([a-z0-9]{4,16})$#', $path, $m)) {
+    $u = waRequireSuper();
+    $id = $m[1];
+    if ($id === 'main') jsonErr('الرقم الأساسي مينفعش يتمسح، تقدر تنهي جلسته بس', 422, 'MAIN_LINE');
+    $cfg = waLinesCfg();
+    $before = count($cfg['lines']);
+    $cfg['lines'] = array_values(array_filter($cfg['lines'], fn($l) => $l['id'] !== $id));
+    if (count($cfg['lines']) === $before) jsonErr('الرقم ده مش موجود', 404, 'NOT_FOUND');
+    // The confirmations it was sending fall back to the main number.
+    if ($cfg['confirm']['line'] === $id) $cfg['confirm']['line'] = 'main';
+    $cfg['removed'][] = $id;
+    waSaveLinesCfg($cfg, $u['sub'] ?? null);
+    jsonOk(waLinesPayload());
+}
+if ($method === 'POST' && preg_match('#^/admin/whatsapp/lines/([a-z0-9]{4,16})/(logout|start)$#', $path, $m)) {
+    if ($m[2] === 'logout') waRequireSuper(); else authUser();
+    $id = waLineId($m[1]);
+    $cfg = waLinesCfg();
+    if (!$id || ($id !== 'main' && !in_array($id, array_column($cfg['lines'], 'id'), true))) jsonErr('الرقم ده مش موجود', 404, 'NOT_FOUND');
+    $cd = waLineDir($id) . '/control';
+    @mkdir($cd, 0755, true);
+    @file_put_contents($cd . '/' . bin2hex(random_bytes(8)) . '.json', json_encode(['action' => $m[2]]));
+    jsonOk(waLinesPayload());
+}
+if (in_array($method, ['PUT', 'POST'], true) && $path === '/admin/whatsapp/confirm') {
+    $u = waRequireSuper();
+    $b = readJsonBody();
+    $cfg = waLinesCfg();
+    $line = waLineId((string) ($b['line'] ?? $cfg['confirm']['line'])) ?? 'main';
+    if ($line !== 'main' && !in_array($line, array_column($cfg['lines'], 'id'), true)) jsonErr('اختار رقم من الأرقام المربوطة', 422, 'BAD_LINE');
+    $text = trim((string) ($b['text'] ?? $cfg['confirm']['text']));
+    if (mb_strlen($text) > 1000) jsonErr('الرسالة طويلة قوي (أقصى حاجة 1000 حرف)', 422, 'TOO_LONG');
+    if ($text === trim(WA_CONFIRM_DEFAULT)) $text = '';
+    $cfg['confirm'] = ['enabled' => !empty($b['enabled']), 'line' => $line, 'text' => $text];
+    waSaveLinesCfg($cfg, $u['sub'] ?? null);
+    jsonOk(waLinesPayload());
+}
+if ($method === 'POST' && $path === '/admin/whatsapp/confirm/test') {
+    waRequireSuper();
+    $b = readJsonBody();
+    $to = normPhoneEg((string) ($b['phone'] ?? ''));
+    if (!$to) jsonErr('اكتب رقم موبايل مصري صحيح', 422, 'BAD_PHONE');
+    $cfg = waLinesCfg();
+    $line = waLineId((string) ($b['line'] ?? $cfg['confirm']['line'])) ?? 'main';
+    if ($line !== 'main' && !in_array($line, array_column($cfg['lines'], 'id'), true)) $line = 'main';
+    $tpl = trim((string) ($b['text'] ?? '')) ?: ($cfg['confirm']['text'] ?: WA_CONFIRM_DEFAULT);
+    $text = notifRender($tpl, ['customerName' => 'أحمد', 'orderNumber' => '12345', 'price' => '150 ج.م',
+        'deliveryAddress' => 'شارع الجمهورية', 'serviceName' => 'توصيل', 'paymentMethod' => 'كاش',
+        'driverName' => '', 'driverPhone' => '', 'customerPhone' => $to, 'pickupAddress' => '', 'reason' => '', 'orderedAt' => '']);
+    // A test goes to a staff phone: no per-number cap.
+    $ok = waEnqueue($to, "(تجربة) " . $text, ['line' => $line, 'staff' => true, 'expiresAt' => (time() + 1800) * 1000]);
+    jsonOk(['queued' => $ok, 'line' => $line, 'text' => $text]);
+}
+
+/*
+ * Offer broadcast over WhatsApp. Goes out ONLY from numbers marked «للعروض»
+ * that are connected right now, spread across them, at the bridge's slow
+ * broadcast pace (25 to 60 s apart, 10 AM to 9 PM, a daily cap per number). A
+ * customer gets at most one offer a day, and «إيقاف» takes them off for good.
+ * dryRun=true answers "how many, from which numbers, over how many days".
+ */
+if ($method === 'POST' && $path === '/admin/whatsapp/broadcast') {
+    $u = waRequireSuper();
+    $b = readJsonBody();
+    $text = trim((string) ($b['text'] ?? ''));
+    $imageUrl = trim((string) ($b['imageUrl'] ?? ''));
+    $offerId = trim((string) ($b['offerId'] ?? ''));
+    if ($offerId !== '' && ($text === '' || $imageUrl === '')) {
+        $os = db()->prepare('SELECT * FROM `Offer` WHERE id = ?');
+        $os->execute([$offerId]);
+        $of = $os->fetch();
+        if (!$of) jsonErr('العرض مش موجود', 404, 'NOT_FOUND');
+        if ($text === '') $text = trim(((string) ($of['titleAr'] ?? '')) . "\n\n" . ((string) ($of['descriptionAr'] ?? '')));
+        if ($imageUrl === '') $imageUrl = (string) ($of['imageUrl'] ?? '');
+    }
+    if ($text === '') jsonErr('اكتب نص العرض', 422, 'MISSING');
+    if (mb_strlen($text) > 1500) jsonErr('النص طويل قوي (أقصى حاجة 1500 حرف)', 422, 'TOO_LONG');
+    $audience = in_array($b['audience'] ?? '', ['all', 'ordered', 'recent'], true) ? $b['audience'] : 'recent';
+    $days = max(7, min(365, (int) ($b['days'] ?? 60)));
+    $limit = max(1, min(5000, (int) ($b['limit'] ?? 500)));
+
+    $cfg = waLinesCfg();
+    $cands = [];
+    if ($cfg['main']['offers']) $cands[] = ['id' => 'main', 'label' => 'الرقم الأساسي', 'bulkPerDay' => $cfg['main']['bulkPerDay']];
+    foreach ($cfg['lines'] as $l) if ($l['offers']) $cands[] = $l;
+    $lines = [];
+    foreach ($cands as $l) {
+        $st = waStatus($l['id']);
+        if ($st['status'] !== 'connected') continue;
+        $lines[] = ['id' => $l['id'], 'label' => $l['label'], 'phone' => $st['phone'], 'bulkPerDay' => $l['bulkPerDay'],
+                    'leftToday' => max(0, $l['bulkPerDay'] - $st['bulkSentToday']), 'pendingBulk' => $st['pendingBulk']];
+    }
+    $aud = waBroadcastAudience($audience, $days);
+    $rows = array_slice($aud['rows'], 0, $limit);
+    $perDay = array_sum(array_column($lines, 'bulkPerDay'));
+    $queued = array_sum(array_column($lines, 'pendingBulk'));
+    $summary = ['recipients' => count($rows), 'available' => count($aud['rows']),
+                'skippedOptOut' => $aud['skippedOptOut'], 'skippedRecent' => $aud['skippedRecent'],
+                'lines' => $lines, 'perDay' => $perDay, 'alreadyQueued' => $queued,
+                'days' => $perDay > 0 ? (int) ceil((count($rows) + $queued) / $perDay) : null,
+                'withImage' => $imageUrl !== '', 'sample' => null];
+    $render = function (array $r) use ($text) {
+        $first = $r['name'] !== '' ? (preg_split('/\s+/u', $r['name'])[0] ?? '') : '';
+        $greet = $first !== '' ? "أهلاً {$first} 👋" : 'أهلاً 👋';
+        $body = str_contains($text, '{{name}}') ? str_replace('{{name}}', $first, $text) : ($greet . "\n\n" . $text);
+        return $body . "\n\n" . WA_OPTOUT_FOOTER;
+    };
+    $summary['sample'] = $render(['name' => 'أحمد محمد']);
+    if (!empty($b['dryRun'])) jsonOk($summary);
+    if (!$lines) jsonErr('مفيش رقم عروض متصل دلوقتي. علّم رقم «للعروض» واتأكد إنه متصل', 422, 'NO_OFFER_LINE');
+    if (!$rows) jsonErr('مفيش عملاء يوصلهم العرض بالاختيار ده', 422, 'NO_RECIPIENTS');
+
+    $image = $imageUrl !== '' ? (waLocalUpload($imageUrl) ?? (preg_match('#^https://#', $imageUrl) ? $imageUrl : null)) : null;
+    $bid = bin2hex(random_bytes(4));
+    $exp = (time() + 4 * 86400) * 1000; // still unsent after 4 days = stale offer, dropped
+    $recentF = waDir() . '/bulk-recent.json';
+    $recent = json_decode((string) @file_get_contents($recentF), true) ?: [];
+    foreach ($recent as $p => $t) if (time() - (int) $t > 7 * 86400) unset($recent[$p]);
+    $n = 0; $per = [];
+    foreach ($rows as $i => $r) {
+        $l = $lines[$i % count($lines)];
+        if (waEnqueue($r['phone'], $render($r), ['line' => $l['id'], 'bulk' => true, 'image' => $image, 'expiresAt' => $exp])) {
+            $n++; $per[$l['id']] = ($per[$l['id']] ?? 0) + 1;
+            $recent[$r['phone']] = time();
+        }
+    }
+    @file_put_contents($recentF, json_encode($recent));
+    $logF = waDir() . '/broadcasts.json';
+    $log = json_decode((string) @file_get_contents($logF), true) ?: [];
+    array_unshift($log, ['id' => $bid, 'at' => gmdate('c'), 'by' => (string) ($u['sub'] ?? ''), 'offerId' => $offerId ?: null,
+        'title' => mb_substr(strtok($text, "\n") ?: $text, 0, 80), 'count' => $n, 'perLine' => $per,
+        'audience' => $audience, 'withImage' => $image !== null]);
+    @file_put_contents($logF, json_encode(array_slice($log, 0, 30), JSON_UNESCAPED_UNICODE));
+    jsonOk($summary + ['queued' => $n, 'broadcastId' => $bid]);
+}
+if ($method === 'GET' && $path === '/admin/whatsapp/broadcasts') {
+    authUser();
+    $log = json_decode((string) @file_get_contents(waDir() . '/broadcasts.json'), true) ?: [];
+    $cfg = waLinesCfg();
+    $ids = array_merge(['main'], array_column($cfg['lines'], 'id'));
+    $pending = 0; $sentToday = 0;
+    foreach ($ids as $id) { $st = waStatus($id); $pending += $st['pendingBulk']; $sentToday += $st['bulkSentToday']; }
+    jsonOk(['log' => $log, 'pendingBulk' => $pending, 'sentToday' => $sentToday, 'optOuts' => count(waOptOuts())]);
+}
+if ($method === 'POST' && $path === '/admin/whatsapp/broadcast/cancel') {
+    waRequireSuper();
+    $cfg = waLinesCfg();
+    $n = 0;
+    foreach (array_merge(['main'], array_column($cfg['lines'], 'id')) as $id) {
+        foreach (glob(waLineDir($id) . '/queue/b-*.json') ?: [] as $f) if (@unlink($f)) $n++;
+    }
+    jsonOk(['cancelled' => $n]);
 }
 
 // ═══ Notification templates / recipients / WhatsApp groups ══════════════
@@ -10288,8 +10660,32 @@ if ($method === 'DELETE' && preg_match('#^/admin/product-sections/([^/]+)$#', $p
 // ever wrote to the Offer table — so the home slider could never be filled.
 // These four routes are that missing half.
 
+/**
+ * Offer.descriptionAr: the text shown UNDER an offer's picture in the app (and
+ * sent as the caption when the offer goes out on WhatsApp). The Prisma schema
+ * has no such column, so it is added here once, lazily, like the other
+ * shim-only schema.
+ */
+function ensureOfferDescSchema(): bool {
+    static $ok = null;
+    if ($ok !== null) return $ok;
+    $flag = ($d = rtDir()) ? $d . '/schema-offer-desc-v1' : null;
+    if ($flag && is_file($flag)) return $ok = true;
+    if (db()->inTransaction()) return false;
+    try {
+        $has = db()->query("SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'Offer' AND COLUMN_NAME = 'descriptionAr'")->fetchColumn();
+        if (!(int) $has) db()->exec('ALTER TABLE `Offer` ADD COLUMN `descriptionAr` TEXT NULL');
+        if ($flag) @file_put_contents($flag, gmdate('c'));
+        return $ok = true;
+    } catch (Throwable $e) {
+        error_log('[api.php] offer desc schema: ' . $e->getMessage());
+        return $ok = false;
+    }
+}
+
 if ($method === 'GET' && $path === '/admin/offers') {
     authUser();
+    ensureOfferDescSchema();
     // Unlike the public route this returns inactive and expired rows too —
     // an admin needs to see and re-enable them.
     $rows = db()->query('SELECT * FROM `Offer` ORDER BY sortOrder ASC, createdAt DESC')->fetchAll();
@@ -10310,6 +10706,9 @@ if ($method === 'POST' && $path === '/admin/offers') {
     if ($titleAr === '') jsonErr('عنوان العرض مطلوب', 400, 'VALIDATION_ERROR');
 
     $id = newId();
+    $desc = trim((string) ($b['descriptionAr'] ?? ''));
+    if (mb_strlen($desc) > 1500) jsonErr('الوصف طويل قوي (أقصى حاجة 1500 حرف)', 400, 'VALIDATION_ERROR');
+    ensureOfferDescSchema();
     $st = db()->prepare(
         'INSERT INTO `Offer` (id, title, titleAr, imageUrl, linkType, linkValue, sortOrder, isActive, startsAt, endsAt, createdAt, updatedAt)'
         . ' VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(3), NOW(3))'
@@ -10326,6 +10725,9 @@ if ($method === 'POST' && $path === '/admin/offers') {
         !empty($b['startsAt']) ? (string) $b['startsAt'] : null,
         !empty($b['endsAt']) ? (string) $b['endsAt'] : null,
     ]);
+    if ($desc !== '') {
+        try { db()->prepare('UPDATE `Offer` SET descriptionAr = ? WHERE id = ?')->execute([$desc, $id]); } catch (Throwable $e) {}
+    }
     $sel = db()->prepare('SELECT * FROM `Offer` WHERE id = ?');
     $sel->execute([$id]);
     jsonOk(boolCast(jsonizeRow($sel->fetch()), ['isActive']), 201);
@@ -10343,7 +10745,12 @@ if ($method === 'PATCH' && preg_match('#^/admin/offers/([^/]+)$#', $path, $m)) {
     }
     // Nullable columns: an empty string from a cleared form field means NULL,
     // not the literal "".
-    foreach (['linkValue', 'startsAt', 'endsAt'] as $f) {
+    if (array_key_exists('descriptionAr', $b)) {
+        if (mb_strlen((string) $b['descriptionAr']) > 1500) jsonErr('الوصف طويل قوي (أقصى حاجة 1500 حرف)', 400, 'VALIDATION_ERROR');
+        ensureOfferDescSchema();
+        $b['descriptionAr'] = trim((string) $b['descriptionAr']);
+    }
+    foreach (['linkValue', 'startsAt', 'endsAt', 'descriptionAr'] as $f) {
         if (array_key_exists($f, $b)) {
             $sets[] = "`$f`=?";
             $args[] = ($b[$f] === '' || $b[$f] === null) ? null : (string) $b[$f];
@@ -13775,6 +14182,7 @@ if ($method === 'GET' && $path === '/categories') {
 }
 
 if ($method === 'GET' && $path === '/offers') {
+    ensureOfferDescSchema();
     $rows = db()->query('SELECT * FROM `Offer` WHERE isActive = 1 AND (startsAt IS NULL OR startsAt <= NOW(3)) AND (endsAt IS NULL OR endsAt >= NOW(3)) ORDER BY sortOrder ASC')->fetchAll();
     jsonOk(array_map(fn($r) => boolCast($r, ['isActive']), $rows));
 }

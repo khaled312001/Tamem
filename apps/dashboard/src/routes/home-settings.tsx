@@ -31,9 +31,11 @@ import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 
 import { Button } from '../components/ui/Button.js';
-import { Field, Input, SearchInput } from '../components/ui/Input.js';
+import { Field, Input, SearchInput, Textarea } from '../components/ui/Input.js';
+import { BroadcastDialog, type BroadcastOffer } from '../components/whatsapp/BroadcastDialog.js';
 import { CardSkeleton } from '../components/ui/Skeleton.js';
 import { api } from '../lib/api.js';
+import { useAuth } from '../lib/auth.js';
 import { uploadFile } from '../lib/uploadFile.js';
 
 interface HomeConfig {
@@ -1394,6 +1396,8 @@ interface Offer {
   title: string;
   titleAr: string;
   imageUrl: string;
+  /** Shown under the picture in the app, and as the WhatsApp caption. */
+  descriptionAr?: string | null;
   linkType: string;
   linkValue: string | null;
   sortOrder: number;
@@ -1403,6 +1407,7 @@ interface Offer {
 /** Blank slide used when the admin hits "إضافة شريحة". */
 const EMPTY_OFFER = {
   titleAr: '',
+  descriptionAr: '',
   imageUrl: '',
   linkType: 'NONE',
   linkValue: '',
@@ -1413,6 +1418,8 @@ const EMPTY_OFFER = {
 function SliderTab() {
   const qc = useQueryClient();
   const [editing, setEditing] = useState<Partial<Offer> | null>(null);
+  const isSuper = (useAuth((s) => s.user) as { role?: string } | null)?.role === 'SUPER_ADMIN';
+  const [sending, setSending] = useState<BroadcastOffer | null>(null);
   // The form used to render below the whole list, so pressing "تعديل" on a
   // slide opened it off-screen and the button read as broken. It now sits above
   // the list and pulls itself into view.
@@ -1475,6 +1482,40 @@ function SliderTab() {
           placeholder="مثال: خصم 20% على أول طلب"
         />
       </Field>
+      <Field
+        label="الوصف"
+        hint="بيظهر تحت الصورة في التطبيق، وبيتبعت مع الصورة لو بعت العرض واتساب"
+      >
+        <Textarea
+          value={editing.descriptionAr ?? ''}
+          onChange={(e) => setEditing({ ...editing, descriptionAr: e.target.value })}
+          rows={3}
+          maxLength={1500}
+          placeholder="مثال: على كل طلبات المطاعم لحد يوم الجمعة. الكود TAMEM20"
+        />
+      </Field>
+      {editing.imageUrl && (
+        <div>
+          <div className="text-xs font-bold text-muted-foreground mb-1">شكله في التطبيق</div>
+          <div className="max-w-sm rounded-2xl border border-border overflow-hidden bg-white shadow-sm">
+            <img
+              src={editing.imageUrl}
+              alt=""
+              className="w-full aspect-[16/6] object-cover bg-muted"
+            />
+            {(editing.titleAr || editing.descriptionAr) && (
+              <div className="p-3">
+                <div className="font-black text-sm">{editing.titleAr}</div>
+                {editing.descriptionAr && (
+                  <div className="text-xs text-muted-foreground mt-1 whitespace-pre-wrap leading-5">
+                    {editing.descriptionAr}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
       <div className="flex items-center gap-2">
         <Button
           onClick={() => save.mutate(editing)}
@@ -1526,6 +1567,9 @@ function SliderTab() {
               />
               <div className="flex-1 min-w-0">
                 <div className="font-bold truncate">{o.titleAr}</div>
+                {o.descriptionAr && (
+                  <div className="text-xs text-muted-foreground truncate">{o.descriptionAr}</div>
+                )}
                 <div className="text-xs text-muted-foreground">
                   {o.isActive ? 'ظاهر' : 'مخفي'} · ترتيب {o.sortOrder}
                 </div>
@@ -1557,6 +1601,16 @@ function SliderTab() {
                 <Button variant="ghost" onClick={() => setEditing(o)}>
                   تعديل
                 </Button>
+                {isSuper && (
+                  <Button
+                    variant="ghost"
+                    className="text-green-700"
+                    onClick={() => setSending(o)}
+                    title="ابعته للعملاء على واتساب"
+                  >
+                    واتساب
+                  </Button>
+                )}
                 <Button
                   variant="ghost"
                   className="text-red-600"
@@ -1571,6 +1625,11 @@ function SliderTab() {
           ))}
         </div>
       )}
+      <BroadcastDialog
+        open={!!sending}
+        onOpenChange={(v) => !v && setSending(null)}
+        offer={sending}
+      />
     </div>
   );
 }
