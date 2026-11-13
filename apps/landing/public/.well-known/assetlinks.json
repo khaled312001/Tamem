@@ -5,7 +5,9 @@
       "namespace": "android_app",
       "package_name": "com.tamem.delivery",
       "sha256_cert_fingerprints": [
-        "4D:6E:FA:E6:A2:81:9C:F3:BF:11:CC:8A:F7:B9:CE:48:B4:9F:37:31:CA:2D:F7:87:EF:7E:F2:E1:1C:BE:0E:8C"
+        "4D:6E:FA:E6:A2:81:9C:F3:BF:11:CC:8A:F7:B9:CE:48:B4:9F:37:31:CA:2D:F7:87:EF:7E:F2:E1:1C:BE:0E:8C",
+        "C8:3F:53:C6:1C:BB:BF:53:5C:EE:96:EA:D1:5A:C0:8D:5C:AA:76:85:9B:4A:29:28:1C:82:9C:14:42:59:FD:EF",
+        "D7:DA:DD:48:79:C0:01:A7:5A:D7:75:30:74:16:06:9B:2D:08:AF:CA:0E:F3:D6:D0:96:C7:9F:EB:CD:D9:47:33"
       ]
     }
   }
