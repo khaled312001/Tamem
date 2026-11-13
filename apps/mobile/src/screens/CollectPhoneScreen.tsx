@@ -1,5 +1,6 @@
 import { useMutation } from '@tanstack/react-query';
 import { LinearGradient } from 'expo-linear-gradient';
+import * as Linking from 'expo-linking';
 import { Phone, ShieldCheck } from 'lucide-react-native';
 import { useState } from 'react';
 import {
@@ -16,6 +17,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { GradientButton } from '../components/GradientButton';
 import { IconField } from '../components/IconField';
 import { api } from '../lib/api';
+import { useSupportWhatsapp, waLink } from '../lib/contacts';
 import { useAuth } from '../stores/auth';
 import { colors, fontFamilies, fontSizes, gradients, radii, spacing } from '../theme/tokens';
 
@@ -27,6 +29,8 @@ import { colors, fontFamilies, fontSizes, gradients, radii, spacing } from '../t
 export function CollectPhoneScreen() {
   const user = useAuth((s) => s.user);
   const setUser = useAuth((s) => s.setUser);
+  const clear = useAuth((s) => s.clear);
+  const supportWhatsapp = useSupportWhatsapp();
   const [phone, setPhone] = useState('');
 
   const valid = /^\+?\d{10,15}$/.test(phone.trim().replace(/\s/g, ''));
@@ -45,7 +49,33 @@ export function CollectPhoneScreen() {
     },
     onError: (err) => {
       const msg = err instanceof Error ? err.message : 'فشل حفظ الرقم';
-      Alert.alert('خطأ', msg.includes('مستخدم') ? 'هذا الرقم مرتبط بحساب آخر بالفعل' : msg);
+      const status = (err as { response?: { status?: number } }).response?.status;
+      if (status === 409 || msg.includes('مستخدم')) {
+        // The number already sits on another account, usually one the office
+        // made for a phone order. Only the office can tie the two together
+        // safely (there is no code to prove the number is yours), so say so
+        // and hand over the one tap that reaches them.
+        Alert.alert(
+          'الرقم ده متسجل بحساب تاني',
+          'غالباً اتعملك حساب قبل كده لما طلبت بالتليفون. كلّمنا على واتساب ونربطهولك بحساب جوجل ده.',
+          [
+            { text: 'إلغاء', style: 'cancel' },
+            {
+              text: 'كلّم الإدارة',
+              onPress: () => {
+                void Linking.openURL(
+                  waLink(
+                    supportWhatsapp,
+                    `السلام عليكم، عايز أربط رقمي ${phone.trim()} بحساب جوجل ${user?.email ?? ''} في تطبيق تميم.`,
+                  ),
+                );
+              },
+            },
+          ],
+        );
+        return;
+      }
+      Alert.alert('خطأ', msg);
     },
   });
 
@@ -115,6 +145,13 @@ export function CollectPhoneScreen() {
             style={({ pressed }) => [styles.skip, pressed && { opacity: 0.7 }]}
           >
             <Text style={styles.skipText}>ليه محتاجين الرقم؟</Text>
+          </Pressable>
+          <Pressable
+            onPress={() => void clear()}
+            hitSlop={8}
+            style={({ pressed }) => [styles.skip, pressed && { opacity: 0.7 }]}
+          >
+            <Text style={styles.skipText}>ادخل بحساب جوجل تاني</Text>
           </Pressable>
         </View>
       </KeyboardAvoidingView>

@@ -175,10 +175,18 @@ export function HomeV2Screen() {
   }, [navigation, activeOrder, tick]);
 
   const onPressOffer = useCallback(
-    (_offer: Offer) => {
+    (offer: Offer) => {
       tick();
-      // Offers funnel into the stores list, same as the old banner tap.
-      navigation.navigate('StoresList');
+      // An offer that belongs to one store opens that store. One with a
+      // description opens in full (the slider shows two lines of it). The
+      // rest funnel into the stores list, as the banner always did.
+      if (offer.linkType === 'MERCHANT' && offer.linkValue) {
+        navigation.navigate('MerchantDetail', { merchantId: String(offer.linkValue) });
+      } else if (offer.descriptionAr) {
+        navigation.navigate('OfferDetail', { offerId: offer.id });
+      } else {
+        navigation.navigate('StoresList');
+      }
     },
     [navigation, tick],
   );

@@ -15,6 +15,10 @@ export interface Offer {
   imageUrl?: string;
   code?: string | null;
   termsAr?: string | null;
+  /** Text shown under the picture (set in the dashboard's slider editor). */
+  descriptionAr?: string | null;
+  linkType?: 'SERVICE' | 'MERCHANT' | 'EXTERNAL' | 'NONE' | string;
+  linkValue?: string | null;
 }
 
 export interface Merchant {

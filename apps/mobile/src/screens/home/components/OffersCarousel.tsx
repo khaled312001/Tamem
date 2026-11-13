@@ -7,7 +7,7 @@
  * the design's 1600×600 ratio. Text is only drawn when an offer has NO image,
  * so a banner that already contains its own artwork/copy is never doubled up.
  */
-import { memo, useCallback, useRef, useState } from 'react';
+import { memo, useCallback, useMemo, useRef, useState } from 'react';
 import {
   FlatList,
   I18nManager,
@@ -27,6 +27,9 @@ import type { Offer } from '../homeData';
 
 const BANNER_RATIO = 1600 / 600;
 const H_PADDING = spacing.lg; // screen padding on each side
+// The text strip under the picture: one line of title, two of description.
+// Fixed, so every slide is the same height and paging stays exact.
+const CAPTION_H = 74;
 
 interface Props {
   offers: Offer[];
@@ -36,7 +39,11 @@ interface Props {
 function OffersCarouselBase({ offers, onPressOffer }: Props) {
   const { width } = useWindowDimensions();
   const bannerWidth = width - H_PADDING * 2;
-  const bannerHeight = bannerWidth / BANNER_RATIO;
+  const imageHeight = bannerWidth / BANNER_RATIO;
+  // Offers made before descriptions existed keep the bare banner; as soon as
+  // one slide has a description, every slide gets the caption strip.
+  const captioned = useMemo(() => offers.some((o) => !!o.descriptionAr), [offers]);
+  const bannerHeight = imageHeight + (captioned ? CAPTION_H : 0);
 
   const [index, setIndex] = useState(0);
   const listRef = useRef<FlatList<Offer>>(null);
@@ -63,13 +70,29 @@ function OffersCarouselBase({ offers, onPressOffer }: Props) {
         accessibilityLabel={item.titleAr || item.title}
       >
         {item.imageUrl ? (
-          // Full-bleed artwork exactly as the API delivered it.
-          <Image
-            source={{ uri: item.imageUrl }}
-            style={StyleSheet.absoluteFill}
-            resizeMode="cover"
-            accessible={false}
-          />
+          <>
+            {/* Full-bleed artwork exactly as the API delivered it. */}
+            <View style={{ width: bannerWidth, height: imageHeight }}>
+              <Image
+                source={{ uri: item.imageUrl }}
+                style={StyleSheet.absoluteFill}
+                resizeMode="cover"
+                accessible={false}
+              />
+            </View>
+            {captioned && (
+              <View style={styles.caption}>
+                <Text style={styles.capTitle} numberOfLines={1}>
+                  {item.titleAr || item.title}
+                </Text>
+                {!!item.descriptionAr && (
+                  <Text style={styles.capDesc} numberOfLines={2}>
+                    {item.descriptionAr}
+                  </Text>
+                )}
+              </View>
+            )}
+          </>
         ) : (
           // No artwork → fall back to the offer's own copy on a brand panel.
           <View style={styles.textOnly}>
@@ -85,7 +108,7 @@ function OffersCarouselBase({ offers, onPressOffer }: Props) {
         )}
       </Pressable>
     ),
-    [bannerWidth, bannerHeight, onPressOffer],
+    [bannerWidth, bannerHeight, imageHeight, captioned, onPressOffer],
   );
 
   const keyExtractor = useCallback((o: Offer) => o.id, []);
@@ -160,6 +183,29 @@ const styles = StyleSheet.create({
     color: colors.brand.dark,
     fontSize: 14,
     fontFamily: fontFamilies.bodyExtraBold,
+  },
+  caption: {
+    flex: 1,
+    backgroundColor: colors.white,
+    paddingHorizontal: spacing.md,
+    paddingVertical: 8,
+    justifyContent: 'center',
+  },
+  capTitle: {
+    color: colors.ink,
+    fontSize: 15,
+    fontFamily: fontFamilies.bodyExtraBold,
+    textAlign: 'right',
+    writingDirection: 'rtl',
+  },
+  capDesc: {
+    marginTop: 2,
+    color: colors.text.muted,
+    fontSize: 12.5,
+    lineHeight: 19,
+    fontFamily: fontFamilies.body,
+    textAlign: 'right',
+    writingDirection: 'rtl',
   },
   dots: {
     flexDirection: 'row',

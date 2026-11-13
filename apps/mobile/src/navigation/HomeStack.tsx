@@ -13,6 +13,7 @@ import { ProductDetailScreen } from '../screens/ProductDetailScreen';
 import { ShippingFlowScreen } from '../screens/ShippingFlowScreen';
 import { StoresListScreen } from '../screens/StoresListScreen';
 import { DealsScreen } from '../screens/DealsScreen';
+import { OfferDetailScreen } from '../screens/OfferDetailScreen';
 
 export type HomeStackParamList = {
   Home: undefined;
@@ -26,6 +27,7 @@ export type HomeStackParamList = {
   CartCheckout: undefined;
   /** تأكيد الرقم وإحنا داخل التطبيق — مش شاشة تسجيل الدخول. */
   Deals: undefined;
+  OfferDetail: { offerId: string };
   DynamicServiceFlow: {
     serviceKey?: string;
     serviceId?: string;
@@ -51,6 +53,7 @@ export function HomeStack() {
       <Stack.Screen name="HomeLegacy" component={HomeScreen} />
       <Stack.Screen name="StoresList" component={StoresListScreen} />
       <Stack.Screen name="Deals" component={DealsScreen} />
+      <Stack.Screen name="OfferDetail" component={OfferDetailScreen} />
       <Stack.Screen name="NearbyMap" component={NearbyMapScreen} />
       <Stack.Screen name="MerchantDetail" component={MerchantDetailScreen} />
       <Stack.Screen name="ProductDetail" component={ProductDetailScreen} />

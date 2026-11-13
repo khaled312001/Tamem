@@ -341,6 +341,13 @@ export function OrderTrackingScreen() {
     queryKey: ['order', orderId],
     queryFn: () => api.raw.get(`/orders/${orderId}`).then((r) => r.data.data),
     enabled: !!orderId,
+    // The live server has no socket, so an open order refreshes itself every
+    // 20 s while this screen is in front; a finished one stops asking.
+    refetchInterval: (q) => {
+      const st = (q.state.data as { status?: string } | undefined)?.status;
+      return st && ['DELIVERED', 'COMPLETED', 'CANCELLED'].includes(st) ? false : 20_000;
+    },
+    refetchIntervalInBackground: false,
   });
 
   useSocketEvents(TRACK_EVENTS, (payload) => {

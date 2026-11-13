@@ -32,7 +32,7 @@
     },
     "android": {
       "package": "com.tamem.delivery",
-      "versionCode": 32,
+      "versionCode": 33,
       "googleServicesFile": "./google-services.json",
       "adaptiveIcon": {
         "foregroundImage": "./src/assets/icon.png",

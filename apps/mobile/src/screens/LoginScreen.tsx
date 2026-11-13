@@ -144,6 +144,10 @@ export function LoginScreen() {
 
   const roleBadgeLabel = initialRole === 'MERCHANT' ? 'تاجر' : 'عميل';
   const RoleBadgeIcon = initialRole === 'MERCHANT' ? Store : UserIcon;
+  // Customers: Google only. The phone + password form is the merchants'
+  // entrance (their accounts are made by the office and have no Google link),
+  // reached from the small «دخول التجار» link at the bottom.
+  const isMerchant = initialRole === 'MERCHANT';
 
   return (
     <SafeAreaView edges={['top']} style={styles.container}>
@@ -161,11 +165,13 @@ export function LoginScreen() {
           <View style={styles.heroLogoCircle}>
             <Truck size={28} color={colors.white} />
           </View>
-          <Text style={styles.heroTitle}>أهلاً بعودتك</Text>
+          <Text style={styles.heroTitle}>{isMerchant ? 'دخول التجار' : 'أهلاً بيك في تميم'}</Text>
           <Text style={styles.heroSubtitle}>
-            سجّل دخولك لمتابعة طلباتك وإنشاء طلبات جديدة بسهولة
+            {isMerchant
+              ? 'ادخل برقم المحل وكلمة المرور اللي اتبعتتلك من الإدارة'
+              : 'ادخل بحساب جوجل في ثانية، من غير كلمة مرور'}
           </Text>
-          {initialRole && (
+          {isMerchant && (
             <View style={styles.roleBadge}>
               <RoleBadgeIcon size={14} color={colors.white} />
               <Text style={styles.roleBadgeText}>تسجيل دخول كـ {roleBadgeLabel}</Text>
@@ -178,78 +184,90 @@ export function LoginScreen() {
           keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={false}
         >
-          <View style={[styles.card, shadows.md]}>
-            <Text style={styles.fieldLabel}>رقم الهاتف</Text>
-            <Controller
-              control={control}
-              name="phone"
-              render={({ field: { value, onChange, onBlur } }) => (
-                <IconField
-                  Icon={Phone}
-                  placeholder="مثال: 01070750167"
-                  keyboardType="phone-pad"
-                  value={value}
-                  onChangeText={onChange}
-                  onBlur={onBlur}
-                  error={errors.phone?.message}
-                  autoComplete="tel"
-                />
-              )}
-            />
-
-            <View style={styles.fieldHeader}>
-              <Text style={styles.fieldLabel}>كلمة المرور</Text>
-              <Pressable onPress={onForgotPassword} hitSlop={8}>
-                <Text style={styles.forgotText}>نسيت كلمة المرور؟</Text>
-              </Pressable>
-            </View>
-            <Controller
-              control={control}
-              name="password"
-              render={({ field: { value, onChange, onBlur } }) => (
-                <PasswordField
-                  Icon={Lock}
-                  placeholder="••••••••"
-                  value={value}
-                  onChangeText={onChange}
-                  onBlur={onBlur}
-                  error={errors.password?.message}
-                  autoComplete="password"
-                />
-              )}
-            />
-
-            {errorMsg ? (
-              <View style={styles.errorBanner}>
-                <AlertCircle size={16} color={colors.danger} />
-                <Text style={styles.errorBannerText}>{errorMsg}</Text>
-              </View>
-            ) : null}
-
-            <View style={{ marginTop: spacing.lg }}>
-              <PrimaryButton
-                label="تسجيل الدخول"
-                onPress={handleSubmit(onSubmit)}
-                loading={loading}
-                Icon={LogIn}
+          {!isMerchant ? (
+            <View style={[styles.card, shadows.md]}>
+              <GoogleSignInButton
+                label="الدخول بحساب جوجل"
+                onResolveRole={resolveGoogleRole}
+                onError={(msg) => Alert.alert('خطأ', msg)}
               />
+              <Text style={styles.googleNote}>
+                أول مرة؟ هيتعملك حساب على طول، وهنطلب رقم موبايلك مرة واحدة عشان المندوب يكلمك.
+              </Text>
             </View>
+          ) : (
+            <View style={[styles.card, shadows.md]}>
+              <Text style={styles.fieldLabel}>رقم الهاتف</Text>
+              <Controller
+                control={control}
+                name="phone"
+                render={({ field: { value, onChange, onBlur } }) => (
+                  <IconField
+                    Icon={Phone}
+                    placeholder="مثال: 01070750167"
+                    keyboardType="phone-pad"
+                    value={value}
+                    onChangeText={onChange}
+                    onBlur={onBlur}
+                    error={errors.phone?.message}
+                    autoComplete="tel"
+                  />
+                )}
+              />
 
-            <View style={styles.divider}>
-              <View style={styles.dividerLine} />
-              <Text style={styles.dividerText}>أو سجّل دخول بحساب جوجل</Text>
-              <View style={styles.dividerLine} />
+              <View style={styles.fieldHeader}>
+                <Text style={styles.fieldLabel}>كلمة المرور</Text>
+                <Pressable onPress={onForgotPassword} hitSlop={8}>
+                  <Text style={styles.forgotText}>نسيت كلمة المرور؟</Text>
+                </Pressable>
+              </View>
+              <Controller
+                control={control}
+                name="password"
+                render={({ field: { value, onChange, onBlur } }) => (
+                  <PasswordField
+                    Icon={Lock}
+                    placeholder="••••••••"
+                    value={value}
+                    onChangeText={onChange}
+                    onBlur={onBlur}
+                    error={errors.password?.message}
+                    autoComplete="password"
+                  />
+                )}
+              />
+
+              {errorMsg ? (
+                <View style={styles.errorBanner}>
+                  <AlertCircle size={16} color={colors.danger} />
+                  <Text style={styles.errorBannerText}>{errorMsg}</Text>
+                </View>
+              ) : null}
+
+              <View style={{ marginTop: spacing.lg }}>
+                <PrimaryButton
+                  label="تسجيل الدخول"
+                  onPress={handleSubmit(onSubmit)}
+                  loading={loading}
+                  Icon={LogIn}
+                />
+              </View>
             </View>
+          )}
 
-            <GoogleSignInButton
-              role={initialRole}
-              // Only used when no initialRole — modal asks the user "customer
-              // or merchant?" so brand-new Google users land in the right
-              // role. Returning users keep their existing role server-side.
-              onResolveRole={resolveGoogleRole}
-              onError={(msg) => Alert.alert('خطأ', msg)}
-            />
-          </View>
+          <Pressable
+            onPress={() =>
+              isMerchant
+                ? navigation.setParams({ initialRole: undefined })
+                : navigation.setParams({ initialRole: 'MERCHANT' })
+            }
+            hitSlop={10}
+            style={({ pressed }) => [styles.switchLink, pressed && { opacity: 0.6 }]}
+          >
+            <Text style={styles.switchText}>
+              {isMerchant ? 'عميل؟ ادخل بجوجل' : 'صاحب محل؟ دخول التجار'}
+            </Text>
+          </Pressable>
         </ScrollView>
       </KeyboardAvoidingView>
     </SafeAreaView>
@@ -346,13 +364,20 @@ const styles = StyleSheet.create({
     fontSize: fontSizes.xs,
     fontFamily: fontFamilies.bodyBold,
   },
-  divider: { flexDirection: 'row', alignItems: 'center', marginVertical: spacing.lg },
-  dividerLine: { flex: 1, height: 1, backgroundColor: colors.line2 },
-  dividerText: {
-    marginHorizontal: spacing.md,
+  googleNote: {
+    marginTop: spacing.md,
     color: colors.text.muted,
     fontSize: fontSizes.xs,
     fontFamily: fontFamilies.body,
+    textAlign: 'center',
+    lineHeight: 20,
+  },
+  switchLink: { alignSelf: 'center', marginTop: spacing.xl, paddingVertical: spacing.sm },
+  switchText: {
+    color: colors.text.muted,
+    fontSize: fontSizes.sm,
+    fontFamily: fontFamilies.bodyBold,
+    textDecorationLine: 'underline',
   },
   roleBadge: {
     marginTop: spacing.md,

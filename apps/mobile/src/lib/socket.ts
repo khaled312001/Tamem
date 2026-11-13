@@ -21,6 +21,16 @@ function resolveWsUrl(): string {
 
 const wsUrl = resolveWsUrl();
 
+/**
+ * Realtime is OFF unless EXPO_PUBLIC_WS_ENABLED=1. The production API is the
+ * PHP server, which has no socket.io: every handshake came back 501, and each
+ * screen that called connectSocket() threw the socket away and started a fresh
+ * round of ten retries. That is a steady trickle of failing requests from every
+ * phone, for nothing (screens already refresh by polling and by push). The
+ * socket is still created, so .on()/.emit() keep working; it just never dials.
+ */
+const REALTIME = process.env.EXPO_PUBLIC_WS_ENABLED === '1';
+
 let socket: Socket | null = null;
 let soundHandlersAttached = false;
 
@@ -33,6 +43,12 @@ let soundHandlersAttached = false;
  */
 export async function connectSocket(): Promise<Socket> {
   if (socket?.connected) return socket;
+  if (!REALTIME) {
+    // One idle socket for the whole session: listeners attach, nothing dials.
+    if (!socket)
+      socket = io(wsUrl, { transports: ['websocket'], autoConnect: false, reconnection: false });
+    return socket;
+  }
   const token = await getAccessTokenAsync();
   if (socket) socket.disconnect();
   // The latch below is per-socket, not per-session. Without this reset a
@@ -81,11 +97,13 @@ export function getSocket(): Socket | null {
 
 /** Convenience helpers — matches dashboard's API for symmetry. */
 export async function subscribeToOrder(orderId: string): Promise<void> {
+  if (!REALTIME) return; // an idle socket would only pile these up in its send buffer
   const s = await connectSocket();
   s.emit('order:subscribe', orderId);
 }
 
 export async function unsubscribeFromOrder(orderId: string): Promise<void> {
+  if (!REALTIME) return;
   const s = await connectSocket();
   s.emit('order:unsubscribe', orderId);
 }
