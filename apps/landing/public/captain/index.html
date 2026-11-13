@@ -167,13 +167,14 @@
         <div id="loginErr" class="msg err" hidden></div>
         <form id="loginForm" autocomplete="on">
           <div class="field">
-            <label for="name">اسمك زي ما هو مسجّل عندنا</label>
+            <label for="name">اسمك كامل</label>
             <input id="name" type="text" autocomplete="name" placeholder="مثال: محمد أحمد" />
           </div>
           <div class="field">
             <label for="phone">رقم موبايلك</label>
             <input id="phone" type="tel" inputmode="tel" autocomplete="tel" placeholder="01xxxxxxxxx" />
           </div>
+          <p class="hint" style="margin: -4px 0 12px">يكفي الاسم أو الرقم يكون زي المسجّل عندنا.</p>
           <button class="btn block" id="loginBtn" type="submit">دخول</button>
         </form>
         <p class="hint">الصفحة دي للمناديب المسجّلين في تميم بس. لو مش عارف تدخل، كلّم الإدارة.</p>
@@ -414,10 +415,12 @@
         // ── login ──
         $('loginForm').addEventListener('submit', function (e) {
           e.preventDefault();
-          var name = $('name').value.trim(), phone = $('phone').value.trim();
+          // Arabic keyboards type ٠١٢: make them 012 before counting digits.
+          var name = $('name').value.trim(), phone = $('phone').value.trim().replace(/[٠-٩]/g, function (c) { return String(c.charCodeAt(0) - 0x0660); });
           $('loginErr').hidden = true;
-          if (name.length < 2 || phone.replace(/\D/g, '').length < 10) {
-            $('loginErr').textContent = 'اكتب اسمك ورقم موبايلك صح.'; $('loginErr').hidden = false; return;
+          // Either one is enough; the server decides which one matched.
+          if (name.split(/\s+/).filter(Boolean).length < 2 && phone.replace(/\D/g, '').length < 10) {
+            $('loginErr').textContent = 'اكتب اسمك كامل أو رقم موبايلك.'; $('loginErr').hidden = false; return;
           }
           $('loginBtn').disabled = true; $('loginBtn').textContent = 'لحظة…';
           call('POST', '/driver-portal/login', { name: name, phone: phone }).then(function (r) {

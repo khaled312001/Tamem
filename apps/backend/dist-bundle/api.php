@@ -7554,6 +7554,24 @@ function personNameMatches(string $typed, string $registered): bool {
     foreach ($t as $w) if (!in_array($w, $r, true)) return false;
     return true;
 }
+/**
+ * Name-only sign-in: same first name, one name holds every word of the other,
+ * and at least two words in common, so a bare first name is never enough.
+ */
+function personNameClose(string $typed, string $registered): bool {
+    $t = array_values(array_unique(personNameWords($typed)));
+    $r = array_values(array_unique(personNameWords($registered)));
+    if (count($t) < 2 || count($r) < 2 || $t[0] !== $r[0]) return false;
+    $common = count(array_intersect($t, $r));
+    return $common >= 2 && ($common === count($t) || $common === count($r));
+}
+/** The last 10 digits of a phone however it was written (+20, 0020, 01…, spaces, ٠١٢); '' when too short. */
+function phoneTail10(string $raw): string {
+    $raw = strtr($raw, ['٠' => '0', '١' => '1', '٢' => '2', '٣' => '3', '٤' => '4', '٥' => '5', '٦' => '6', '٧' => '7', '٨' => '8', '٩' => '9',
+                        '۰' => '0', '۱' => '1', '۲' => '2', '۳' => '3', '۴' => '4', '۵' => '5', '۶' => '6', '۷' => '7', '۸' => '8', '۹' => '9']);
+    $d = preg_replace('/\D+/', '', $raw) ?? '';
+    return strlen($d) >= 10 ? substr($d, -10) : '';
+}
 /** Failed portal logins in the last hour: [same IP, same phone, all]. */
 function portalFails(string $ip, string $phone): array {
     $d = rtDir();
@@ -7602,8 +7620,11 @@ function portalPayload(array $d): array {
 if ($method === 'POST' && $path === '/driver-portal/login') {
     $b = readJsonBody();
     $ip = passcodeClientIp();
-    $phone = normPhoneEg((string) ($b['phone'] ?? '')) ?? '';
-    [$byIp, $byPhone, $all] = portalFails($ip, $phone);
+    // Either one is enough (owner's call, 2026-11-13): the office may have typed
+    // the name or the number another way. The phone counts by its last 10
+    // digits; the name by personNameClose (two words at least, one driver only).
+    $tail = phoneTail10((string) ($b['phone'] ?? ''));
+    [$byIp, $byPhone, $all] = portalFails($ip, $tail);
     // No cap on the total: 300 wrong tries from anywhere used to lock every
     // driver out for an hour.
     if ($byIp >= 12 || $byPhone >= 6) {
@@ -7611,18 +7632,48 @@ if ($method === 'POST' && $path === '/driver-portal/login') {
         jsonErr('محاولات كتير — استنى ساعة وجرّب تاني، أو كلّم الإدارة', 429, 'TOO_MANY');
     }
     $name = trim((string) ($b['name'] ?? ''));
-    if ($phone === '' || mb_strlen($name) < 2) jsonErr('اكتب اسمك ورقم موبايلك صح', 422, 'VALIDATION_ERROR');
-    $st = db()->prepare("SELECT u.id, u.name, u.isActive FROM `User` u JOIN `DriverProfile` dp ON dp.userId = u.id
-                          WHERE u.phone = ? AND u.role = 'DRIVER' LIMIT 1");
-    $st->execute([$phone]);
-    $u = $st->fetch();
-    // One answer for «no such phone» and «wrong name»: the page must not tell
+    if ($tail === '' && count(personNameWords($name)) < 2) jsonErr('اكتب اسمك كامل أو رقم موبايلك', 422, 'VALIDATION_ERROR');
+    $drivers = db()->query("SELECT u.id, u.name, u.phone, u.isActive FROM `User` u JOIN `DriverProfile` dp ON dp.userId = u.id
+                             WHERE u.role = 'DRIVER'")->fetchAll();
+    // Several candidates: keep the ones whose name fits, then the active ones.
+    $one = function (array $pool) use ($name): ?array {
+        if (count($pool) > 1) {
+            $n = array_values(array_filter($pool, fn($r) => personNameMatches($name, (string) $r['name']) || personNameClose($name, (string) $r['name'])));
+            if ($n) $pool = $n;
+        }
+        if (count($pool) > 1) {
+            // «محمد علي» typed in full beats «محمد علي حسن» that merely contains it.
+            $want = array_unique(personNameWords($name)); sort($want);
+            $x = array_values(array_filter($pool, function ($r) use ($want) {
+                $w = array_unique(personNameWords((string) $r['name'])); sort($w);
+                return $w === $want;
+            }));
+            if ($x) $pool = $x;
+        }
+        if (count($pool) > 1) {
+            $a = array_values(array_filter($pool, fn($r) => (int) $r['isActive']));
+            if ($a) $pool = $a;
+        }
+        return count($pool) === 1 ? $pool[0] : null;
+    };
+    $byNum = $tail === '' ? [] : array_values(array_filter($drivers, fn($r) => phoneTail10((string) $r['phone']) === $tail));
+    $u = $byNum ? $one($byNum) : null;
+    $how = 'phone';
+    if (!$u) {
+        $u = $one(array_values(array_filter($drivers, fn($r) => personNameClose($name, (string) $r['name']))));
+        $how = 'name';
+    }
+    // One answer for «no such phone» and «no such name»: the page must not tell
     // a stranger which numbers belong to our drivers.
-    if (!$u || !personNameMatches($name, (string) $u['name'])) {
-        portalNoteFail($ip, $phone);
-        jsonErr('الاسم أو الرقم مش مطابقين لبيانات أي مندوب عندنا — اكتب اسمك زي ما هو مسجّل، أو كلّم الإدارة', 401, 'NO_MATCH');
+    if (!$u) {
+        portalNoteFail($ip, $tail);
+        jsonErr('مش لاقيين مندوب بالاسم ده ولا بالرقم ده — اكتب اسمك كامل ورقم موبايلك، أو كلّم الإدارة', 401, 'NO_MATCH');
     }
     if (!(int) $u['isActive']) jsonErr('الحساب ده مش متاح — كلّم الإدارة', 403, 'PORTAL_INACTIVE');
+    if ($how === 'name' && $tail !== '') {
+        // Not an error: tells the office which driver's number on file needs a look.
+        error_log('[driver-portal] signed in by name, the phone typed differs from the one on file (driver ' . $u['id'] . ')');
+    }
     jsonOk(['token' => portalTokenFor((string) $u['id']), 'expiresIn' => 4 * 3600]);
 }
 if ($method === 'GET' && $path === '/driver-portal/me') {
