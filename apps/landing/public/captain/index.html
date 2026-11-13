@@ -8,6 +8,8 @@
     <meta name="googlebot" content="noindex, nofollow" />
     <meta name="referrer" content="no-referrer" />
     <meta name="theme-color" content="#e0301e" />
+    <!-- Light only, even when the phone is in dark mode: "only" also stops Chrome's auto-dark. -->
+    <meta name="color-scheme" content="only light" />
     <title>صفحة الكابتن — تميم للتوصيل</title>
     <link rel="icon" href="/favicon.png" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -18,6 +20,7 @@
     />
     <style>
       :root {
+        color-scheme: only light;
         --red: #e0301e;
         --red-dark: #b82414;
         --gold: #f2a93b;
@@ -148,20 +151,6 @@
       .row { display: flex; gap: 8px; align-items: center; justify-content: space-between; }
       .center { text-align: center; }
       [hidden] { display: none !important; }
-      @media (prefers-color-scheme: dark) {
-        :root {
-          --surface: #1a1210; --card: #241a17; --ink: #f5ece4; --muted: #b4a79c; --border: #3a2b26; --seat: #3a2d28;
-          --green-bg: #12301f; --amber-bg: #3a2a10; --amber: #f5c26b;
-        }
-        input[type='text'], input[type='tel'] { background: #2e211d; }
-        .slot, .day { background: #2a1f1b; }
-        .slot.mine { background: #15291d; }
-        .idbox { background: #2a1f1b; }
-        .seat.t { background: #7c6b62; }
-        .msg.ok { color: #a7ebc0; }
-        .msg.err { background: #3a1612; color: #ffb9ad; }
-        .b-approved { color: #8be0aa; }
-      }
     </style>
   </head>
   <body>
