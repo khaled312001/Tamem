@@ -24,6 +24,7 @@ import { ArrowLeftRight, CheckCircle2, Loader2, MapPin, Search, Truck, User } fr
 import { useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
 
+import { PlacePicker } from '../components/PlacePicker.js';
 import { Button } from '../components/ui/Button.js';
 import { Dialog } from '../components/ui/Dialog.js';
 import { Field, Input, Textarea } from '../components/ui/Input.js';
@@ -41,9 +42,6 @@ const PAYMENTS = [
 ] as const;
 
 const STAGES = ORDER_STAGES;
-
-// One press writes the name the same way every time; «التقارير ← صيدلية الطاهر» reads it from here.
-const TAHER_PICKUP = 'صيدلية الطاهر';
 
 export function CustomOrderDialog({
   onClose,
@@ -112,7 +110,11 @@ export function CustomOrderDialog({
   }, [driverId, stage]);
 
   // ── optional store ──
+  // Set by picking a registered store in «من» (or by the select below). Typing
+  // over the picked name unlinks it, so the order never claims a store the
+  // agent has since replaced with something else.
   const [merchantId, setMerchantId] = useState('');
+  const [linkedName, setLinkedName] = useState('');
   const { data: merchants } = useQuery({
     queryKey: ['custom-order', 'merchants'],
     queryFn: () => api.adminListMerchants({ pageSize: 200 }) as Promise<{ items: Row[] }>,
@@ -270,23 +272,46 @@ export function CustomOrderDialog({
         {/* 2 — the trip */}
         <section className="space-y-2">
           <SectionTitle icon={ArrowLeftRight} title="الرحلة" />
-          <Field label="من (مكان الاستلام)">
-            <Input
+          {/* «التقارير ← صيدلية الطاهر» matches «طاهر» in the pickup, so the
+              registered «صيدلية د. مصطفي الطاهر» chip still lands in it. */}
+          <Field
+            label="من (المحل أو المطعم أو المكان اللي المندوب هياخد منه)"
+            hint="اختار من المقترحات أو اكتب أي مكان لو مش مسجّل"
+          >
+            <PlacePicker
               value={pickup}
-              onChange={(e) => setPickup(e.target.value)}
-              placeholder="مثال: قفط — شارع المحطة، أمام الصيدلية"
+              onChange={(t) => {
+                setPickup(t);
+                // Only when the box held the store's own name — a link made from
+                // the select below, over a typed street, survives edits.
+                if (merchantId && pickup.trim() === linkedName && t.trim() !== linkedName) {
+                  setMerchantId('');
+                  setLinkedName('');
+                }
+              }}
+              onPick={(s) => {
+                setPickup(s.name);
+                setMerchantId(s.kind === 'merchant' && s.id ? s.id : '');
+                setLinkedName(s.kind === 'merchant' ? s.name : '');
+              }}
+              chosen={merchantId ? [merchantId] : []}
+              placeholder="مثال: مطعم الاسكندراني — أو قفط، شارع المحطة"
             />
-            <button
-              type="button"
-              onClick={() => setPickup(TAHER_PICKUP)}
-              className={`mt-2 rounded-lg border px-3 py-1.5 text-xs font-bold transition ${
-                pickup === TAHER_PICKUP
-                  ? 'border-brand-red bg-brand-red/5 text-brand-red'
-                  : 'border-border hover:bg-muted/40'
-              }`}
-            >
-              💊 {TAHER_PICKUP}
-            </button>
+            {merchantId && linkedName && (
+              <p className="mt-1 text-xs font-bold text-emerald-700">
+                ✓ مربوط بالمتجر المسجّل «{linkedName}»{' '}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMerchantId('');
+                    setLinkedName('');
+                  }}
+                  className="text-muted-foreground underline font-normal"
+                >
+                  فك الربط
+                </button>
+              </p>
+            )}
           </Field>
           <Field label="إلى (مكان التسليم)">
             <Input
@@ -373,7 +398,15 @@ export function CustomOrderDialog({
             <Field label="اربطه بتاجر (اختياري)" hint="لو الاستلام من محل معروف عندنا">
               <select
                 value={merchantId}
-                onChange={(e) => setMerchantId(e.target.value)}
+                onChange={(e) => {
+                  const id = e.target.value;
+                  setMerchantId(id);
+                  const m = (merchants?.items ?? []).find((x) => String(x.id) === id);
+                  const nm = m ? String(m.storeNameAr ?? m.storeName ?? '') : '';
+                  setLinkedName(nm);
+                  // Nothing typed in «من» yet — the store IS where it starts.
+                  if (nm && !pickup.trim()) setPickup(nm);
+                }}
                 className="w-full px-3 py-2 rounded-lg border border-input bg-background text-sm outline-none focus:border-brand-red"
               >
                 <option value="">— بدون تاجر —</option>

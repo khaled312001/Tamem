@@ -33,6 +33,7 @@ import {
 import { useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
 
+import { PlacePicker, placeKey, type PlaceSuggestion } from '../components/PlacePicker.js';
 import { Button } from '../components/ui/Button.js';
 import { Dialog } from '../components/ui/Dialog.js';
 import { Field, Input, Textarea, SearchInput } from '../components/ui/Input.js';
@@ -64,9 +65,16 @@ interface Line {
 }
 
 interface Basket {
+  /** The store's id — or a local `place:…` key for a place we have no store for. */
   merchantId: string;
   merchantName: string;
   lines: Line[];
+  /**
+   * A place typed in «من» that is not a registered store. No menu to search:
+   * its lines are typed and priced by the agent, and the server files them
+   * with no merchant and makes the name the order's pickup address.
+   */
+  isPlace?: boolean;
 }
 
 /**
@@ -158,6 +166,8 @@ export function ManualOrderDialog({
   // ── baskets ──
   const [baskets, setBaskets] = useState<Basket[]>([]);
   const [pickMerchant, setPickMerchant] = useState(false);
+  // What is typed in «من فين؟» — cleared once it becomes a basket.
+  const [placeQ, setPlaceQ] = useState('');
 
   // The tariff for the chosen area. `NO_PRICE` is a normal outcome, not an
   // error — the agent is offered a manual fee instead.
@@ -166,7 +176,7 @@ export function ManualOrderDialog({
   // shop is two journeys with two fees, and quoting it from whichever store the
   // agent happened to add first made the same order cost 20 or 70 depending on
   // the order of two clicks. The server groups them and returns the split.
-  const merchantIds = baskets.map((b) => b.merchantId);
+  const merchantIds = baskets.filter((b) => !b.isPlace).map((b) => b.merchantId);
   const merchantKey = [...merchantIds].sort().join(',');
 
   const { data: quote, isFetching: quoting } = useQuery({
@@ -228,6 +238,42 @@ export function ManualOrderDialog({
       { merchantId: m.id, merchantName: m.storeNameAr ?? m.storeName ?? 'متجر', lines: [] },
     ]);
     setPickMerchant(false);
+  };
+
+  // «من فين؟»: a registered store opens its basket; anything else becomes an
+  // unregistered place with one empty line ready to type into.
+  const pickPlace = (s: PlaceSuggestion) => {
+    setPlaceQ('');
+    if (s.kind === 'merchant' && s.id) {
+      addBasket({ id: s.id, storeNameAr: s.name });
+      return;
+    }
+    const name = s.name.trim();
+    if (!name) return;
+    if (baskets.some((b) => placeKey(b.merchantName) === placeKey(name) && placeKey(name) !== '')) {
+      toast.error('المكان ده مضاف بالفعل');
+      return;
+    }
+    setBaskets((prev) => [
+      ...prev,
+      {
+        merchantId: `place:${uid()}`,
+        merchantName: name,
+        isPlace: true,
+        lines: [
+          {
+            key: uid(),
+            productId: null,
+            nameAr: '',
+            unitPrice: 0,
+            quantity: 1,
+            notes: '',
+            addonIds: [],
+            addonNames: [],
+          },
+        ],
+      },
+    ]);
   };
 
   const patchBasket = (merchantId: string, fn: (b: Basket) => Basket) =>
@@ -317,7 +363,7 @@ export function ManualOrderDialog({
         source: 'MANUAL',
         notes: notes.trim() || undefined,
         merchants: baskets.map((b) => ({
-          merchantId: b.merchantId,
+          ...(b.isPlace ? { placeName: b.merchantName } : { merchantId: b.merchantId }),
           items: b.lines.map((l) => ({
             productId: l.productId ?? undefined,
             nameAr: l.productId ? undefined : l.nameAr,
@@ -570,6 +616,18 @@ export function ManualOrderDialog({
 
           {/* 3 — merchants + products */}
           <Section icon={Store} title="تفاصيل الطلب">
+            <Field
+              label="من فين؟ (المحل أو المطعم اللي المندوب هياخد منه)"
+              hint="اختار من الأكثر طلبًا أو اكتب الاسم — ولو المكان مش مسجّل عندنا اكتبه وكمّل عادي"
+            >
+              <PlacePicker
+                value={placeQ}
+                onChange={setPlaceQ}
+                onPick={pickPlace}
+                chosen={baskets.flatMap((b) => [b.merchantId, placeKey(b.merchantName)])}
+                freeTextLabel={(t) => `أضف «${t}» — مكان مش مسجّل`}
+              />
+            </Field>
             {baskets.map((b) => (
               <MerchantBasket
                 key={b.merchantId}
@@ -581,7 +639,7 @@ export function ManualOrderDialog({
 
             <Button variant="outline" onClick={() => setPickMerchant(true)} className="w-full">
               <Plus className="w-4 h-4" />
-              {baskets.length ? 'إضافة تاجر آخر' : 'اختر التاجر'}
+              {baskets.length ? 'إضافة تاجر آخر من القائمة' : 'تصفّح كل المتاجر'}
             </Button>
           </Section>
 
@@ -874,7 +932,8 @@ export function ManualOrderDialog({
         <Dialog open onOpenChange={(o) => !o && setReview(false)} title="مراجعة نهائية" size="md">
           <div className="space-y-2 text-sm">
             <Line2 k="العميل" v={`${name || 'بدون اسم'} — ${phone}`} />
-            <Line2 k="العنوان" v={address} />
+            <Line2 k="من" v={baskets.map((b) => b.merchantName).join('، ') || '—'} />
+            <Line2 k="إلى" v={address} />
             {baskets.map((b) => (
               <div key={b.merchantId} className="rounded-lg border border-border p-2">
                 <p className="font-bold">{b.merchantName}</p>
@@ -1077,7 +1136,7 @@ function MerchantBasket({
         pageSize: 20,
         isAvailable: true,
       }),
-    enabled: deb.length >= 1,
+    enabled: deb.length >= 1 && !basket.isPlace,
   });
   const hits = (products?.items ?? []) as Row[];
 
@@ -1095,8 +1154,17 @@ function MerchantBasket({
   return (
     <div className="rounded-xl border border-border p-3 space-y-3 bg-card">
       <div className="flex items-center gap-2">
-        <Store className="w-4 h-4 text-brand-red" />
-        <p className="font-black flex-1">{basket.merchantName}</p>
+        {basket.isPlace ? (
+          <MapPin className="w-4 h-4 text-brand-red" />
+        ) : (
+          <Store className="w-4 h-4 text-brand-red" />
+        )}
+        <p className="font-black flex-1">
+          {basket.merchantName}
+          {basket.isPlace && (
+            <span className="ms-2 text-[11px] font-bold text-amber-700">مكان مش مسجّل</span>
+          )}
+        </p>
         <button
           type="button"
           onClick={onRemove}
@@ -1106,33 +1174,39 @@ function MerchantBasket({
         </button>
       </div>
 
-      <div className="relative">
-        <Search className="w-4 h-4 absolute top-1/2 -translate-y-1/2 start-3 text-muted-foreground" />
-        <SearchInput
-          value={q}
-          onChange={(e) => setQ(e.target.value)}
-          placeholder="ابحث في منيو التاجر… (مثال: بيتزا)"
-          className="ps-9"
-        />
-        {deb && hits.length > 0 && (
-          <div className="absolute z-20 mt-1 w-full max-h-64 overflow-y-auto rounded-lg border border-border bg-white shadow-lg divide-y divide-border">
-            {hits.map((p) => (
-              <button
-                key={p.id}
-                type="button"
-                onClick={() => {
-                  setOptionsFor(p);
-                  setQ('');
-                }}
-                className="w-full text-start px-3 py-2 hover:bg-muted/50 text-sm flex items-center gap-2"
-              >
-                <span className="flex-1 font-bold truncate">{p.nameAr}</span>
-                <span className="text-brand-red font-bold">{formatMoney(Number(p.price))}</span>
-              </button>
-            ))}
-          </div>
-        )}
-      </div>
+      {basket.isPlace ? (
+        <p className="text-xs text-muted-foreground leading-relaxed">
+          مفيش منيو للمكان ده عندنا — اكتب كل صنف وسعره بنفسك.
+        </p>
+      ) : (
+        <div className="relative">
+          <Search className="w-4 h-4 absolute top-1/2 -translate-y-1/2 start-3 text-muted-foreground" />
+          <SearchInput
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            placeholder="ابحث في منيو التاجر… (مثال: بيتزا)"
+            className="ps-9"
+          />
+          {deb && hits.length > 0 && (
+            <div className="absolute z-20 mt-1 w-full max-h-64 overflow-y-auto rounded-lg border border-border bg-white shadow-lg divide-y divide-border">
+              {hits.map((p) => (
+                <button
+                  key={p.id}
+                  type="button"
+                  onClick={() => {
+                    setOptionsFor(p);
+                    setQ('');
+                  }}
+                  className="w-full text-start px-3 py-2 hover:bg-muted/50 text-sm flex items-center gap-2"
+                >
+                  <span className="flex-1 font-bold truncate">{p.nameAr}</span>
+                  <span className="text-brand-red font-bold">{formatMoney(Number(p.price))}</span>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
       {basket.lines.map((l) => (
         <div key={l.key} className="rounded-lg border border-border p-2 space-y-2">

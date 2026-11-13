@@ -140,6 +140,26 @@ const QUICK_FILTERS: {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type OrderRow = any;
 
+/** The «من ← إلى» cell: pickup over drop-off, each clipped to one line (full text on hover). */
+function FromTo({ from, to }: { from?: string | null; to?: string | null }) {
+  return (
+    <div className="space-y-0.5 text-xs">
+      <div className="flex items-baseline gap-1.5 min-w-0">
+        <span className="shrink-0 text-[10px] font-bold text-emerald-700">من</span>
+        <span className="truncate font-bold text-foreground" title={from ?? undefined}>
+          {from || '—'}
+        </span>
+      </div>
+      <div className="flex items-baseline gap-1.5 min-w-0">
+        <span className="shrink-0 text-[10px] font-bold text-brand-red">إلى</span>
+        <span className="truncate text-muted-foreground" title={to ?? undefined}>
+          {to || '—'}
+        </span>
+      </div>
+    </div>
+  );
+}
+
 /**
  * Column header that doubles as a sort toggle. Three states:
  *   not-sorted → click → desc → click → asc → click → cleared
@@ -1015,7 +1035,7 @@ export function OrdersPage() {
                     <th className="px-4 py-3 font-bold">العميل</th>
                     <th className="px-4 py-3 font-bold">المصدر</th>
                     <th className="px-4 py-3 font-bold">الخدمة</th>
-                    <th className="px-4 py-3 font-bold">المتجر</th>
+                    <th className="px-4 py-3 font-bold">من ← إلى</th>
                     <SortableTh
                       label="الحالة"
                       col="status"
@@ -1130,23 +1150,24 @@ export function OrdersPage() {
                           </td>
                           <td className="px-4 py-3">{o.service?.nameAr ?? '—'}</td>
                           {/*
-                            The store the order is bought from. It was on no
-                            column at all, so pricing an order meant opening it
-                            just to find out where to buy — the single most
-                            common reason to open a row.
-                            A multi-merchant cart has no single merchant, so the
-                            parent shows the count instead of a name.
+                            «من ← إلى»: where the driver picks up and where it
+                            goes. «من» is the server's pickupLabel — the store,
+                            a mixed basket's stores, and/or the place the agent
+                            typed — so a courier job and an unregistered
+                            restaurant read like any store order. Pricing or
+                            dispatching a row no longer means opening it.
                           */}
-                          <td className="px-4 py-3">
-                            {o.merchant?.storeNameAr ? (
-                              <span className="font-medium">{o.merchant.storeNameAr}</span>
-                            ) : (o._count?.subOrders ?? 0) > 1 ? (
-                              <span className="text-xs bg-brand-orange/10 text-brand-orange px-2 py-0.5 rounded-full font-bold">
-                                {o._count?.subOrders} متاجر
-                              </span>
-                            ) : (
-                              <span className="text-muted-foreground">—</span>
-                            )}
+                          <td className="px-4 py-3 max-w-[240px]">
+                            <FromTo
+                              from={
+                                o.pickupLabel ??
+                                o.merchant?.storeNameAr ??
+                                ((o._count?.subOrders ?? 0) > 1
+                                  ? `${o._count?.subOrders} متاجر`
+                                  : null)
+                              }
+                              to={o.deliveryAddress}
+                            />
                           </td>
                           <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
                             <StatusQuickMenu orderId={o.id} status={o.status as OrderStatus} />

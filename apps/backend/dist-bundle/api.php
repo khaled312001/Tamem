@@ -5284,6 +5284,29 @@ if ($method === 'GET' && $path === '/admin/orders') {
     $rows = array_map('orderNest', $st->fetchAll());
 
     /*
+     * «من» for the list's «من ← إلى» column: where the driver picks the order
+     * up. The store when there is one, the stores of a mixed basket, and/or
+     * what the agent typed as the pickup (an unregistered place, the start of
+     * a courier job). One query for the page.
+     */
+    $noStore = array_values(array_filter(array_map(fn($r) => empty($r['merchant']) ? ($r['id'] ?? null) : null, $rows)));
+    $basketStores = [];
+    if ($noStore) {
+        $in = implode(',', array_fill(0, count($noStore), '?'));
+        $bs = db()->prepare("SELECT DISTINCT oi.orderId, mp.storeNameAr FROM `OrderItem` oi
+                               JOIN `MerchantProfile` mp ON mp.id = oi.merchantId WHERE oi.orderId IN ($in)");
+        $bs->execute($noStore);
+        foreach ($bs->fetchAll() as $x) $basketStores[$x['orderId']][] = (string) $x['storeNameAr'];
+    }
+    foreach ($rows as &$r) {
+        $from = !empty($r['merchant']['storeNameAr']) ? [(string) $r['merchant']['storeNameAr']] : ($basketStores[$r['id']] ?? []);
+        $pa = trim((string) ($r['pickupAddress'] ?? ''));
+        if ($pa !== '' && !in_array($pa, $from, true)) $from[] = $pa;
+        $r['pickupLabel'] = $from ? implode('، ', $from) : null;
+    }
+    unset($r);
+
+    /*
      * Attach each parent's per-merchant sub-orders.
      *
      * A two-merchant cart creates a parent plus one child per store. The list
@@ -5471,6 +5494,111 @@ if ($method === 'GET' && preg_match('#^/admin/orders/([^/]+)$#', $path, $m)) {
     } catch (Throwable $e) {}
     jsonOk($o);
 }
+
+/**
+ * A place name reduced to what identifies it, so «الاسكندراني», «اسكندرانى» and
+ * «من مطعم الاسكندراني» are one place. Agents have typed the pickup by hand for
+ * months — the top store alone shows up in six spellings — so suggestions are
+ * grouped and matched on this key. Nothing stored is ever rewritten with it.
+ * Mirrored as placeKey() in the dashboard's PlacePicker.tsx: keep them equal.
+ */
+function placeKey(string $s): string {
+    $s = mb_strtolower(trim($s), 'UTF-8');
+    $s = preg_replace('/[\x{064B}-\x{065F}\x{0670}\x{0640}]/u', '', $s) ?? $s; // tashkeel, tatweel
+    $s = strtr($s, ['أ' => 'ا', 'إ' => 'ا', 'آ' => 'ا', 'ى' => 'ي', 'ة' => 'ه', 'ؤ' => 'و', 'ئ' => 'ي']);
+    $s = preg_replace('/[^\p{L}\p{N}]+/u', ' ', $s) ?? $s;
+    static $noise = ['من', 'مطعم', 'مطاعم', 'صيدليه', 'صدليه', 'محل', 'محلات', 'كافيه', 'كافي', 'مخبز', 'فرن',
+        'سوبر', 'ماركت', 'سوبرماركت', 'هايبر', 'د', 'دكتور', 'دكتوره'];
+    $out = [];
+    foreach (preg_split('/\s+/u', trim($s)) ?: [] as $w) {
+        if ($w === '' || in_array($w, $noise, true)) continue;
+        if (mb_strlen($w) > 4 && mb_substr($w, 0, 3) === 'عال') $w = mb_substr($w, 3);      // «عالسريع» = «ع السريع»
+        elseif (mb_strlen($w) > 3 && mb_substr($w, 0, 2) === 'ال') $w = mb_substr($w, 2);
+        if (mb_strlen($w) < 2) continue;
+        $out[] = $w;
+    }
+    return implode(' ', $out);
+}
+
+/**
+ * Where orders are picked up from, most used first — for «من» on the two
+ * manual-order screens.
+ *
+ * Two sources, merged on placeKey():
+ *  - registered stores: their orders (whole-order merchantId or a basket line)
+ *    over the last 90 days;
+ *  - what agents typed as the pickup address. A spelling that matches a store
+ *    (its name, the alias in its brackets — «الحسن والحسين ( كرم الحناوي )» —
+ *    or its name without the first word, when that is unique) counts for the
+ *    store; the rest group into a «place» shown in its most common spelling.
+ * Every active store is listed even with no orders, so a new one is findable.
+ */
+function placeSuggestions(): array {
+    $since = gmdate('Y-m-d H:i:s', time() - 90 * 86400);
+    $stores = []; $alias = []; $ambiguous = [];
+    $ms = db()->query("SELECT mp.id, mp.storeNameAr, mp.storeName, mp.city FROM `MerchantProfile` mp
+                         JOIN `User` u ON u.id = mp.userId WHERE u.isActive = 1")->fetchAll();
+    foreach ($ms as $m) {
+        $name = trim((string) ($m['storeNameAr'] ?: $m['storeName']));
+        if ($name === '') continue;
+        $stores[$m['id']] = ['kind' => 'merchant', 'id' => $m['id'], 'name' => $name, 'city' => $m['city'] ?: null, 'count' => 0];
+        $keys = [];
+        $main = placeKey(preg_replace('/\(.*?\)/u', ' ', $name) ?? $name);
+        if ($main !== '') $keys[] = $main;
+        if (preg_match_all('/\((.*?)\)/u', $name, $pm)) foreach ($pm[1] as $p) if (($k = placeKey($p)) !== '') $keys[] = $k;
+        $parts = explode(' ', $main);
+        if (count($parts) >= 2 && mb_strlen($rest = implode(' ', array_slice($parts, 1))) >= 3) $keys[] = $rest;
+        foreach (array_unique($keys) as $k) {
+            if (isset($alias[$k]) && $alias[$k] !== $m['id']) $ambiguous[$k] = true;
+            $alias[$k] = $m['id'];
+        }
+    }
+    foreach ($ambiguous as $k => $_) unset($alias[$k]);
+
+    $q = db()->prepare("SELECT x.mid, COUNT(DISTINCT x.oid) n FROM (
+            SELECT o.id oid, o.merchantId mid FROM `Order` o
+             WHERE o.merchantId IS NOT NULL AND o.createdAt >= ? AND o.status NOT IN ('CANCELLED','REJECTED')
+            UNION
+            SELECT oi.orderId, oi.merchantId FROM `OrderItem` oi JOIN `Order` o2 ON o2.id = oi.orderId
+             WHERE oi.merchantId IS NOT NULL AND o2.createdAt >= ? AND o2.status NOT IN ('CANCELLED','REJECTED')
+        ) x GROUP BY x.mid");
+    $q->execute([$since, $since]);
+    foreach ($q->fetchAll() as $r) if (isset($stores[$r['mid']])) $stores[$r['mid']]['count'] += (int) $r['n'];
+
+    $places = [];
+    $q = db()->prepare("SELECT TRIM(pickupAddress) p, COUNT(*) n FROM `Order`
+                         WHERE pickupAddress IS NOT NULL AND TRIM(pickupAddress) <> '' AND createdAt >= ?
+                           AND status NOT IN ('CANCELLED','REJECTED') AND CHAR_LENGTH(pickupAddress) <= 80
+                         GROUP BY TRIM(pickupAddress)");
+    $q->execute([$since]);
+    foreach ($q->fetchAll() as $r) {
+        $k = placeKey((string) $r['p']); $n = (int) $r['n'];
+        if ($k === '') continue;
+        if (isset($alias[$k])) { $stores[$alias[$k]]['count'] += $n; continue; }
+        $places[$k] ??= ['n' => 0, 'best' => '', 'bestN' => 0];
+        $places[$k]['n'] += $n;
+        if ($n > $places[$k]['bestN']) { $places[$k]['best'] = (string) $r['p']; $places[$k]['bestN'] = $n; }
+    }
+    $items = array_values($stores);
+    // A spelling typed once is noise; twice is a place people actually use.
+    foreach ($places as $p) if ($p['n'] >= 2) $items[] = ['kind' => 'place', 'name' => $p['best'], 'count' => $p['n']];
+    usort($items, fn($a, $b) => [$b['count'], $a['kind'] === 'merchant' ? 0 : 1, $a['name']] <=> [$a['count'], $b['kind'] === 'merchant' ? 0 : 1, $b['name']]);
+    return array_slice($items, 0, 400);
+}
+
+// GET /admin/places/suggest — see placeSuggestions(). Cached 10 minutes: both
+// order screens open it on every call the agents take.
+if ($method === 'GET' && $path === '/admin/places/suggest') {
+    $u = authUser();
+    if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
+    $file = ($d = rtDir()) ? $d . '/cache/place-suggest.json' : null;
+    if ($file && is_file($file) && @filemtime($file) > time() - 600 && ($c = @file_get_contents($file))) {
+        http_response_code(200); echo $c; exit;
+    }
+    $json = json_encode(['data' => ['items' => placeSuggestions()]], JSON_UNESCAPED_UNICODE);
+    if ($file) rtWrite($file, $json);
+    http_response_code(200); echo $json; exit;
+}
 if ($method === 'POST' && $path === '/admin/orders') {
     $u = authUser();
     if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
@@ -5528,9 +5656,31 @@ if ($method === 'POST' && $path === '/admin/orders') {
      * /orders/cart. Every line carries its own merchantId, so the per-store
      * breakdown survives without making the admin price and assign N times.
      */
-    $lines = []; $subtotal = 0.0; $perMerchant = [];
+    $lines = []; $subtotal = 0.0; $perMerchant = []; $places = [];
     foreach ((array) ($b['merchants'] ?? []) as $mEntry) {
         $mid = trim((string) ($mEntry['merchantId'] ?? ''));
+        /*
+         * A place we have no store for («مطعم» the agent typed in «من»): its
+         * lines are typed and priced by the agent, carry no merchantId, and
+         * travel with the local run (saveOrderLegs). The name becomes the
+         * order's pickup address, which is what the driver and the WhatsApp
+         * message read.
+         */
+        $placeName = mb_substr(trim((string) ($mEntry['placeName'] ?? '')), 0, 120);
+        if ($mid === '' && $placeName !== '') {
+            $pSub = 0.0;
+            foreach ((array) ($mEntry['items'] ?? []) as $it) {
+                $manualName = trim((string) ($it['nameAr'] ?? ''));
+                if ($manualName === '') continue;
+                $qty = max(1, (int) ($it['quantity'] ?? 1));
+                $unit = round((float) ($it['unitPrice'] ?? 0), 2);
+                $lines[] = [null, $manualName, $unit, $qty, null, ($it['notes'] ?? null) ?: null, null, null];
+                $pSub += $unit * $qty;
+            }
+            $places[] = ['name' => $placeName, 'subtotal' => round($pSub, 2)];
+            $subtotal += $pSub;
+            continue;
+        }
         if ($mid === '') continue;
         $mSub = 0.0;
         foreach ((array) ($mEntry['items'] ?? []) as $it) {
@@ -5633,6 +5783,7 @@ if ($method === 'POST' && $path === '/admin/orders') {
         'totalReason' => ($quoted !== null && $computed !== null && abs($quoted - $computed) > 0.009)
             ? (trim((string) ($b['quotedPriceReason'] ?? '')) ?: null) : null,
         'perMerchant' => $perMerchant ?: null,
+        'places' => $places ?: null,
     ], fn($v) => $v !== null);
 
     // Frozen snapshot of the routing that produced this fee, in the same shape
@@ -5661,7 +5812,9 @@ if ($method === 'POST' && $path === '/admin/orders') {
         // A point-to-point courier job has a real pickup — without this the
         // agent had to create the order and then go and edit it to say where it
         // starts. (The driver is handled AFTER the insert: see below.)
-        'pickupAddress' => !empty($b['pickupAddress']) ? (string) $b['pickupAddress'] : null,
+        // …or, on a basket order, the unregistered place(s) the goods come from.
+        'pickupAddress' => !empty($b['pickupAddress']) ? (string) $b['pickupAddress']
+            : ($places ? implode('، ', array_column($places, 'name')) : null),
         'pickupLat' => isset($b['pickupLat']) && $b['pickupLat'] !== '' ? (float)$b['pickupLat'] : null,
         'pickupLng' => isset($b['pickupLng']) && $b['pickupLng'] !== '' ? (float)$b['pickupLng'] : null,
 
@@ -13298,13 +13451,17 @@ function saveOrderLegs(string $orderId, array $plan): void {
                minMinutes = VALUES(minMinutes), maxMinutes = VALUES(maxMinutes),
                updatedAt = NOW(3)'
         );
+        // Lines with no store at all (a free-text job, an unregistered place)
+        // belong to the local run — or to the first run when there is no local
+        // one, so their goods are never left uncollected.
+        $storeless = in_array('LOCAL', array_map(fn($g) => (string) $g['key'], $plan['groups']), true)
+            ? 'LOCAL' : (string) ($plan['groups'][0]['key'] ?? '');
         foreach ($plan['groups'] as $g) {
             $keys[] = (string) $g['key'];
             $mids = array_column($g['merchants'], 'id');
             $s = 0.0;
             foreach ($mids as $mid) $s += $sub[$mid] ?? 0.0;
-            // Lines with no store at all (a free-text job) belong to the local run.
-            if ($g['key'] === 'LOCAL') $s += $sub[''] ?? 0.0;
+            if ((string) $g['key'] === $storeless) $s += $sub[''] ?? 0.0;
             $ins->execute([
                 newId(), $orderId, (string) $g['key'], $g['city'], $g['kind'], (int) $g['seq'],
                 $mids ? json_encode($mids, JSON_UNESCAPED_UNICODE) : null,
