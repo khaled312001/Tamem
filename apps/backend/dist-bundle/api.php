@@ -6716,8 +6716,9 @@ function shiftSpillsInto(string $start, string $end, int $mins): bool {
  * date), a booked seat that only starts later is left out — see «حجز الورديات».
  */
 function driverShiftsForDay(string $driverId, int $dow, ?string $onDay = null): array {
-    $dated = $onDay !== null && ensureShiftBookingSchema();
-    $st = db()->prepare("SELECT id, startTime, endTime FROM `DriverShift` WHERE driverId = ? AND dayOfWeek = ? AND isActive = 1"
+    $schema = ensureShiftBookingSchema();
+    $dated = $onDay !== null && $schema;
+    $st = db()->prepare("SELECT id, startTime, endTime" . ($schema ? ', location' : '') . " FROM `DriverShift` WHERE driverId = ? AND dayOfWeek = ? AND isActive = 1"
         . ($dated ? " AND (validFrom IS NULL OR validFrom <= ?)" : '') . " ORDER BY startTime");
     $st->execute($dated ? [$driverId, $dow, $onDay] : [$driverId, $dow]);
     return $st->fetchAll();
@@ -7181,9 +7182,12 @@ function hhmm12Ar(string $t): string {
     $en = $h12 . ':' . str_pad((string) $m, 2, '0', STR_PAD_LEFT) . $ap;
     return strtr($en, ['0'=>'٠','1'=>'١','2'=>'٢','3'=>'٣','4'=>'٤','5'=>'٥','6'=>'٦','7'=>'٧','8'=>'٨','9'=>'٩']);
 }
-const SHIFT_DAYS_AR = [6 => 'السبت', 0 => 'الأحد', 1 => 'الإثنين', 2 => 'الثلاثاء', 3 => 'الأربعاء', 4 => 'الخميس', 5 => 'الجمعة'];
-// One driver's week as lines (Sat-first). Overnight windows get a 🌙 so the
-// "ends next morning" bit is explicit. Returns '' when the driver has no shifts.
+// The office's week runs Tuesday → Monday (owner, 2026-11-15). Only the ORDER
+// changes: keys stay PHP date('w') (0 = Sunday), so stored rows are untouched.
+const SHIFT_DAYS_AR = [2 => 'الثلاثاء', 3 => 'الأربعاء', 4 => 'الخميس', 5 => 'الجمعة', 6 => 'السبت', 0 => 'الأحد', 1 => 'الإثنين'];
+// One driver's week as lines (Tue-first). Overnight windows get a 🌙 so the
+// "ends next morning" bit is explicit, and the place follows the hours.
+// Returns '' when the driver has no shifts.
 function driverWeekLines(string $driverId): string {
     $lines = [];
     foreach (SHIFT_DAYS_AR as $dow => $label) {
@@ -7191,7 +7195,8 @@ function driverWeekLines(string $driverId): string {
         if (!$sh) continue;
         $parts = array_map(function ($s) {
             $t = hhmm12Ar($s['startTime']) . ' ← ' . hhmm12Ar($s['endTime']);
-            return shiftIsOvernight($s['startTime'], $s['endTime']) ? $t . ' 🌙' : $t;
+            if (shiftIsOvernight($s['startTime'], $s['endTime'])) $t .= ' 🌙';
+            return !empty($s['location']) ? $t . ' 📍 ' . $s['location'] : $t;
         }, $sh);
         $lines[] = '• *' . $label . ':* ' . implode(' + ', $parts);
     }
@@ -7202,16 +7207,22 @@ function driverWeekLines(string $driverId): string {
 if ($method === 'GET' && $path === '/admin/driver-shifts') {
     $u = authUser(); if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
     $drivers = db()->query("SELECT u.id, u.name, u.phone FROM `User` u JOIN `DriverProfile` dp ON dp.userId = u.id WHERE u.role = 'DRIVER' AND u.isActive = 1 ORDER BY u.name")->fetchAll();
-    $shifts = db()->query("SELECT id, driverId, dayOfWeek, startTime, endTime FROM `DriverShift` WHERE isActive = 1 ORDER BY startTime")->fetchAll();
+    $schema = ensureShiftBookingSchema();
+    $shifts = db()->query("SELECT id, driverId, dayOfWeek, startTime, endTime" . ($schema ? ', location, slotId' : '') . " FROM `DriverShift` WHERE isActive = 1 ORDER BY startTime")->fetchAll();
     $byDriver = [];
-    foreach ($shifts as $s) $byDriver[$s['driverId']][(int) $s['dayOfWeek']][] = ['id' => $s['id'], 'startTime' => $s['startTime'], 'endTime' => $s['endTime']];
+    foreach ($shifts as $s) $byDriver[$s['driverId']][(int) $s['dayOfWeek']][] = [
+        'id' => $s['id'], 'startTime' => $s['startTime'], 'endTime' => $s['endTime'],
+        'location' => ($s['location'] ?? null) ?: null, 'booked' => !empty($s['slotId']),
+    ];
     $out = array_map(function ($d) use ($byDriver) {
         $days = $byDriver[$d['id']] ?? [];
         $mins = 0;
         foreach ($days as $list) foreach ($list as $sh) $mins += shiftMinutes($sh['startTime'], $sh['endTime']);
         return ['id' => $d['id'], 'name' => $d['name'], 'phone' => $d['phone'], 'days' => (object) $days, 'weeklyHours' => round($mins / 60, 1)];
     }, $drivers);
-    jsonOk(['drivers' => $out]);
+    $days = [];
+    foreach (SHIFT_DAYS_AR as $dow => $label) $days[] = ['dayOfWeek' => $dow, 'label' => $label];
+    jsonOk(['drivers' => $out, 'days' => $days, 'places' => shiftPlaces()]);
 }
 // Add a shift to a driver on one or more days (the "copy to days" convenience).
 if ($method === 'POST' && $path === '/admin/driver-shifts') {
@@ -7221,10 +7232,14 @@ if ($method === 'POST' && $path === '/admin/driver-shifts') {
     $start = trim((string) ($b['startTime'] ?? '')); $end = trim((string) ($b['endTime'] ?? ''));
     $days = is_array($b['days'] ?? null) ? $b['days'] : (isset($b['dayOfWeek']) ? [$b['dayOfWeek']] : []);
     if ($driverId === '' || !hhmmOk($start) || !hhmmOk($end) || !$days) jsonErr('بيانات الوردية ناقصة', 422, 'VALIDATION_ERROR');
+    $loc = shiftPlaceIn($b['location'] ?? null);
+    $withLoc = $loc !== null && ensureShiftBookingSchema();
     $created = 0;
     foreach ($days as $d) {
         $dow = (int) $d; if ($dow < 0 || $dow > 6) continue;
-        db()->prepare("INSERT INTO `DriverShift` (id, driverId, dayOfWeek, startTime, endTime, isActive) VALUES (?,?,?,?,?,1)")->execute([newId(), $driverId, $dow, $start, $end]);
+        $withLoc
+            ? db()->prepare("INSERT INTO `DriverShift` (id, driverId, dayOfWeek, startTime, endTime, isActive, location) VALUES (?,?,?,?,?,1,?)")->execute([newId(), $driverId, $dow, $start, $end, $loc])
+            : db()->prepare("INSERT INTO `DriverShift` (id, driverId, dayOfWeek, startTime, endTime, isActive) VALUES (?,?,?,?,?,1)")->execute([newId(), $driverId, $dow, $start, $end]);
         $created++;
     }
     jsonOk(['created' => $created]);
@@ -7234,11 +7249,25 @@ if ($method === 'PATCH' && preg_match('#^/admin/driver-shifts/([^/]+)$#', $path,
     $b = readJsonBody(); $sets = []; $args = [];
     if (isset($b['startTime'])) { if (!hhmmOk((string) $b['startTime'])) jsonErr('وقت غير صحيح', 422, 'V'); $sets[] = 'startTime = ?'; $args[] = (string) $b['startTime']; }
     if (isset($b['endTime'])) { if (!hhmmOk((string) $b['endTime'])) jsonErr('وقت غير صحيح', 422, 'V'); $sets[] = 'endTime = ?'; $args[] = (string) $b['endTime']; }
-    if ($sets) { $args[] = $m[1]; db()->prepare("UPDATE `DriverShift` SET " . implode(', ', $sets) . " WHERE id = ?")->execute($args); }
+    // The place only labels the shift (money never reads it), so it is set in
+    // place, even on a booked seat with history.
+    if (array_key_exists('location', $b)) {
+        if (!ensureShiftBookingSchema()) jsonErr('الجدول مش جاهز — جرّب تاني', 503, 'NOT_READY');
+        $sets[] = 'location = ?'; $args[] = shiftPlaceIn($b['location']);
+    }
+    if ($sets) { $args[] = $m[1]; db()->prepare("UPDATE `DriverShift` SET " . implode(', ', $sets) . ", updatedAt = NOW(3) WHERE id = ?")->execute($args); }
     jsonOk(['ok' => true]);
 }
 if ($method === 'DELETE' && preg_match('#^/admin/driver-shifts/([^/]+)$#', $path, $m)) {
     $u = authUser(); if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
+    // A booked seat is freed the dated way (like «حجز الأماكن»), so the days it
+    // was in force keep their schedule for the bonus/deductions.
+    if (ensureShiftBookingSchema()) {
+        $st = db()->prepare("SELECT id, dayOfWeek, startTime, validFrom, slotId FROM `DriverShift` WHERE id = ? AND isActive = 1 LIMIT 1");
+        $st->execute([$m[1]]);
+        $row = $st->fetch();
+        if ($row && !empty($row['slotId'])) jsonOk(['deleted' => true, 'released' => endShiftSeat($row)]);
+    }
     db()->prepare("DELETE FROM `DriverShift` WHERE id = ?")->execute([$m[1]]);
     jsonOk(['deleted' => true]);
 }
@@ -7248,8 +7277,14 @@ if ($method === 'POST' && $path === '/admin/driver-shifts/copy') {
     $b = readJsonBody(); $from = trim((string) ($b['fromDriverId'] ?? '')); $to = trim((string) ($b['toDriverId'] ?? ''));
     if ($from === '' || $to === '' || $from === $to) jsonErr('اختر مندوبين مختلفين', 422, 'V');
     db()->prepare("DELETE FROM `DriverShift` WHERE driverId = ?")->execute([$to]);
-    $st = db()->prepare("SELECT dayOfWeek, startTime, endTime FROM `DriverShift` WHERE driverId = ? AND isActive = 1"); $st->execute([$from]);
-    $n = 0; foreach ($st->fetchAll() as $s) { db()->prepare("INSERT INTO `DriverShift` (id, driverId, dayOfWeek, startTime, endTime, isActive) VALUES (?,?,?,?,?,1)")->execute([newId(), $to, (int) $s['dayOfWeek'], $s['startTime'], $s['endTime']]); $n++; }
+    $loc = ensureShiftBookingSchema();
+    $st = db()->prepare("SELECT dayOfWeek, startTime, endTime" . ($loc ? ', location' : '') . " FROM `DriverShift` WHERE driverId = ? AND isActive = 1"); $st->execute([$from]);
+    $n = 0; foreach ($st->fetchAll() as $s) {
+        $loc
+            ? db()->prepare("INSERT INTO `DriverShift` (id, driverId, dayOfWeek, startTime, endTime, isActive, location) VALUES (?,?,?,?,?,1,?)")->execute([newId(), $to, (int) $s['dayOfWeek'], $s['startTime'], $s['endTime'], $s['location'] ?: null])
+            : db()->prepare("INSERT INTO `DriverShift` (id, driverId, dayOfWeek, startTime, endTime, isActive) VALUES (?,?,?,?,?,1)")->execute([newId(), $to, (int) $s['dayOfWeek'], $s['startTime'], $s['endTime']]);
+        $n++;
+    }
     jsonOk(['copied' => $n]);
 }
 // Wipe the sheet — all drivers (empty body) or one driver ({driverId}). For when
@@ -7348,7 +7383,9 @@ const SHIFT_DEFAULT_WINDOWS = [['08:00', '12:00'], ['12:00', '16:00'], ['16:00',
 function ensureShiftBookingSchema(): bool {
     static $ok = null;
     if ($ok !== null) return $ok;
-    $flag = ($d = rtDir()) ? $d . '/schema-shift-booking-v1' : null;
+    // v2 (2026-11-15) adds DriverShift.location; the steps are idempotent, so a
+    // host that ran v1 only adds the new column.
+    $flag = ($d = rtDir()) ? $d . '/schema-shift-booking-v2' : null;
     if ($flag && is_file($flag)) return $ok = true;
     // DDL commits implicitly: never run it under somebody else's transaction.
     if (db()->inTransaction()) return false;
@@ -7370,6 +7407,7 @@ function ensureShiftBookingSchema(): bool {
         if (!in_array('slotId', $cols, true)) { $add[] = 'ADD COLUMN `slotId` VARCHAR(30) NULL'; $add[] = 'ADD KEY `DriverShift_slotId_idx` (`slotId`)'; }
         if (!in_array('validFrom', $cols, true)) $add[] = 'ADD COLUMN `validFrom` DATE NULL';
         if (!in_array('validTo', $cols, true)) $add[] = 'ADD COLUMN `validTo` DATE NULL';
+        if (!in_array('location', $cols, true)) $add[] = 'ADD COLUMN `location` VARCHAR(60) NULL';
         if ($add) db()->exec('ALTER TABLE `DriverShift` ' . implode(', ', $add));
         if ($flag) @file_put_contents($flag, gmdate('c'));
         return $ok = true;
@@ -7386,7 +7424,32 @@ function shiftBookingRules(): array {
         'requireIdCard' => array_key_exists('requireIdCard', $s) ? (bool) $s['requireIdCard'] : true,
         'open' => array_key_exists('open', $s) ? (bool) $s['open'] : true,
         'note' => mb_substr(trim((string) ($s['note'] ?? '')), 0, 300),
+        'places' => is_array($s['places'] ?? null) ? shiftPlaceList($s['places']) : SHIFT_DEFAULT_PLACES,
     ];
+}
+// Where a driver waits during a shift (owner, 2026-11-15). The office edits the list.
+const SHIFT_DEFAULT_PLACES = ['المكتب', 'الاسكندراني', 'الأمير', 'الانسجام'];
+/** One place name as stored: trimmed, single spaces, 60 chars; '' / null → null. */
+function shiftPlaceIn($v): ?string {
+    if ($v === null) return null;
+    $s = preg_replace('/[\x00-\x1F\x7F]+/u', '', (string) $v) ?? '';
+    $s = trim(preg_replace('/\s+/u', ' ', $s) ?? '');
+    return $s === '' ? null : mb_substr($s, 0, 60);
+}
+function shiftPlaceList(array $in): array {
+    $out = [];
+    foreach ($in as $p) { $p = shiftPlaceIn(is_scalar($p) ? $p : null); if ($p !== null && !in_array($p, $out, true)) $out[] = $p; }
+    return array_slice($out, 0, 30);
+}
+/** The office's list first, then any other place still on a shift (so nothing in use disappears). */
+function shiftPlaces(): array {
+    $list = shiftBookingRules()['places'];
+    if (ensureShiftBookingSchema()) {
+        foreach (db()->query("SELECT DISTINCT location FROM `DriverShift` WHERE isActive = 1 AND location IS NOT NULL AND location <> ''")->fetchAll() as $r) {
+            if (!in_array($r['location'], $list, true)) $list[] = $r['location'];
+        }
+    }
+    return $list;
 }
 /** [start, end] in minutes from the day's midnight; an end at or before the start is the next midnight-or-later. */
 function slotSpan(string $start, string $end): array {
@@ -7399,7 +7462,7 @@ function shiftSlotsWithSeats(?string $forDriver = null, bool $names = false): ar
     if (!ensureShiftBookingSchema()) return [];
     $slots = db()->query("SELECT id, dayOfWeek, startTime, endTime, capacity FROM `ShiftSlot` WHERE isActive = 1 ORDER BY dayOfWeek, startTime")->fetchAll();
     $by = [];
-    foreach (db()->query("SELECT ds.id, ds.slotId, ds.driverId, ds.validFrom, ds.createdAt, u.name, u.phone
+    foreach (db()->query("SELECT ds.id, ds.slotId, ds.driverId, ds.validFrom, ds.createdAt, ds.location, u.name, u.phone
                             FROM `DriverShift` ds LEFT JOIN `User` u ON u.id = ds.driverId COLLATE utf8mb4_unicode_ci
                            WHERE ds.slotId IS NOT NULL AND ds.isActive = 1 ORDER BY ds.createdAt")->fetchAll() as $b) {
         $by[$b['slotId']][] = $b;
@@ -7416,10 +7479,12 @@ function shiftSlotsWithSeats(?string $forDriver = null, bool $names = false): ar
             $mine = array_values(array_filter($list, fn($b) => $b['driverId'] === $forDriver));
             $row['mine'] = (bool) $mine;
             $row['mineFrom'] = $mine ? $mine[0]['validFrom'] : null;
+            $row['mineLocation'] = $mine ? (($mine[0]['location'] ?? null) ?: null) : null;
         }
         if ($names) {
             $row['bookings'] = array_map(fn($b) => [
                 'shiftId' => $b['id'], 'driverId' => $b['driverId'], 'name' => $b['name'], 'phone' => $b['phone'],
+                'location' => ($b['location'] ?? null) ?: null,
                 'validFrom' => $b['validFrom'], 'bookedAt' => $b['createdAt'] ? gmdate('Y-m-d\TH:i:s\Z', (int) strtotime($b['createdAt'] . ' UTC')) : null,
             ], $list);
         }
@@ -7435,7 +7500,7 @@ function shiftSlotsWithSeats(?string $forDriver = null, bool $names = false): ar
  * today, otherwise from tomorrow — so it never reaches back into a day that
  * has already been worked or missed.
  */
-function bookShiftSeat(string $slotId, string $driverId, bool $byOffice): array {
+function bookShiftSeat(string $slotId, string $driverId, bool $byOffice, ?string $location = null): array {
     if (!ensureShiftBookingSchema()) jsonErr('الحجز مش جاهز حالياً — جرّب بعد شوية', 503, 'NOT_READY');
     $R = shiftBookingRules();
     $pdo = db();
@@ -7468,9 +7533,9 @@ function bookShiftSeat(string $slotId, string $driverId, bool $byOffice): array 
     $from = ((int) date('w') === $dow && (int) strtotime($today . ' ' . $slot['startTime']) > time())
         ? $today : date('Y-m-d', strtotime('+1 day'));
     $id = newId();
-    $pdo->prepare("INSERT INTO `DriverShift` (id, driverId, dayOfWeek, startTime, endTime, isActive, slotId, validFrom, createdAt, updatedAt)
-                   VALUES (?,?,?,?,?,1,?,?,NOW(3),NOW(3))")
-        ->execute([$id, $driverId, $dow, $slot['startTime'], $slot['endTime'], $slotId, $from]);
+    $pdo->prepare("INSERT INTO `DriverShift` (id, driverId, dayOfWeek, startTime, endTime, isActive, slotId, validFrom, location, createdAt, updatedAt)
+                   VALUES (?,?,?,?,?,1,?,?,?,NOW(3),NOW(3))")
+        ->execute([$id, $driverId, $dow, $slot['startTime'], $slot['endTime'], $slotId, $from, $location]);
     $pdo->commit();
     return ['shiftId' => $id, 'validFrom' => $from];
 }
@@ -7769,7 +7834,7 @@ if ($method === 'GET' && $path === '/admin/shift-booking') {
     }
     $days = [];
     foreach (SHIFT_DAYS_AR as $dow => $label) $days[] = ['dayOfWeek' => $dow, 'label' => $label];
-    jsonOk(['slots' => $slots, 'drivers' => $drivers, 'rules' => shiftBookingRules(), 'days' => $days,
+    jsonOk(['slots' => $slots, 'drivers' => $drivers, 'rules' => shiftBookingRules(), 'days' => $days, 'places' => shiftPlaces(),
         'portalUrl' => rtrim((string) (env('SITE_URL') ?: 'https://deliverytamem.com'), '/') . '/captain/']);
 }
 if ($method === 'PUT' && $path === '/admin/shift-booking/rules') {
@@ -7781,6 +7846,7 @@ if ($method === 'PUT' && $path === '/admin/shift-booking/rules') {
         'requireIdCard' => array_key_exists('requireIdCard', $b) ? (bool) $b['requireIdCard'] : $cur['requireIdCard'],
         'open' => array_key_exists('open', $b) ? (bool) $b['open'] : $cur['open'],
         'note' => array_key_exists('note', $b) ? mb_substr(trim((string) $b['note']), 0, 300) : $cur['note'],
+        'places' => is_array($b['places'] ?? null) ? shiftPlaceList($b['places']) : $cur['places'],
     ];
     notifWriteSetting('shift_booking', $new, $u['sub'] ?? null);
     jsonOk($new);
@@ -7851,8 +7917,8 @@ if ($method === 'PATCH' && preg_match('#^/admin/shift-slots/([^/]+)$#', $path, $
                     $pdo->prepare("UPDATE `DriverShift` SET startTime = ?, endTime = ?, updatedAt = NOW(3) WHERE id = ?")->execute([$start, $end, $r['id']]);
                 } else {
                     $pdo->prepare("UPDATE `DriverShift` SET isActive = 0, validTo = ?, updatedAt = NOW(3) WHERE id = ?")->execute([$tomorrow, $r['id']]);
-                    $pdo->prepare("INSERT INTO `DriverShift` (id, driverId, dayOfWeek, startTime, endTime, isActive, slotId, validFrom, createdAt, updatedAt) VALUES (?,?,?,?,?,1,?,?,NOW(3),NOW(3))")
-                        ->execute([newId(), $r['driverId'], $r['dayOfWeek'], $start, $end, $m[1], $tomorrow]);
+                    $pdo->prepare("INSERT INTO `DriverShift` (id, driverId, dayOfWeek, startTime, endTime, isActive, slotId, validFrom, location, createdAt, updatedAt) VALUES (?,?,?,?,?,1,?,?,?,NOW(3),NOW(3))")
+                        ->execute([newId(), $r['driverId'], $r['dayOfWeek'], $start, $end, $m[1], $tomorrow, ($r['location'] ?? null) ?: null]);
                 }
                 $moved++;
             }
@@ -7877,11 +7943,12 @@ if ($method === 'DELETE' && preg_match('#^/admin/shift-slots/([^/]+)$#', $path, 
 // The office seats a driver ({driverId}) — capacity still applies, the hours cap does not.
 if ($method === 'POST' && preg_match('#^/admin/shift-slots/([^/]+)/bookings$#', $path, $m)) {
     requireShiftAdmin();
-    $driverId = trim((string) (readJsonBody()['driverId'] ?? ''));
+    $b = readJsonBody();
+    $driverId = trim((string) ($b['driverId'] ?? ''));
     $st = db()->prepare("SELECT 1 FROM `User` u JOIN `DriverProfile` dp ON dp.userId = u.id WHERE u.id = ? AND u.role = 'DRIVER' AND u.isActive = 1");
     $st->execute([$driverId]);
     if (!$st->fetch()) jsonErr('اختار مندوب', 422, 'VALIDATION_ERROR');
-    jsonOk(bookShiftSeat($m[1], $driverId, true));
+    jsonOk(bookShiftSeat($m[1], $driverId, true, shiftPlaceIn($b['location'] ?? null)));
 }
 if ($method === 'DELETE' && preg_match('#^/admin/shift-slots/([^/]+)/bookings/([^/]+)$#', $path, $m)) {
     requireShiftAdmin();
@@ -8771,7 +8838,7 @@ if ($method === 'GET' && $path === '/admin/shifts/today') {
         $scheduledNow = false;
         foreach ($today as $s) if (shiftCoversOwnDay($s['startTime'], $s['endTime'], $mins)) { $scheduledNow = true; break; }
         if (!$scheduledNow) foreach ($carry as $s) if (shiftSpillsInto($s['startTime'], $s['endTime'], $mins)) { $scheduledNow = true; break; }
-        $labelParts = array_map(fn($s) => $s['startTime'] . '–' . $s['endTime'], $today);
+        $labelParts = array_map(fn($s) => $s['startTime'] . '–' . $s['endTime'] . (!empty($s['location']) ? ' 📍 ' . $s['location'] : ''), $today);
         foreach ($carry as $s) $labelParts[] = '⟵ حتى ' . $s['endTime'] . ' (من امبارح)';
         $open = driverOpenSession($d['id']);
         $out[] = [
@@ -8780,7 +8847,7 @@ if ($method === 'GET' && $path === '/admin/shifts/today') {
             'scheduledLabel' => implode('، ', $labelParts),
             'scheduledNow' => $scheduledNow,
             'onShift' => $open !== null,
-            'startedAt' => $open['startedAt'] ? isoZ($open['startedAt']) : null,
+            'startedAt' => $open && $open['startedAt'] ? isoZ($open['startedAt']) : null,
             'offSchedule' => $open ? (bool) (int) $open['offSchedule'] : false,
         ];
     }

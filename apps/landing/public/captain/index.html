@@ -141,6 +141,9 @@
       .mylist { margin: 0; padding: 0; list-style: none; }
       .mylist li { display: flex; justify-content: space-between; gap: 8px; padding: 8px 0; border-bottom: 1px dashed var(--border); font-size: 14px; }
       .mylist li:last-child { border-bottom: 0; }
+      .mylist li > span { text-align: end; }
+      .place { font-size: 13px; font-weight: 700; color: var(--red); margin-top: 2px; }
+      small.place { display: block; font-size: 12px; }
       .toast {
         position: fixed; left: 50%; bottom: 18px; transform: translateX(-50%) translateY(20px); opacity: 0;
         background: var(--ink); color: #fff; padding: 10px 16px; border-radius: 12px; font-size: 14px; max-width: calc(100% - 32px);
@@ -387,7 +390,8 @@
             else btn = '<button class="btn small green" data-book="' + s.id + '"' + (state.locked ? ' disabled' : '') + '>احجز</button>';
             return '<div class="slot' + (s.mine ? ' mine' : '') + (full ? ' full' : '') + '">' +
               '<div class="top"><div><div class="time">' + t12(s.startTime) + ' ← ' + t12(s.endTime) + '</div>' +
-              '<div class="sub">' + s.hours + ' ساعات · ' + (s.mine ? 'بتاعتك' + (s.mineFrom ? ' (من ' + fmtDate(s.mineFrom) + ')' : '') : free > 0 ? 'فاضي ' + free + ' من ' + s.capacity : 'مكتملة') + '</div></div>' + btn + '</div>' +
+              '<div class="sub">' + s.hours + ' ساعات · ' + (s.mine ? 'بتاعتك' + (s.mineFrom ? ' (من ' + fmtDate(s.mineFrom) + ')' : '') : free > 0 ? 'فاضي ' + free + ' من ' + s.capacity : 'مكتملة') + '</div>' +
+              (s.mine && s.mineLocation ? '<div class="place">📍 مكانك: ' + esc(s.mineLocation) + '</div>' : '') + '</div>' + btn + '</div>' +
               '<div class="seats">' + seats + '</div></div>';
           }).join('') : '<p class="hint">مفيش ورديات متاحة اليوم ده.</p>';
 
@@ -396,7 +400,8 @@
           var mine = me.slots.filter(function (s) { return s.mine; });
           $('mine').innerHTML = mine.length ? me.days.map(function (x) {
             return mine.filter(function (s) { return s.dayOfWeek === x.dayOfWeek; }).map(function (s) {
-              return '<li><b>' + esc(dayName[s.dayOfWeek]) + '</b><span>' + t12(s.startTime) + ' ← ' + t12(s.endTime) + '</span></li>';
+              return '<li><b>' + esc(dayName[s.dayOfWeek]) + '</b><span>' + t12(s.startTime) + ' ← ' + t12(s.endTime) +
+                (s.mineLocation ? '<small class="place">📍 ' + esc(s.mineLocation) + '</small>' : '') + '</span></li>';
             }).join('');
           }).join('') : '<li><span class="hint" style="margin:0">لسه ماحجزتش أي وردية.</span></li>';
         }

@@ -17,6 +17,7 @@ import {
 import { useState } from 'react';
 import { toast } from 'sonner';
 
+import { placeOut, ShiftPlacePicker } from '../components/ShiftPlacePicker.js';
 import { Button } from '../components/ui/Button.js';
 import { Dialog } from '../components/ui/Dialog.js';
 import { api } from '../lib/api.js';
@@ -24,18 +25,27 @@ import { SearchInput } from '../components/ui/Input.js';
 import { IncentiveRulesPanel } from './driver-incentives.js';
 import { ShiftBookingPanel } from './shift-booking.js';
 
-// Arabic week, Saturday-first. dayOfWeek matches PHP 'w' (0=Sun … 6=Sat).
+// The office's week runs Tuesday → Monday (owner, 2026-11-15); same order as
+// SHIFT_DAYS_AR on the server. dayOfWeek matches PHP 'w' (0=Sun … 6=Sat).
 const DAYS: { d: number; l: string }[] = [
-  { d: 6, l: 'السبت' },
-  { d: 0, l: 'الأحد' },
-  { d: 1, l: 'الإثنين' },
   { d: 2, l: 'الثلاثاء' },
   { d: 3, l: 'الأربعاء' },
   { d: 4, l: 'الخميس' },
   { d: 5, l: 'الجمعة' },
+  { d: 6, l: 'السبت' },
+  { d: 0, l: 'الأحد' },
+  { d: 1, l: 'الإثنين' },
 ];
 
-type Shift = { id: string; startTime: string; endTime: string };
+type Shift = {
+  id: string;
+  startTime: string;
+  endTime: string;
+  /** Where he waits: المكتب، الاسكندراني… */
+  location?: string | null;
+  /** Taken from «حجز الأماكن»: deleting frees the seat the dated way. */
+  booked?: boolean;
+};
 type GridDriver = {
   id: string;
   name: string;
@@ -317,8 +327,11 @@ function Row({ d, busy, children }: { d: TodayDriver; busy: boolean; children: R
   );
 }
 function fmtRange(r: string): string {
-  const [a, b] = r.split('–');
-  return a && b ? `${fmt12(a)}–${fmt12(b)}` : r;
+  // «16:00–00:00 📍 المكتب»: the place rides after the hours.
+  const [range = r, place] = r.split(' 📍 ');
+  const [a, b] = range.split('–');
+  const t = a && b ? `${fmt12(a)}–${fmt12(b)}` : range;
+  return place ? `${t} 📍 ${place}` : t;
 }
 
 // ───────────────────────── Weekly grid (sheet) ─────────────────────────
@@ -327,22 +340,23 @@ function WeeklyGrid() {
   const { data, isLoading } = useQuery({
     queryKey: ['admin', 'driver-shifts'],
     queryFn: () =>
-      api.raw.get('/admin/driver-shifts').then((r) => r.data.data as { drivers: GridDriver[] }),
+      api.raw
+        .get('/admin/driver-shifts')
+        .then((r) => r.data.data as { drivers: GridDriver[]; places?: string[] }),
   });
-  const invalidate = () => qc.invalidateQueries({ queryKey: ['admin', 'driver-shifts'] });
+  const invalidate = () => {
+    qc.invalidateQueries({ queryKey: ['admin', 'driver-shifts'] });
+    qc.invalidateQueries({ queryKey: ['admin', 'shift-booking'] });
+  };
   const [adding, setAdding] = useState<{ driver: GridDriver; day: number } | null>(null);
+  const [editing, setEditing] = useState<{ driver: GridDriver; day: number; shift: Shift } | null>(
+    null,
+  );
   const [copyFrom, setCopyFrom] = useState<GridDriver | null>(null);
   const [sendDriver, setSendDriver] = useState<GridDriver | null>(null);
   const [clearing, setClearing] = useState(false);
+  const places = data?.places ?? [];
 
-  const del = useMutation({
-    mutationFn: (id: string) =>
-      api.raw.delete(`/admin/driver-shifts/${id}`).then((r) => r.data.data),
-    onSuccess: () => {
-      toast.success('اتحذفت');
-      invalidate();
-    },
-  });
   const sendAll = useMutation({
     mutationFn: () =>
       api.raw
@@ -365,8 +379,8 @@ function WeeklyGrid() {
     <div className="space-y-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <p className="text-xs text-muted-foreground">
-          الجدول بيكرّر نفسه كل أسبوع — دوس على خانة اليوم عشان تضيف وردية. تقدر تضيف نفس الوردية
-          لأكتر من يوم مرة واحدة.
+          الجدول بيكرّر نفسه كل أسبوع من الثلاثاء للإثنين — دوس على خانة اليوم عشان تضيف وردية، ودوس
+          على الميعاد عشان تحدد مكانه أو تشيله.
         </p>
         <div className="flex items-center gap-2">
           <Button
@@ -441,18 +455,23 @@ function WeeklyGrid() {
                             key={s.id}
                             onClick={(e) => {
                               e.stopPropagation();
-                              if (confirm(`حذف وردية ${fmt12(s.startTime)}–${fmt12(s.endTime)}؟`))
-                                del.mutate(s.id);
+                              setEditing({ driver: dr, day: day.d, shift: s });
                             }}
-                            className="rounded bg-emerald-100 px-1.5 py-0.5 text-[11px] font-bold text-emerald-800 hover:bg-red-100 hover:text-red-700"
+                            className="rounded bg-emerald-100 px-1.5 py-0.5 text-[11px] font-bold text-emerald-800 hover:bg-emerald-200"
                             title={
-                              isOvernight(s)
-                                ? 'وردية ليلية تعدّي نص الليل — اضغط للحذف'
-                                : 'اضغط للحذف'
+                              (isOvernight(s) ? 'وردية ليلية تعدّي نص الليل — ' : '') +
+                              'اضغط لتحديد المكان أو الحذف'
                             }
                           >
-                            {fmt12(s.startTime)}–{fmt12(s.endTime)}
-                            {isOvernight(s) ? ' 🌙' : ''}
+                            <span className="block">
+                              {fmt12(s.startTime)}–{fmt12(s.endTime)}
+                              {isOvernight(s) ? ' 🌙' : ''}
+                            </span>
+                            {s.location && (
+                              <span className="block text-[10px] font-semibold text-emerald-900/80">
+                                📍 {s.location}
+                              </span>
+                            )}
                           </button>
                         ))}
                         {carry.map((s) => (
@@ -486,9 +505,23 @@ function WeeklyGrid() {
         <AddShiftDialog
           driver={adding.driver}
           day={adding.day}
+          places={places}
           onClose={() => setAdding(null)}
           onSaved={() => {
             setAdding(null);
+            invalidate();
+          }}
+        />
+      )}
+      {editing && (
+        <ShiftDialog
+          driver={editing.driver}
+          day={editing.day}
+          shift={editing.shift}
+          places={places}
+          onClose={() => setEditing(null)}
+          onSaved={() => {
+            setEditing(null);
             invalidate();
           }}
         />
@@ -655,24 +688,127 @@ function SendScheduleDialog({ driver, onClose }: { driver: GridDriver; onClose: 
   );
 }
 
-function AddShiftDialog({
+// One shift on the sheet: set where he waits, or take it off.
+function ShiftDialog({
   driver,
   day,
+  shift,
+  places,
   onClose,
   onSaved,
 }: {
   driver: GridDriver;
   day: number;
+  shift: Shift;
+  places: string[];
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const [place, setPlace] = useState<string | null>(shift.location ?? null);
+  const [confirmDel, setConfirmDel] = useState(false);
+  const save = useMutation({
+    mutationFn: () =>
+      api.raw.patch(`/admin/driver-shifts/${shift.id}`, { location: placeOut(place) }),
+    onSuccess: () => {
+      toast.success('اتحفظ المكان');
+      onSaved();
+    },
+    onError: () => toast.error('تعذّر الحفظ'),
+  });
+  const del = useMutation({
+    mutationFn: () => api.raw.delete(`/admin/driver-shifts/${shift.id}`),
+    onSuccess: () => {
+      toast.success(shift.booked ? 'اتشال من الحجز' : 'اتحذفت');
+      onSaved();
+    },
+    onError: () => toast.error('تعذّر الحذف'),
+  });
+  const dayLabel = DAYS.find((x) => x.d === day)?.l ?? '';
+  return (
+    <Dialog open onOpenChange={(o) => !o && onClose()} title={`${driver.name} — ${dayLabel}`}>
+      <div className="space-y-4">
+        <div className="rounded-lg bg-muted px-3 py-2 text-sm font-bold">
+          {fmt12(shift.startTime)}–{fmt12(shift.endTime)}
+          {isOvernight(shift) ? ' 🌙' : ''}
+          {shift.booked && (
+            <span className="ms-2 text-xs font-normal text-muted-foreground">
+              (محجوزة من «حجز الأماكن»)
+            </span>
+          )}
+        </div>
+        <ShiftPlacePicker places={places} value={place} onChange={setPlace} />
+        {confirmDel ? (
+          <div className="space-y-2 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800">
+            <p>
+              {shift.booked
+                ? 'هيتشال من الوردية دي في «حجز الأماكن» كمان. الأيام اللي فاتت بتفضل محسوبة زي ما هي.'
+                : 'هتتشال الوردية دي من جدول المندوب.'}
+            </p>
+            <div className="flex justify-end gap-2">
+              <Button variant="outline" size="sm" onClick={() => setConfirmDel(false)}>
+                لا
+              </Button>
+              <Button
+                size="sm"
+                onClick={() => del.mutate()}
+                disabled={del.isPending}
+                className="bg-red-600 text-white hover:bg-red-700"
+              >
+                {del.isPending && <Loader2 className="h-3.5 w-3.5 animate-spin" />} أيوه شيلها
+              </Button>
+            </div>
+          </div>
+        ) : (
+          <div className="flex items-center justify-between gap-2">
+            <Button
+              variant="outline"
+              onClick={() => setConfirmDel(true)}
+              className="border-red-200 text-red-600 hover:bg-red-50 hover:text-red-700"
+            >
+              <Trash2 className="h-4 w-4" /> شيل الوردية
+            </Button>
+            <div className="flex gap-2">
+              <Button variant="outline" onClick={onClose}>
+                <X className="h-4 w-4" /> إلغاء
+              </Button>
+              <Button onClick={() => save.mutate()} disabled={save.isPending}>
+                {save.isPending && <Loader2 className="h-4 w-4 animate-spin" />} حفظ المكان
+              </Button>
+            </div>
+          </div>
+        )}
+      </div>
+    </Dialog>
+  );
+}
+
+function AddShiftDialog({
+  driver,
+  day,
+  places,
+  onClose,
+  onSaved,
+}: {
+  driver: GridDriver;
+  day: number;
+  places: string[];
   onClose: () => void;
   onSaved: () => void;
 }) {
   const [days, setDays] = useState<number[]>([day]);
   const [start, setStart] = useState('16:00');
   const [end, setEnd] = useState('00:00');
+  const [place, setPlace] = useState<string | null>(null);
   const save = useMutation({
     mutationFn: () =>
       api.raw
-        .post('/admin/driver-shifts', { driverId: driver.id, days, startTime: start, endTime: end })
+        .post('/admin/driver-shifts', {
+          driverId: driver.id,
+          days,
+          startTime: start,
+          endTime: end,
+          location: placeOut(place),
+        })
         .then((r) => r.data.data),
     onSuccess: () => {
       toast.success('اتضافت الوردية');
@@ -737,6 +873,7 @@ function AddShiftDialog({
             لو خليت وقت النهاية أصغر من البداية، معناها الوردية بتعدّي نص الليل (مثلًا ٨م–٢ص).
           </div>
         )}
+        <ShiftPlacePicker places={places} value={place} onChange={setPlace} />
         <div className="flex justify-end gap-2">
           <Button variant="outline" onClick={onClose}>
             <X className="h-4 w-4" /> إلغاء

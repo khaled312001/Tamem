@@ -25,6 +25,7 @@ import {
 import { useEffect, useState } from 'react';
 import { toast } from 'sonner';
 
+import { placeOut, ShiftPlacePicker } from '../components/ShiftPlacePicker.js';
 import { Button } from '../components/ui/Button.js';
 import { ConfirmDialog } from '../components/ui/ConfirmDialog.js';
 import { Dialog } from '../components/ui/Dialog.js';
@@ -37,6 +38,7 @@ interface Booking {
   name: string | null;
   phone: string | null;
   validFrom: string | null;
+  location?: string | null;
 }
 interface Slot {
   id: string;
@@ -64,12 +66,14 @@ interface Rules {
   requireIdCard: boolean;
   open: boolean;
   note: string;
+  places?: string[];
 }
 interface Data {
   slots: Slot[];
   drivers: Driver[];
   rules: Rules;
   days: { dayOfWeek: number; label: string }[];
+  places?: string[];
   portalUrl: string;
 }
 
@@ -162,6 +166,7 @@ export function ShiftBookingPanel() {
                 today={d.dayOfWeek === new Date().getDay()}
                 slots={data.slots.filter((s) => s.dayOfWeek === d.dayOfWeek)}
                 drivers={data.drivers}
+                places={data.places ?? data.rules.places ?? []}
                 onAdd={() => setAddFor(d.dayOfWeek)}
                 onDone={refresh}
               />
@@ -287,12 +292,14 @@ function DayCard({
   slots,
   drivers,
   onAdd,
+  places,
   onDone,
 }: {
   label: string;
   today: boolean;
   slots: Slot[];
   drivers: Driver[];
+  places: string[];
   onAdd: () => void;
   onDone: () => void;
 }) {
@@ -317,7 +324,7 @@ function DayCard({
         </span>
       </div>
       {slots.map((s) => (
-        <SlotRow key={s.id} slot={s} drivers={drivers} onDone={onDone} />
+        <SlotRow key={s.id} slot={s} drivers={drivers} places={places} onDone={onDone} />
       ))}
       <button
         onClick={onAdd}
@@ -329,8 +336,19 @@ function DayCard({
   );
 }
 
-function SlotRow({ slot, drivers, onDone }: { slot: Slot; drivers: Driver[]; onDone: () => void }) {
+function SlotRow({
+  slot,
+  drivers,
+  places,
+  onDone,
+}: {
+  slot: Slot;
+  drivers: Driver[];
+  places: string[];
+  onDone: () => void;
+}) {
   const [adding, setAdding] = useState(false);
+  const [placeFor, setPlaceFor] = useState<Booking | null>(null);
   const [confirmDel, setConfirmDel] = useState(false);
   const [editTime, setEditTime] = useState(false);
   const [st, setSt] = useState(slot.startTime);
@@ -442,14 +460,31 @@ function SlotRow({ slot, drivers, onDone }: { slot: Slot; drivers: Driver[]; onD
         {slot.bookings.map((b) => (
           <span
             key={b.shiftId}
-            className="inline-flex items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-xs font-bold"
+            className="inline-flex items-center gap-1 rounded-2xl bg-muted px-2 py-0.5 text-xs font-bold"
           >
-            {b.name ?? 'مندوب'}
-            {b.validFrom && b.validFrom > today && (
-              <span className="font-normal text-muted-foreground">
-                (من {b.validFrom.slice(5).replace('-', '/')})
+            <button
+              className="text-start hover:underline"
+              title="اضغط لتحديد مكانه"
+              onClick={() => setPlaceFor(b)}
+            >
+              <span className="block">
+                {b.name ?? 'مندوب'}
+                {b.validFrom && b.validFrom > today && (
+                  <span className="font-normal text-muted-foreground">
+                    {' '}
+                    (من {b.validFrom.slice(5).replace('-', '/')})
+                  </span>
+                )}
               </span>
-            )}
+              <span
+                className={cn(
+                  'block text-[10px]',
+                  b.location ? 'text-brand-red' : 'font-normal text-muted-foreground',
+                )}
+              >
+                📍 {b.location ?? 'حدد المكان'}
+              </span>
+            </button>
             <button
               title="شيله من الوردية"
               onClick={() =>
@@ -497,6 +532,18 @@ function SlotRow({ slot, drivers, onDone }: { slot: Slot; drivers: Driver[]; onD
             </button>
           ))}
       </div>
+      {placeFor && (
+        <PlaceDialog
+          booking={placeFor}
+          when={`${t12(slot.startTime)} ← ${t12(slot.endTime)}`}
+          places={places}
+          onClose={() => setPlaceFor(null)}
+          onDone={() => {
+            setPlaceFor(null);
+            onDone();
+          }}
+        />
+      )}
       <ConfirmDialog
         open={confirmDel}
         onOpenChange={setConfirmDel}
@@ -515,6 +562,53 @@ function SlotRow({ slot, drivers, onDone }: { slot: Slot; drivers: Driver[]; onD
         }
       />
     </div>
+  );
+}
+
+// Where this driver waits on this seat. The place is per driver, not per seat.
+function PlaceDialog({
+  booking,
+  when,
+  places,
+  onClose,
+  onDone,
+}: {
+  booking: Booking;
+  when: string;
+  places: string[];
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const [place, setPlace] = useState<string | null>(booking.location ?? null);
+  const save = useMutation({
+    mutationFn: () =>
+      api.raw.patch(`/admin/driver-shifts/${booking.shiftId}`, { location: placeOut(place) }),
+    onSuccess: () => {
+      toast.success('اتحفظ المكان');
+      onDone();
+    },
+    onError: (e) => toast.error(errMsg(e)),
+  });
+  return (
+    <Dialog
+      open
+      onOpenChange={(o) => !o && onClose()}
+      title={`مكان ${booking.name ?? 'المندوب'}`}
+      size="md"
+    >
+      <div className="space-y-4">
+        <p className="rounded-lg bg-muted px-3 py-2 text-sm font-bold">{when}</p>
+        <ShiftPlacePicker places={places} value={place} onChange={setPlace} />
+        <div className="flex justify-end gap-2">
+          <Button variant="outline" onClick={onClose}>
+            إلغاء
+          </Button>
+          <Button onClick={() => save.mutate()} disabled={save.isPending}>
+            {save.isPending && <Loader2 className="h-4 w-4 animate-spin" />} حفظ
+          </Button>
+        </div>
+      </div>
+    </Dialog>
   );
 }
 
@@ -629,8 +723,18 @@ function RulesDialog({
 }) {
   const [r, setR] = useState<Rules>(rules);
   useEffect(() => setR(rules), [rules]);
+  // One place per line; the server trims, de-duplicates and keeps 30 at most.
+  const [placesText, setPlacesText] = useState((rules.places ?? []).join('\n'));
+  useEffect(() => setPlacesText((rules.places ?? []).join('\n')), [rules]);
   const save = useMutation({
-    mutationFn: () => api.raw.put('/admin/shift-booking/rules', r),
+    mutationFn: () =>
+      api.raw.put('/admin/shift-booking/rules', {
+        ...r,
+        places: placesText
+          .split('\n')
+          .map((p) => p.trim())
+          .filter(Boolean),
+      }),
     onSuccess: () => {
       toast.success('اتحفظت القواعد');
       onDone();
@@ -693,6 +797,19 @@ function RulesDialog({
             maxLength={300}
             onChange={(e) => setR({ ...r, note: e.target.value })}
             placeholder="مثال: حجز الأسبوع الجاي بيقفل الخميس ١٠ بالليل"
+            className="mt-1 w-full rounded-lg border border-border px-3 py-2"
+          />
+        </label>
+        <label className="block">
+          <b>أماكن المناديب</b>
+          <span className="block text-xs text-muted-foreground">
+            كل مكان في سطر. بتظهر لما تحدد مكان المندوب في الوردية.
+          </span>
+          <textarea
+            value={placesText}
+            onChange={(e) => setPlacesText(e.target.value)}
+            rows={4}
+            placeholder={'المكتب\nالاسكندراني\nالأمير\nالانسجام'}
             className="mt-1 w-full rounded-lg border border-border px-3 py-2"
           />
         </label>
