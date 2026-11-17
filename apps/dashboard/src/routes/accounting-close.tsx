@@ -12,10 +12,11 @@ import {
   UserX,
 } from 'lucide-react';
 import { useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { toast } from 'sonner';
 
 import {
+  BooksNotice,
   dayLabel,
   DayNav,
   downloadCsv,
@@ -23,6 +24,7 @@ import {
   ExportButtons,
   KIND_LABEL,
   money,
+  monthEnd,
   MonthNav,
   monthLabel,
   Panel,
@@ -35,6 +37,8 @@ import {
   type Party,
   type PartyType,
   type Pnl,
+  SYSTEM_START,
+  type Books,
 } from '../components/accounting/kit.js';
 import { Button } from '../components/ui/Button.js';
 import { ConfirmDialog } from '../components/ui/ConfirmDialog.js';
@@ -326,6 +330,7 @@ export function DayClosing({
         <p className="text-sm text-destructive">{errMsg(error)}</p>
       ) : (
         <>
+          <BooksNotice books={data.books} />
           {data.monthClosed ? (
             <div className="rounded-xl border border-emerald-300 bg-emerald-50 p-3 text-sm font-bold text-emerald-900">
               <Lock className="me-1 inline h-4 w-4" /> الشهر كله متقفل.
@@ -521,6 +526,7 @@ export function MonthClosing({
         <p className="text-sm text-destructive">{errMsg(error)}</p>
       ) : (
         <>
+          <BooksNotice books={data.books} />
           <CloseBar
             closed={data.closed}
             label="الشهر"
@@ -629,8 +635,107 @@ export function MonthClosing({
 }
 
 // ───────────────────────── People ─────────────────────────
+type PeriodMode = 'day' | 'month' | 'range';
+const PERIOD_MODES: [PeriodMode, string][] = [
+  ['day', 'يوم'],
+  ['month', 'شهر'],
+  ['range', 'مدة'],
+];
+interface PeriodRow {
+  share?: number;
+  withdrawals?: number;
+  capital?: number;
+  due?: number;
+  salary?: number;
+  advances?: number;
+  paid?: number;
+  remaining?: number;
+}
+interface PeopleData {
+  from: string;
+  to: string;
+  netProfit: number;
+  distributable: number;
+  sharesTotal: number;
+  months: {
+    month: string;
+    from: string;
+    to: string;
+    whole: boolean;
+    closed: boolean;
+    netProfit: number;
+  }[];
+  rows: Record<string, PeriodRow>;
+  books?: Books;
+}
+
 export function PeopleTab({ meta }: { meta: Meta }) {
   const qc = useQueryClient();
+  // The period lives in the URL (shared «day»/«month» with the other tabs), so a refresh keeps it.
+  const [sp, setSp] = useSearchParams();
+  const pm = sp.get('pm');
+  const mode: PeriodMode = pm === 'day' || pm === 'range' ? pm : 'month';
+  const day = sp.get('day') || meta.today;
+  const month = sp.get('month') || meta.thisMonth;
+  const rFrom = sp.get('from') || `${meta.thisMonth}-01`;
+  const rTo = sp.get('to') || meta.today;
+  const setP = (o: Record<string, string>) =>
+    setSp(
+      (p) => {
+        const n = new URLSearchParams(p);
+        for (const [k, v] of Object.entries(o)) n.set(k, v);
+        return n;
+      },
+      { replace: true },
+    );
+  const [from, to] =
+    mode === 'day'
+      ? [day, day]
+      : mode === 'month'
+        ? [`${month}-01`, monthEnd(month)]
+        : rFrom <= rTo
+          ? [rFrom, rTo]
+          : [rTo, rFrom];
+  const period = useQuery({
+    queryKey: ['acct', 'people', from, to],
+    queryFn: () =>
+      api.raw
+        .get('/admin/accounting/people', { params: { from, to } })
+        .then((r) => r.data.data as PeopleData),
+    placeholderData: (prev) => prev,
+  });
+  const pd = period.data;
+  // the server starts a range on the system's first day at the earliest, so name what it used
+  const periodName =
+    mode === 'day'
+      ? dayLabel(day)
+      : mode === 'month'
+        ? monthLabel(month)
+        : `من ${pd?.from ?? from} لحد ${pd?.to ?? to}`;
+  const partOfMonth = !!pd && pd.months.some((m) => !m.whole);
+  const csv = () =>
+    pd &&
+    downloadCsv(`الموظفين والشركاء ${from} إلى ${to}`, [
+      ['الاسم', 'النوع', 'النسبة/المرتب', 'نصيبه أو مرتب المدة', 'سحب أو سلف', 'اتصرف', 'ليه'],
+      ...meta.parties.map((p) => {
+        const r = pd.rows[p.id] ?? {};
+        return p.type === 'EMPLOYEE'
+          ? [
+              p.name,
+              PARTY_LABEL[p.type],
+              p.monthlySalary,
+              r.salary,
+              r.advances,
+              r.paid,
+              r.remaining,
+            ]
+          : [p.name, PARTY_LABEL[p.type], `${p.sharePct ?? 0}%`, r.share, r.withdrawals, '', r.due];
+      }),
+      [],
+      ['صافي ربح الشركة', pd.netProfit],
+      ['نصيب الشركاء', pd.sharesTotal],
+      ['يفضل في الشركة', Math.round((pd.distributable - pd.sharesTotal) * 100) / 100],
+    ]);
   const [editing, setEditing] = useState<Party | PartyType | null>(null);
   const [statement, setStatement] = useState<Party | null>(null);
   const [removing, setRemoving] = useState<Party | null>(null);
@@ -681,61 +786,149 @@ export function PeopleTab({ meta }: { meta: Meta }) {
           <UserX className="h-4 w-4" />
         </button>
       )}
+      <PeriodFigures p={p} r={pd?.rows[p.id]} />
     </div>
   );
   return (
-    <div className="grid gap-4 lg:grid-cols-2">
-      <Panel
-        title="الشركاء والمستثمرين"
-        action={
-          <span className="flex gap-2">
-            <Button size="sm" variant="outline" onClick={() => setEditing('OWNER')}>
-              <Plus className="h-4 w-4" /> شريك
-            </Button>
-            <Button size="sm" variant="outline" onClick={() => setEditing('INVESTOR')}>
-              <Plus className="h-4 w-4" /> مستثمر
-            </Button>
+    <div className="space-y-4">
+      <Panel>
+        <div className="flex flex-wrap items-center gap-2" data-print="hide">
+          <div className="inline-flex rounded-lg border border-border bg-card p-0.5">
+            {PERIOD_MODES.map(([m, label]) => (
+              <button
+                key={m}
+                onClick={() => setP({ pm: m })}
+                className={cn(
+                  'rounded-md px-3 py-1.5 text-sm font-bold transition',
+                  mode === m
+                    ? 'bg-brand-red text-white'
+                    : 'text-muted-foreground hover:text-foreground',
+                )}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          {mode === 'day' && (
+            <DayNav value={day} onChange={(v) => setP({ day: v })} max={meta.today} />
+          )}
+          {mode === 'month' && (
+            <MonthNav value={month} onChange={(v) => setP({ month: v })} max={meta.thisMonth} />
+          )}
+          {mode === 'range' && (
+            <span className="inline-flex flex-wrap items-center gap-2 text-xs font-bold">
+              من
+              <input
+                type="date"
+                value={rFrom}
+                min={SYSTEM_START}
+                max={meta.today}
+                onChange={(e) => e.target.value && setP({ from: e.target.value })}
+                className="rounded-lg border border-border bg-card px-2 py-1.5 text-sm font-bold"
+              />
+              لحد
+              <input
+                type="date"
+                value={rTo}
+                min={SYSTEM_START}
+                max={meta.today}
+                onChange={(e) => e.target.value && setP({ to: e.target.value })}
+                className="rounded-lg border border-border bg-card px-2 py-1.5 text-sm font-bold"
+              />
+            </span>
+          )}
+          {period.isFetching && <Loader2 className="h-4 w-4 animate-spin text-brand-red" />}
+          <span className="ms-auto">
+            <ExportButtons onCsv={csv} />
           </span>
-        }
-      >
-        <p
-          className={cn(
-            'mb-2 text-xs font-bold',
-            shares > 100 ? 'text-red-600' : 'text-muted-foreground',
-          )}
+        </div>
+        {period.error ? (
+          <p className="mt-3 text-sm text-destructive">{errMsg(period.error)}</p>
+        ) : (
+          pd && (
+            <>
+              <p className="mt-3 text-sm font-black">{periodName}</p>
+              <div className="mt-2 grid gap-2 sm:grid-cols-3">
+                {[
+                  [
+                    'صافي ربح الشركة',
+                    signed(pd.netProfit),
+                    pd.netProfit < 0 ? 'text-destructive' : '',
+                  ],
+                  ['نصيب الشركاء والمستثمرين', money(pd.sharesTotal), 'text-emerald-700'],
+                  ['يفضل في الشركة', money(pd.distributable - pd.sharesTotal), ''],
+                ].map(([k, v, tone]) => (
+                  <div key={k} className="rounded-xl border border-border bg-card p-3">
+                    <p className="text-xs text-muted-foreground">{k}</p>
+                    <p className={cn('text-lg font-black tabular-nums', tone)}>{v}</p>
+                  </div>
+                ))}
+              </div>
+              <p className="mt-2 text-xs text-muted-foreground">
+                النصيب = النسبة × صافي الربح، والشهر الخسران مالوش نصيب.
+                {pd.months.some((m) => m.closed) && ' الشهور المتقفلة محسوبة بأرقام التقفيل.'}
+                {partOfMonth && ' المرتب محسوب بالأيام لأن المدة مش شهر كامل.'}
+              </p>
+              <div className="mt-3">
+                <BooksNotice books={pd.books} />
+              </div>
+            </>
+          )
+        )}
+      </Panel>
+      <div className="grid gap-4 lg:grid-cols-2">
+        <Panel
+          title="الشركاء والمستثمرين"
+          action={
+            <span className="flex gap-2">
+              <Button size="sm" variant="outline" onClick={() => setEditing('OWNER')}>
+                <Plus className="h-4 w-4" /> شريك
+              </Button>
+              <Button size="sm" variant="outline" onClick={() => setEditing('INVESTOR')}>
+                <Plus className="h-4 w-4" /> مستثمر
+              </Button>
+            </span>
+          }
         >
-          مجموع النسب: {shares}% من 100%
-          {shares < 100 ? ` · الباقي ${100 - shares}% يفضل في الشركة` : ''}
-        </p>
-        <div className="divide-y divide-border">
-          {group(['OWNER', 'INVESTOR']).map((p) => (
-            <Card key={p.id} p={p} />
-          ))}
-          {group(['OWNER', 'INVESTOR']).length === 0 && (
-            <p className="py-3 text-sm text-muted-foreground">لسه مفيش.</p>
-          )}
-        </div>
-      </Panel>
-      <Panel
-        title="الموظفين"
-        action={
-          <Button size="sm" variant="outline" onClick={() => setEditing('EMPLOYEE')}>
-            <Plus className="h-4 w-4" /> موظف
-          </Button>
-        }
-      >
-        <div className="divide-y divide-border">
-          {group(['EMPLOYEE']).map((p) => (
-            <Card key={p.id} p={p} />
-          ))}
-          {group(['EMPLOYEE']).length === 0 && (
-            <p className="py-3 text-sm text-muted-foreground">لسه مفيش.</p>
-          )}
-        </div>
-        <p className="mt-2 text-xs text-muted-foreground">
-          المناديب مش هنا: حساباتهم من الطلبات نفسها، وسلفهم بتتسجل من «الحركات».
-        </p>
-      </Panel>
+          <p
+            className={cn(
+              'mb-2 text-xs font-bold',
+              shares > 100 ? 'text-red-600' : 'text-muted-foreground',
+            )}
+          >
+            مجموع النسب: {shares}% من 100%
+            {shares < 100 ? ` · الباقي ${100 - shares}% يفضل في الشركة` : ''}
+          </p>
+          <div className="divide-y divide-border">
+            {group(['OWNER', 'INVESTOR']).map((p) => (
+              <Card key={p.id} p={p} />
+            ))}
+            {group(['OWNER', 'INVESTOR']).length === 0 && (
+              <p className="py-3 text-sm text-muted-foreground">لسه مفيش.</p>
+            )}
+          </div>
+        </Panel>
+        <Panel
+          title="الموظفين"
+          action={
+            <Button size="sm" variant="outline" onClick={() => setEditing('EMPLOYEE')}>
+              <Plus className="h-4 w-4" /> موظف
+            </Button>
+          }
+        >
+          <div className="divide-y divide-border">
+            {group(['EMPLOYEE']).map((p) => (
+              <Card key={p.id} p={p} />
+            ))}
+            {group(['EMPLOYEE']).length === 0 && (
+              <p className="py-3 text-sm text-muted-foreground">لسه مفيش.</p>
+            )}
+          </div>
+          <p className="mt-2 text-xs text-muted-foreground">
+            المناديب مش هنا: حساباتهم من الطلبات نفسها، وسلفهم بتتسجل من «الحركات».
+          </p>
+        </Panel>
+      </div>
       {editing && (
         <PartyDialog
           party={typeof editing === 'string' ? null : editing}
@@ -753,6 +946,44 @@ export function PeopleTab({ meta }: { meta: Meta }) {
         loading={del.isPending}
         onConfirm={() => removing && del.mutate(removing.id)}
       />
+    </div>
+  );
+}
+
+/** One person's money in the chosen period, on its own row under the name. */
+function PeriodFigures({ p, r }: { p: Party; r?: PeriodRow }) {
+  if (!r) return null;
+  const Item = ({ k, v, tone }: { k: string; v: string; tone?: string }) => (
+    <span className="rounded-lg bg-muted/40 px-2 py-1">
+      <span className="text-muted-foreground">{k} </span>
+      <b className={cn('tabular-nums', tone)}>{v}</b>
+    </span>
+  );
+  return (
+    <div className="flex basis-full flex-wrap gap-1.5 text-xs">
+      {p.type === 'EMPLOYEE' ? (
+        <>
+          <Item k="مرتب المدة" v={money(r.salary)} />
+          <Item k="سلف" v={money(r.advances)} />
+          <Item k="اتصرف" v={money(r.paid)} />
+          <Item
+            k={(r.remaining ?? 0) >= 0 ? 'باقي له' : 'واخد زيادة'}
+            v={money(Math.abs(r.remaining ?? 0))}
+            tone={(r.remaining ?? 0) < 0 ? 'text-destructive' : ''}
+          />
+        </>
+      ) : (
+        <>
+          <Item k="نصيبه" v={money(r.share)} tone="text-emerald-700" />
+          <Item k="سحب" v={money(r.withdrawals)} />
+          {!!r.capital && <Item k="رأس مال" v={money(r.capital)} />}
+          <Item
+            k={(r.due ?? 0) >= 0 ? 'ليه' : 'سحب زيادة'}
+            v={money(Math.abs(r.due ?? 0))}
+            tone={(r.due ?? 0) < 0 ? 'text-destructive' : 'font-black'}
+          />
+        </>
+      )}
     </div>
   );
 }

@@ -37,6 +37,7 @@ import {
 import { toast } from 'sonner';
 
 import {
+  BooksNotice,
   changePct,
   errMsg,
   METHOD_LABEL,
@@ -212,6 +213,7 @@ function Overview({
         <p className="text-sm text-destructive">{errMsg(error)}</p>
       ) : (
         <>
+          <BooksNotice books={data.books} />
           {data.recurringDue.count > 0 && (
             <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
               <span>

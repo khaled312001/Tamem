@@ -4,7 +4,7 @@
  * the receipt upload.
  */
 import { useQuery } from '@tanstack/react-query';
-import { ChevronLeft, ChevronRight, Download, Printer } from 'lucide-react';
+import { AlertTriangle, ChevronLeft, ChevronRight, Download, Printer } from 'lucide-react';
 import type { ReactNode } from 'react';
 
 import { api } from '../../lib/api.js';
@@ -99,6 +99,41 @@ export interface OrderMoney {
   companyNet: number;
   feeMissing: number;
 }
+/** The system started 1 Aug 2026; Aug–Oct were kept on paper. */
+export const SYSTEM_START = '2026-08-01';
+export interface Books {
+  systemStart: string;
+  paperUntil: string;
+  paper: boolean;
+  beforeStart: boolean;
+  stuckOrders: number;
+}
+/** Says when a period's numbers aren't final yet: paper months, orders never marked delivered. */
+export function BooksNotice({ books }: { books?: Books }) {
+  if (!books || (!books.paper && !books.stuckOrders)) return null;
+  return (
+    <div className="space-y-1.5 rounded-xl border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
+      <p className="flex items-center gap-1.5 font-black">
+        <AlertTriangle className="h-4 w-4 shrink-0" /> الأرقام دي لسه مش نهائية
+      </p>
+      {books.paper && (
+        <p>
+          السيستم اشتغل فعلياً من 1 أغسطس 2026، وحسابات أغسطس وسبتمبر وأكتوبر كانت ماشية ورقي. لحد
+          ما المحاسب يدخّل الدفاتر الورقية دي في «الحركات اليومية» (المصروفات وأي إيراد برا
+          الطلبات)، صافي الربح ونصيب كل مستثمر في الشهور دي مش مظبوطين.
+        </p>
+      )}
+      {books.stuckOrders > 0 && (
+        <p>
+          فيه {books.stuckOrders} طلب في المدة دي ماتعلّمش «مكتمل»، فإيرادهم مش داخل في الحساب. يا
+          تتقفل الطلبات دي من صفحة الطلبات، يا المحاسب يدخّل إيرادها من الدفتر في «الحركات اليومية»
+          تحت «إيراد طلبات من الدفتر الورقي». واحدة بس منهم، عشان الإيراد مايتحسبش مرتين.
+        </p>
+      )}
+    </div>
+  );
+}
+
 export interface Pnl {
   from: string;
   to: string;
@@ -117,6 +152,7 @@ export interface Pnl {
   marginPct: number | null;
   cashByMethod: Record<Method, { in: number; out: number; net: number }>;
   driverSettlements: { amount: number; count: number };
+  books?: Books;
   byDay?: {
     day: string;
     orders: number;

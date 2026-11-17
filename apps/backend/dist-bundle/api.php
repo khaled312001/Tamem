@@ -8100,7 +8100,7 @@ const ACCT_PARTY_TYPES = ['EMPLOYEE', 'INVESTOR', 'OWNER'];
 const ACCT_DEFAULT_CATEGORIES = [
     'EXPENSE' => ['إيجارات', 'أقساط موتوسيكلات', 'بنزين', 'فواتير (كهربا، نت، موبايل)', 'مرتبات', 'صيانة',
                   'دعاية وإعلانات', 'أدوات ومستلزمات', 'رسوم وضرايب', 'مصروفات أخرى'],
-    'INCOME' => ['إعلانات التجار', 'اشتراكات', 'إيرادات أخرى'],
+    'INCOME' => ['إعلانات التجار', 'اشتراكات', 'إيراد طلبات من الدفتر الورقي', 'إيرادات أخرى'],
     'ADVANCE' => ['سلفة'],
     'WITHDRAWAL' => ['مسحوبات أرباح'],
     'CAPITAL' => ['إيداع رأس مال'],
@@ -8189,6 +8189,19 @@ function acctYm($v): ?string {
     return ($s < '2024-01' || $s > date('Y-m', strtotime('+13 months'))) ? null : $s;
 }
 /** [first day, last day] of a YYYY-MM month. */
+// The system really started taking orders on 1 Aug 2026; Aug–Oct were kept on paper (expenses,
+// other income) and many of their orders were never marked delivered, so those months' profit
+// (and every partner's share of it) is only right once the accountant enters the paper books.
+const ACCT_SYSTEM_START = '2026-08-01';
+const ACCT_PAPER_UNTIL = '2026-10-31';
+/** What the accounting screens warn about for $from..$to: paper months, orders never finished. */
+function acctBooksInfo(string $from, string $to): array {
+    $st = db()->prepare("SELECT COUNT(*) FROM `Order` WHERE createdAt >= ? AND createdAt < ?
+        AND status NOT IN ('DELIVERED','COMPLETED','CANCELLED','REJECTED')");
+    $st->execute([gmdate('Y-m-d H:i:s', workDayStartTs($from)), gmdate('Y-m-d H:i:s', workDayEndTs($to))]);
+    return ['systemStart' => ACCT_SYSTEM_START, 'paperUntil' => ACCT_PAPER_UNTIL,
+            'paper' => $from <= ACCT_PAPER_UNTIL, 'beforeStart' => $from < ACCT_SYSTEM_START, 'stuckOrders' => (int) $st->fetchColumn()];
+}
 function acctMonthDays(string $ym): array { return [$ym . '-01', date('Y-m-t', strtotime($ym . '-01'))]; }
 function acctMonthShift(string $ym, int $n): string { return date('Y-m', strtotime($ym . '-01 ' . ($n >= 0 ? '+' : '') . $n . ' months')); }
 /** Whole months from $a to $b (YYYY-MM), $b − $a. */
@@ -8776,7 +8789,7 @@ if (str_starts_with($path, '/admin/accounting')) {
         $due = array_values(array_filter(acctRecurringFor($ym), static fn ($l) => $l['status'] === 'DUE'));
         jsonOk($cur + ['month' => $ym, 'previous' => $trend[4], 'trend' => $trend,
             'recurringDue' => ['count' => count($due), 'amount' => round(array_sum(array_column($due, 'amount')), 2)],
-            'closed' => acctClosing('MONTH', $ym) ? true : false]);
+            'closed' => acctClosing('MONTH', $ym) ? true : false, 'books' => acctBooksInfo($from, $to)]);
     }
 
     if ($method === 'GET' && $path === '/admin/accounting/entries') {
@@ -9014,6 +9027,68 @@ if (str_starts_with($path, '/admin/accounting')) {
                 'lines' => array_reverse($lines)]);
     }
 
+    // ── People over any period (a day, a month or a from–to range) ──
+    // Same rules as the month closing: a share is pct × the profit, a losing month gives none.
+    // The range is cut at month edges: a whole month that's closed takes its numbers (and each
+    // person's share / salary) from the closing; anything else is computed live, a part of a
+    // month gets that part's profit and that part of the salary (by days).
+    if ($method === 'GET' && $path === '/admin/accounting/people') {
+        $today = workDayOf();
+        $from = acctYmd($_GET['from'] ?? '') ?? substr($today, 0, 7) . '-01';
+        $to = acctYmd($_GET['to'] ?? '') ?? $today;
+        if ($to < $from) [$from, $to] = [$to, $from];
+        // nothing before the system started: the range begins on its first day
+        if ($from < ACCT_SYSTEM_START) $from = ACCT_SYSTEM_START;
+        if ($to < $from) $to = $from;
+        if ((strtotime($to) - strtotime($from)) / 86400 > 400) jsonErr('أقصى مدة سنة وشهر', 422, 'RANGE_TOO_LONG');
+        $parties = db()->query('SELECT * FROM `AcctParty` ORDER BY isActive DESC, type, name')->fetchAll();
+        $segs = []; $net = 0.0; $acc = [];
+        for ($ym = substr($from, 0, 7); $ym <= substr($to, 0, 7); $ym = acctMonthShift($ym, 1)) {
+            [$mf, $mt] = acctMonthDays($ym);
+            $sf = max($from, $mf); $stp = min($to, $mt);
+            $full = $sf === $mf && $stp === $mt;
+            $c = $full ? acctClosing('MONTH', $ym) : null;
+            $snap = ($c && $c['netProfit'] !== null) ? $c['snapshot'] : null;
+            $n = $snap ? (float) $c['netProfit'] : (float) acctPnl($sf, $stp)['netProfit'];
+            $net += $n;
+            $frac = ((int) round((strtotime($stp) - strtotime($sf)) / 86400) + 1) / (int) date('t', strtotime($mf));
+            $fromSnap = [];
+            if ($snap) {
+                foreach ($snap['partners'] ?? [] as $x) $fromSnap[$x['id']] = (float) ($x['share'] ?? 0);
+                foreach ($snap['payroll'] ?? [] as $x) $fromSnap[$x['id']] = (float) ($x['salary'] ?? 0);
+            }
+            foreach ($parties as $x) {
+                $id = $x['id'];
+                if ($snap) $v = $fromSnap[$id] ?? 0.0;
+                elseif ($x['type'] === 'EMPLOYEE') $v = (float) ($x['monthlySalary'] ?? 0) * $frac;
+                else $v = max(0.0, $n) * (float) ($x['sharePct'] ?? 0) / 100;
+                $acc[$id] = ($acc[$id] ?? 0.0) + $v;
+            }
+            $segs[] = ['month' => $ym, 'from' => $sf, 'to' => $stp, 'whole' => $full, 'closed' => (bool) $snap, 'netProfit' => round($n, 2)];
+        }
+        $st = db()->prepare('SELECT partyId, kind, SUM(amount) a FROM `AcctEntry` WHERE entryDate BETWEEN ? AND ? AND partyId IS NOT NULL GROUP BY partyId, kind');
+        $st->execute([$from, $to]);
+        $per = [];
+        foreach ($st->fetchAll() as $r) $per[$r['partyId']][$r['kind']] = (float) $r['a'];
+        $rows = []; $sharesTotal = 0.0;
+        foreach ($parties as $x) {
+            $e = $per[$x['id']] ?? [];
+            $v = round($acc[$x['id']] ?? 0.0, 2);
+            if ($x['type'] === 'EMPLOYEE') {
+                $adv = round($e['ADVANCE'] ?? 0, 2); $paid = round($e['EXPENSE'] ?? 0, 2);
+                $rows[$x['id']] = ['salary' => $v, 'advances' => $adv, 'paid' => $paid, 'remaining' => round($v - $adv - $paid, 2)];
+            } else {
+                $sharesTotal += $v;
+                $wd = round($e['WITHDRAWAL'] ?? 0, 2);
+                $rows[$x['id']] = ['share' => $v, 'withdrawals' => $wd, 'capital' => round($e['CAPITAL'] ?? 0, 2), 'due' => round($v - $wd, 2)];
+            }
+        }
+        $distributable = 0.0;
+        foreach ($segs as $s) $distributable += max(0.0, $s['netProfit']);
+        jsonOk(['from' => $from, 'to' => $to, 'netProfit' => round($net, 2), 'distributable' => round($distributable, 2),
+                'sharesTotal' => round($sharesTotal, 2), 'months' => $segs, 'rows' => (object) $rows, 'books' => acctBooksInfo($from, $to)]);
+    }
+
     // ── «تقفيل المناديب»: each driver's day, editable, then closed one by one ──
     if ($method === 'GET' && $path === '/admin/accounting/drivers-day') {
         $day = acctYmd($_GET['date'] ?? '') ?? workDayOf();
@@ -9141,14 +9216,14 @@ if (str_starts_with($path, '/admin/accounting')) {
         $c = acctClosing('DAY', $day);
         $mc = acctClosing('MONTH', substr($day, 0, 7));
         jsonOk($sheet + ['closed' => $c ? array_diff_key($c, ['snapshot' => 1]) + ['changed' => $c['netProfit'] !== null && abs($c['netProfit'] - $sheet['netProfit']) > 0.009] : null,
-                         'monthClosed' => $mc !== null, 'isFuture' => $day > workDayOf()]);
+                         'monthClosed' => $mc !== null, 'isFuture' => $day > workDayOf(), 'books' => acctBooksInfo($day, $day)]);
     }
     if ($method === 'GET' && $path === '/admin/accounting/month') {
         $ym = acctYm($_GET['month'] ?? '') ?? substr(workDayOf(), 0, 7);
         $sheet = acctMonthSheet($ym);
         $c = acctClosing('MONTH', $ym);
         jsonOk($sheet + ['closed' => $c ? array_diff_key($c, ['snapshot' => 1]) + ['changed' => $c['netProfit'] !== null && abs($c['netProfit'] - $sheet['netProfit']) > 0.009] : null,
-                         'ended' => acctMonthDays($ym)[1] < workDayOf()]);
+                         'ended' => acctMonthDays($ym)[1] < workDayOf(), 'books' => acctBooksInfo(...acctMonthDays($ym))]);
     }
     if ($method === 'GET' && $path === '/admin/accounting/closings') {
         $rows = db()->query("SELECT type, period, note, closedByName, closedAt, JSON_VALUE(snapshot, '$.netProfit') AS net FROM `AcctClose` ORDER BY closedAt DESC LIMIT 200")->fetchAll();
