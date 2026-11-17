@@ -1,10 +1,11 @@
 /**
  * «تقفيل المناديب» by the week (Tue → Mon, like the shift schedule).
  *
- * Every driver's week added up from his days: fee value, his % and the company's,
- * bonus and deductions, what's left for him and what he hands over. His % can be
- * set for the week («كل واحد ليه اتفاق»), and the week closes in one go, settling
- * every order and bonus of it. Days closed alone stay as they were.
+ * Every driver's week added up from his days: the total, the company's and his
+ * share, free orders, bonus, deductions and what each day left for him, less any
+ * cash he handed in short = what the company pays him. His % can be set for the
+ * week («كل واحد ليه اتفاق»); a day's figures are typed on the day itself. Closing
+ * the week pays him and settles every order and bonus of it.
  */
 import { useIsFetching, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
@@ -13,7 +14,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Loader2,
-  Trash2,
+  Pencil,
 } from 'lucide-react';
 import { useState } from 'react';
 import { toast } from 'sonner';
@@ -34,8 +35,10 @@ import { cn } from '../lib/utils.js';
 import {
   ClosedBox,
   CloseForm,
-  ExtraForm,
-  HandOver,
+  FIG_LABEL,
+  FIG_TONE,
+  figText,
+  FigureTiles,
   ModeToggle,
   OrdersList,
   OrdersNotes,
@@ -43,30 +46,23 @@ import {
   SplitBox,
   STATUS_AR,
   STATUS_TONE,
-  type DriverDay,
+  type Calc,
+  type Closing,
+  type Figure,
   type WeekPct,
 } from './accounting-drivers.js';
 
+type Sums = Record<Figure | 'cash' | 'owed', number>;
 interface WeekDayRow {
   day: string;
   orders: number;
-  share: number;
-  bonus: number;
-  deductions: number;
-  extras: number;
-  net: number;
-  cashFees: number;
-  handOver: number;
-  closed: boolean;
   attendance: string | null;
-}
-interface WeekExtra {
-  id: string;
-  amount: number;
-  note: string;
-  byName: string | null;
-  createdAt: string;
-  day: string;
+  calc: Sums & { pct: number };
+  edited: boolean;
+  closed: boolean;
+  /** the cash he handed in − what he should have (closed days) */
+  diff: number;
+  changed: boolean;
 }
 interface DriverWeek {
   driverId: string;
@@ -80,27 +76,23 @@ interface DriverWeek {
   worth: number;
   cashFees: number;
   otherFees: number;
+  /** on his orders (the week's % box) */
   share: number;
   pct: number | null;
   company: number;
-  bonus: number;
-  /** positive: late + absence */
-  deductions: number;
-  extras: number;
   advances: number;
-  net: number;
-  handOver: number;
   unpaidOrders: number;
+  days: WeekDayRow[];
   daysClosed: number;
-  closedExpected: number;
-  closedReceived: number;
-  /** what the week still expects from him (days closed alone already handed theirs over) */
-  expected: number;
+  daysChanged: number;
+  daysEdited: number;
+  openDays: number;
   profilePct: number | null;
   weekPct: WeekPct | null;
-  extrasList: WeekExtra[];
-  days: WeekDayRow[];
-  closing: DriverDay['closing'];
+  calc: Sums & { pct: number | null; received: number; diff: number };
+  /** what the company pays him: every day's remaining, less what he handed in short */
+  payable: number;
+  closing: Closing | null;
 }
 interface WeekSheet {
   weekStart: string;
@@ -114,22 +106,15 @@ interface WeekSheet {
     drivers: number;
     closed: number;
     orders: number;
-    worth: number;
-    share: number;
-    company: number;
-    bonus: number;
-    deductions: number;
-    extras: number;
-    net: number;
-    cashFees: number;
-    pharmacyFees: number;
-    freeCost: number;
-    expected: number;
-    received: number;
+    payable: number;
+    paid: number;
+    calc: Sums & { received: number; diff: number };
   };
 }
 
 const weekName = (s: WeekSheet) => `${dayLabel(s.weekStart)} ← ${dayLabel(s.weekEnd)}`;
+const FIGS = ['total', 'company', 'share', 'free', 'bonus', 'deduction', 'remaining'] as const;
+const asCalc = (c: DriverWeek['calc']) => ({ ...c, pct: c.pct ?? 0, edits: {} }) as unknown as Calc;
 
 export function DriversWeekTab({
   week,
@@ -163,17 +148,17 @@ export function DriversWeekTab({
         'طلبات',
         'مجاني',
         'صيدلية',
-        'قيمة التوصيل',
+        'الإجمالي',
+        'نسبة الشركة',
         'نسبته %',
-        'نصيبه',
-        'الشركة',
+        'نسبته',
+        'المجاني',
         'بونص',
-        'خصومات',
-        'خصم أو إضافة',
-        'صافي ليه',
-        'حصّل كاش',
-        'يسلّم للشركة',
-        'اتسلّم',
+        'خصم',
+        'المتبقي له',
+        'ناقص من الكاش',
+        'يقبض',
+        'اتدفعله',
         'الحالة',
       ],
       ...data.lines.map((l) => [
@@ -181,17 +166,17 @@ export function DriversWeekTab({
         l.orders,
         l.free,
         l.pharmacy,
-        l.worth,
-        l.pct ?? '',
-        l.share,
-        l.company,
-        l.bonus,
-        -l.deductions,
-        l.extras,
-        l.net,
-        l.cashFees,
-        l.expected,
-        l.closing?.received ?? '',
+        l.calc.total,
+        l.calc.company,
+        l.calc.pct ?? '',
+        l.calc.share,
+        l.calc.free,
+        l.calc.bonus,
+        l.calc.deduction,
+        l.calc.remaining,
+        l.calc.diff,
+        l.payable,
+        l.closing ? (l.closing.received ?? l.closing.expected) : '',
         l.closing ? 'اتقفل' : 'مفتوح',
       ]),
       [
@@ -199,17 +184,17 @@ export function DriversWeekTab({
         data.totals.orders,
         '',
         '',
-        data.totals.worth,
+        data.totals.calc.total,
+        data.totals.calc.company,
         '',
-        data.totals.share,
-        data.totals.company,
-        data.totals.bonus,
-        -data.totals.deductions,
-        data.totals.extras,
-        data.totals.net,
-        data.totals.cashFees,
-        data.totals.expected,
-        data.totals.received,
+        data.totals.calc.share,
+        data.totals.calc.free,
+        data.totals.calc.bonus,
+        data.totals.calc.deduction,
+        data.totals.calc.remaining,
+        data.totals.calc.diff,
+        data.totals.payable,
+        data.totals.paid,
         `${data.totals.closed} من ${data.totals.drivers}`,
       ],
     ]);
@@ -250,11 +235,11 @@ export function DriversWeekTab({
           <div className="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-6">
             {[
               ['المناديب', `${data.totals.closed} من ${data.totals.drivers} اتقفلوا`],
-              ['طلبات مسلّمة', String(data.totals.orders)],
-              ['قيمة التوصيل', money(data.totals.worth)],
-              ['نصيب المناديب', money(data.totals.share)],
-              ['نصيب الشركة', money(data.totals.company)],
-              ['المفروض يتسلّم', signed(data.totals.expected)],
+              ['الإجمالي', money(data.totals.calc.total)],
+              ['نسبة الشركة', money(data.totals.calc.company)],
+              ['المتبقي للمناديب', signed(data.totals.calc.remaining)],
+              ['يقبضوا آخر الأسبوع', signed(data.totals.payable)],
+              ['اتدفعلهم', money(data.totals.paid)],
             ].map(([l, v]) => (
               <div key={l} className="rounded-xl border border-border bg-card p-3">
                 <p className="text-xs text-muted-foreground">{l}</p>
@@ -263,9 +248,9 @@ export function DriversWeekTab({
             ))}
           </div>
           <p className="text-xs leading-relaxed text-muted-foreground">
-            الأسبوع من الثلاثاء للاتنين. صافي ليه = نصيبه (نسبته من قيمة التوصيل) + البونص −
-            الخصومات ± أي خصم أو إضافة. يسلّم للشركة = اللي حصّله كاش − صافي ليه (أوردرات صيدلية
-            الطاهر والمحافظ مش معاه). اضغط على أي مندوب عشان تعدّل نسبته أو تقفّل أسبوعه.
+            الأسبوع من الثلاثاء للاتنين. المتبقي له = نسبته + المجاني + البونص − الخصم من كل أيامه،
+            ويقبض = المتبقي له − أي كاش سلّمه ناقص. الأرقام بتتعدل من اليوم نفسه، والنسبة بتتعدل
+            للأسبوع كله من هنا. اضغط على أي مندوب عشان تقفّل أسبوعه وتديله فلوسه.
             {!data.ended && ' الأسبوع ده لسه ماخلصش.'}
           </p>
           {data.lines.length === 0 ? (
@@ -280,17 +265,9 @@ export function DriversWeekTab({
                     {[
                       'المندوب',
                       'طلبات',
-                      'قيمة التوصيل',
-                      'نسبته',
-                      'نصيبه',
-                      'الشركة',
-                      'بونص',
-                      'خصومات',
-                      'خصم / إضافة',
-                      'صافي ليه',
-                      'حصّل كاش',
-                      'يسلّم للشركة',
-                      'اتسلّم',
+                      ...FIGS.map((f) => FIG_LABEL[f]),
+                      'ناقص كاش',
+                      'يقبض',
                       '',
                     ].map((h, i) => (
                       <th key={i} className="px-3 py-2 text-start font-bold">
@@ -309,7 +286,14 @@ export function DriversWeekTab({
                         l.closing && 'bg-emerald-50/50',
                       )}
                     >
-                      <td className="px-3 py-2 font-bold">{l.name}</td>
+                      <td className="px-3 py-2">
+                        <div className="font-bold">{l.name}</div>
+                        <span className="text-[11px] text-muted-foreground">
+                          {l.days.length} يوم
+                          {l.daysClosed > 0 && ` · ${l.daysClosed} اتقفل`}
+                          {l.daysEdited > 0 && ' · فيه تعديل'}
+                        </span>
+                      </td>
                       <td className="px-3 py-2">
                         {l.orders}
                         {(l.free > 0 || l.pharmacy > 0) && (
@@ -322,47 +306,21 @@ export function DriversWeekTab({
                           </span>
                         )}
                       </td>
-                      <td className="px-3 py-2">{money(l.worth)}</td>
-                      <td className="px-3 py-2">
-                        {pctLabel(l.pct)}
-                        {l.weekPct && (
-                          <span className="ms-1 rounded-full bg-amber-100 px-1.5 text-[10px] font-bold text-amber-800">
-                            معدّلة
-                          </span>
-                        )}
-                      </td>
-                      <td className="px-3 py-2 text-emerald-700">{money(l.share)}</td>
-                      <td className="px-3 py-2">{money(l.company)}</td>
-                      <td className="px-3 py-2">{l.bonus ? `+${money(l.bonus)}` : '—'}</td>
+                      {FIGS.map((f) => (
+                        <td key={f} className={cn('px-3 py-2', FIG_TONE[f])}>
+                          {figText(f, l.calc[f])}
+                          {f === 'share' && (
+                            <span className="block text-[11px] font-normal text-muted-foreground">
+                              {pctLabel(l.calc.pct)}
+                              {l.weekPct && ' · للأسبوع'}
+                            </span>
+                          )}
+                        </td>
+                      ))}
                       <td className="px-3 py-2 text-destructive">
-                        {l.deductions ? `−${money(l.deductions)}` : '—'}
+                        {l.calc.diff < -0.005 ? `−${money(-l.calc.diff)}` : '—'}
                       </td>
-                      <td
-                        className={cn(
-                          'px-3 py-2',
-                          l.extras < 0 ? 'text-destructive' : 'text-emerald-700',
-                        )}
-                      >
-                        {l.extras ? (l.extras > 0 ? '+' : '') + signed(l.extras) : '—'}
-                      </td>
-                      <td className="px-3 py-2 font-black">{signed(l.net)}</td>
-                      <td className="px-3 py-2">{money(l.cashFees)}</td>
-                      <td className="px-3 py-2">
-                        <HandOver v={l.expected} />
-                      </td>
-                      <td className="px-3 py-2">
-                        {l.closing ? (
-                          <span
-                            className={cn(
-                              l.closing.diff && l.closing.diff < 0 && 'text-destructive',
-                            )}
-                          >
-                            {signed(l.closing.received ?? l.closing.expected)}
-                          </span>
-                        ) : (
-                          '—'
-                        )}
-                      </td>
+                      <td className="px-3 py-2 font-black">{signed(l.payable)}</td>
                       <td className="px-3 py-2" onClick={(e) => e.stopPropagation()}>
                         {l.closing ? (
                           l.closing.changed ? (
@@ -371,7 +329,7 @@ export function DriversWeekTab({
                             </span>
                           ) : (
                             <span className="inline-flex items-center gap-1 whitespace-nowrap rounded-full bg-emerald-100 px-2 py-0.5 text-[11px] font-bold text-emerald-800">
-                              <CheckCircle2 className="h-3 w-3" /> اتقفل
+                              <CheckCircle2 className="h-3 w-3" /> اتدفعله
                             </span>
                           )
                         ) : (
@@ -391,21 +349,15 @@ export function DriversWeekTab({
                   <tr className="border-t-2 border-border font-black tabular-nums">
                     <td className="px-3 py-2">الإجمالي</td>
                     <td className="px-3 py-2">{data.totals.orders}</td>
-                    <td className="px-3 py-2">{money(data.totals.worth)}</td>
-                    <td />
-                    <td className="px-3 py-2">{money(data.totals.share)}</td>
-                    <td className="px-3 py-2">{money(data.totals.company)}</td>
-                    <td className="px-3 py-2">{money(data.totals.bonus)}</td>
+                    {FIGS.map((f) => (
+                      <td key={f} className="px-3 py-2">
+                        {figText(f, data.totals.calc[f])}
+                      </td>
+                    ))}
                     <td className="px-3 py-2">
-                      {data.totals.deductions ? `−${money(data.totals.deductions)}` : '—'}
+                      {data.totals.calc.diff < -0.005 ? `−${money(-data.totals.calc.diff)}` : '—'}
                     </td>
-                    <td className="px-3 py-2">
-                      {data.totals.extras ? signed(data.totals.extras) : '—'}
-                    </td>
-                    <td className="px-3 py-2">{signed(data.totals.net)}</td>
-                    <td className="px-3 py-2">{money(data.totals.cashFees)}</td>
-                    <td className="px-3 py-2">{signed(data.totals.expected)}</td>
-                    <td className="px-3 py-2">{money(data.totals.received)}</td>
+                    <td className="px-3 py-2">{signed(data.totals.payable)}</td>
                     <td />
                   </tr>
                 </tbody>
@@ -443,37 +395,14 @@ function DriverWeekDialog({
   const done = () => qc.invalidateQueries({ queryKey: ['acct'] });
   const refreshing = useIsFetching({ queryKey: ['acct', 'drivers-week', ws] });
   const editable = !l.closing && !sheet.isFuture;
-  // A deduction/addition for the week sits on his last day of it that isn't closed alone.
-  const lastDay = sheet.weekEnd < sheet.today ? sheet.weekEnd : sheet.today;
-  const closedDays = new Set(l.days.filter((d) => d.closed).map((d) => d.day));
-  let extraDay: string | null = lastDay;
-  while (extraDay && closedDays.has(extraDay))
-    extraDay = extraDay > ws ? shiftDay(extraDay, -1) : null;
 
-  const addExtra = useMutation({
-    mutationFn: (v: { type: 'DEDUCT' | 'ADD'; amount: number; note: string }) =>
-      api.raw.post('/admin/accounting/drivers-day/extra', {
-        driverId: l.driverId,
-        day: extraDay,
-        ...v,
-      }),
-    onSuccess: () => {
-      toast.success('اتضاف');
-      done();
-    },
-    onError: (e) => toast.error(errMsg(e)),
-  });
-  const delExtra = useMutation({
-    mutationFn: (id: string) => api.raw.delete(`/admin/accounting/drivers-day/extra/${id}`),
-    onSuccess: () => done(),
-    onError: (e) => toast.error(errMsg(e)),
-  });
   const close = useMutation({
     mutationFn: (v: { received: number | null; note: string }) =>
       api.raw.post('/admin/accounting/drivers-week/close', {
         driverId: l.driverId,
         week: ws,
-        ...v,
+        paid: v.received,
+        note: v.note,
       }),
     onSuccess: () => {
       toast.success(`اتقفل أسبوع ${l.name}`);
@@ -498,42 +427,37 @@ function DriverWeekDialog({
       size="xl"
     >
       <div className="space-y-4 text-sm">
-        <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-          {[
-            ['طلبات', String(l.orders)],
-            ['قيمة التوصيل', money(l.worth)],
-            ['صافي ليه', signed(l.net)],
-            ['حصّل كاش', money(l.cashFees)],
-          ].map(([k, v]) => (
-            <div key={k} className="rounded-lg bg-muted/40 p-2">
-              <p className="text-[11px] text-muted-foreground">{k}</p>
-              <p className="font-black tabular-nums">{v}</p>
-            </div>
-          ))}
-        </div>
+        <p className="text-xs text-muted-foreground">
+          {l.orders} أوردر في {l.days.length} يوم · الكاش اللي سلّمه أو هيسلّمه {money(l.calc.cash)}
+        </p>
+        <FigureTiles c={asCalc(l.calc)} freeCount={l.free} onEdit={null} />
         <OrdersNotes l={l} />
 
         <SplitBox
           key={`${l.weekPct?.pct}${l.pct}`}
           driverId={l.driverId}
           week={ws}
-          worth={l.worth}
-          share={l.share}
           pct={l.pct}
           profilePct={l.profilePct}
           weekPct={l.weekPct}
-          editable={editable}
-          whyNot={l.closing ? 'أسبوعه متقفل، افتحه الأول عشان تعدّل.' : null}
+          editable={editable && l.daysClosed === 0}
+          whyNot={
+            l.closing
+              ? 'أسبوعه متقفل، افتحه الأول عشان تعدّل.'
+              : l.daysClosed > 0
+                ? 'فيه يوم متقفل في الأسبوع ده، افتحه الأول عشان النسبة تتغير على الأسبوع كله.'
+                : null
+          }
         />
 
         <section className="space-y-2 rounded-xl border border-border p-3">
           <p className="font-black">أيامه</p>
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[560px] text-xs tabular-nums">
+            <table className="w-full min-w-[760px] text-xs tabular-nums [&_td]:whitespace-nowrap">
               <thead className="text-muted-foreground">
                 <tr>
-                  {['اليوم', 'طلبات', 'نصيبه', 'بونص', 'خصومات', '±', 'صافي', ''].map((h, i) => (
-                    <th key={i} className="py-1.5 text-start font-bold">
+                  {['اليوم', 'طلبات', ...FIGS.map((f) => FIG_LABEL[f]), 'الكاش', ''].map((h, i) => (
+                    <th key={i} className="py-1.5 pe-2 text-start font-bold">
                       {h}
                     </th>
                   ))}
@@ -542,7 +466,7 @@ function DriverWeekDialog({
               <tbody>
                 {l.days.map((d) => (
                   <tr key={d.day} className="border-t border-border/50">
-                    <td className="py-1.5 font-bold">
+                    <td className="py-1.5 pe-2 font-bold">
                       {dayLabel(d.day)}
                       {d.attendance && d.attendance !== 'off' && (
                         <span
@@ -554,27 +478,35 @@ function DriverWeekDialog({
                           {STATUS_AR[d.attendance]}
                         </span>
                       )}
+                      {d.edited && <Pencil className="ms-1 inline h-3 w-3 text-amber-600" />}
                     </td>
-                    <td className="py-1.5">{d.orders}</td>
-                    <td className="py-1.5">{money(d.share)}</td>
-                    <td className="py-1.5">{d.bonus ? `+${money(d.bonus)}` : '—'}</td>
-                    <td className="py-1.5 text-destructive">
-                      {d.deductions ? `−${money(d.deductions)}` : '—'}
-                    </td>
-                    <td className="py-1.5">{d.extras ? signed(d.extras) : '—'}</td>
-                    <td className="py-1.5 font-black">{signed(d.net)}</td>
-                    <td className="py-1.5">
-                      {d.closed ? (
-                        <span className="text-emerald-700">اتقفل لوحده</span>
-                      ) : (
-                        <button
-                          type="button"
-                          className="text-brand-red underline-offset-2 hover:underline"
-                          onClick={() => onOpenDay(d.day)}
-                        >
-                          افتح اليوم
-                        </button>
+                    <td className="py-1.5 pe-2">{d.orders}</td>
+                    {FIGS.map((f) => (
+                      <td key={f} className={cn('py-1.5 pe-2', FIG_TONE[f])}>
+                        {figText(f, d.calc[f])}
+                      </td>
+                    ))}
+                    <td className="py-1.5 pe-2">
+                      {money(d.calc.cash)}
+                      {d.closed && d.diff < -0.005 && (
+                        <span className="ms-1 text-destructive">ناقص {money(-d.diff)}</span>
                       )}
+                    </td>
+                    <td className="py-1.5">
+                      {d.closed && (
+                        <span
+                          className={cn('me-2', d.changed ? 'text-amber-700' : 'text-emerald-700')}
+                        >
+                          {d.changed ? 'اتغير بعد التقفيل' : 'اتقفل'}
+                        </span>
+                      )}
+                      <button
+                        type="button"
+                        className="text-brand-red underline-offset-2 hover:underline"
+                        onClick={() => onOpenDay(d.day)}
+                      >
+                        {editable && !d.closed ? 'افتح اليوم وعدّل' : 'افتح اليوم'}
+                      </button>
                     </td>
                   </tr>
                 ))}
@@ -582,90 +514,54 @@ function DriverWeekDialog({
             </table>
           </div>
           <p className="text-xs text-muted-foreground">
-            البونص وخصم التأخير والغياب بيتحسبوا كل يوم لوحده، ولو عايز تعدّل واحد منهم افتح اليوم
-            بتاعه.
+            الإجمالي ونسبة الشركة ونسبته والمجاني والبونص والخصم والمتبقي له بيتعدلوا من اليوم نفسه:
+            دوس «افتح اليوم» وبعدين على الرقم.
           </p>
         </section>
-
-        <section className="space-y-2 rounded-xl border border-border p-3">
-          <p className="font-black">خصم أو إضافة</p>
-          {l.extrasList.length === 0 ? (
-            <p className="text-xs text-muted-foreground">مفيش.</p>
-          ) : (
-            <ul className="divide-y divide-border">
-              {l.extrasList.map((x) => (
-                <li key={x.id} className="flex items-center justify-between gap-2 py-1.5">
-                  <span>
-                    <b className={x.amount < 0 ? 'text-destructive' : 'text-emerald-700'}>
-                      {x.amount < 0 ? `خصم ${money(-x.amount)}` : `إضافة ${money(x.amount)}`}
-                    </b>{' '}
-                    · {x.note}
-                    <span className="text-xs text-muted-foreground">
-                      {' '}
-                      · {dayLabel(x.day)}
-                      {x.byName && ` · ${x.byName}`}
-                    </span>
-                  </span>
-                  {editable && !closedDays.has(x.day) && (
-                    <button
-                      type="button"
-                      aria-label="امسح"
-                      disabled={delExtra.isPending}
-                      onClick={() => delExtra.mutate(x.id)}
-                      className="rounded p-1 text-muted-foreground hover:bg-red-50 hover:text-destructive"
-                    >
-                      <Trash2 className="h-4 w-4" />
-                    </button>
-                  )}
-                </li>
-              ))}
-            </ul>
-          )}
-          {editable && extraDay && (
-            <ExtraForm busy={addExtra.isPending} onAdd={(v) => addExtra.mutateAsync(v)} />
-          )}
-          {l.advances > 0 && (
-            <p className="rounded-lg bg-amber-50 p-2 text-xs text-amber-800">
-              خد سلف {money(l.advances)} الأسبوع ده (من «الحركات اليومية»). مش متخصومة هنا، لو
-              هتخصمها ضيفها خصم.
-            </p>
-          )}
-        </section>
+        {l.advances > 0 && (
+          <p className="rounded-lg bg-amber-50 p-2 text-xs text-amber-800">
+            خد سلف {money(l.advances)} الأسبوع ده (من «الحركات اليومية»). مش متخصومة هنا، لو هتخصمها
+            زوّدها على خصم يوم منهم.
+          </p>
+        )}
 
         <section className="rounded-xl border-2 border-brand-red/20 bg-brand-red/[0.03] p-3 tabular-nums">
           {[
-            [`نصيبه (${pctLabel(l.pct)})`, money(l.share)],
-            ['البونص', l.bonus ? `+ ${money(l.bonus)}` : '0'],
-            ['خصم التأخير والغياب', l.deductions ? `− ${money(l.deductions)}` : '0'],
-            ['خصم أو إضافة', l.extras ? (l.extras > 0 ? '+ ' : '') + signed(l.extras) : '0'],
+            [`نسبته (${pctLabel(l.calc.pct)})`, money(l.calc.share)],
+            ['المجاني', l.calc.free ? `+ ${money(l.calc.free)}` : '0'],
+            ['البونص', l.calc.bonus ? `+ ${money(l.calc.bonus)}` : '0'],
+            ['الخصم', l.calc.deduction ? `− ${money(l.calc.deduction)}` : '0'],
           ].map(([k, v]) => (
             <div key={k} className="flex justify-between py-0.5">
               <span className="text-muted-foreground">{k}</span>
               <span>{v}</span>
             </div>
           ))}
-          <div className="mt-1 flex justify-between border-t border-border pt-1.5 text-base font-black">
-            <span>صافي ليه</span>
-            <span>{signed(l.net)}</span>
+          <div className="mt-1 flex justify-between border-t border-border pt-1.5 font-black">
+            <span>المتبقي له من أيامه</span>
+            <span>{signed(l.calc.remaining)}</span>
           </div>
-          <div className="flex justify-between py-0.5">
-            <span className="text-muted-foreground">حصّل كاش من التوصيل</span>
-            <span>{money(l.cashFees)}</span>
-          </div>
-          {l.daysClosed > 0 && (
+          {Math.abs(l.calc.diff) >= 0.005 && (
             <div className="flex justify-between py-0.5">
               <span className="text-muted-foreground">
-                اتقفل منه {l.daysClosed} يوم لوحده (المطلوب فيهم {signed(l.closedExpected)})
+                {l.calc.diff < 0 ? 'سلّم كاش ناقص' : 'سلّم كاش زيادة'}
               </span>
-              <span>− {signed(l.closedExpected)}</span>
+              <span>
+                {l.calc.diff < 0 ? '− ' : '+ '}
+                {money(Math.abs(l.calc.diff))}
+              </span>
             </div>
           )}
           <div className="flex justify-between text-base font-black">
-            <span>{l.expected >= 0 ? 'يسلّم للشركة' : 'ليه عند الشركة'}</span>
-            <span className={l.expected < 0 ? 'text-amber-700' : ''}>
-              {money(Math.abs(l.expected))}
-            </span>
+            <span>يقبض</span>
+            <span>{signed(l.payable)}</span>
           </div>
+          {l.openDays > 0 && !l.closing && (
+            <p className="mt-1 text-xs text-muted-foreground">
+              {l.openDays} يوم لسه مفتوح: بيتحسبوا إنه سلّم الكاش كله (
+              {money(l.days.filter((d) => !d.closed).reduce((s, d) => s + d.calc.cash, 0))}).
+            </p>
+          )}
         </section>
 
         <OrdersList driverId={l.driverId} week={ws} count={l.orders} />
@@ -686,9 +582,9 @@ function DriverWeekDialog({
               </p>
             )}
             <CloseForm
-              handOver={l.expected}
+              expected={l.payable}
               busy={close.isPending}
-              waiting={addExtra.isPending || delExtra.isPending || refreshing > 0}
+              waiting={refreshing > 0}
               onClose={(v) => close.mutate(v)}
               week
             />
