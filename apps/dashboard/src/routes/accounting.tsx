@@ -55,6 +55,7 @@ import { StatCard } from '../components/ui/StatCard.js';
 import { api } from '../lib/api.js';
 import { cn } from '../lib/utils.js';
 import { DriversDayTab } from './accounting-drivers.js';
+import { DriversWeekTab } from './accounting-drivers-week.js';
 import { DayClosing, MonthClosing, PeopleTab } from './accounting-close.js';
 import { LedgerTab, RecurringTab } from './accounting-ledger.js';
 
@@ -128,11 +129,31 @@ export function AccountingPage() {
           <Loader2 className="h-6 w-6 animate-spin text-brand-red" />
         </div>
       ) : tab === 'drivers' ? (
-        <DriversDayTab
-          meta={meta.data}
-          day={sp.get('day') || meta.data.today}
-          onDay={(v) => setParam('day', v)}
-        />
+        sp.get('dm') === 'week' ? (
+          <DriversWeekTab
+            week={sp.get('week') || meta.data.today}
+            onWeek={(v) => setParam('week', v)}
+            onMode={(m) => setParam('dm', m)}
+            onOpenDay={(d) =>
+              setSp(
+                (p) => {
+                  const n = new URLSearchParams(p);
+                  n.set('dm', 'day');
+                  n.set('day', d);
+                  return n;
+                },
+                { replace: true },
+              )
+            }
+          />
+        ) : (
+          <DriversDayTab
+            meta={meta.data}
+            day={sp.get('day') || meta.data.today}
+            onDay={(v) => setParam('day', v)}
+            onMode={(m) => setParam('dm', m)}
+          />
+        )
       ) : tab === 'ledger' ? (
         <LedgerTab meta={meta.data} />
       ) : tab === 'recurring' ? (

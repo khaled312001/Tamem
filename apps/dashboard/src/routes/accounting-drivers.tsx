@@ -55,16 +55,34 @@ interface Extra {
   byName: string | null;
   createdAt: string;
 }
+/** His % set by the accountant for one week (Tue → Mon); null = the % in his file. */
+export interface WeekPct {
+  pct: number;
+  note: string | null;
+  byName: string | null;
+}
 export interface DriverDay {
   driverId: string;
   name: string;
   phone: string | null;
   orders: number;
   free: number;
+  /** what the free / discounted orders cost the company (their real fee − what was charged) */
+  freeCost: number;
+  /** «صيدلية الطاهر» orders: the pharmacy pays their fees to the company, the driver never holds them */
+  pharmacy: number;
+  pharmacyFees: number;
   worth: number;
   cashFees: number;
   otherFees: number;
   share: number;
+  /** his % of the fees as it stands on the orders; the company keeps the rest */
+  pct: number | null;
+  company: number;
+  profilePct: number | null;
+  weekPct: WeekPct | null;
+  weekStart: string;
+  weekClosed: { closedByName: string | null; closedAt: string } | null;
   bonus: KindLine & { tier: number | null; next: { orders: number; amount: number } | null };
   late: KindLine;
   absence: KindLine;
@@ -115,22 +133,235 @@ interface Sheet {
   };
 }
 
-const STATUS_AR: Record<string, string> = {
+export const STATUS_AR: Record<string, string> = {
   ontime: 'في معاده',
   late: 'متأخر',
   absent: 'غياب',
   waiting: 'لسه ماوصلش',
   off: 'مش عليه وردية',
 };
-const STATUS_TONE: Record<string, string> = {
+export const STATUS_TONE: Record<string, string> = {
   ontime: 'bg-emerald-100 text-emerald-800',
   late: 'bg-amber-100 text-amber-800',
   absent: 'bg-red-100 text-red-800',
   waiting: 'bg-sky-100 text-sky-800',
   off: 'bg-muted text-muted-foreground',
 };
-const inputCls = 'w-full rounded-lg border border-border bg-background px-3 py-2 text-sm';
+export const inputCls = 'w-full rounded-lg border border-border bg-background px-3 py-2 text-sm';
 const deductions = (l: DriverDay) => l.late.amount + l.absence.amount; // ≤ 0
+export const pctLabel = (p: number | null) => (p === null ? '—' : `${Math.round(p * 100) / 100}%`);
+
+/** يوم / أسبوع — the same tab, closed day by day or the whole week (Tue → Mon). */
+export function ModeToggle({
+  mode,
+  onMode,
+}: {
+  mode: 'day' | 'week';
+  onMode: (m: 'day' | 'week') => void;
+}) {
+  return (
+    <div className="inline-flex rounded-lg border border-border bg-card p-0.5" data-print="hide">
+      {(
+        [
+          ['day', 'يوم'],
+          ['week', 'أسبوع'],
+        ] as const
+      ).map(([m, label]) => (
+        <button
+          key={m}
+          onClick={() => onMode(m)}
+          className={cn(
+            'rounded-md px-3 py-1.5 text-sm font-bold transition',
+            mode === m ? 'bg-brand-red text-white' : 'text-muted-foreground hover:text-foreground',
+          )}
+        >
+          {label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/** Why what he holds in cash isn't the whole fee value: free orders, wallet payments, the pharmacy's. */
+export function OrdersNotes({
+  l,
+}: {
+  l: Pick<DriverDay, 'free' | 'freeCost' | 'pharmacy' | 'pharmacyFees' | 'otherFees'>;
+}) {
+  const notes = [
+    l.free > 0 &&
+      `${l.free} أوردر مجاني أو بخصم: الشركة شالت ${money(l.freeCost)} من توصيلهم، ونصيبه محسوب على سعرهم الأصلي.`,
+    l.pharmacy > 0 &&
+      `${l.pharmacy} أوردر صيدلية الطاهر: رسومهم ${money(l.pharmacyFees)} الصيدلية بتدفعها للشركة، مش معاه. نصيبه منهم عادي.`,
+    l.otherFees > 0 &&
+      `${money(l.otherFees)} توصيل اتدفعوا فودافون كاش أو إنستاباي للشركة على طول، مش معاه.`,
+  ].filter((x): x is string => !!x);
+  if (!notes.length) return null;
+  return (
+    <ul className="space-y-0.5 text-xs text-muted-foreground">
+      {notes.map((n) => (
+        <li key={n}>• {n}</li>
+      ))}
+    </ul>
+  );
+}
+
+/**
+ * His % of the delivery fees and the company's, editable for his whole week (Tue → Mon).
+ * Saving writes it on the week's unpaid orders, so every report reads the same split.
+ */
+export function SplitBox({
+  driverId,
+  week,
+  worth,
+  share,
+  pct,
+  profilePct,
+  weekPct,
+  editable,
+  whyNot,
+}: {
+  driverId: string;
+  week: string;
+  worth: number;
+  share: number;
+  pct: number | null;
+  profilePct: number | null;
+  weekPct: WeekPct | null;
+  editable: boolean;
+  whyNot?: string | null;
+}) {
+  const qc = useQueryClient();
+  const [editing, setEditing] = useState(false);
+  const [val, setVal] = useState(String(weekPct?.pct ?? pct ?? profilePct ?? 0));
+  const [note, setNote] = useState(weekPct?.note ?? '');
+  const [toProfile, setToProfile] = useState(false);
+  const save = useMutation({
+    mutationFn: (v: { pct: number | null; note?: string; saveToProfile?: boolean }) =>
+      api.raw.post('/admin/accounting/drivers-week/share', { driverId, week, ...v }),
+    onSuccess: (r) => {
+      const d = r.data.data as { pct: number; orders: number; keptPaid: number };
+      toast.success(
+        `اتحسب ${d.orders} أوردر بنسبة ${pctLabel(d.pct)}` +
+          (d.keptPaid ? ` (و${d.keptPaid} اتحاسب عليهم قبل كده فضلوا زي ما هم)` : ''),
+      );
+      setEditing(false);
+      qc.invalidateQueries({ queryKey: ['acct'] });
+    },
+    onError: (e) => toast.error(errMsg(e)),
+  });
+  const n = Number(val);
+  const ok = val !== '' && n >= 0 && n <= 100;
+  return (
+    <section className="space-y-2 rounded-xl border border-border p-3">
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <div>
+          <p className="font-black">نسبته ونسبة الشركة</p>
+          <p className="mt-1 text-sm tabular-nums">
+            <span className="font-black text-emerald-700">نسبته {pctLabel(pct)}</span>
+            <span className="text-muted-foreground"> = {money(share)}</span>
+            <span className="mx-2 text-muted-foreground">·</span>
+            <span className="font-black">
+              الشركة {pct === null ? '—' : pctLabel(Math.round((100 - pct) * 100) / 100)}
+            </span>
+            <span className="text-muted-foreground"> = {money(worth - share)}</span>
+          </p>
+          <p className="text-xs text-muted-foreground">
+            {weekPct ? (
+              <>
+                <span className="me-1 rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-bold text-amber-800">
+                  معدّلة للأسبوع
+                </span>
+                {weekPct.note && `${weekPct.note} · `}
+                {weekPct.byName && `${weekPct.byName} · `}
+                نسبته في ملفه {pctLabel(profilePct)}
+              </>
+            ) : (
+              <>من ملفه ({pctLabel(profilePct)})</>
+            )}
+          </p>
+        </div>
+        {editable && !editing && (
+          <div className="flex gap-1">
+            <Button size="sm" variant="outline" onClick={() => setEditing(true)}>
+              <Pencil className="h-3.5 w-3.5" /> عدّل النسبة
+            </Button>
+            {weekPct && (
+              <Button
+                size="sm"
+                variant="ghost"
+                disabled={save.isPending}
+                onClick={() => save.mutate({ pct: null })}
+              >
+                <RotateCcw className="h-3.5 w-3.5" /> رجّع نسبة ملفه
+              </Button>
+            )}
+          </div>
+        )}
+      </div>
+      {!editable && whyNot && <p className="text-xs text-muted-foreground">{whyNot}</p>}
+      {editing && (
+        <div className="space-y-2 rounded-lg bg-muted/30 p-2">
+          <div className="grid gap-2 sm:grid-cols-[140px_1fr]">
+            <label className="block text-xs font-bold">
+              نسبته %
+              <input
+                type="number"
+                min={0}
+                max={100}
+                inputMode="decimal"
+                value={val}
+                onChange={(e) => setVal(e.target.value)}
+                className={cn(inputCls, 'mt-1')}
+                aria-label="نسبته"
+              />
+            </label>
+            <label className="block text-xs font-bold">
+              الاتفاق (اختياري)
+              <input
+                value={note}
+                onChange={(e) => setNote(e.target.value)}
+                maxLength={255}
+                placeholder="مثلاً: اتفاق نص بنص"
+                className={cn(inputCls, 'mt-1')}
+              />
+            </label>
+          </div>
+          {ok && (
+            <p className="text-xs tabular-nums">
+              نصيبه {money(Math.round(worth * n) / 100)} · الشركة{' '}
+              {money(Math.round(worth * (100 - n)) / 100)} (الشركة {pctLabel(100 - n)})
+            </p>
+          )}
+          <label className="flex items-center gap-2 text-xs font-bold">
+            <input
+              type="checkbox"
+              checked={toProfile}
+              onChange={(e) => setToProfile(e.target.checked)}
+            />
+            واحفظها في ملفه للأوردرات الجاية كمان
+          </label>
+          <p className="text-xs text-muted-foreground">
+            النسبة دي بتتحسب على كل أوردرات أسبوعه (من الثلاثاء للاتنين) اللي لسه ماتحاسبش عليها،
+            ولو اتفاقه مبلغ ثابت خلّي نسبته 0 وضيف المبلغ تحت كـ«إضافة».
+          </p>
+          <div className="flex gap-1">
+            <Button
+              size="sm"
+              disabled={!ok || save.isPending}
+              onClick={() => save.mutate({ pct: n, note: note.trim(), saveToProfile: toProfile })}
+            >
+              {save.isPending && <Loader2 className="h-3.5 w-3.5 animate-spin" />} حفظ
+            </Button>
+            <Button size="sm" variant="ghost" onClick={() => setEditing(false)}>
+              إلغاء
+            </Button>
+          </div>
+        </div>
+      )}
+    </section>
+  );
+}
 const hm = (t: string) => {
   const [h, m] = t.split(':').map(Number);
   return new Date(2000, 0, 1, h, m).toLocaleTimeString('ar-EG', {
@@ -144,6 +375,9 @@ const clock = (iso: string) =>
     minute: '2-digit',
     timeZone: 'Africa/Cairo',
   });
+/** The Cairo calendar day of an instant (work days run midnight → midnight since 2026-11-14). */
+const cairoDay = (iso: string) =>
+  new Intl.DateTimeFormat('en-CA', { timeZone: 'Africa/Cairo' }).format(new Date(iso));
 
 function useSheet(day: string) {
   return useQuery({
@@ -156,7 +390,7 @@ function useSheet(day: string) {
 }
 
 /** Hand-over: positive = he gives the company, negative = the company owes him. */
-function HandOver({ v }: { v: number }) {
+export function HandOver({ v }: { v: number }) {
   if (Math.abs(v) < 0.005) return <span className="text-muted-foreground">0</span>;
   return v > 0 ? (
     <span className="font-black">{money(v)}</span>
@@ -169,10 +403,12 @@ export function DriversDayTab({
   meta,
   day,
   onDay,
+  onMode,
 }: {
   meta: Meta;
   day: string;
   onDay: (v: string) => void;
+  onMode: (m: 'day' | 'week') => void;
 }) {
   const qc = useQueryClient();
   const { data, isLoading, error } = useSheet(day);
@@ -189,7 +425,10 @@ export function DriversDayTab({
   });
 
   const open = data?.lines.filter(
-    (l) => !l.closing && (l.orders > 0 || Math.abs(l.net) >= 0.01 || Math.abs(l.handOver) >= 0.01),
+    (l) =>
+      !l.closing &&
+      !l.weekClosed &&
+      (l.orders > 0 || Math.abs(l.net) >= 0.01 || Math.abs(l.handOver) >= 0.01),
   );
   const csv = () =>
     data &&
@@ -200,7 +439,9 @@ export function DriversDayTab({
         'المندوب',
         'طلبات',
         'قيمة التوصيل',
+        'نسبته %',
         'نصيبه',
+        'الشركة',
         'بونص',
         'خصم تأخير وغياب',
         'خصم أو إضافة',
@@ -214,7 +455,9 @@ export function DriversDayTab({
         l.name,
         l.orders,
         l.worth,
+        l.pct ?? '',
         l.share,
+        l.company,
         l.bonus.amount,
         deductions(l),
         l.extrasTotal,
@@ -228,7 +471,9 @@ export function DriversDayTab({
         'الإجمالي',
         data.totals.orders,
         '',
+        '',
         data.totals.share,
+        '',
         data.totals.bonus,
         -data.totals.deductions,
         data.totals.extras,
@@ -244,7 +489,8 @@ export function DriversDayTab({
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-3">
+          <ModeToggle mode="day" onMode={onMode} />
           <DayNav value={day} onChange={onDay} max={meta.today} />
           <span className="font-black">{dayLabel(day)}</span>
         </div>
@@ -292,12 +538,13 @@ export function DriversDayTab({
             </p>
           ) : (
             <div className="overflow-x-auto rounded-2xl border border-border bg-card">
-              <table className="w-full min-w-[960px] text-sm">
+              <table className="w-full min-w-[960px] text-sm [&_td]:whitespace-nowrap [&_th]:whitespace-nowrap">
                 <thead className="bg-muted/40 text-xs text-muted-foreground">
                   <tr className="text-start">
                     {[
                       'المندوب',
                       'طلبات',
+                      'نسبته',
                       'نصيبه',
                       'بونص',
                       'خصومات',
@@ -340,11 +587,19 @@ export function DriversDayTab({
                       </td>
                       <td className="px-3 py-2">
                         {l.orders}
-                        {l.free > 0 && (
+                        {(l.free > 0 || l.pharmacy > 0) && (
                           <span className="ms-1 text-xs text-muted-foreground">
-                            ({l.free} مجاني)
+                            (
+                            {[l.free && `${l.free} مجاني`, l.pharmacy && `${l.pharmacy} صيدلية`]
+                              .filter(Boolean)
+                              .join('، ')}
+                            )
                           </span>
                         )}
+                      </td>
+                      <td className="px-3 py-2">
+                        {pctLabel(l.pct)}
+                        {l.weekPct && <Pencil className="ms-1 inline h-3 w-3 text-amber-600" />}
                       </td>
                       <td className="px-3 py-2 text-emerald-700">{money(l.share)}</td>
                       <td className="px-3 py-2">
@@ -391,7 +646,11 @@ export function DriversDayTab({
                         )}
                       </td>
                       <td className="px-3 py-2" onClick={(e) => e.stopPropagation()}>
-                        {l.closing ? (
+                        {l.weekClosed && !l.closing ? (
+                          <span className="inline-flex items-center gap-1 whitespace-nowrap rounded-full bg-emerald-100 px-2 py-0.5 text-[11px] font-bold text-emerald-800">
+                            <CheckCircle2 className="h-3 w-3" /> اتقفل مع أسبوعه
+                          </span>
+                        ) : l.closing ? (
                           l.closing.changed ? (
                             <span className="inline-flex items-center gap-1 whitespace-nowrap rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-bold text-amber-800">
                               <AlertTriangle className="h-3 w-3" /> اتغير بعد التقفيل
@@ -419,6 +678,7 @@ export function DriversDayTab({
                   <tr className="border-t-2 border-border font-black tabular-nums">
                     <td className="px-3 py-2">الإجمالي</td>
                     <td className="px-3 py-2">{data.totals.orders}</td>
+                    <td />
                     <td className="px-3 py-2">{money(data.totals.share)}</td>
                     <td className="px-3 py-2">{money(data.totals.bonus)}</td>
                     <td className="px-3 py-2">
@@ -485,16 +745,23 @@ function DriverDayDialog({
   const done = () => qc.invalidateQueries({ queryKey: ['acct'] });
   const refreshing = useIsFetching({ queryKey: ['acct', 'drivers-day', day] });
   const editable =
-    !sheet.locked && !sheet.isFuture && !l.closing && sheet.editsReady && day >= sheet.editableFrom;
+    !sheet.locked &&
+    !sheet.isFuture &&
+    !l.closing &&
+    !l.weekClosed &&
+    sheet.editsReady &&
+    day >= sheet.editableFrom;
   const whyNot = sheet.locked
     ? 'اليوم متقفل في الحسابات.'
     : l.closing
       ? 'يومه متقفل — افتحه الأول عشان تعدّل.'
-      : day < sheet.editableFrom
-        ? `التعديل بيبدأ من ${sheet.editableFrom}.`
-        : !sheet.editsReady
-          ? 'التعديلات مش جاهزة على السيرفر.'
-          : null;
+      : l.weekClosed
+        ? 'أسبوعه متقفل كله — افتحه من «أسبوع» عشان تعدّل.'
+        : day < sheet.editableFrom
+          ? `التعديل بيبدأ من ${sheet.editableFrom}.`
+          : !sheet.editsReady
+            ? 'التعديلات مش جاهزة على السيرفر.'
+            : null;
 
   const adjust = useMutation({
     mutationFn: (v: { kind: RuleKind; amount: number | null; note?: string }) =>
@@ -559,11 +826,6 @@ function DriverDayDialog({
             </div>
           ))}
         </div>
-        {l.otherFees > 0 && (
-          <p className="text-xs text-muted-foreground">
-            و{money(l.otherFees)} توصيل اتدفعوا فودافون كاش أو إنستاباي للشركة على طول، مش معاه.
-          </p>
-        )}
         {a && a.status !== 'off' && (
           <p className="text-xs">
             <span className={cn('rounded-full px-2 py-0.5 font-bold', STATUS_TONE[a.status])}>
@@ -579,6 +841,26 @@ function DriverDayDialog({
             {a.status === 'late' && <span className="ms-2">اتأخر {a.lateMin} دقيقة</span>}
           </p>
         )}
+        <OrdersNotes l={l} />
+
+        <SplitBox
+          key={`${l.weekPct?.pct}${l.pct}`}
+          driverId={l.driverId}
+          week={day}
+          worth={l.worth}
+          share={l.share}
+          pct={l.pct}
+          profilePct={l.profilePct}
+          weekPct={l.weekPct}
+          editable={!sheet.locked && !sheet.isFuture && !l.closing && !l.weekClosed}
+          whyNot={
+            l.closing || l.weekClosed
+              ? 'النسبة بتتعدّل لأسبوعه كله، وده متقفل.'
+              : sheet.locked
+                ? 'اليوم متقفل في الحسابات.'
+                : null
+          }
+        />
 
         <section className="space-y-2 rounded-xl border border-border p-3">
           <p className="font-black">البونص والخصومات</p>
@@ -703,10 +985,23 @@ function DriverDayDialog({
         {l.closing ? (
           <ClosedBox
             c={l.closing}
-            canReopen={!sheet.locked}
+            canReopen={!sheet.locked && !l.weekClosed}
             busy={reopen.isPending}
             onReopen={() => reopen.mutate()}
           />
+        ) : l.weekClosed ? (
+          <section className="rounded-xl border border-emerald-300 bg-emerald-50 p-3 text-sm text-emerald-900">
+            <span className="inline-flex items-center gap-1.5 font-black">
+              <Lock className="h-4 w-4" /> اليوم ده اتقفل مع أسبوعه
+            </span>
+            <p className="mt-1 text-xs">
+              {l.weekClosed.closedByName && `${l.weekClosed.closedByName} · `}
+              {new Date(l.weekClosed.closedAt).toLocaleString('ar-EG', {
+                timeZone: 'Africa/Cairo',
+              })}
+              . عشان تعدّل افتح الأسبوع من «أسبوع».
+            </p>
+          </section>
         ) : sheet.locked || sheet.isFuture ? (
           whyNot && <p className="text-xs text-muted-foreground">{whyNot}</p>
         ) : (
@@ -836,7 +1131,7 @@ function KindRow({
   );
 }
 
-function ExtraForm({
+export function ExtraForm({
   busy,
   onAdd,
 }: {
@@ -909,25 +1204,41 @@ function ExtraForm({
   );
 }
 
-function OrdersList({ driverId, day, count }: { driverId: string; day: string; count: number }) {
+/** His orders of one day, or of his whole week when `week` is given (any day of it). */
+export function OrdersList({
+  driverId,
+  day,
+  week,
+  count,
+}: {
+  driverId: string;
+  day?: string;
+  week?: string;
+  count: number;
+}) {
   const [open, setOpen] = useState(false);
   const { data, isLoading } = useQuery({
-    queryKey: ['acct', 'drivers-day-orders', driverId, day],
+    queryKey: ['acct', 'drivers-day-orders', driverId, week ? `w${week}` : day],
     queryFn: () =>
-      api.raw.get('/admin/accounting/drivers-day/orders', { params: { driverId, date: day } }).then(
-        (r) =>
-          r.data.data.orders as {
-            id: string;
-            orderNumber: string;
-            createdAt: string;
-            cash: boolean;
-            worth: number;
-            charged: number;
-            share: number;
-            free: boolean;
-            settled: boolean;
-          }[],
-      ),
+      api.raw
+        .get('/admin/accounting/drivers-day/orders', {
+          params: week ? { driverId, week } : { driverId, date: day },
+        })
+        .then(
+          (r) =>
+            r.data.data.orders as {
+              id: string;
+              orderNumber: string;
+              createdAt: string;
+              cash: boolean;
+              pharmacy: boolean;
+              worth: number;
+              charged: number;
+              share: number;
+              free: boolean;
+              settled: boolean;
+            }[],
+        ),
     enabled: open,
   });
   if (!count) return null;
@@ -960,13 +1271,24 @@ function OrdersList({ driverId, day, count }: { driverId: string; day: string; c
                 {data.map((o) => (
                   <tr key={o.id} className="border-t border-border/50">
                     <td className="py-1">#{o.orderNumber}</td>
-                    <td className="py-1">{clock(o.createdAt)}</td>
+                    <td className="py-1">
+                      {week && (
+                        <span className="me-1 text-muted-foreground">
+                          {dayLabel(cairoDay(o.createdAt))}
+                        </span>
+                      )}
+                      {clock(o.createdAt)}
+                    </td>
                     <td className="py-1">
                       {money(o.worth)}
                       {o.free && <span className="ms-1 text-emerald-700">مجاني</span>}
                     </td>
                     <td className="py-1">
-                      {o.cash ? money(o.charged) : `${money(o.charged)} (محفظة)`}
+                      {o.pharmacy
+                        ? `${money(o.charged)} (على الصيدلية)`
+                        : o.cash
+                          ? money(o.charged)
+                          : `${money(o.charged)} (محفظة)`}
                     </td>
                     <td className="py-1">{money(o.share)}</td>
                   </tr>
@@ -980,16 +1302,18 @@ function OrdersList({ driverId, day, count }: { driverId: string; day: string; c
   );
 }
 
-function CloseForm({
+export function CloseForm({
   handOver,
   busy,
   waiting,
   onClose,
+  week = false,
 }: {
   handOver: number;
   busy: boolean;
   waiting: boolean;
   onClose: (v: { received: number | null; note: string }) => void;
+  week?: boolean;
 }) {
   // null = not typed yet: follow what he owes (and let the server use its fresh number).
   // Once typed, a refresh never overwrites it; the عجز/زيادة line just follows the new number.
@@ -999,7 +1323,7 @@ function CloseForm({
   const diff = received === '' ? 0 : Math.round((Number(received) - handOver) * 100) / 100;
   return (
     <section className="space-y-2 rounded-xl border border-emerald-300 bg-emerald-50/60 p-3">
-      <p className="font-black">تقفيل يومه</p>
+      <p className="font-black">{week ? 'تقفيل أسبوعه' : 'تقفيل يومه'}</p>
       <div className="grid gap-2 sm:grid-cols-2">
         <label className="block text-xs font-bold">
           {handOver >= 0 ? 'استلمنا منه' : 'دفعنا له (اكتبه بالسالب)'}
@@ -1028,8 +1352,8 @@ function CloseForm({
         </p>
       )}
       <p className="text-xs text-muted-foreground">
-        التقفيل بيعلّم طلبات اليوم والبونص والخصومات إنها اتسوّت، ومفيش تعديل بعده إلا لو فتحته
-        تاني.
+        التقفيل بيعلّم طلبات {week ? 'الأسبوع' : 'اليوم'} والبونص والخصومات إنها اتسوّت، ومفيش تعديل
+        بعده إلا لو فتحته تاني.
       </p>
       <Button
         disabled={busy || waiting || (received !== '' && Number.isNaN(Number(received)))}
@@ -1038,29 +1362,31 @@ function CloseForm({
         }
       >
         {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}{' '}
-        قفّل يومه
+        {week ? 'قفّل أسبوعه' : 'قفّل يومه'}
       </Button>
     </section>
   );
 }
 
-function ClosedBox({
+export function ClosedBox({
   c,
   canReopen,
   busy,
   onReopen,
+  week = false,
 }: {
   c: NonNullable<DriverDay['closing']>;
   canReopen: boolean;
   busy: boolean;
   onReopen: () => void;
+  week?: boolean;
 }) {
   const [ask, setAsk] = useState(false);
   return (
     <section className="space-y-1 rounded-xl border border-emerald-300 bg-emerald-50 p-3 text-emerald-900">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <span className="inline-flex items-center gap-1.5 font-black">
-          <Lock className="h-4 w-4" /> يومه متقفل
+          <Lock className="h-4 w-4" /> {week ? 'أسبوعه متقفل' : 'يومه متقفل'}
         </span>
         {canReopen && (
           <Button size="sm" variant="outline" onClick={() => setAsk(true)}>

@@ -1214,7 +1214,7 @@ function extraMerchantFee(): float {
 function snapshotDriverShare(string $orderId): void {
     try {
         $q = db()->prepare(
-            "SELECT o.deliveryFee, o.customData, o.assignedDriverId, dp.deliverySharePct
+            "SELECT o.deliveryFee, o.customData, o.assignedDriverId, o.createdAt, dp.deliverySharePct
              FROM `Order` o
              LEFT JOIN `DriverProfile` dp ON dp.userId = o.assignedDriverId
              WHERE o.id = ? LIMIT 1"
@@ -1225,6 +1225,10 @@ function snapshotDriverShare(string $orderId): void {
         $fee = $o['deliveryFee'] !== null ? (float) $o['deliveryFee'] : 0.0;
         if ($fee < 0) $fee = 0.0;
         $pct = $o['deliverySharePct'] !== null ? (float) $o['deliverySharePct'] : 0.0;
+        // the accountant's % for that week wins over the profile's
+        $wp = driverWeekPct((string) $o['assignedDriverId'],
+                            acctWeekStart(workDayOf((int) strtotime(substr((string) $o['createdAt'], 0, 19) . ' UTC'))));
+        if ($wp !== null) $pct = $wp;
         // A free / discounted app order (عرض «أول أوردر مجاني») still took the
         // driver a full trip: his share is on the fee BEFORE the promo, and the
         // promo is the company's cost — its revenue on the order goes negative.
@@ -1249,6 +1253,12 @@ function orderPromoOriginalFee($customData): float {
 function orderFeeWorthSql(string $o = 'o'): string {
     return "GREATEST(COALESCE($o.deliveryFee,0), COALESCE(CAST(JSON_UNQUOTE(JSON_EXTRACT($o.customData,'\$.deliveryPromo.originalFee')) AS DECIMAL(10,2)),0))";
 }
+/**
+ * «صيدلية الطاهر» orders (matched on the pickup address, like its report): the pharmacy
+ * pays the company their delivery fees on account (owner, 2026-11-17), so the driver
+ * never holds that money. His share of them is the same as any order.
+ */
+function pharmacyOrderSql(string $o = 'o'): string { return "COALESCE($o.pickupAddress, '') LIKE '%طاهر%'"; }
 function computeOrderFinancials(string $orderId): void {
     try {
         $q = db()->prepare(
@@ -7122,6 +7132,7 @@ function driverAccountText(string $driverId, string $name, ?string $day = null):
     $W = orderFeeWorthSql();
     $st = db()->prepare(
         "SELECT o.orderNumber, COALESCE(o.deliveryFee, 0) AS charged, $W AS worth, o.paymentMethod,
+                (" . pharmacyOrderSql() . ") AS pharmacy,
                 COALESCE(o.driverDeliveryRevenue, ROUND($W * COALESCE(dp.deliverySharePct,0) / 100, 2)) AS due
            FROM `Order` o JOIN `DriverProfile` dp ON dp.userId = o.assignedDriverId
           WHERE o.assignedDriverId = ? AND o.status IN ('DELIVERED','COMPLETED')
@@ -7130,11 +7141,13 @@ function driverAccountText(string $driverId, string $name, ?string $day = null):
     );
     $st->execute([$driverId, gmdate('Y-m-d H:i:s', workDayStartTs($day)), gmdate('Y-m-d H:i:s', workDayEndTs($day))]);
     $rows = $st->fetchAll();
-    // Only a CASH order's fee is in his pocket: a wallet payment went to the company.
-    $worth = 0.0; $charged = 0.0; $due = 0.0; $free = 0; $notCash = 0.0;
+    // Only a CASH order's fee is in his pocket: a wallet payment went to the company,
+    // and «صيدلية الطاهر» pays the company its orders' fees on account.
+    $worth = 0.0; $charged = 0.0; $due = 0.0; $free = 0; $notCash = 0.0; $pharm = 0.0;
     foreach ($rows as $x) {
         $worth += (float) $x['worth']; $due += (float) $x['due'];
-        if (in_array($x['paymentMethod'] ?? 'CASH', ['CASH', null, ''], true)) $charged += (float) $x['charged'];
+        if ((int) $x['pharmacy']) $pharm += (float) $x['charged'];
+        elseif (in_array($x['paymentMethod'] ?? 'CASH', ['CASH', null, ''], true)) $charged += (float) $x['charged'];
         else $notCash += (float) $x['charged'];
         if ((float) $x['worth'] > (float) $x['charged']) $free++;
     }
@@ -7172,6 +7185,7 @@ function driverAccountText(string $driverId, string $name, ?string $day = null):
     $L[] = '💰 صافي ليك: ' . waMoney($net);
     $L[] = '💵 حصّلت توصيل كاش: ' . waMoney($charged)
         . ($notCash > 0 ? ' (و' . waMoney($notCash) . ' اتدفعوا للشركة على طول)' : '');
+    if ($pharm > 0) $L[] = '💊 توصيل صيدلية الطاهر ' . waMoney($pharm) . ' على حساب الصيدلية، مش معاك';
     $rest = round($charged - $net, 2);
     $L[] = $rest >= 0 ? '📤 تسلّم للشركة: ' . waMoney($rest) : '📥 ليك عند الشركة: ' . waMoney(-$rest);
     if ($rows) {
@@ -8109,9 +8123,10 @@ const ACCT_DEFAULT_CATEGORIES = [
 function ensureAcctSchema(): bool {
     static $ok = null;
     if ($ok !== null) return $ok;
-    // v2 (2026-11-17): AcctDriverDay. Every CREATE is IF NOT EXISTS, so a host
-    // that only ran v1 just adds the new table.
-    $flag = ($d = rtDir()) ? $d . '/schema-acct-v2' : null;
+    // v2 (2026-11-17): AcctDriverDay. v3: AcctDriverWeek + DriverWeekShare (weekly
+    // closing, a driver's % for one week). Every CREATE is IF NOT EXISTS, so an
+    // older host just adds the new tables.
+    $flag = ($d = rtDir()) ? $d . '/schema-acct-v3' : null;
     if ($flag && is_file($flag)) return $ok = true;
     if (db()->inTransaction()) return false;   // DDL commits implicitly
     try {
@@ -8152,6 +8167,18 @@ function ensureAcctSchema(): bool {
             settlementId VARCHAR(30) NULL, snapshot TEXT NOT NULL,
             closedById VARCHAR(191) NULL, closedByName VARCHAR(120) NULL, closedAt DATETIME(3) NOT NULL,
             PRIMARY KEY (driverId, workDay), KEY AcctDriverDay_day_idx (workDay)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+        db()->exec("CREATE TABLE IF NOT EXISTS `AcctDriverWeek` (
+            driverId VARCHAR(191) NOT NULL, weekStart DATE NOT NULL,
+            expected DECIMAL(12,2) NOT NULL, received DECIMAL(12,2) NULL, note VARCHAR(300) NULL,
+            settlementId VARCHAR(30) NULL, snapshot MEDIUMTEXT NOT NULL,
+            closedById VARCHAR(191) NULL, closedByName VARCHAR(120) NULL, closedAt DATETIME(3) NOT NULL,
+            PRIMARY KEY (driverId, weekStart), KEY AcctDriverWeek_week_idx (weekStart)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+        db()->exec("CREATE TABLE IF NOT EXISTS `DriverWeekShare` (
+            driverId VARCHAR(191) NOT NULL, weekStart DATE NOT NULL, pct DECIMAL(5,2) NOT NULL,
+            note VARCHAR(255) NULL, setById VARCHAR(191) NULL, setByName VARCHAR(120) NULL, setAt DATETIME(3) NOT NULL,
+            PRIMARY KEY (driverId, weekStart)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
         if ($flag) @file_put_contents($flag, gmdate('c'));
         return $ok = true;
@@ -8203,6 +8230,24 @@ function acctBooksInfo(string $from, string $to): array {
             'paper' => $from <= ACCT_PAPER_UNTIL, 'beforeStart' => $from < ACCT_SYSTEM_START, 'stuckOrders' => (int) $st->fetchColumn()];
 }
 function acctMonthDays(string $ym): array { return [$ym . '-01', date('Y-m-t', strtotime($ym . '-01'))]; }
+/** The Tuesday that opens the office week (Tue → Mon, like the shift schedule) holding work day $ymd. */
+function acctWeekStart(string $ymd): string { return workDayShift($ymd, -(((int) date('w', strtotime($ymd)) - 2 + 7) % 7)); }
+function acctWeekEnd(string $weekStart): string { return workDayShift($weekStart, 6); }
+/**
+ * A driver's percentage set by the accountant for one week («كل واحد ليه اتفاق»), or
+ * null. snapshotDriverShare() uses it, so an order delivered later that week gets it too.
+ */
+function driverWeekPct(string $driverId, string $weekStart): ?float {
+    static $ready = null;
+    if ($ready === null) $ready = ($d = rtDir()) && is_file($d . '/schema-acct-v3');
+    if (!$ready) return null;
+    try {
+        $st = db()->prepare('SELECT pct FROM `DriverWeekShare` WHERE driverId = ? AND weekStart = ?');
+        $st->execute([$driverId, $weekStart]);
+        $v = $st->fetchColumn();
+        return $v === false ? null : (float) $v;
+    } catch (Throwable $e) { return null; }
+}
 function acctMonthShift(string $ym, int $n): string { return date('Y-m', strtotime($ym . '-01 ' . ($n >= 0 ? '+' : '') . $n . ' months')); }
 /** Whole months from $a to $b (YYYY-MM), $b − $a. */
 function acctMonthDiff(string $a, string $b): int {
@@ -8592,12 +8637,13 @@ function acctDaySheet(string $day): array {
     ];
 }
 
-/** Has the accountant closed this driver's day («تقفيل المناديب»)? False when the books aren't set up. */
+/** Has the accountant closed this driver's day, alone or with its week («تقفيل المناديب»)? False when the books aren't set up. */
 function acctDriverDayClosed(string $driverId, string $day): bool {
     if (!ensureAcctSchema()) return false;
     try {
-        $st = db()->prepare('SELECT 1 FROM `AcctDriverDay` WHERE driverId = ? AND workDay = ? LIMIT 1');
-        $st->execute([$driverId, $day]);
+        $st = db()->prepare('SELECT 1 FROM `AcctDriverDay` WHERE driverId = ? AND workDay = ?
+                             UNION ALL SELECT 1 FROM `AcctDriverWeek` WHERE driverId = ? AND weekStart = ? LIMIT 1');
+        $st->execute([$driverId, $day, $driverId, acctWeekStart($day)]);
         return (bool) $st->fetchColumn();
     } catch (Throwable $e) { return false; }
 }
@@ -8616,11 +8662,16 @@ function acctDriverDaySheet(string $day): array {
     $W = orderFeeWorthSql();
     $due = "COALESCE(o.driverDeliveryRevenue, ROUND($W * COALESCE(dp.deliverySharePct, 0) / 100, 2))";
     $cash = "COALESCE(o.paymentMethod, 'CASH') = 'CASH'";
+    $ph = pharmacyOrderSql();
+    // In his pocket: CASH fees, except the pharmacy's (it pays the company on account).
     $st = db()->prepare("SELECT o.assignedDriverId d, COUNT(*) n, SUM($W) worth,
-            SUM(CASE WHEN $cash THEN COALESCE(o.deliveryFee, 0) ELSE 0 END) cashFees,
-            SUM(CASE WHEN $cash THEN 0 ELSE COALESCE(o.deliveryFee, 0) END) otherFees,
+            SUM(CASE WHEN $ph THEN 0 WHEN $cash THEN COALESCE(o.deliveryFee, 0) ELSE 0 END) cashFees,
+            SUM(CASE WHEN $ph THEN 0 WHEN $cash THEN 0 ELSE COALESCE(o.deliveryFee, 0) END) otherFees,
+            SUM(CASE WHEN $ph THEN 1 ELSE 0 END) pharmacy,
+            SUM(CASE WHEN $ph THEN COALESCE(o.deliveryFee, 0) ELSE 0 END) pharmacyFees,
             SUM($due) share,
             SUM(CASE WHEN $W > COALESCE(o.deliveryFee, 0) THEN 1 ELSE 0 END) free,
+            SUM(GREATEST($W - COALESCE(o.deliveryFee, 0), 0)) freeCost,
             SUM(CASE WHEN COALESCE(o.driverSettlementStatus, 'PENDING') <> 'SETTLED' THEN 1 ELSE 0 END) unpaid
         FROM `Order` o LEFT JOIN `DriverProfile` dp ON dp.userId = o.assignedDriverId
         WHERE o.status IN ('DELIVERED','COMPLETED') AND o.assignedDriverId IS NOT NULL AND o.createdAt >= ? AND o.createdAt < ?
@@ -8654,13 +8705,26 @@ function acctDriverDaySheet(string $day): array {
     $st->execute([$day]);
     $closed = [];
     foreach ($st->fetchAll() as $r) $closed[$r['driverId']] = $r;
+    // His week (Tue → Mon): closed as a whole, or a percentage set for it.
+    $ws = acctWeekStart($day);
+    $weekClosed = []; $weekPct = [];
+    $st = db()->prepare('SELECT driverId, closedByName, closedAt FROM `AcctDriverWeek` WHERE weekStart = ?');
+    $st->execute([$ws]);
+    foreach ($st->fetchAll() as $r) $weekClosed[$r['driverId']] = ['closedByName' => $r['closedByName'], 'closedAt' => isoZ($r['closedAt'])];
+    $st = db()->prepare('SELECT driverId, pct, note, setByName FROM `DriverWeekShare` WHERE weekStart = ?');
+    $st->execute([$ws]);
+    foreach ($st->fetchAll() as $r) $weekPct[$r['driverId']] = ['pct' => (float) $r['pct'], 'note' => $r['note'], 'byName' => $r['setByName']];
 
     $ids = array_values(array_unique(array_merge(array_keys($om), array_keys($inc), array_keys($extras), array_keys($adv), array_keys($closed))));
-    $names = [];
+    $names = []; $profilePct = [];
     if ($ids) {
-        $st = db()->prepare('SELECT id, name, phone FROM `User` WHERE id IN (' . implode(',', array_fill(0, count($ids), '?')) . ')');
+        $in = implode(',', array_fill(0, count($ids), '?'));
+        $st = db()->prepare("SELECT id, name, phone FROM `User` WHERE id IN ($in)");
         $st->execute($ids);
         foreach ($st->fetchAll() as $r) $names[$r['id']] = $r;
+        $st = db()->prepare("SELECT userId, deliverySharePct FROM `DriverProfile` WHERE userId IN ($in)");
+        $st->execute($ids);
+        foreach ($st->fetchAll() as $r) $profilePct[$r['userId']] = (float) $r['deliverySharePct'];
     }
     $zero = ['BONUS' => 0.0, 'LATE' => 0.0, 'ABSENCE' => 0.0, 'EXTRA' => 0.0];
     $kindLine = static function (?array $x, string $k) use ($zero): array {
@@ -8680,10 +8744,16 @@ function acctDriverDaySheet(string $day): array {
         $cashFees = round((float) ($o['cashFees'] ?? 0), 2);
         $handOver = round($cashFees - $net, 2);
         $unpaid = (int) ($o['unpaid'] ?? 0);
+        $worth = round((float) ($o['worth'] ?? 0), 2);
         $line = [
             'driverId' => $id, 'name' => $names[$id]['name'] ?? 'مندوب محذوف', 'phone' => $names[$id]['phone'] ?? null,
-            'orders' => (int) ($o['n'] ?? 0), 'free' => (int) ($o['free'] ?? 0), 'worth' => round((float) ($o['worth'] ?? 0), 2),
-            'cashFees' => $cashFees, 'otherFees' => round((float) ($o['otherFees'] ?? 0), 2), 'share' => $share,
+            'orders' => (int) ($o['n'] ?? 0), 'free' => (int) ($o['free'] ?? 0), 'freeCost' => round((float) ($o['freeCost'] ?? 0), 2),
+            'pharmacy' => (int) ($o['pharmacy'] ?? 0), 'pharmacyFees' => round((float) ($o['pharmacyFees'] ?? 0), 2),
+            'worth' => $worth, 'cashFees' => $cashFees, 'otherFees' => round((float) ($o['otherFees'] ?? 0), 2), 'share' => $share,
+            // his cut of the fees as it stands on the orders, the company keeps the rest
+            'pct' => $worth > 0 ? round($share / $worth * 100, 2) : null, 'company' => round($worth - $share, 2),
+            'profilePct' => $profilePct[$id] ?? null, 'weekPct' => $weekPct[$id] ?? null,
+            'weekStart' => $ws, 'weekClosed' => $weekClosed[$id] ?? null,
             'bonus' => $kindLine($x, 'BONUS') + ['tier' => $x['tier'] ?? null, 'next' => $x['next'] ?? null],
             'late' => $kindLine($x, 'LATE'), 'absence' => $kindLine($x, 'ABSENCE'),
             'attendance' => $x ? ['status' => $x['status'], 'schedStart' => $x['schedStart'], 'arrival' => $x['arrival'],
@@ -8702,7 +8772,8 @@ function acctDriverDaySheet(string $day): array {
         ];
         $lines[] = $line;
         $tot['drivers']++;
-        if ($c) { $tot['closed']++; $tot['received'] += $line['closing']['received'] ?? 0.0; }
+        if ($c || $line['weekClosed']) $tot['closed']++;
+        if ($c) $tot['received'] += $line['closing']['received'] ?? 0.0;
         $tot['orders'] += $line['orders'];
         foreach (['worth', 'cashFees', 'share', 'net', 'handOver', 'advances'] as $k) $tot[$k] += $line[$k];
         $tot['bonus'] += $line['bonus']['amount'];
@@ -8739,6 +8810,94 @@ function acctCloseDriverDay(array $line, string $day, ?float $received, string $
         jsonErr('تعذّر تقفيل يوم ' . $line['name'] . ' — جرّب تاني', 422, 'SETTLE_FAILED');
     }
     if ($s) db()->prepare('UPDATE `AcctDriverDay` SET settlementId = ? WHERE driverId = ? AND workDay = ?')->execute([$s['id'], $line['driverId'], $day]);
+    return ['driverId' => $line['driverId'], 'settlement' => $s];
+}
+
+/**
+ * A week (Tue → Mon) of «تقفيل المناديب»: the day sheets of its days so far, added up per
+ * driver, with each day kept for the breakdown. Days a driver closed alone stay closed:
+ * what they expected is taken off what the week still expects from him.
+ */
+function acctDriverWeekSheet(string $ws): array {
+    $we = acctWeekEnd($ws);
+    $last = min($we, workDayOf());
+    $agg = [];
+    for ($d = $ws; $d <= $last; $d = workDayShift($d, 1)) {
+        foreach (acctDriverDaySheet($d)['lines'] as $l) {
+            $id = $l['driverId'];
+            if (!isset($agg[$id])) $agg[$id] = ['driverId' => $id, 'name' => $l['name'], 'phone' => $l['phone'], 'orders' => 0, 'free' => 0,
+                'freeCost' => 0.0, 'pharmacy' => 0, 'pharmacyFees' => 0.0, 'worth' => 0.0, 'cashFees' => 0.0, 'otherFees' => 0.0, 'share' => 0.0,
+                'bonus' => 0.0, 'deductions' => 0.0, 'extras' => 0.0, 'advances' => 0.0, 'net' => 0.0, 'handOver' => 0.0, 'unpaidOrders' => 0,
+                'daysClosed' => 0, 'closedExpected' => 0.0, 'closedReceived' => 0.0, 'profilePct' => $l['profilePct'], 'weekPct' => $l['weekPct'],
+                'extrasList' => [], 'days' => []];
+            $a = &$agg[$id];
+            foreach (['orders', 'free', 'pharmacy', 'unpaidOrders'] as $k) $a[$k] += (int) $l[$k];
+            foreach (['freeCost', 'pharmacyFees', 'worth', 'cashFees', 'otherFees', 'share', 'advances', 'net', 'handOver'] as $k) $a[$k] += $l[$k];
+            $ded = -($l['late']['amount'] + $l['absence']['amount']);
+            $a['bonus'] += $l['bonus']['amount']; $a['deductions'] += $ded; $a['extras'] += $l['extrasTotal'];
+            if ($l['closing']) {
+                $a['daysClosed']++; $a['closedExpected'] += $l['closing']['expected']; $a['closedReceived'] += $l['closing']['received'] ?? 0.0;
+            }
+            foreach ($l['extras'] as $x) $a['extrasList'][] = $x + ['day' => $d];
+            $a['days'][] = ['day' => $d, 'orders' => $l['orders'], 'share' => $l['share'], 'bonus' => $l['bonus']['amount'], 'deductions' => round($ded, 2),
+                            'extras' => $l['extrasTotal'], 'net' => $l['net'], 'cashFees' => $l['cashFees'], 'handOver' => $l['handOver'],
+                            'closed' => $l['closing'] !== null, 'attendance' => $l['attendance']['status'] ?? null];
+            unset($a);
+        }
+    }
+    $st = db()->prepare('SELECT * FROM `AcctDriverWeek` WHERE weekStart = ?');
+    $st->execute([$ws]);
+    $closed = [];
+    foreach ($st->fetchAll() as $r) $closed[$r['driverId']] = $r;
+    $lines = [];
+    $tot = ['drivers' => 0, 'closed' => 0, 'orders' => 0, 'worth' => 0.0, 'share' => 0.0, 'company' => 0.0, 'bonus' => 0.0, 'deductions' => 0.0,
+            'extras' => 0.0, 'net' => 0.0, 'cashFees' => 0.0, 'pharmacyFees' => 0.0, 'freeCost' => 0.0, 'expected' => 0.0, 'received' => 0.0];
+    foreach ($agg as $id => $a) {
+        foreach ($a as $k => $v) if (is_float($v)) $a[$k] = round($v, 2);
+        $a['pct'] = $a['worth'] > 0 ? round($a['share'] / $a['worth'] * 100, 2) : null;
+        $a['company'] = round($a['worth'] - $a['share'], 2);
+        // what the week still expects from him: days closed alone already handed theirs over
+        $a['expected'] = round($a['handOver'] - $a['closedExpected'], 2);
+        $c = $closed[$id] ?? null;
+        $a['closing'] = $c ? [
+            'expected' => (float) $c['expected'], 'received' => $c['received'] !== null ? (float) $c['received'] : null,
+            'diff' => $c['received'] !== null ? round((float) $c['received'] - (float) $c['expected'], 2) : null,
+            'note' => $c['note'], 'closedByName' => $c['closedByName'], 'closedAt' => isoZ($c['closedAt']),
+            'settled' => $c['settlementId'] !== null,
+            'changed' => $a['unpaidOrders'] > 0 || abs($a['expected'] - (float) $c['expected']) > 0.009,
+        ] : null;
+        $lines[] = $a;
+        $tot['drivers']++;
+        if ($c) { $tot['closed']++; $tot['received'] += $a['closing']['received'] ?? 0.0; }
+        $tot['orders'] += $a['orders'];
+        foreach (['worth', 'share', 'company', 'bonus', 'deductions', 'extras', 'net', 'cashFees', 'pharmacyFees', 'freeCost', 'expected'] as $k) $tot[$k] += $a[$k];
+    }
+    usort($lines, static fn ($x, $y) => $y['orders'] <=> $x['orders'] ?: strcmp((string) $x['name'], (string) $y['name']));
+    foreach ($tot as $k => $v) if (is_float($v)) $tot[$k] = round($v, 2);
+    return ['weekStart' => $ws, 'weekEnd' => $we, 'lines' => $lines, 'totals' => $tot];
+}
+
+/** Close a driver's week: what he owed and handed over, then settle every unpaid order and bonus of it. */
+function acctCloseDriverWeek(array $line, string $ws, ?float $received, string $note, ?string $by): array {
+    $st = db()->prepare('SELECT name FROM `User` WHERE id = ?'); $st->execute([$by]);
+    $byName = $st->fetchColumn() ?: null;
+    try {
+        db()->prepare('INSERT INTO `AcctDriverWeek` (driverId, weekStart, expected, received, note, snapshot, closedById, closedByName, closedAt)
+                       VALUES (?,?,?,?,?,?,?,?,NOW(3))')
+            ->execute([$line['driverId'], $ws, $line['expected'], $received ?? $line['expected'], acctText($note, 300) ?: null,
+                       json_encode($line, JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE), $by, $byName]);
+    } catch (PDOException $e) {
+        if ((int) ($e->errorInfo[1] ?? 0) === 1062) jsonErr('أسبوع المندوب ده اتقفل قبل كده', 409, 'ALREADY_CLOSED');
+        throw $e;
+    }
+    try {
+        $s = settleDriverRange($line['driverId'], $ws, min(acctWeekEnd($ws), workDayOf()), 'تقفيل أسبوع ' . $ws . ' من الحسابات', $by);
+    } catch (Throwable $e) {
+        db()->prepare('DELETE FROM `AcctDriverWeek` WHERE driverId = ? AND weekStart = ?')->execute([$line['driverId'], $ws]);
+        error_log('[api.php] driver week close: ' . $e->getMessage());
+        jsonErr('تعذّر تقفيل أسبوع ' . $line['name'] . ' — جرّب تاني', 422, 'SETTLE_FAILED');
+    }
+    if ($s) db()->prepare('UPDATE `AcctDriverWeek` SET settlementId = ? WHERE driverId = ? AND weekStart = ?')->execute([$s['id'], $line['driverId'], $ws]);
     return ['driverId' => $line['driverId'], 'settlement' => $s];
 }
 /** A month's net profit as the books state it: the closing's figure when closed, else live. */
@@ -9099,18 +9258,23 @@ if (str_starts_with($path, '/admin/accounting')) {
             'rules' => ['enabled' => (bool) $R['enabled'], 'bonusTiers' => $R['bonusTiers']]]);
     }
     if ($method === 'GET' && $path === '/admin/accounting/drivers-day/orders') {
-        $day = acctYmd($_GET['date'] ?? '') ?? jsonErr('اليوم غير صحيح', 422, 'BAD_DATE');
+        // one day (date=) or his whole week (week=, any day of it)
+        $wk = acctYmd($_GET['week'] ?? '');
+        $day = $wk ? null : (acctYmd($_GET['date'] ?? '') ?? jsonErr('اليوم غير صحيح', 422, 'BAD_DATE'));
+        [$from, $to] = $wk ? [acctWeekStart($wk), acctWeekEnd(acctWeekStart($wk))] : [$day, $day];
         $driverId = trim((string) ($_GET['driverId'] ?? ''));
         $W = orderFeeWorthSql();
         $st = db()->prepare("SELECT o.id, o.orderNumber, o.createdAt, o.paymentMethod, $W AS worth, COALESCE(o.deliveryFee, 0) AS charged,
                 COALESCE(o.driverDeliveryRevenue, ROUND($W * COALESCE(dp.deliverySharePct, 0) / 100, 2)) AS share,
-                COALESCE(o.driverSettlementStatus, 'PENDING') AS settlement
+                (" . pharmacyOrderSql() . ") AS pharmacy, COALESCE(o.driverSettlementStatus, 'PENDING') AS settlement
             FROM `Order` o LEFT JOIN `DriverProfile` dp ON dp.userId = o.assignedDriverId
             WHERE o.assignedDriverId = ? AND o.status IN ('DELIVERED','COMPLETED') AND o.createdAt >= ? AND o.createdAt < ?
             ORDER BY o.createdAt");
-        $st->execute([$driverId, gmdate('Y-m-d H:i:s', workDayStartTs($day)), gmdate('Y-m-d H:i:s', workDayEndTs($day))]);
+        $st->execute([$driverId, gmdate('Y-m-d H:i:s', workDayStartTs($from)), gmdate('Y-m-d H:i:s', workDayEndTs($to))]);
         jsonOk(['orders' => array_map(static fn ($r) => ['id' => $r['id'], 'orderNumber' => $r['orderNumber'], 'createdAt' => isoZ($r['createdAt']),
-            'cash' => ($r['paymentMethod'] ?? 'CASH') === 'CASH', 'worth' => (float) $r['worth'], 'charged' => (float) $r['charged'],
+            // in his pocket? not a wallet payment, not the pharmacy's (it pays the company)
+            'cash' => ($r['paymentMethod'] ?? 'CASH') === 'CASH' && !(int) $r['pharmacy'], 'pharmacy' => (bool) (int) $r['pharmacy'],
+            'worth' => (float) $r['worth'], 'charged' => (float) $r['charged'],
             'share' => (float) $r['share'], 'free' => (float) $r['worth'] > (float) $r['charged'], 'settled' => $r['settlement'] === 'SETTLED'],
             $st->fetchAll())]);
     }
@@ -9179,6 +9343,7 @@ if (str_starts_with($path, '/admin/accounting')) {
         foreach (acctDriverDaySheet($day)['lines'] as $l) if ($l['driverId'] === $driverId) $line = $l;
         if (!$line) jsonErr('مفيش حاجة للمندوب ده في اليوم ده', 422, 'NOTHING');
         if ($line['closing']) jsonErr('يوم المندوب ده اتقفل قبل كده', 409, 'ALREADY_CLOSED');
+        if ($line['weekClosed']) jsonErr('أسبوع المندوب ده متقفل كله', 409, 'WEEK_CLOSED');
         $rec = $b['received'] ?? null;
         if ($rec !== null && $rec !== '' && (!is_numeric($rec) || abs((float) $rec) > 10000000)) jsonErr('المبلغ اللي اتسلّم غير صحيح', 422, 'BAD_AMOUNT');
         $r = acctCloseDriverDay($line, $day, ($rec === null || $rec === '') ? null : round((float) $rec, 2), (string) ($b['note'] ?? ''), $acctBy);
@@ -9192,7 +9357,7 @@ if (str_starts_with($path, '/admin/accounting')) {
         acctRefuseClosed($day);
         $n = 0;
         foreach (acctDriverDaySheet($day)['lines'] as $l) {
-            if ($l['closing'] || ($l['orders'] === 0 && abs($l['net']) < 0.01 && abs($l['handOver']) < 0.01)) continue;
+            if ($l['closing'] || $l['weekClosed'] || ($l['orders'] === 0 && abs($l['net']) < 0.01 && abs($l['handOver']) < 0.01)) continue;
             acctCloseDriverDay($l, $day, null, '', $acctBy);
             $n++;
         }
@@ -9200,12 +9365,93 @@ if (str_starts_with($path, '/admin/accounting')) {
     }
     if ($method === 'DELETE' && preg_match('#^/admin/accounting/drivers-day/close/([A-Za-z0-9_-]+)/(\d{4}-\d{2}-\d{2})$#', $path, $m)) {
         acctRefuseClosed($m[2]);
+        $st = db()->prepare('SELECT 1 FROM `AcctDriverWeek` WHERE driverId = ? AND weekStart = ?'); $st->execute([$m[1], acctWeekStart($m[2])]);
+        if ($st->fetchColumn()) jsonErr('أسبوعه متقفل كله، افتح الأسبوع الأول', 409, 'WEEK_CLOSED');
         $st = db()->prepare('SELECT settlementId FROM `AcctDriverDay` WHERE driverId = ? AND workDay = ?'); $st->execute([$m[1], $m[2]]);
         $row = $st->fetch() ?: jsonErr('يوم المندوب ده مش متقفل', 404, 'NOT_FOUND');
         try {
             if ($row['settlementId']) unsettleDriver((string) $row['settlementId']);
         } catch (Throwable $e) { error_log('[api.php] driver day reopen: ' . $e->getMessage()); jsonErr('تعذّر فتح اليوم — جرّب تاني', 422, 'REOPEN_FAILED'); }
         db()->prepare('DELETE FROM `AcctDriverDay` WHERE driverId = ? AND workDay = ?')->execute([$m[1], $m[2]]);
+        jsonOk(['reopened' => true]);
+    }
+
+    // ── «تقفيل المناديب» by the week (Tue → Mon): his % for the week, then one closing ──
+    /** The driver and week of a week call; refuses a future week and days the books closed. */
+    $dwTarget = static function (array $b) {
+        $d = acctYmd($b['week'] ?? '') ?? jsonErr('الأسبوع غير صحيح', 422, 'BAD_DATE');
+        $ws = acctWeekStart($d);
+        if ($ws > workDayOf()) jsonErr('الأسبوع ده لسه ماجاش', 422, 'FUTURE');
+        $driverId = trim((string) ($b['driverId'] ?? ''));
+        $st = db()->prepare('SELECT name FROM `User` WHERE id = ? LIMIT 1'); $st->execute([$driverId]);
+        if ($driverId === '' || $st->fetchColumn() === false) jsonErr('المندوب مش موجود', 422, 'BAD_DRIVER');
+        for ($d = $ws, $last = min(acctWeekEnd($ws), workDayOf()); $d <= $last; $d = workDayShift($d, 1)) acctRefuseClosed($d);
+        return [$driverId, $ws];
+    };
+    $dwClosed = static function (string $driverId, string $ws): bool {
+        $st = db()->prepare('SELECT 1 FROM `AcctDriverWeek` WHERE driverId = ? AND weekStart = ?'); $st->execute([$driverId, $ws]);
+        return (bool) $st->fetchColumn();
+    };
+    if ($method === 'GET' && $path === '/admin/accounting/drivers-week') {
+        $ws = acctWeekStart(acctYmd($_GET['week'] ?? '') ?? workDayOf());
+        jsonOk(acctDriverWeekSheet($ws) + ['today' => workDayOf(), 'thisWeek' => acctWeekStart(workDayOf()),
+            'isFuture' => $ws > workDayOf(), 'ended' => acctWeekEnd($ws) < workDayOf()]);
+    }
+    // His % of the delivery fees for this week (null = back to his profile's). It is written
+    // on the week's unpaid orders right away, so every report reads the same split, and
+    // orders delivered later that week take it too (snapshotDriverShare). Paid orders keep theirs.
+    if ($method === 'POST' && $path === '/admin/accounting/drivers-week/share') {
+        $b = readJsonBody();
+        [$driverId, $ws] = $dwTarget($b);
+        if ($dwClosed($driverId, $ws)) jsonErr('أسبوع المندوب ده متقفل، افتحه الأول', 409, 'WEEK_CLOSED');
+        $raw = $b['pct'] ?? null;
+        if ($raw !== null && $raw !== '' && (!is_numeric($raw) || (float) $raw < 0 || (float) $raw > 100)) jsonErr('النسبة من 0 لـ 100', 422, 'BAD_PCT');
+        $st = db()->prepare('SELECT deliverySharePct FROM `DriverProfile` WHERE userId = ?'); $st->execute([$driverId]);
+        $profile = $st->fetchColumn();
+        if ($raw === null || $raw === '') {
+            db()->prepare('DELETE FROM `DriverWeekShare` WHERE driverId = ? AND weekStart = ?')->execute([$driverId, $ws]);
+            $pct = $profile !== false ? (float) $profile : 0.0;
+        } else {
+            $pct = round((float) $raw, 2);
+            $st = db()->prepare('SELECT name FROM `User` WHERE id = ?'); $st->execute([$acctBy]);
+            db()->prepare('INSERT INTO `DriverWeekShare` (driverId, weekStart, pct, note, setById, setByName, setAt) VALUES (?,?,?,?,?,?,NOW(3))
+                           ON DUPLICATE KEY UPDATE pct = VALUES(pct), note = VALUES(note), setById = VALUES(setById), setByName = VALUES(setByName), setAt = NOW(3)')
+                ->execute([$driverId, $ws, $pct, acctText($b['note'] ?? '', 255) ?: null, $acctBy, $st->fetchColumn() ?: null]);
+            if (!empty($b['saveToProfile']) && $profile !== false)
+                db()->prepare('UPDATE `DriverProfile` SET deliverySharePct = ? WHERE userId = ?')->execute([$pct, $driverId]);
+        }
+        $W = orderFeeWorthSql();
+        $u = db()->prepare("UPDATE `Order` o SET o.driverSharePct = ?, o.driverDeliveryRevenue = ROUND($W * ? / 100, 2),
+                o.companyDeliveryRevenue = ROUND(COALESCE(o.deliveryFee, 0) - ROUND($W * ? / 100, 2), 2), o.updatedAt = NOW(3)
+            WHERE o.assignedDriverId = ? AND o.status IN ('DELIVERED','COMPLETED') AND COALESCE(o.driverSettlementStatus, 'PENDING') <> 'SETTLED'
+              AND o.createdAt >= ? AND o.createdAt < ?");
+        $u->execute([$pct, $pct, $pct, $driverId, gmdate('Y-m-d H:i:s', workDayStartTs($ws)), gmdate('Y-m-d H:i:s', workDayEndTs(acctWeekEnd($ws)))]);
+        $st = db()->prepare("SELECT COUNT(*) FROM `Order` WHERE assignedDriverId = ? AND status IN ('DELIVERED','COMPLETED') AND driverSettlementStatus = 'SETTLED'
+                               AND createdAt >= ? AND createdAt < ?");
+        $st->execute([$driverId, gmdate('Y-m-d H:i:s', workDayStartTs($ws)), gmdate('Y-m-d H:i:s', workDayEndTs(acctWeekEnd($ws)))]);
+        jsonOk(['pct' => $pct, 'orders' => $u->rowCount(), 'keptPaid' => (int) $st->fetchColumn()]);
+    }
+    if ($method === 'POST' && $path === '/admin/accounting/drivers-week/close') {
+        $b = readJsonBody();
+        [$driverId, $ws] = $dwTarget($b);
+        $line = null;
+        foreach (acctDriverWeekSheet($ws)['lines'] as $l) if ($l['driverId'] === $driverId) $line = $l;
+        if (!$line) jsonErr('مفيش حاجة للمندوب ده في الأسبوع ده', 422, 'NOTHING');
+        if ($line['closing']) jsonErr('أسبوع المندوب ده اتقفل قبل كده', 409, 'ALREADY_CLOSED');
+        $rec = $b['received'] ?? null;
+        if ($rec !== null && $rec !== '' && (!is_numeric($rec) || abs((float) $rec) > 10000000)) jsonErr('المبلغ اللي اتسلّم غير صحيح', 422, 'BAD_AMOUNT');
+        $r = acctCloseDriverWeek($line, $ws, ($rec === null || $rec === '') ? null : round((float) $rec, 2), (string) ($b['note'] ?? ''), $acctBy);
+        jsonOk($r + ['expected' => $line['expected']]);
+    }
+    if ($method === 'DELETE' && preg_match('#^/admin/accounting/drivers-week/close/([A-Za-z0-9_-]+)/(\d{4}-\d{2}-\d{2})$#', $path, $m)) {
+        $ws = acctWeekStart($m[2]);
+        for ($d = $ws, $last = min(acctWeekEnd($ws), workDayOf()); $d <= $last; $d = workDayShift($d, 1)) acctRefuseClosed($d);
+        $st = db()->prepare('SELECT settlementId FROM `AcctDriverWeek` WHERE driverId = ? AND weekStart = ?'); $st->execute([$m[1], $ws]);
+        $row = $st->fetch() ?: jsonErr('أسبوع المندوب ده مش متقفل', 404, 'NOT_FOUND');
+        try {
+            if ($row['settlementId']) unsettleDriver((string) $row['settlementId']);
+        } catch (Throwable $e) { error_log('[api.php] driver week reopen: ' . $e->getMessage()); jsonErr('تعذّر فتح الأسبوع — جرّب تاني', 422, 'REOPEN_FAILED'); }
+        db()->prepare('DELETE FROM `AcctDriverWeek` WHERE driverId = ? AND weekStart = ?')->execute([$m[1], $ws]);
         jsonOk(['reopened' => true]);
     }
 
@@ -12165,19 +12411,22 @@ function settleDriverRows(string $driverId, array $rows, array $incPay, string $
     } catch (Throwable $e) { if ($pdo->inTransaction()) $pdo->rollBack(); throw $e; }
     return ['id' => $sid, 'amount' => $amount, 'orderCount' => count($orderIds), 'incentives' => $incTotal];
 }
-/** Settle one work day of a driver: its unpaid orders and its unpaid bonus/deductions. Null when nothing is owed. */
-function settleDriverDay(string $driverId, string $day, string $note, ?string $by): ?array {
+/** Settle work days $from..$to of a driver: the unpaid orders and the unpaid bonus/deductions. Null when nothing is owed. */
+function settleDriverRange(string $driverId, string $from, string $to, string $note, ?string $by): ?array {
     $w = ["o.assignedDriverId = ?", "o.status IN ('DELIVERED','COMPLETED')", "COALESCE(o.driverSettlementStatus, 'PENDING') <> 'SETTLED'"];
     $a = [$driverId];
-    driverReportDays($day, $day, $w, $a);
+    driverReportDays($from, $to, $w, $a);
     $sel = db()->prepare("SELECT o.id, o.driverDeliveryRevenue FROM `Order` o WHERE " . implode(' AND ', $w));
     $sel->execute($a);
     $rows = $sel->fetchAll();
     $incPay = [];
-    $x = driverIncentives($driverId, $day, $day)[$driverId]['days'][$day] ?? null;
-    if ($x) foreach ($x['pending'] as $kind => $amt) if (abs($amt) >= 0.01) $incPay[] = [$day, $kind, $amt];
+    foreach ((driverIncentives($driverId, $from, $to)[$driverId]['days'] ?? []) as $day => $x)
+        foreach ($x['pending'] as $kind => $amt) if (abs($amt) >= 0.01) $incPay[] = [$day, $kind, $amt];
     if (!$rows && !$incPay) return null;
     return settleDriverRows($driverId, $rows, $incPay, $note, $by);
+}
+function settleDriverDay(string $driverId, string $day, string $note, ?string $by): ?array {
+    return settleDriverRange($driverId, $day, $day, $note, $by);
 }
 /** Undo a settlement: its orders go back to unpaid, its payouts and the row are removed. */
 function unsettleDriver(string $settlementId): void {
