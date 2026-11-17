@@ -229,6 +229,19 @@ export function DashboardLayout() {
     if (!q) return;
     navigate(`/orders?search=${encodeURIComponent(q)}`);
   };
+  // The accounting page is heavy (charts, three tab files). For whoever can open
+  // it, fetch its code while the dashboard sits idle, so the first open only
+  // waits for its data. Same module the router imports, so it is fetched once.
+  const canAccounting = allNavPaths.includes('/accounting');
+  useEffect(() => {
+    if (!canAccounting) return;
+    const load = () => void import('./accounting.js').catch(() => undefined);
+    const w = window as Window & { requestIdleCallback?: (cb: () => void) => number };
+    const t = w.requestIdleCallback ? w.requestIdleCallback(load) : window.setTimeout(load, 3000);
+    return () => {
+      if (!w.requestIdleCallback) window.clearTimeout(t);
+    };
+  }, [canAccounting]);
   // Auto-close the drawer when navigating between pages
   useEffect(() => setMobileOpen(false), [location.pathname]);
   // Lock scroll while the overlay is up

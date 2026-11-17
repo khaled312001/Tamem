@@ -6777,7 +6777,10 @@ function shiftMinutes(string $start, string $end): int {
  */
 /** A function, not a const: a top-level const only exists once execution reaches
  *  it, and the driver report — far above this point — needs it first. */
-function incentiveKinds(): array { return ['BONUS', 'LATE', 'ABSENCE']; }
+function incentiveKinds(): array { return ['BONUS', 'LATE', 'ABSENCE', 'EXTRA']; }
+/** The kinds the rules compute, which the office can waive or set to another amount.
+ *  EXTRA is the accountant's own ± lines (DriverDayExtra), never computed. */
+function incentiveRuleKinds(): array { return ['BONUS', 'LATE', 'ABSENCE']; }
 
 function incentiveRulesDefault(): array {
     return [
@@ -6845,6 +6848,38 @@ function ensureIncentiveSchema(): void {
     backfillFreeOrderShares();
 }
 /**
+ * The accountant's edits to a driver's day (2026-11-17, «تقفيل المناديب»):
+ *   • DriverIncentiveWaiver.amount — NULL is the old waiver (the kind counts 0);
+ *     a number sets that kind to it instead («البونص 30 مش 50»). Signed like
+ *     the rest: LATE/ABSENCE are stored negative.
+ *   • DriverDayExtra — free ± lines with a reason («خصم عهدة», «إضافة مشوار»),
+ *     the EXTRA kind. Paid by a settlement like any other kind.
+ * Lazy and flag-gated; until it runs, driverIncentives() reads neither.
+ */
+function incentiveV2Ready(): bool {
+    static $ok = null;
+    if ($ok !== null) return $ok;
+    $flag = ($d = rtDir()) ? $d . '/schema-incentive-v2' : null;
+    if ($flag && is_file($flag)) return $ok = true;
+    if (db()->inTransaction()) return false;   // DDL commits implicitly; try again next time
+    ensureIncentiveSchema();
+    try {
+        if (!db()->query("SHOW COLUMNS FROM `DriverIncentiveWaiver` LIKE 'amount'")->fetch())
+            db()->exec("ALTER TABLE `DriverIncentiveWaiver` ADD COLUMN amount DECIMAL(10,2) NULL");
+        db()->exec("CREATE TABLE IF NOT EXISTS `DriverDayExtra` (
+            id VARCHAR(30) NOT NULL PRIMARY KEY, driverId VARCHAR(30) NOT NULL, workDay DATE NOT NULL,
+            amount DECIMAL(10,2) NOT NULL, note VARCHAR(255) NOT NULL,
+            createdById VARCHAR(191) NULL, createdAt DATETIME(3) NOT NULL,
+            KEY idx_dde_day (workDay), KEY idx_dde_driver_day (driverId, workDay)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+        if ($flag) @file_put_contents($flag, gmdate('c'));
+        return $ok = true;
+    } catch (Throwable $e) {
+        error_log('[api.php] incentive v2 schema: ' . $e->getMessage());
+        return $ok = false;
+    }
+}
+/**
  * One-off: free app orders completed before the fix were snapshotted on a 0
  * fee, so the driver's share came out 0 (the 50 ج that «بقلت في النص»).
  * Re-snapshot the ones not settled yet, at the share % saved on each order —
@@ -6892,8 +6927,11 @@ function driverIncentives(?string $driverId, string $fromDay, string $toDay): ar
     // Before any early return: it also runs the free-order backfill, which
     // must not wait for the incentive rules to start or be switched on.
     ensureIncentiveSchema();
+    $v2 = incentiveV2Ready();
     $R = driverIncentiveRules();
-    if (!$R['enabled']) return [];
+    // Rules off: nothing is computed, but the accountant's edits and ± lines still count.
+    $auto = (bool) $R['enabled'];
+    if (!$auto && !$v2) return [];
     $today = workDayOf();
     if ($fromDay < $R['effectiveFrom']) $fromDay = $R['effectiveFrom'];
     if ($toDay > $today) $toDay = $today;
@@ -6960,19 +6998,31 @@ function driverIncentives(?string $driverId, string $fromDay, string $toDay): ar
         $tailEnd = workDayStartTs($day) + (workDayStartHour($day) === 0 ? WORKDAY_OLD_START_HOUR * 3600 : 0);
         if ($ts >= $tailEnd && !isset($activity[$r['d']][$day])) $activity[$r['d']][$day] = $ts;
     }
-    $q = db()->prepare("SELECT driverId, workDay, kind, note FROM `DriverIncentiveWaiver` WHERE workDay BETWEEN ? AND ?" . ($one ? ' AND driverId = ?' : ''));
+    $q = db()->prepare("SELECT driverId, workDay, kind, note" . ($v2 ? ', amount' : '') . " FROM `DriverIncentiveWaiver` WHERE workDay BETWEEN ? AND ?" . ($one ? ' AND driverId = ?' : ''));
     $q->execute($one ? [$fromDay, $toDay, $driverId] : [$fromDay, $toDay]);
-    $waivers = [];
-    foreach ($q->fetchAll() as $r) $waivers[$r['driverId']][$r['workDay']][$r['kind']] = (string) ($r['note'] ?? '');
+    // A row with no amount is a waiver (counts 0); with an amount it SETS the kind.
+    $waivers = []; $adjusts = []; $adjNotes = [];
+    foreach ($q->fetchAll() as $r) {
+        if (($r['amount'] ?? null) === null) { $waivers[$r['driverId']][$r['workDay']][$r['kind']] = (string) ($r['note'] ?? ''); continue; }
+        $adjusts[$r['driverId']][$r['workDay']][$r['kind']] = (float) $r['amount'];
+        $adjNotes[$r['driverId']][$r['workDay']][$r['kind']] = (string) ($r['note'] ?? '');
+    }
+    $extras = [];
+    if ($v2) {
+        $q = db()->prepare("SELECT driverId, workDay, SUM(amount) a FROM `DriverDayExtra` WHERE workDay BETWEEN ? AND ?" . ($one ? ' AND driverId = ?' : '') . " GROUP BY driverId, workDay");
+        $q->execute($one ? [$fromDay, $toDay, $driverId] : [$fromDay, $toDay]);
+        foreach ($q->fetchAll() as $r) $extras[$r['driverId']][$r['workDay']] = round((float) $r['a'], 2);
+    }
     $q = db()->prepare("SELECT driverId, workDay, kind, SUM(amount) a FROM `DriverIncentivePayout` WHERE workDay BETWEEN ? AND ?"
         . ($one ? ' AND driverId = ?' : '') . " GROUP BY driverId, workDay, kind");
     $q->execute($one ? [$fromDay, $toDay, $driverId] : [$fromDay, $toDay]);
     $paid = [];
     foreach ($q->fetchAll() as $r) $paid[$r['driverId']][$r['workDay']][$r['kind']] = (float) $r['a'];
 
-    $ids = array_unique(array_merge(array_keys($orders), array_keys($sched), array_keys($waivers), array_keys($paid)));
+    $ids = array_unique(array_merge(array_keys($orders), array_keys($sched), array_keys($waivers), array_keys($paid),
+        array_keys($adjusts), array_keys($extras)));
     if ($one) $ids = [$driverId];
-    $tiers = $R['bonusTiers'];
+    $tiers = $auto ? $R['bonusTiers'] : [];
     $now = time();
     $out = [];
     foreach ($ids as $d) {
@@ -6981,9 +7031,10 @@ function driverIncentives(?string $driverId, string $fromDay, string $toDay): ar
             $n = $orders[$d][$day] ?? 0;
             $tier = null; $next = null;
             foreach ($tiers as $t) { if ($n >= $t['orders']) $tier = $t; elseif ($next === null) $next = $t; }
-            $raw = ['BONUS' => $tier ? (float) $tier['amount'] : 0.0, 'LATE' => 0.0, 'ABSENCE' => 0.0];
+            $ex = $extras[$d][$day] ?? 0.0;
+            $raw = ['BONUS' => $tier ? (float) $tier['amount'] : 0.0, 'LATE' => 0.0, 'ABSENCE' => 0.0, 'EXTRA' => $ex];
 
-            $start = $startOn($sched[$d][(int) date('w', strtotime($day))] ?? [], $day);
+            $start = $auto ? $startOn($sched[$d][(int) date('w', strtotime($day))] ?? [], $day) : null;
             $status = 'off'; $arrival = null; $arrivalBy = null; $lateMin = 0;
             if ($start !== null) {
                 // Under the old 03:00 day, a first shift that starts after midnight
@@ -7010,11 +7061,13 @@ function driverIncentives(?string $driverId, string $fromDay, string $toDay): ar
                 }
             }
             $w = $waivers[$d][$day] ?? [];
+            $adj = $adjusts[$d][$day] ?? [];
             $pd = $paid[$d][$day] ?? [];
-            if ($n === 0 && $start === null && !$w && !$pd) continue;
+            if ($n === 0 && $start === null && !$w && !$pd && !$adj && $ex == 0.0) continue;
             $amount = []; $pending = []; $paidK = [];
             foreach (incentiveKinds() as $k) {
-                $amount[$k] = array_key_exists($k, $w) ? 0.0 : $raw[$k];
+                // The office's amount wins, then a waiver (0), then the rules.
+                $amount[$k] = array_key_exists($k, $adj) ? $adj[$k] : (array_key_exists($k, $w) ? 0.0 : $raw[$k]);
                 $paidK[$k] = round($pd[$k] ?? 0.0, 2);
                 $pending[$k] = round($amount[$k] - $paidK[$k], 2);
             }
@@ -7025,9 +7078,11 @@ function driverIncentives(?string $driverId, string $fromDay, string $toDay): ar
                 'schedStart' => $start, 'arrival' => $arrival ? gmdate('Y-m-d\TH:i:s\Z', $arrival) : null,
                 'arrivalBy' => $arrivalBy, 'lateMin' => $lateMin, 'status' => $status,
                 'raw' => $raw, 'waived' => (object) $w, 'amount' => $amount, 'paid' => $paidK, 'pending' => $pending,
+                'adjusted' => (object) $adj, 'adjustNote' => (object) ($adjNotes[$d][$day] ?? []),
             ];
-            $tot['bonus'] += $amount['BONUS'];
-            $tot['deductions'] -= $amount['LATE'] + $amount['ABSENCE'];
+            // A + line is paid like a bonus, a − line like a deduction.
+            $tot['bonus'] += $amount['BONUS'] + max(0.0, $amount['EXTRA']);
+            $tot['deductions'] -= $amount['LATE'] + $amount['ABSENCE'] + min(0.0, $amount['EXTRA']);
             $tot['paid'] += array_sum($paidK);
             $tot['pending'] += array_sum($pending);
         }
@@ -7041,16 +7096,18 @@ function driverIncentives(?string $driverId, string $fromDay, string $toDay): ar
 function incentiveAttendanceLine(array $x): string {
     if (($x['schedStart'] ?? null) === null) return '';
     $at = 'معادك ' . hhmm12Ar((string) $x['schedStart']);
-    $wv = (array) $x['waived'];
+    // The amount after the office's waiver or edit, not the rule's.
+    $late = -(float) ($x['amount']['LATE'] ?? $x['raw']['LATE']);
+    $abs = -(float) ($x['amount']['ABSENCE'] ?? $x['raw']['ABSENCE']);
     switch ($x['status']) {
         case 'ontime':  return "✅ $at — وصلت في معادك";
         case 'waiting': return "⏳ $at — لسه ما سجّلتش حضور";
         case 'late':
             return "⏰ $at — اتأخرت " . minsLabel((int) $x['lateMin'])
-                . (isset($wv['LATE']) ? ' (اتعفى من الإدارة ✅)' : ' ➜ خصم ' . waMoney(-$x['raw']['LATE']));
+                . ($late <= 0 ? ' (اتعفى من الإدارة ✅)' : ' ➜ خصم ' . waMoney($late));
         case 'absent':
             return "🚫 $at — اتحسب غياب"
-                . (isset($wv['ABSENCE']) ? ' (بإذن — من غير خصم ✅)' : ' ➜ خصم ' . waMoney(-$x['raw']['ABSENCE']));
+                . ($abs <= 0 ? ' (بإذن — من غير خصم ✅)' : ' ➜ خصم ' . waMoney($abs));
     }
     return '';
 }
@@ -7064,7 +7121,7 @@ function driverAccountText(string $driverId, string $name, ?string $day = null):
     $day = $day ?? workDayOf();
     $W = orderFeeWorthSql();
     $st = db()->prepare(
-        "SELECT o.orderNumber, COALESCE(o.deliveryFee, 0) AS charged, $W AS worth,
+        "SELECT o.orderNumber, COALESCE(o.deliveryFee, 0) AS charged, $W AS worth, o.paymentMethod,
                 COALESCE(o.driverDeliveryRevenue, ROUND($W * COALESCE(dp.deliverySharePct,0) / 100, 2)) AS due
            FROM `Order` o JOIN `DriverProfile` dp ON dp.userId = o.assignedDriverId
           WHERE o.assignedDriverId = ? AND o.status IN ('DELIVERED','COMPLETED')
@@ -7073,9 +7130,12 @@ function driverAccountText(string $driverId, string $name, ?string $day = null):
     );
     $st->execute([$driverId, gmdate('Y-m-d H:i:s', workDayStartTs($day)), gmdate('Y-m-d H:i:s', workDayEndTs($day))]);
     $rows = $st->fetchAll();
-    $worth = 0.0; $charged = 0.0; $due = 0.0; $free = 0;
+    // Only a CASH order's fee is in his pocket: a wallet payment went to the company.
+    $worth = 0.0; $charged = 0.0; $due = 0.0; $free = 0; $notCash = 0.0;
     foreach ($rows as $x) {
-        $worth += (float) $x['worth']; $charged += (float) $x['charged']; $due += (float) $x['due'];
+        $worth += (float) $x['worth']; $due += (float) $x['due'];
+        if (in_array($x['paymentMethod'] ?? 'CASH', ['CASH', null, ''], true)) $charged += (float) $x['charged'];
+        else $notCash += (float) $x['charged'];
         if ((float) $x['worth'] > (float) $x['charged']) $free++;
     }
     $open = driverOpenSession($driverId);
@@ -7091,23 +7151,27 @@ function driverAccountText(string $driverId, string $name, ?string $day = null):
     $L[] = '📦 توصيلات: ' . count($rows) . ($free ? ' (منهم ' . $free . ' مجاني 🎁)' : '');
     $L[] = '🚚 قيمة التوصيل: ' . waMoney($worth) . ($free ? ' — المجاني محسوب بسعره' : '');
     $L[] = '🤝 نصيبك: ' . waMoney($due);
-    $bonus = 0.0; $ded = 0.0;
+    $bonus = 0.0; $ded = 0.0; $extra = 0.0;
     if ($inc) {
         $bonus = (float) $inc['amount']['BONUS'];
         $ded = -((float) $inc['amount']['LATE'] + (float) $inc['amount']['ABSENCE']);
+        $extra = (float) ($inc['amount']['EXTRA'] ?? 0);
         $nx = $inc['next'];
         if ($bonus > 0) {
-            $L[] = '🏆 بونص: ' . waMoney($bonus) . ' (وصلت ' . $inc['tier'] . ' أوردر)'
+            $L[] = '🏆 بونص: ' . waMoney($bonus) . ($inc['tier'] ? ' (وصلت ' . $inc['tier'] . ' أوردر)' : '')
                 . ($nx ? ' — فاضلك ' . ($nx['orders'] - $inc['orders']) . ' على ' . waMoney($nx['amount']) : '');
         } elseif ($nx) {
             $L[] = '🎯 فاضلك ' . ($nx['orders'] - $inc['orders']) . ' أوردر على بونص ' . waMoney($nx['amount']);
         }
         if ($ded > 0) $L[] = '➖ خصومات: ' . waMoney($ded);
+        if ($extra > 0) $L[] = '➕ إضافة من الحسابات: ' . waMoney($extra);
+        elseif ($extra < 0) $L[] = '➖ خصم من الحسابات: ' . waMoney(-$extra);
     }
-    $net = $due + $bonus - $ded;
+    $net = $due + $bonus - $ded + $extra;
     $L[] = '━━━━━━━━━━';
     $L[] = '💰 صافي ليك: ' . waMoney($net);
-    $L[] = '💵 حصّلت توصيل من العملاء: ' . waMoney($charged);
+    $L[] = '💵 حصّلت توصيل كاش: ' . waMoney($charged)
+        . ($notCash > 0 ? ' (و' . waMoney($notCash) . ' اتدفعوا للشركة على طول)' : '');
     $rest = round($charged - $net, 2);
     $L[] = $rest >= 0 ? '📤 تسلّم للشركة: ' . waMoney($rest) : '📥 ليك عند الشركة: ' . waMoney(-$rest);
     if ($rows) {
@@ -7175,12 +7239,16 @@ if ($method === 'POST' && $path === '/admin/driver-incentives/waive') {
     $b = readJsonBody();
     $driverId = trim((string) ($b['driverId'] ?? '')); $day = trim((string) ($b['day'] ?? ''));
     $kind = strtoupper(trim((string) ($b['kind'] ?? '')));
-    if ($driverId === '' || !preg_match('/^\d{4}-\d{2}-\d{2}$/', $day) || !in_array($kind, incentiveKinds(), true))
+    if ($driverId === '' || !preg_match('/^\d{4}-\d{2}-\d{2}$/', $day) || !in_array($kind, incentiveRuleKinds(), true))
         jsonErr('بيانات غير صحيحة', 422, 'VALIDATION_ERROR');
     ensureIncentiveSchema();
+    $v2 = incentiveV2Ready();
+    if (acctDriverDayClosed($driverId, $day))
+        jsonErr('اليوم ده اتقفل للمندوب في «الحسابات ← تقفيل المناديب» — افتحه من هناك الأول', 409, 'DRIVER_DAY_CLOSED');
     if (!empty($b['waived'])) {
+        // A waiver replaces an amount the accountant had set (amount back to NULL).
         db()->prepare('INSERT INTO `DriverIncentiveWaiver` (driverId, workDay, kind, note, createdById, createdAt) VALUES (?,?,?,?,?,NOW(3))
-                       ON DUPLICATE KEY UPDATE note = VALUES(note), createdById = VALUES(createdById), createdAt = VALUES(createdAt)')
+                       ON DUPLICATE KEY UPDATE note = VALUES(note), createdById = VALUES(createdById), createdAt = VALUES(createdAt)' . ($v2 ? ', amount = NULL' : ''))
             ->execute([$driverId, $day, $kind, mb_substr(trim((string) ($b['note'] ?? '')), 0, 255) ?: null, $u['sub'] ?? null]);
     } else {
         db()->prepare('DELETE FROM `DriverIncentiveWaiver` WHERE driverId = ? AND workDay = ? AND kind = ?')->execute([$driverId, $day, $kind]);
@@ -8041,7 +8109,9 @@ const ACCT_DEFAULT_CATEGORIES = [
 function ensureAcctSchema(): bool {
     static $ok = null;
     if ($ok !== null) return $ok;
-    $flag = ($d = rtDir()) ? $d . '/schema-acct-v1' : null;
+    // v2 (2026-11-17): AcctDriverDay. Every CREATE is IF NOT EXISTS, so a host
+    // that only ran v1 just adds the new table.
+    $flag = ($d = rtDir()) ? $d . '/schema-acct-v2' : null;
     if ($flag && is_file($flag)) return $ok = true;
     if (db()->inTransaction()) return false;   // DDL commits implicitly
     try {
@@ -8072,6 +8142,16 @@ function ensureAcctSchema(): bool {
             type VARCHAR(5) NOT NULL, period VARCHAR(10) NOT NULL, snapshot MEDIUMTEXT NOT NULL,
             note VARCHAR(300) NULL, closedById VARCHAR(191) NULL, closedByName VARCHAR(120) NULL,
             closedAt DATETIME(3) NOT NULL, PRIMARY KEY (type, period)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+        // «تقفيل المناديب»: one row per driver per work day once the accountant
+        // closes it. expected = what he owed the company then, received = what
+        // he actually handed over; settlementId = the DriverSettlement it made.
+        db()->exec("CREATE TABLE IF NOT EXISTS `AcctDriverDay` (
+            driverId VARCHAR(191) NOT NULL, workDay DATE NOT NULL,
+            expected DECIMAL(12,2) NOT NULL, received DECIMAL(12,2) NULL, note VARCHAR(300) NULL,
+            settlementId VARCHAR(30) NULL, snapshot TEXT NOT NULL,
+            closedById VARCHAR(191) NULL, closedByName VARCHAR(120) NULL, closedAt DATETIME(3) NOT NULL,
+            PRIMARY KEY (driverId, workDay), KEY AcctDriverDay_day_idx (workDay)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
         if ($flag) @file_put_contents($flag, gmdate('c'));
         return $ok = true;
@@ -8489,11 +8569,164 @@ function acctDaySheet(string $day): array {
     $byDriver = $p['byDriver']; unset($p['byDriver'], $p['byDay']);
     $rows = acctEntries('e.entryDate = ?', [$day], 500);
     $locked = acctLockedSet($day, $day);
+    $dd = acctDriverDaySheet($day)['totals'];
     return $p + [
         'day' => $day,
         'drivers' => acctDriverLines($byDriver, $day, $day),
         'entries' => array_map(static fn ($r) => acctEntryRow($r, $locked), $rows),
+        // «تقفيل المناديب» of the same day, so closing the day can warn about the open ones.
+        'driverDays' => ['drivers' => $dd['drivers'], 'closed' => $dd['closed'], 'handOver' => $dd['handOver'], 'received' => $dd['received']],
     ];
+}
+
+/** Has the accountant closed this driver's day («تقفيل المناديب»)? False when the books aren't set up. */
+function acctDriverDayClosed(string $driverId, string $day): bool {
+    if (!ensureAcctSchema()) return false;
+    try {
+        $st = db()->prepare('SELECT 1 FROM `AcctDriverDay` WHERE driverId = ? AND workDay = ? LIMIT 1');
+        $st->execute([$driverId, $day]);
+        return (bool) $st->fetchColumn();
+    } catch (Throwable $e) { return false; }
+}
+
+/**
+ * «تقفيل المناديب» for one work day: every driver who worked, was due, or has
+ * anything written on the day. Per driver:
+ *   share (his cut of the delivery fees, a free order at its real fee)
+ *   + bonus + late + absence (the rules, or the accountant's amount) + extras (± lines)
+ *   = net — what the day earned him.
+ *   cashFees − net = handOver: what he owes the company out of the delivery
+ *   money he collected in cash (negative = the company owes him).
+ * A closed day carries what was expected then and what was actually received.
+ */
+function acctDriverDaySheet(string $day): array {
+    $W = orderFeeWorthSql();
+    $due = "COALESCE(o.driverDeliveryRevenue, ROUND($W * COALESCE(dp.deliverySharePct, 0) / 100, 2))";
+    $cash = "COALESCE(o.paymentMethod, 'CASH') = 'CASH'";
+    $st = db()->prepare("SELECT o.assignedDriverId d, COUNT(*) n, SUM($W) worth,
+            SUM(CASE WHEN $cash THEN COALESCE(o.deliveryFee, 0) ELSE 0 END) cashFees,
+            SUM(CASE WHEN $cash THEN 0 ELSE COALESCE(o.deliveryFee, 0) END) otherFees,
+            SUM($due) share,
+            SUM(CASE WHEN $W > COALESCE(o.deliveryFee, 0) THEN 1 ELSE 0 END) free,
+            SUM(CASE WHEN COALESCE(o.driverSettlementStatus, 'PENDING') <> 'SETTLED' THEN 1 ELSE 0 END) unpaid
+        FROM `Order` o LEFT JOIN `DriverProfile` dp ON dp.userId = o.assignedDriverId
+        WHERE o.status IN ('DELIVERED','COMPLETED') AND o.assignedDriverId IS NOT NULL AND o.createdAt >= ? AND o.createdAt < ?
+        GROUP BY o.assignedDriverId");
+    $st->execute([gmdate('Y-m-d H:i:s', workDayStartTs($day)), gmdate('Y-m-d H:i:s', workDayEndTs($day))]);
+    $om = [];
+    foreach ($st->fetchAll() as $r) $om[$r['d']] = $r;
+    $inc = [];
+    foreach (driverIncentives(null, $day, $day) as $id => $x) if (isset($x['days'][$day])) $inc[$id] = $x['days'][$day];
+    $extras = [];
+    if (incentiveV2Ready()) {
+        // Names looked up apart: no JOIN, so the table's collation never has to match User's.
+        $st = db()->prepare('SELECT id, driverId, amount, note, createdAt, createdById FROM `DriverDayExtra` WHERE workDay = ? ORDER BY createdAt');
+        $st->execute([$day]);
+        $rows = $st->fetchAll();
+        $by = array_values(array_unique(array_filter(array_column($rows, 'createdById'))));
+        $byName = [];
+        if ($by) {
+            $n = db()->prepare('SELECT id, name FROM `User` WHERE id IN (' . implode(',', array_fill(0, count($by), '?')) . ')');
+            $n->execute($by);
+            foreach ($n->fetchAll() as $u) $byName[$u['id']] = $u['name'];
+        }
+        foreach ($rows as $r) $extras[$r['driverId']][] = ['id' => $r['id'], 'amount' => (float) $r['amount'],
+            'note' => $r['note'], 'byName' => $byName[$r['createdById']] ?? null, 'createdAt' => isoZ($r['createdAt'])];
+    }
+    $st = db()->prepare("SELECT partyId, SUM(amount) a FROM `AcctEntry` WHERE kind = 'ADVANCE' AND partyType = 'DRIVER' AND entryDate = ? GROUP BY partyId");
+    $st->execute([$day]);
+    $adv = [];
+    foreach ($st->fetchAll() as $r) $adv[$r['partyId']] = round((float) $r['a'], 2);
+    $st = db()->prepare('SELECT * FROM `AcctDriverDay` WHERE workDay = ?');
+    $st->execute([$day]);
+    $closed = [];
+    foreach ($st->fetchAll() as $r) $closed[$r['driverId']] = $r;
+
+    $ids = array_values(array_unique(array_merge(array_keys($om), array_keys($inc), array_keys($extras), array_keys($adv), array_keys($closed))));
+    $names = [];
+    if ($ids) {
+        $st = db()->prepare('SELECT id, name, phone FROM `User` WHERE id IN (' . implode(',', array_fill(0, count($ids), '?')) . ')');
+        $st->execute($ids);
+        foreach ($st->fetchAll() as $r) $names[$r['id']] = $r;
+    }
+    $zero = ['BONUS' => 0.0, 'LATE' => 0.0, 'ABSENCE' => 0.0, 'EXTRA' => 0.0];
+    $kindLine = static function (?array $x, string $k) use ($zero): array {
+        $adj = $x ? (array) $x['adjusted'] : []; $wv = $x ? (array) $x['waived'] : [];
+        return ['auto' => round((float) ($x['raw'][$k] ?? 0), 2), 'amount' => round((float) ($x['amount'][$k] ?? 0), 2),
+                'edited' => array_key_exists($k, $adj), 'waived' => array_key_exists($k, $wv),
+                'note' => ((array) ($x['adjustNote'] ?? []))[$k] ?? ($wv[$k] ?? null) ?: null];
+    };
+    $lines = [];
+    $tot = ['drivers' => 0, 'closed' => 0, 'orders' => 0, 'worth' => 0.0, 'cashFees' => 0.0, 'share' => 0.0, 'bonus' => 0.0,
+            'deductions' => 0.0, 'extras' => 0.0, 'net' => 0.0, 'handOver' => 0.0, 'received' => 0.0, 'advances' => 0.0];
+    foreach ($ids as $id) {
+        $o = $om[$id] ?? null; $x = $inc[$id] ?? null; $c = $closed[$id] ?? null;
+        $amt = $x ? $x['amount'] : $zero;
+        $share = round((float) ($o['share'] ?? 0), 2);
+        $net = round($share + $amt['BONUS'] + $amt['LATE'] + $amt['ABSENCE'] + ($amt['EXTRA'] ?? 0), 2);
+        $cashFees = round((float) ($o['cashFees'] ?? 0), 2);
+        $handOver = round($cashFees - $net, 2);
+        $unpaid = (int) ($o['unpaid'] ?? 0);
+        $line = [
+            'driverId' => $id, 'name' => $names[$id]['name'] ?? 'مندوب محذوف', 'phone' => $names[$id]['phone'] ?? null,
+            'orders' => (int) ($o['n'] ?? 0), 'free' => (int) ($o['free'] ?? 0), 'worth' => round((float) ($o['worth'] ?? 0), 2),
+            'cashFees' => $cashFees, 'otherFees' => round((float) ($o['otherFees'] ?? 0), 2), 'share' => $share,
+            'bonus' => $kindLine($x, 'BONUS') + ['tier' => $x['tier'] ?? null, 'next' => $x['next'] ?? null],
+            'late' => $kindLine($x, 'LATE'), 'absence' => $kindLine($x, 'ABSENCE'),
+            'attendance' => $x ? ['status' => $x['status'], 'schedStart' => $x['schedStart'], 'arrival' => $x['arrival'],
+                                  'arrivalBy' => $x['arrivalBy'], 'lateMin' => $x['lateMin']] : null,
+            'extras' => $extras[$id] ?? [], 'extrasTotal' => round((float) ($amt['EXTRA'] ?? 0), 2),
+            'advances' => $adv[$id] ?? 0.0,
+            'net' => $net, 'handOver' => $handOver, 'unpaidOrders' => $unpaid,
+            'closing' => $c ? [
+                'expected' => (float) $c['expected'], 'received' => $c['received'] !== null ? (float) $c['received'] : null,
+                'diff' => $c['received'] !== null ? round((float) $c['received'] - (float) $c['expected'], 2) : null,
+                'note' => $c['note'], 'closedByName' => $c['closedByName'], 'closedAt' => isoZ($c['closedAt']),
+                'settled' => $c['settlementId'] !== null,
+                // Something moved after the closing: a late order, or an amount changed elsewhere.
+                'changed' => $unpaid > 0 || abs($handOver - (float) $c['expected']) > 0.009,
+            ] : null,
+        ];
+        $lines[] = $line;
+        $tot['drivers']++;
+        if ($c) { $tot['closed']++; $tot['received'] += $line['closing']['received'] ?? 0.0; }
+        $tot['orders'] += $line['orders'];
+        foreach (['worth', 'cashFees', 'share', 'net', 'handOver', 'advances'] as $k) $tot[$k] += $line[$k];
+        $tot['bonus'] += $line['bonus']['amount'];
+        $tot['deductions'] -= $line['late']['amount'] + $line['absence']['amount'];
+        $tot['extras'] += $line['extrasTotal'];
+    }
+    usort($lines, static fn ($a, $b) => $b['orders'] <=> $a['orders'] ?: strcmp((string) $a['name'], (string) $b['name']));
+    foreach ($tot as $k => $v) if (is_float($v)) $tot[$k] = round($v, 2);
+    return ['lines' => $lines, 'totals' => $tot];
+}
+
+/**
+ * Close one driver's day: store what he owed and what he handed over, then
+ * settle the day (his orders → SETTLED, the bonus/deductions → paid), so the
+ * drivers report, «حسابي» and the books all read it as done.
+ */
+function acctCloseDriverDay(array $line, string $day, ?float $received, string $note, ?string $by): array {
+    $st = db()->prepare('SELECT name FROM `User` WHERE id = ?'); $st->execute([$by]);
+    $byName = $st->fetchColumn() ?: null;
+    try {
+        db()->prepare('INSERT INTO `AcctDriverDay` (driverId, workDay, expected, received, note, snapshot, closedById, closedByName, closedAt)
+                       VALUES (?,?,?,?,?,?,?,?,NOW(3))')
+            ->execute([$line['driverId'], $day, $line['handOver'], $received ?? $line['handOver'], acctText($note, 300) ?: null,
+                       json_encode($line, JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE), $by, $byName]);
+    } catch (PDOException $e) {
+        if ((int) ($e->errorInfo[1] ?? 0) === 1062) jsonErr('يوم المندوب ده اتقفل قبل كده', 409, 'ALREADY_CLOSED');
+        throw $e;
+    }
+    try {
+        $s = settleDriverDay($line['driverId'], $day, 'تقفيل يوم ' . $day . ' من الحسابات', $by);
+    } catch (Throwable $e) {
+        db()->prepare('DELETE FROM `AcctDriverDay` WHERE driverId = ? AND workDay = ?')->execute([$line['driverId'], $day]);
+        error_log('[api.php] driver day close: ' . $e->getMessage());
+        jsonErr('تعذّر تقفيل يوم ' . $line['name'] . ' — جرّب تاني', 422, 'SETTLE_FAILED');
+    }
+    if ($s) db()->prepare('UPDATE `AcctDriverDay` SET settlementId = ? WHERE driverId = ? AND workDay = ?')->execute([$s['id'], $line['driverId'], $day]);
+    return ['driverId' => $line['driverId'], 'settlement' => $s];
 }
 /** A month's net profit as the books state it: the closing's figure when closed, else live. */
 function acctMonthNet(string $ym): array {
@@ -8779,6 +9012,126 @@ if (str_starts_with($path, '/admin/accounting')) {
         jsonOk(['party' => ['id' => $p['id'], 'type' => $p['type'], 'name' => $p['name'], 'sharePct' => $p['sharePct'] !== null ? (float) $p['sharePct'] : null,
                             'monthlySalary' => $p['monthlySalary'] !== null ? (float) $p['monthlySalary'] : null, 'capital' => $p['capital'] !== null ? (float) $p['capital'] : null],
                 'lines' => array_reverse($lines)]);
+    }
+
+    // ── «تقفيل المناديب»: each driver's day, editable, then closed one by one ──
+    if ($method === 'GET' && $path === '/admin/accounting/drivers-day') {
+        $day = acctYmd($_GET['date'] ?? '') ?? workDayOf();
+        $c = acctClosedOn($day);
+        $R = driverIncentiveRules();
+        jsonOk(acctDriverDaySheet($day) + ['day' => $day, 'today' => workDayOf(), 'isFuture' => $day > workDayOf(),
+            'locked' => $c ? $c['type'] : null, 'editableFrom' => $R['effectiveFrom'], 'editsReady' => incentiveV2Ready(),
+            'rules' => ['enabled' => (bool) $R['enabled'], 'bonusTiers' => $R['bonusTiers']]]);
+    }
+    if ($method === 'GET' && $path === '/admin/accounting/drivers-day/orders') {
+        $day = acctYmd($_GET['date'] ?? '') ?? jsonErr('اليوم غير صحيح', 422, 'BAD_DATE');
+        $driverId = trim((string) ($_GET['driverId'] ?? ''));
+        $W = orderFeeWorthSql();
+        $st = db()->prepare("SELECT o.id, o.orderNumber, o.createdAt, o.paymentMethod, $W AS worth, COALESCE(o.deliveryFee, 0) AS charged,
+                COALESCE(o.driverDeliveryRevenue, ROUND($W * COALESCE(dp.deliverySharePct, 0) / 100, 2)) AS share,
+                COALESCE(o.driverSettlementStatus, 'PENDING') AS settlement
+            FROM `Order` o LEFT JOIN `DriverProfile` dp ON dp.userId = o.assignedDriverId
+            WHERE o.assignedDriverId = ? AND o.status IN ('DELIVERED','COMPLETED') AND o.createdAt >= ? AND o.createdAt < ?
+            ORDER BY o.createdAt");
+        $st->execute([$driverId, gmdate('Y-m-d H:i:s', workDayStartTs($day)), gmdate('Y-m-d H:i:s', workDayEndTs($day))]);
+        jsonOk(['orders' => array_map(static fn ($r) => ['id' => $r['id'], 'orderNumber' => $r['orderNumber'], 'createdAt' => isoZ($r['createdAt']),
+            'cash' => ($r['paymentMethod'] ?? 'CASH') === 'CASH', 'worth' => (float) $r['worth'], 'charged' => (float) $r['charged'],
+            'share' => (float) $r['share'], 'free' => (float) $r['worth'] > (float) $r['charged'], 'settled' => $r['settlement'] === 'SETTLED'],
+            $st->fetchAll())]);
+    }
+    /** The driver and day of an edit; refuses a closed, future or pre-rules day. */
+    $ddTarget = static function (array $b, bool $editing) {
+        $day = acctYmd($b['day'] ?? '') ?? jsonErr('اليوم غير صحيح', 422, 'BAD_DATE');
+        if ($day > workDayOf()) jsonErr('اليوم ده لسه ماجاش', 422, 'FUTURE');
+        $driverId = trim((string) ($b['driverId'] ?? ''));
+        $st = db()->prepare('SELECT name FROM `User` WHERE id = ? LIMIT 1'); $st->execute([$driverId]);
+        if ($driverId === '' || $st->fetchColumn() === false) jsonErr('المندوب مش موجود', 422, 'BAD_DRIVER');
+        acctRefuseClosed($day);
+        if ($editing) {
+            if (!incentiveV2Ready()) jsonErr('التعديلات مش جاهزة حالياً — راجع سجل السيرفر', 503, 'NOT_READY');
+            $from = driverIncentiveRules()['effectiveFrom'];
+            if ($day < $from) jsonErr("التعديل على أيام المناديب بيبدأ من $from", 422, 'BEFORE_RULES');
+            if (acctDriverDayClosed($driverId, $day)) jsonErr('يوم المندوب ده متقفل — افتحه الأول عشان تعدّل', 409, 'DRIVER_DAY_CLOSED');
+        }
+        return [$driverId, $day];
+    };
+    // Set the bonus / lateness / absence of a day to an amount, or back to the rules (amount null).
+    if ($method === 'POST' && $path === '/admin/accounting/drivers-day/adjust') {
+        $b = readJsonBody();
+        [$driverId, $day] = $ddTarget($b, true);
+        $kind = strtoupper(trim((string) ($b['kind'] ?? '')));
+        if (!in_array($kind, incentiveRuleKinds(), true)) jsonErr('نوع التعديل غير صحيح', 422, 'BAD_KIND');
+        $raw = $b['amount'] ?? null;
+        if ($raw === null || $raw === '') {
+            db()->prepare('DELETE FROM `DriverIncentiveWaiver` WHERE driverId = ? AND workDay = ? AND kind = ?')->execute([$driverId, $day, $kind]);
+            jsonOk(['reset' => true]);
+        }
+        if (!is_numeric($raw) || (float) $raw < 0 || (float) $raw > 100000) jsonErr('اكتب مبلغ من 0 لـ 100000', 422, 'BAD_AMOUNT');
+        // Typed as a positive number; a deduction is stored negative like the rules do.
+        $amount = round((float) $raw, 2) * ($kind === 'BONUS' ? 1 : -1);
+        db()->prepare('INSERT INTO `DriverIncentiveWaiver` (driverId, workDay, kind, note, createdById, createdAt, amount) VALUES (?,?,?,?,?,NOW(3),?)
+                       ON DUPLICATE KEY UPDATE amount = VALUES(amount), note = VALUES(note), createdById = VALUES(createdById), createdAt = VALUES(createdAt)')
+            ->execute([$driverId, $day, $kind, acctText($b['note'] ?? '', 255) ?: null, $acctBy, $amount]);
+        jsonOk(['kind' => $kind, 'amount' => $amount]);
+    }
+    // A free line: a deduction («خصم عهدة») or an addition, with its reason.
+    if ($method === 'POST' && $path === '/admin/accounting/drivers-day/extra') {
+        $b = readJsonBody();
+        [$driverId, $day] = $ddTarget($b, true);
+        $type = strtoupper((string) ($b['type'] ?? ''));
+        if (!in_array($type, ['DEDUCT', 'ADD'], true)) jsonErr('اختار خصم أو إضافة', 422, 'BAD_TYPE');
+        $amount = acctAmount($b['amount'] ?? null);
+        if ($amount === null || $amount > 100000) jsonErr('اكتب مبلغ صحيح', 422, 'BAD_AMOUNT');
+        $note = acctText($b['note'] ?? '', 255);
+        if (mb_strlen($note) < 2) jsonErr('اكتب السبب', 422, 'NOTE_REQUIRED');
+        $id = newId();
+        db()->prepare('INSERT INTO `DriverDayExtra` (id, driverId, workDay, amount, note, createdById, createdAt) VALUES (?,?,?,?,?,?,NOW(3))')
+            ->execute([$id, $driverId, $day, $type === 'DEDUCT' ? -$amount : $amount, $note, $acctBy]);
+        jsonOk(['id' => $id]);
+    }
+    if ($method === 'DELETE' && preg_match('#^/admin/accounting/drivers-day/extra/([A-Za-z0-9_-]+)$#', $path, $m)) {
+        if (!incentiveV2Ready()) jsonErr('مش موجود', 404, 'NOT_FOUND');
+        $st = db()->prepare('SELECT driverId, workDay FROM `DriverDayExtra` WHERE id = ?'); $st->execute([$m[1]]);
+        $x = $st->fetch() ?: jsonErr('السطر مش موجود', 404, 'NOT_FOUND');
+        $ddTarget(['driverId' => $x['driverId'], 'day' => $x['workDay']], true);
+        db()->prepare('DELETE FROM `DriverDayExtra` WHERE id = ?')->execute([$m[1]]);
+        jsonOk(['deleted' => true]);
+    }
+    if ($method === 'POST' && $path === '/admin/accounting/drivers-day/close') {
+        $b = readJsonBody();
+        [$driverId, $day] = $ddTarget($b, false);
+        $line = null;
+        foreach (acctDriverDaySheet($day)['lines'] as $l) if ($l['driverId'] === $driverId) $line = $l;
+        if (!$line) jsonErr('مفيش حاجة للمندوب ده في اليوم ده', 422, 'NOTHING');
+        if ($line['closing']) jsonErr('يوم المندوب ده اتقفل قبل كده', 409, 'ALREADY_CLOSED');
+        $rec = $b['received'] ?? null;
+        if ($rec !== null && $rec !== '' && (!is_numeric($rec) || abs((float) $rec) > 10000000)) jsonErr('المبلغ اللي اتسلّم غير صحيح', 422, 'BAD_AMOUNT');
+        $r = acctCloseDriverDay($line, $day, ($rec === null || $rec === '') ? null : round((float) $rec, 2), (string) ($b['note'] ?? ''), $acctBy);
+        jsonOk($r + ['expected' => $line['handOver']]);
+    }
+    // Close every driver of the day still open, each at what he owed (received = expected).
+    if ($method === 'POST' && $path === '/admin/accounting/drivers-day/close-all') {
+        $b = readJsonBody();
+        $day = acctYmd($b['day'] ?? '') ?? jsonErr('اليوم غير صحيح', 422, 'BAD_DATE');
+        if ($day > workDayOf()) jsonErr('اليوم ده لسه ماجاش', 422, 'FUTURE');
+        acctRefuseClosed($day);
+        $n = 0;
+        foreach (acctDriverDaySheet($day)['lines'] as $l) {
+            if ($l['closing'] || ($l['orders'] === 0 && abs($l['net']) < 0.01 && abs($l['handOver']) < 0.01)) continue;
+            acctCloseDriverDay($l, $day, null, '', $acctBy);
+            $n++;
+        }
+        jsonOk(['closed' => $n]);
+    }
+    if ($method === 'DELETE' && preg_match('#^/admin/accounting/drivers-day/close/([A-Za-z0-9_-]+)/(\d{4}-\d{2}-\d{2})$#', $path, $m)) {
+        acctRefuseClosed($m[2]);
+        $st = db()->prepare('SELECT settlementId FROM `AcctDriverDay` WHERE driverId = ? AND workDay = ?'); $st->execute([$m[1], $m[2]]);
+        $row = $st->fetch() ?: jsonErr('يوم المندوب ده مش متقفل', 404, 'NOT_FOUND');
+        try {
+            if ($row['settlementId']) unsettleDriver((string) $row['settlementId']);
+        } catch (Throwable $e) { error_log('[api.php] driver day reopen: ' . $e->getMessage()); jsonErr('تعذّر فتح اليوم — جرّب تاني', 422, 'REOPEN_FAILED'); }
+        db()->prepare('DELETE FROM `AcctDriverDay` WHERE driverId = ? AND workDay = ?')->execute([$m[1], $m[2]]);
+        jsonOk(['reopened' => true]);
     }
 
     // ── Closings ──
@@ -11703,6 +12056,66 @@ if ($method === 'PATCH' && preg_match('#^/admin/drivers/([^/]+)$#', $path, $m)) 
     $r = $pdo->prepare('SELECT * FROM `User` WHERE id = ?'); $r->execute([$id]);
     jsonOk(jsonizeRow($r->fetch()) ?: []);
 }
+/**
+ * Pay a driver: $rows (orders: id, driverDeliveryRevenue) become SETTLED and each
+ * [day, kind, amount] of $incPay becomes a payout row, all under one new
+ * DriverSettlement. Throws on failure (nothing is written then).
+ * @return array{id:string,amount:float,orderCount:int,incentives:float}
+ */
+function settleDriverRows(string $driverId, array $rows, array $incPay, string $note, ?string $by): array {
+    $pdo = db();
+    ensureIncentiveSchema();   // DDL commits implicitly — never inside the transaction below
+    $orderIds = [];
+    foreach ($rows as $r) { if ($r['driverDeliveryRevenue'] === null) snapshotDriverShare($r['id']); $orderIds[] = $r['id']; }
+    $ph = implode(',', array_fill(0, max(1, count($orderIds)), '?'));
+    $amount = 0.0;
+    if ($orderIds) {
+        $amt = $pdo->prepare("SELECT COALESCE(SUM(driverDeliveryRevenue), 0) FROM `Order` WHERE id IN ($ph)");
+        $amt->execute($orderIds); $amount = round((float) $amt->fetchColumn(), 2);
+    }
+    $incTotal = round(array_sum(array_column($incPay, 2)), 2);
+    $amount = round($amount + $incTotal, 2);
+    $note = mb_substr(trim($note), 0, 255);
+    $sid = newId();
+    try {
+        $pdo->beginTransaction();
+        $pdo->prepare('INSERT INTO `DriverSettlement` (id, driverId, amount, orderCount, note, createdById, createdAt) VALUES (?,?,?,?,?,?,NOW(3))')
+            ->execute([$sid, $driverId, $amount, count($orderIds), $note !== '' ? $note : null, $by]);
+        if ($orderIds)
+            $pdo->prepare("UPDATE `Order` SET driverSettlementStatus = 'SETTLED', driverSettledAt = NOW(3), driverSettlementId = ?, updatedAt = NOW(3) WHERE id IN ($ph)")
+                ->execute(array_merge([$sid], $orderIds));
+        $ip = $pdo->prepare('INSERT INTO `DriverIncentivePayout` (id, driverId, workDay, kind, amount, settlementId, createdAt) VALUES (?,?,?,?,?,?,NOW(3))');
+        foreach ($incPay as [$day, $kind, $amt]) $ip->execute([newId(), $driverId, $day, $kind, $amt, $sid]);
+        $pdo->commit();
+    } catch (Throwable $e) { if ($pdo->inTransaction()) $pdo->rollBack(); throw $e; }
+    return ['id' => $sid, 'amount' => $amount, 'orderCount' => count($orderIds), 'incentives' => $incTotal];
+}
+/** Settle one work day of a driver: its unpaid orders and its unpaid bonus/deductions. Null when nothing is owed. */
+function settleDriverDay(string $driverId, string $day, string $note, ?string $by): ?array {
+    $w = ["o.assignedDriverId = ?", "o.status IN ('DELIVERED','COMPLETED')", "COALESCE(o.driverSettlementStatus, 'PENDING') <> 'SETTLED'"];
+    $a = [$driverId];
+    driverReportDays($day, $day, $w, $a);
+    $sel = db()->prepare("SELECT o.id, o.driverDeliveryRevenue FROM `Order` o WHERE " . implode(' AND ', $w));
+    $sel->execute($a);
+    $rows = $sel->fetchAll();
+    $incPay = [];
+    $x = driverIncentives($driverId, $day, $day)[$driverId]['days'][$day] ?? null;
+    if ($x) foreach ($x['pending'] as $kind => $amt) if (abs($amt) >= 0.01) $incPay[] = [$day, $kind, $amt];
+    if (!$rows && !$incPay) return null;
+    return settleDriverRows($driverId, $rows, $incPay, $note, $by);
+}
+/** Undo a settlement: its orders go back to unpaid, its payouts and the row are removed. */
+function unsettleDriver(string $settlementId): void {
+    $pdo = db();
+    try {
+        $pdo->beginTransaction();
+        $pdo->prepare("UPDATE `Order` SET driverSettlementStatus = 'PENDING', driverSettledAt = NULL, driverSettlementId = NULL, updatedAt = NOW(3) WHERE driverSettlementId = ?")
+            ->execute([$settlementId]);
+        $pdo->prepare('DELETE FROM `DriverIncentivePayout` WHERE settlementId = ?')->execute([$settlementId]);
+        $pdo->prepare('DELETE FROM `DriverSettlement` WHERE id = ?')->execute([$settlementId]);
+        $pdo->commit();
+    } catch (Throwable $e) { if ($pdo->inTransaction()) $pdo->rollBack(); throw $e; }
+}
 // Settle a driver's outstanding delivery dues: mark a batch of their delivered
 // orders SETTLED and record the settlement (amount + who + when). Body: optional
 // orderIds[] (explicit selection), else all still-PENDING delivered orders,
@@ -11733,32 +12146,11 @@ if ($method === 'POST' && preg_match('#^/admin/drivers/([^/]+)/settle$#', $path,
         foreach ($days as $day => $x) foreach ($x['pending'] as $kind => $amt) if (abs($amt) >= 0.01) $incPay[] = [$day, $kind, $amt];
     }
     if (!$rows && !$incPay) jsonErr('لا توجد طلبات مستحقة للتسوية', 422, 'NOTHING_TO_SETTLE');
-    ensureIncentiveSchema();   // DDL commits implicitly — never inside the transaction below
-    $orderIds = [];
-    foreach ($rows as $r) { if ($r['driverDeliveryRevenue'] === null) snapshotDriverShare($r['id']); $orderIds[] = $r['id']; }
-    $ph = implode(',', array_fill(0, max(1, count($orderIds)), '?'));
-    $amount = 0.0;
-    if ($orderIds) {
-        $amt = $pdo->prepare("SELECT COALESCE(SUM(driverDeliveryRevenue), 0) FROM `Order` WHERE id IN ($ph)");
-        $amt->execute($orderIds); $amount = round((float) $amt->fetchColumn(), 2);
-    }
-    $incTotal = round(array_sum(array_column($incPay, 2)), 2);
-    $amount = round($amount + $incTotal, 2);
-    $note = mb_substr(trim((string) ($b['note'] ?? '')), 0, 255);
-    $sid = newId();
     try {
-        $pdo->beginTransaction();
-        $pdo->prepare('INSERT INTO `DriverSettlement` (id, driverId, amount, orderCount, note, createdById, createdAt) VALUES (?,?,?,?,?,?,NOW(3))')
-            ->execute([$sid, $driverId, $amount, count($orderIds), $note !== '' ? $note : null, $u['sub'] ?? null]);
-        if ($orderIds)
-            $pdo->prepare("UPDATE `Order` SET driverSettlementStatus = 'SETTLED', driverSettledAt = NOW(3), driverSettlementId = ?, updatedAt = NOW(3) WHERE id IN ($ph)")
-                ->execute(array_merge([$sid], $orderIds));
-        $ip = $pdo->prepare('INSERT INTO `DriverIncentivePayout` (id, driverId, workDay, kind, amount, settlementId, createdAt) VALUES (?,?,?,?,?,?,NOW(3))');
-        foreach ($incPay as [$day, $kind, $amt]) $ip->execute([newId(), $driverId, $day, $kind, $amt, $sid]);
-        $pdo->commit();
-    } catch (Throwable $e) { if ($pdo->inTransaction()) $pdo->rollBack(); error_log('[api.php] settle: ' . $e->getMessage()); jsonErr('تعذّرت التسوية', 422, 'SETTLE_FAILED'); }
-    jsonOk(['settlementId' => $sid, 'driverId' => $driverId, 'amount' => $amount, 'orderCount' => count($orderIds),
-        'incentives' => $incTotal]);
+        $s = settleDriverRows($driverId, $rows, $incPay, (string) ($b['note'] ?? ''), $u['sub'] ?? null);
+    } catch (Throwable $e) { error_log('[api.php] settle: ' . $e->getMessage()); jsonErr('تعذّرت التسوية', 422, 'SETTLE_FAILED'); }
+    jsonOk(['settlementId' => $s['id'], 'driverId' => $driverId, 'amount' => $s['amount'], 'orderCount' => $s['orderCount'],
+        'incentives' => $s['incentives']]);
 }
 // Settlement history for a driver (audit trail of paid batches).
 if ($method === 'GET' && preg_match('#^/admin/drivers/([^/]+)/settlements$#', $path, $m)) {

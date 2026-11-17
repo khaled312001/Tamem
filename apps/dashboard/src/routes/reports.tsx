@@ -751,11 +751,13 @@ type IncentiveDay = {
   arrivalBy: 'checkin' | 'activity' | null;
   lateMin: number;
   status: 'ontime' | 'late' | 'absent' | 'waiting' | 'off';
-  raw: Record<'BONUS' | 'LATE' | 'ABSENCE', number>;
+  raw: Record<'BONUS' | 'LATE' | 'ABSENCE', number> & { EXTRA?: number };
   waived: Partial<Record<'BONUS' | 'LATE' | 'ABSENCE', string>>;
-  amount: Record<'BONUS' | 'LATE' | 'ABSENCE', number>;
+  amount: Record<'BONUS' | 'LATE' | 'ABSENCE', number> & { EXTRA?: number };
   paid: Record<'BONUS' | 'LATE' | 'ABSENCE', number>;
   pending: Record<'BONUS' | 'LATE' | 'ABSENCE', number>;
+  /** The amount the accountant set in «تقفيل المناديب» (wins over the rules). */
+  adjusted?: Partial<Record<'BONUS' | 'LATE' | 'ABSENCE', number>>;
 };
 
 const STATUS_AR: Record<IncentiveDay['status'], string> = {
@@ -796,7 +798,9 @@ function IncentiveDays({ driverId, filters }: { driverId: string; filters: Drive
   });
   if (!data) return null;
   if (!data.rules.enabled) return null;
-  const days = data.days.filter((d) => d.status !== 'off' || d.orders > 0 || d.raw.BONUS);
+  const days = data.days.filter(
+    (d) => d.status !== 'off' || d.orders > 0 || d.raw.BONUS || d.amount.EXTRA || d.amount.BONUS,
+  );
   if (!days.length) {
     return (
       <p className="mb-3 text-xs text-muted-foreground">
@@ -840,10 +844,21 @@ function IncentiveDays({ driverId, filters }: { driverId: string; filters: Drive
           </thead>
           <tbody>
             {days.map((d) => {
-              const dedKind = d.raw.ABSENCE ? 'ABSENCE' : d.raw.LATE ? 'LATE' : null;
-              const ded = dedKind ? -d.raw[dedKind] : 0;
+              const adj = d.adjusted ?? {};
+              const dedKind =
+                d.raw.ABSENCE || 'ABSENCE' in adj
+                  ? 'ABSENCE'
+                  : d.raw.LATE || 'LATE' in adj
+                    ? 'LATE'
+                    : null;
+              // The accountant's amount when there is one, else the rules'.
+              const dedEdited = dedKind ? dedKind in adj : false;
+              const ded = dedKind ? -(dedEdited ? d.amount[dedKind] : d.raw[dedKind]) : 0;
               const dedWaived = dedKind ? dedKind in d.waived : false;
               const bonusWaived = 'BONUS' in d.waived;
+              const bonusEdited = 'BONUS' in adj;
+              const bonus = bonusEdited ? d.amount.BONUS : d.raw.BONUS;
+              const extra = d.amount.EXTRA ?? 0;
               return (
                 <tr key={d.day} className="border-b border-border/30 whitespace-nowrap">
                   <td className="py-1.5 px-2 font-bold">
@@ -855,7 +870,7 @@ function IncentiveDays({ driverId, filters }: { driverId: string; filters: Drive
                   </td>
                   <td className="py-1.5 px-2">{d.orders}</td>
                   <td className="py-1.5 px-2">
-                    {d.raw.BONUS ? (
+                    {bonus || bonusEdited ? (
                       <span
                         className={
                           bonusWaived
@@ -863,7 +878,10 @@ function IncentiveDays({ driverId, filters }: { driverId: string; filters: Drive
                             : 'text-emerald-700 font-bold'
                         }
                       >
-                        +{money(d.raw.BONUS)}
+                        +{money(bonus)}
+                        {bonusEdited && (
+                          <span className="ms-1 font-normal text-amber-700">(معدّل)</span>
+                        )}
                       </span>
                     ) : d.next ? (
                       <span className="text-muted-foreground">فاضل {d.next.orders - d.orders}</span>
@@ -902,6 +920,12 @@ function IncentiveDays({ driverId, filters }: { driverId: string; filters: Drive
                       '—'
                     )}
                     {dedWaived && <span className="ms-1 text-emerald-700">معفي</span>}
+                    {dedEdited && <span className="ms-1 text-amber-700">(معدّل)</span>}
+                    {extra !== 0 && (
+                      <div className={extra < 0 ? 'text-destructive' : 'text-emerald-700'}>
+                        {extra < 0 ? `خصم ${money(-extra)}` : `إضافة ${money(extra)}`} من الحسابات
+                      </div>
+                    )}
                   </td>
                   <td className="py-1.5 px-2" data-print="hide">
                     <div className="flex gap-1">
@@ -920,7 +944,7 @@ function IncentiveDays({ driverId, filters }: { driverId: string; filters: Drive
                               : 'إعفاء'}
                         </button>
                       )}
-                      {d.raw.BONUS > 0 && (
+                      {bonus > 0 && (
                         <button
                           disabled={waive.isPending}
                           onClick={() =>

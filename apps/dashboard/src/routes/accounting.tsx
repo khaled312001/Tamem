@@ -10,6 +10,7 @@
  */
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
+  Bike,
   BookOpen,
   CalendarCheck,
   CalendarClock,
@@ -52,6 +53,7 @@ import { Button } from '../components/ui/Button.js';
 import { StatCard } from '../components/ui/StatCard.js';
 import { api } from '../lib/api.js';
 import { cn } from '../lib/utils.js';
+import { DriversDayTab } from './accounting-drivers.js';
 import { DayClosing, MonthClosing, PeopleTab } from './accounting-close.js';
 import { LedgerTab, RecurringTab } from './accounting-ledger.js';
 
@@ -59,17 +61,22 @@ const TABS = [
   { key: 'overview', label: 'نظرة عامة', icon: LayoutDashboard },
   { key: 'ledger', label: 'الحركات اليومية', icon: BookOpen },
   { key: 'recurring', label: 'المصروفات الثابتة والأقساط', icon: Repeat },
+  { key: 'drivers', label: 'تقفيل المناديب', icon: Bike },
   { key: 'day', label: 'التقفيل اليومي', icon: CalendarCheck },
   { key: 'month', label: 'التقفيل الشهري', icon: CalendarDays },
   { key: 'people', label: 'الموظفين والشركاء', icon: Users },
 ] as const;
 type TabKey = (typeof TABS)[number]['key'];
 
+// Cairo's month, so the overview can load without waiting for /meta.
+const cairoMonth = () =>
+  new Intl.DateTimeFormat('en-CA', { timeZone: 'Africa/Cairo' }).format(new Date()).slice(0, 7);
+
 export function AccountingPage() {
   const [sp, setSp] = useSearchParams();
   const meta = useAcctMeta();
   const tab = (TABS.find((t) => t.key === sp.get('tab'))?.key ?? 'overview') as TabKey;
-  const thisMonth = meta.data?.thisMonth ?? new Date().toISOString().slice(0, 7);
+  const thisMonth = meta.data?.thisMonth ?? cairoMonth();
   const month = sp.get('month') || thisMonth;
   const setParam = (k: string, v: string) =>
     setSp(
@@ -112,12 +119,19 @@ export function AccountingPage() {
           </button>
         ))}
       </div>
-      {meta.isLoading || !meta.data ? (
+      {tab === 'overview' ? (
+        // Needs nothing from /meta: both requests go out together instead of one after the other.
+        <Overview month={month} onMonth={(v) => setParam('month', v)} max={thisMonth} />
+      ) : meta.isLoading || !meta.data ? (
         <div className="flex justify-center py-16">
           <Loader2 className="h-6 w-6 animate-spin text-brand-red" />
         </div>
-      ) : tab === 'overview' ? (
-        <Overview month={month} onMonth={(v) => setParam('month', v)} max={thisMonth} />
+      ) : tab === 'drivers' ? (
+        <DriversDayTab
+          meta={meta.data}
+          day={sp.get('day') || meta.data.today}
+          onDay={(v) => setParam('day', v)}
+        />
       ) : tab === 'ledger' ? (
         <LedgerTab meta={meta.data} />
       ) : tab === 'recurring' ? (

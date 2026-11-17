@@ -12,6 +12,7 @@ import {
   UserX,
 } from 'lucide-react';
 import { useState } from 'react';
+import { Link } from 'react-router-dom';
 import { toast } from 'sonner';
 
 import {
@@ -245,6 +246,7 @@ interface DaySheet extends Pnl {
   day: string;
   drivers: DriverLine[];
   entries: Entry[];
+  driverDays?: { drivers: number; closed: number; handOver: number; received: number };
   closed: Closed | null;
   monthClosed: boolean;
   isFuture: boolean;
@@ -337,6 +339,11 @@ export function DayClosing({
                 busy={c.busy}
                 onClose={(n) => c.close.mutate(n)}
                 onReopen={() => c.reopen.mutate()}
+                warn={
+                  data.driverDays && data.driverDays.closed < data.driverDays.drivers
+                    ? `فيه ${data.driverDays.drivers - data.driverDays.closed} مندوب لسه يومهم مفتوح في «تقفيل المناديب».`
+                    : null
+                }
               />
             )
           )}
@@ -363,7 +370,22 @@ export function DayClosing({
               </div>
             ))}
           </div>
-          <Panel title="المناديب">
+          <Panel
+            title="المناديب"
+            action={
+              <Link
+                to={`?tab=drivers&day=${day}`}
+                className="rounded-lg border border-border px-3 py-1.5 text-xs font-bold hover:border-brand-red"
+                data-print="hide"
+              >
+                تقفيل المناديب
+                {data.driverDays
+                  ? ` (${data.driverDays.closed} من ${data.driverDays.drivers})`
+                  : ''}{' '}
+                ←
+              </Link>
+            }
+          >
             <DriversTable rows={data.drivers} period="اليوم" />
           </Panel>
           <div className="grid gap-4 lg:grid-cols-2">
