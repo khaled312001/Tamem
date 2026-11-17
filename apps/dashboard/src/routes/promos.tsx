@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Gift, Pencil, Plus, Trash2 } from 'lucide-react';
-import { useState, type ReactNode } from 'react';
+import { Gift, Pencil, Plus, Search, Store, Trash2, X } from 'lucide-react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { toast } from 'sonner';
 
 import { Badge } from '../components/ui/Badge.js';
@@ -51,6 +51,14 @@ function scheduleText(r: Rule): string {
   if (r.scheduleType === 'WEEKLY')
     return (r.weekdays ?? []).map((d: number) => WEEKDAYS[d]).join('، ') || 'بدون أيام';
   return '—';
+}
+/** «من: محل أ، محل ب و3 كمان» for a promo limited to some stores, else ''. */
+function merchantsText(r: Rule): string {
+  const list: { id: string; name: string | null }[] = r.merchants ?? [];
+  if (!list.length) return '';
+  const names = list.map((m) => m.name || 'محل اتمسح');
+  const head = names.slice(0, 3).join('، ');
+  return names.length > 3 ? `من: ${head} و${names.length - 3} كمان` : `من: ${head}`;
 }
 
 export function PromosPage() {
@@ -208,7 +216,13 @@ export function PromosPage() {
                       <Badge>{rewardText(r)}</Badge>
                     </td>
                     <td className="px-3 py-3 text-xs">
-                      {AUDIENCE_LABEL[r.audience] ?? r.audience}
+                      <div>{AUDIENCE_LABEL[r.audience] ?? r.audience}</div>
+                      {merchantsText(r) && (
+                        <div className="mt-0.5 flex items-start gap-1 font-bold text-brand-red">
+                          <Store className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                          <span>{merchantsText(r)}</span>
+                        </div>
+                      )}
                     </td>
                     <td className="px-3 py-3 text-xs">
                       <div>{SCHEDULE_LABEL[r.scheduleType] ?? r.scheduleType}</div>
@@ -299,7 +313,12 @@ function UsagesDialog({ rule, onClose }: { rule: Rule; onClose: () => void }) {
   const fmt = (iso: string) =>
     new Date(iso).toLocaleString('ar-EG', { dateStyle: 'short', timeStyle: 'short' });
   return (
-    <Dialog open onOpenChange={(o) => !o && onClose()} title={`مين استخدم «${rule.nameAr}»`} size="lg">
+    <Dialog
+      open
+      onOpenChange={(o) => !o && onClose()}
+      title={`مين استخدم «${rule.nameAr}»`}
+      size="lg"
+    >
       {isLoading ? (
         <p className="p-4 text-sm text-muted-foreground">جاري التحميل…</p>
       ) : !data ? null : (
@@ -348,7 +367,9 @@ function UsagesDialog({ rule, onClose }: { rule: Rule; onClose: () => void }) {
                         <td className="px-2 py-2">
                           <span
                             className={`rounded px-1.5 py-0.5 text-[10px] font-bold ${
-                              cancelled ? 'bg-red-100 text-red-700' : 'bg-emerald-100 text-emerald-700'
+                              cancelled
+                                ? 'bg-red-100 text-red-700'
+                                : 'bg-emerald-100 text-emerald-700'
                             }`}
                           >
                             {STATUS[u.status] ?? u.status}
@@ -414,6 +435,17 @@ const PRESETS: { label: string; emoji: string; patch: Partial<Rule> }[] = [
       weekdays: [5],
     },
   },
+  {
+    label: 'محل توصيله مجاني',
+    emoji: '🏪',
+    patch: {
+      nameAr: 'توصيل مجاني من المحل',
+      rewardType: 'FREE_DELIVERY',
+      audience: 'ALL',
+      scheduleType: 'ALWAYS',
+      merchantMode: 'SOME',
+    },
+  },
 ];
 
 // ── مكوّنات صغيرة للفورم ────────────────────────────────────────────────
@@ -455,6 +487,125 @@ function Seg({
   );
 }
 
+type MerchantRow = {
+  id: string;
+  storeNameAr?: string | null;
+  storeName?: string | null;
+  city?: string | null;
+};
+
+/**
+ * Pick the stores a promo is limited to. Searches on the server (the list is
+ * paged at 100), shows the picked ones as chips on top so they stay visible
+ * whatever the search says.
+ */
+function MerchantScopePicker({
+  ids,
+  names,
+  onChange,
+}: {
+  ids: string[];
+  names: Record<string, string>;
+  onChange: (ids: string[], names: Record<string, string>) => void;
+}) {
+  const [q, setQ] = useState('');
+  const [term, setTerm] = useState('');
+  useEffect(() => {
+    const t = setTimeout(() => setTerm(q.trim()), 250);
+    return () => clearTimeout(t);
+  }, [q]);
+  const { data: rows, isFetching } = useQuery({
+    queryKey: ['admin', 'merchants', 'promo-scope', term],
+    queryFn: () =>
+      api.raw
+        .get('/admin/merchants', {
+          params: { pageSize: 100, sort: 'name', dir: 'asc', search: term || undefined },
+        })
+        .then((r) => (r.data.data ?? []) as MerchantRow[]),
+    staleTime: 60_000,
+    // Keep the last list on screen while the next search loads.
+    placeholderData: (prev) => prev,
+  });
+  const nameOf = (m: MerchantRow) => m.storeNameAr || m.storeName || m.id;
+  const toggle = (m: MerchantRow) =>
+    ids.includes(m.id)
+      ? onChange(
+          ids.filter((x) => x !== m.id),
+          names,
+        )
+      : onChange([...ids, m.id], { ...names, [m.id]: nameOf(m) });
+
+  return (
+    <div className="space-y-2">
+      {ids.length > 0 && (
+        <div className="flex flex-wrap gap-1.5">
+          {ids.map((id) => (
+            <span
+              key={id}
+              className="inline-flex items-center gap-1 rounded-lg border border-brand-red bg-brand-red/10 px-2 py-1 text-xs font-bold text-brand-red"
+            >
+              <Store className="h-3.5 w-3.5" />
+              {names[id] || 'محل اتمسح'}
+              <button
+                type="button"
+                aria-label="شيل المحل"
+                onClick={() =>
+                  onChange(
+                    ids.filter((x) => x !== id),
+                    names,
+                  )
+                }
+                className="rounded p-0.5 hover:bg-brand-red/20"
+              >
+                <X className="h-3 w-3" />
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
+      <div className="relative">
+        <Search className="pointer-events-none absolute right-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+        <Input
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+          placeholder="دوّر على المحل بالاسم أو الرقم"
+          className="pr-8"
+        />
+      </div>
+      <div className="max-h-48 overflow-y-auto rounded-lg border border-border bg-white">
+        {!rows ? (
+          <div className="p-3 text-xs text-muted-foreground">بيحمّل المحلات…</div>
+        ) : !rows.length ? (
+          <div className="p-3 text-xs text-muted-foreground">
+            {isFetching ? 'بيدوّر…' : 'مفيش محل بالاسم ده'}
+          </div>
+        ) : (
+          rows.map((m) => {
+            const on = ids.includes(m.id);
+            return (
+              <label
+                key={m.id}
+                className={`flex cursor-pointer items-center gap-2 border-b border-border/50 px-3 py-2 text-sm last:border-b-0 ${
+                  on ? 'bg-brand-red/[0.06]' : 'hover:bg-muted/40'
+                }`}
+              >
+                <input
+                  type="checkbox"
+                  checked={on}
+                  onChange={() => toggle(m)}
+                  className="h-4 w-4 accent-brand-red"
+                />
+                <span className="flex-1 font-bold">{nameOf(m)}</span>
+                {m.city && <span className="text-xs text-muted-foreground">{m.city}</span>}
+              </label>
+            );
+          })
+        )}
+      </div>
+    </div>
+  );
+}
+
 function PromoDialog({
   rule,
   onClose,
@@ -484,8 +635,17 @@ function PromoDialog({
     usageLimitPerCustomer:
       rule?.usageLimitPerCustomer != null ? String(rule.usageLimitPerCustomer) : '',
     priority: rule?.priority ?? 0,
+    // Which stores: empty list = every store.
+    merchantMode: (rule?.merchantIds ?? []).length ? 'SOME' : 'ALL',
+    merchantIds: rule?.merchantIds ?? [],
+    merchantNames: Object.fromEntries(
+      ((rule?.merchants ?? []) as { id: string; name: string | null }[])
+        .filter((m) => m.name)
+        .map((m) => [m.id, m.name]),
+    ),
   });
   const set = (patch: Partial<Rule>) => setF((prev: Rule) => ({ ...prev, ...patch }));
+  const someStores = f.merchantMode === 'SOME';
   const needsValue = f.rewardType !== 'FREE_DELIVERY';
 
   const err =
@@ -501,10 +661,17 @@ function PromoDialog({
               ? 'اختر يوم من أيام الأسبوع'
               : f.scheduleType === 'DATE_RANGE' && !f.dateFrom && !f.dateTo
                 ? 'حدّد بداية أو نهاية الفترة'
-                : '';
+                : someStores && !f.merchantIds.length
+                  ? 'اختار محل واحد على الأقل'
+                  : '';
 
   const summary = (() => {
-    const who = f.audience === 'FIRST_ORDER' ? 'أول أوردر لعميل جديد' : 'أي أوردر';
+    const stores = someStores
+      ? ` من ${
+          f.merchantIds.map((id: string) => f.merchantNames[id] || 'محل اتمسح').join(' أو ') || '…'
+        }`
+      : '';
+    const who = (f.audience === 'FIRST_ORDER' ? 'أول أوردر لعميل جديد' : 'أي أوردر') + stores;
     const reward =
       f.rewardType === 'FREE_DELIVERY'
         ? 'توصيل مجاني'
@@ -520,12 +687,16 @@ function PromoDialog({
             ? `كل: ${(f.weekdays ?? []).map((d: number) => WEEKDAYS[d]).join('، ') || '—'}`
             : `من ${f.dateFrom || '…'} لـ ${f.dateTo || '…'}`;
     const min = Number(f.minOrderAmount) > 0 ? ` (للطلبات فوق ${f.minOrderAmount} ج.م)` : '';
-    return `${who} ياخد ${reward} ${when}${min}.`;
+    const mixed = someStores ? ' ولو السلة فيها محل تاني التوصيل بسعره العادي.' : '';
+    return `${who} ياخد ${reward} ${when}${min}.${mixed}`;
   })();
 
   const submit = () => {
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    const { merchantMode, merchantNames, merchants, ...rest } = f;
     onSave({
-      ...f,
+      ...rest,
+      merchantIds: someStores ? f.merchantIds : [],
       rewardValue: f.rewardValue === '' ? null : Number(f.rewardValue),
       minOrderAmount: f.minOrderAmount === '' ? null : Number(f.minOrderAmount),
       maxDiscount: f.maxDiscount === '' ? null : Number(f.maxDiscount),
@@ -563,6 +734,7 @@ function PromoDialog({
                       dateFrom: '',
                       dateTo: '',
                       rewardValue: '',
+                      merchantMode: 'ALL',
                       ...p.patch,
                     })
                   }
@@ -621,6 +793,30 @@ function PromoDialog({
               onChange={(v) => set({ audience: v })}
               options={Object.entries(AUDIENCE_LABEL)}
             />
+          </div>
+          <div>
+            <div className="text-xs font-bold text-muted-foreground mb-1.5">من أنهي محل؟</div>
+            <Seg
+              value={f.merchantMode}
+              onChange={(v) => set({ merchantMode: v })}
+              options={[
+                ['ALL', 'كل المحلات'],
+                ['SOME', 'محلات معينة'],
+              ]}
+            />
+            {someStores && (
+              <div className="mt-2 space-y-2">
+                <p className="text-[11px] leading-relaxed text-muted-foreground">
+                  أي عميل يطلب من المحلات دي بس ياخد العرض. لو السلة فيها محل تاني مش في اللستة
+                  التوصيل بيتحسب عادي.
+                </p>
+                <MerchantScopePicker
+                  ids={f.merchantIds}
+                  names={f.merchantNames}
+                  onChange={(merchantIds, merchantNames) => set({ merchantIds, merchantNames })}
+                />
+              </div>
+            )}
           </div>
           <div>
             <div className="text-xs font-bold text-muted-foreground mb-1.5">التوقيت</div>

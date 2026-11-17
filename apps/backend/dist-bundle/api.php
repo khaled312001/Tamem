@@ -993,9 +993,21 @@ if (str_starts_with($path, '/admin/')) {
 if ($method === 'GET' && $path === '/admin/promos') {
     $u = authUser(); if (!in_array($u['role'] ?? '', ['ADMIN', 'SUPER_ADMIN'], true)) jsonErr('غير مسموح', 403, 'FORBIDDEN');
     $out = [];
+    // Names for the stores a promo is limited to, so the page can show them.
+    $__pm = [];
+    foreach (promoRules() as $r) foreach (promoMerchantScope($r) as $m) $__pm[$m] = $m;
+    $__names = [];
+    if ($__pm) {
+        $__st = db()->prepare('SELECT id, storeNameAr, storeName FROM `MerchantProfile` WHERE id IN (' . implode(',', array_fill(0, count($__pm), '?')) . ')');
+        $__st->execute(array_values($__pm));
+        foreach ($__st->fetchAll() as $__m) $__names[(string) $__m['id']] = (string) ($__m['storeNameAr'] ?: $__m['storeName']);
+    }
     foreach (promoRules() as $r) {
         $rid = (string) ($r['id'] ?? '');
         $r['usedCount'] = $rid !== '' ? promoUsageCount($rid) : 0;
+        $r['merchantIds'] = promoMerchantScope($r);
+        // A deleted store keeps its id on the rule (it just never matches).
+        $r['merchants'] = array_map(fn($m) => ['id' => $m, 'name' => $__names[$m] ?? null], $r['merchantIds']);
         $out[] = $r;
     }
     jsonOk(['rules' => $out]);
@@ -1024,6 +1036,9 @@ if ($method === 'PUT' && $path === '/admin/promos') {
             'usageLimitTotal' => ($r['usageLimitTotal'] ?? '') !== '' ? (int) $r['usageLimitTotal'] : null,
             'usageLimitPerCustomer' => ($r['usageLimitPerCustomer'] ?? '') !== '' ? (int) $r['usageLimitPerCustomer'] : null,
             'priority' => (int) ($r['priority'] ?? 0),
+            // Empty = every store. Otherwise the promo is the store's: it
+            // applies only when EVERY store in the order is on this list.
+            'merchantIds' => promoMerchantScope($r),
         ];
     }
     db()->prepare('INSERT INTO `Setting` (`key`,`value`,`description`,`updatedAt`,`updatedById`) VALUES (?,?,NULL,NOW(3),?) ON DUPLICATE KEY UPDATE `value`=VALUES(`value`), `updatedAt`=VALUES(`updatedAt`), `updatedById`=VALUES(`updatedById`)')
@@ -15584,6 +15599,9 @@ function firstOrderNeedsVerification(?string $customerId): bool {
         if (empty($r['isActive'])) continue;
         if ((string) ($r['audience'] ?? 'ALL') !== 'FIRST_ORDER') continue;
         if (!promoScheduleMatches($r)) continue;
+        // One store's offer: this hint has no basket to check it against, so
+        // «أكّد رقمك واستلم أول توصيلة مجانًا» could promise it on another store.
+        if (promoMerchantScope($r)) continue;
         if (customerAppOrderCount($customerId) > 0) return false;
         $i = customerPhoneInfo($customerId);
         // التوثيق مابقاش شرط للعرض (شوف الملاحظة في promoFor…)، فاللي يستحق
@@ -15726,17 +15744,36 @@ function promoScheduleMatches(array $r): bool {
     if ($type === 'WEEKLY') return in_array((int) date('w'), array_map('intval', (array) ($r['weekdays'] ?? [])), true);
     return false;
 }
+/** The stores a promo is limited to (unique ids, max 300). Empty = every store. */
+function promoMerchantScope(array $r): array {
+    $out = [];
+    foreach ((array) ($r['merchantIds'] ?? []) as $m) {
+        $m = trim((string) $m);
+        if ($m !== '' && strlen($m) <= 64) $out[$m] = true;
+    }
+    return array_slice(array_keys($out), 0, 300);
+}
 /**
  * يقيّم العروض المفعّلة على أوردر ويرجّع الأنسب (أعلى أولوية) أو null.
+ *
+ * $merchantIds = the stores in the order. A promo limited to some stores
+ * («توصيل مجاني من محل كذا») needs every one of them on its list: the fee is
+ * one trip for the whole basket, so a basket that also holds another store
+ * pays normally, and an order with no known store never qualifies.
  * @return array{ruleId:string,label:string,discount:float,newFee:float,originalFee:float}|null
  */
-function evalDeliveryPromo(?string $customerId, float $fee, bool $hasIntercity, float $orderAmount): ?array {
+function evalDeliveryPromo(?string $customerId, float $fee, bool $hasIntercity, float $orderAmount, array $merchantIds = []): ?array {
     if ($fee <= 0) return null;
+    $merchantIds = array_values(array_unique(array_filter(array_map(fn($m) => trim((string) $m), $merchantIds), fn($m) => $m !== '')));
     $rules = promoRules();
     usort($rules, fn($a, $b) => ((int) ($b['priority'] ?? 0)) <=> ((int) ($a['priority'] ?? 0)));
     foreach ($rules as $r) {
         if (empty($r['isActive'])) continue;
         if (!promoScheduleMatches($r)) continue;
+        $scope = promoMerchantScope($r);
+        if ($scope) {
+            if (!$merchantIds || array_diff($merchantIds, $scope)) continue;
+        }
         if (($r['excludeIntercity'] ?? true) && $hasIntercity) continue; // استثناء أوردرات قنا/الترحيل
         $minOrder = ($r['minOrderAmount'] ?? '') !== '' ? (float) $r['minOrderAmount'] : 0.0;
         // An order whose value is unknown (0 — the quote, a free-text errand)
@@ -16408,7 +16445,7 @@ if ($method === 'POST' && $path === '/zones/quote-delivery') {
         }
         $inter = array_values(array_filter($plan['groups'], fn($g) => $g['kind'] === 'INTERCITY'));
         if ($q[0] === 'NO_PRICE' && !$inter) jsonErr('لا يوجد سعر توصيل لهذه المنطقة، تواصل مع الدعم', 400, 'NO_DELIVERY_PRICE');
-        $__promo = $skipPromo ? null : evalDeliveryPromo(optionalAuthUid(), (float) $plan['fee'], count($inter) > 0, 0.0);
+        $__promo = $skipPromo ? null : evalDeliveryPromo(optionalAuthUid(), (float) $plan['fee'], count($inter) > 0, 0.0, $mids);
         // Same as the order: the groups and the «نقل + توصيل» parts have to add
         // up to the discounted price, not the one before the promo.
         if ($__promo) {
@@ -16951,7 +16988,7 @@ if ($method === 'POST' && $path === '/orders/cart') {
     $deliveryPromo = null;
     if ($fee !== null && $fee > 0) {
         $__hasInter = $plan && count(array_filter($plan['groups'], fn($g) => ($g['kind'] ?? '') === 'INTERCITY')) > 0;
-        $deliveryPromo = evalDeliveryPromo($uid, (float) $fee, $__hasInter, (float) $grandSub);
+        $deliveryPromo = evalDeliveryPromo($uid, (float) $fee, $__hasInter, (float) $grandSub, $ids);
         if ($deliveryPromo) {
             $fee = $deliveryPromo['newFee'];
             // The groups must carry the discounted fee too. OrderLeg.deliveryFee
@@ -17206,7 +17243,8 @@ if ($method === 'POST' && $path === '/orders') {
     // عرض توصيل — يخصم من الرسوم ويتسجّل في customData.
     $deliveryPromo = null;
     if ($fee !== null && $fee > 0) {
-        $deliveryPromo = evalDeliveryPromo($uid, (float) $fee, $__hasIntercity, 0.0);
+        $deliveryPromo = evalDeliveryPromo($uid, (float) $fee, $__hasIntercity, 0.0,
+            !empty($b['merchantId']) ? [(string) $b['merchantId']] : []);
         if ($deliveryPromo) {
             $fee = $deliveryPromo['newFee'];
             $cd = is_array($b['customData'] ?? null) ? $b['customData'] : [];
