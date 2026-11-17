@@ -7148,6 +7148,7 @@ function driverAccountText(string $driverId, string $name, ?string $day = null):
     $dow = (int) date('w', strtotime($day));
     $L = [
         '📊 *حسابك — ' . (SHIFT_DAYS_AR[$dow] ?? '') . ' ' . date('j/n', strtotime($day)) . '* يا كابتن ' . $name,
+        workDayStartHour($day) === 0 ? '🕛 حساب اليوم من 12 بليل لحد 12 بليل' : '🕒 حساب اليوم من 3 الفجر لحد 3 الفجر',
         $open ? '🟢 شغّال من ' . cairoTimeLabel((string) $open['startedAt']) . ' (بقالك ' . workedLabel((string) $open['startedAt']) . ')'
               : '⚪ مش مسجّل حضور — ابعت /حضرت',
     ];
@@ -14552,7 +14553,7 @@ if ($method === 'POST' && $path === '/telegram/webhook') {
                 tgSend($chatId, "انت لسه مش مربوط كمندوب 🙏\nافتح رابط الربط اللي وصلك من الإدارة الأول.");
             } else {
                 try {
-                    // Built by driverAccountText(): today's work day (03:00 → 03:00) by
+                    // Built by driverAccountText(): today's work day (00:00 → 00:00) by
                     // the day each order was placed — the same rows the driver report,
                     // the bonus and the settlement count.
                     tgSend($chatId, driverAccountText((string) $drv['userId'], (string) $drv['name']));
