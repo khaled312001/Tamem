@@ -2,8 +2,9 @@
  * «تقفيل المناديب» by the week (Tue → Mon, like the shift schedule).
  *
  * Every driver's week added up from his days: the total, the company's and his
- * share, free orders, bonus, deductions and what each day left for him, less any
- * cash he handed in short = what the company pays him. His % can be set for the
+ * share, bonus, deductions and what each day left for him, less any cash he handed
+ * in short = what the company pays him («المجاني» only lowers the cash he hands in,
+ * never his money). His % can be set for the
  * week («كل واحد ليه اتفاق»); a day's figures are typed on the day itself. Closing
  * the week pays him and settles every order and bonus of it.
  */
@@ -248,9 +249,10 @@ export function DriversWeekTab({
             ))}
           </div>
           <p className="text-xs leading-relaxed text-muted-foreground">
-            الأسبوع من الثلاثاء للاتنين. المتبقي له = نسبته + المجاني + البونص − الخصم من كل أيامه،
-            ويقبض = المتبقي له − أي كاش سلّمه ناقص. الأرقام بتتعدل من اليوم نفسه، والنسبة بتتعدل
-            للأسبوع كله من هنا. اضغط على أي مندوب عشان تقفّل أسبوعه وتديله فلوسه.
+            الأسبوع من الثلاثاء للاتنين. المتبقي له = نسبته + البونص − الخصم من كل أيامه، ويقبض =
+            المتبقي له − أي كاش سلّمه ناقص. المجاني بيقلّل الكاش اللي يسلّمه بس. الأرقام بتتعدل من
+            اليوم نفسه، والنسبة بتتعدل للأسبوع كله من هنا. اضغط على أي مندوب عشان تقفّل أسبوعه
+            وتديله فلوسه.
             {!data.ended && ' الأسبوع ده لسه ماخلصش.'}
           </p>
           {data.lines.length === 0 ? (
@@ -430,7 +432,7 @@ function DriverWeekDialog({
         <p className="text-xs text-muted-foreground">
           {l.orders} أوردر في {l.days.length} يوم · الكاش اللي سلّمه أو هيسلّمه {money(l.calc.cash)}
         </p>
-        <FigureTiles c={asCalc(l.calc)} freeCount={l.free} onEdit={null} />
+        <FigureTiles c={asCalc(l.calc)} freeCount={l.free + l.pharmacy} onEdit={null} />
         <OrdersNotes l={l} />
 
         <SplitBox
@@ -528,7 +530,6 @@ function DriverWeekDialog({
         <section className="rounded-xl border-2 border-brand-red/20 bg-brand-red/[0.03] p-3 tabular-nums">
           {[
             [`نسبته (${pctLabel(l.calc.pct)})`, money(l.calc.share)],
-            ['المجاني', l.calc.free ? `+ ${money(l.calc.free)}` : '0'],
             ['البونص', l.calc.bonus ? `+ ${money(l.calc.bonus)}` : '0'],
             ['الخصم', l.calc.deduction ? `− ${money(l.calc.deduction)}` : '0'],
           ].map(([k, v]) => (

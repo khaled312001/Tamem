@@ -7159,7 +7159,6 @@ function driverAccountText(string $driverId, string $name, ?string $day = null):
     $L[] = '📦 توصيلات: ' . count($rows) . (($l['free'] ?? 0) ? ' (منهم ' . $l['free'] . ' مجاني 🎁)' : '');
     $L[] = '🚚 الإجمالي: ' . waMoney($c['total'] ?? 0);
     $L[] = '🤝 نسبتك ' . acctPctText((float) ($c['pct'] ?? 0)) . ': ' . waMoney($c['share'] ?? 0);
-    if ($c && ($c['free'] > 0 || $l['free'] > 0)) $L[] = '🎁 المجاني: ' . waMoney($c['free']) . ' (نسبتك من سعره الأصلي)';
     $bonus = (float) ($c['bonus'] ?? 0);
     $nx = $l['bonus']['next'] ?? null;
     $done = (int) ($l['bonus']['orders'] ?? count($rows));
@@ -7173,9 +7172,11 @@ function driverAccountText(string $driverId, string $name, ?string $day = null):
     $L[] = '━━━━━━━━━━';
     $L[] = '💰 المتبقي ليك النهارده: ' . waMoney($c['remaining'] ?? 0);
     if ($wk) $L[] = '📅 المتبقي ليك في الأسبوع لحد دلوقتي: ' . waMoney($wk['payable']) . ' — بتقبضه آخر الأسبوع';
+    if ($c && $c['free'] > 0)
+        $L[] = '🎁 المجاني (ما اتحصلش منه كاش): ' . waMoney($c['free'])
+            . (($l['pharmacyFees'] ?? 0) > 0 ? ' — منه صيدلية الطاهر ' . waMoney($l['pharmacyFees']) : '');
     $L[] = '💵 حصّلت كاش: ' . waMoney($c['cash'] ?? 0) . ' — سلّمه كله للمكتب'
         . (($l['otherFees'] ?? 0) > 0 ? ' (و' . waMoney($l['otherFees']) . ' اتدفعوا للشركة على طول)' : '');
-    if (($l['pharmacyFees'] ?? 0) > 0) $L[] = '💊 توصيل صيدلية الطاهر ' . waMoney($l['pharmacyFees']) . ' على حساب الصيدلية، مش معاك';
     if ($cl = $l['closing'] ?? null) {
         $got = $cl['received'] ?? $cl['expected'];
         $L[] = '✅ يومك اتقفل: سلّمت ' . waMoney($got)
@@ -8667,14 +8668,16 @@ function acctPctText(float $p): string { return rtrim(rtrim(number_format($p, 2,
  * written on the day ($only: just him). He hands the office ALL the cash he collected,
  * every day, and the company pays him what's left for him when his week (Tue → Mon)
  * closes (owner, 2026-11-17). Per driver, `calc` — each figure worked out, or typed:
- *   total      his orders' delivery fees as charged (a free order counts 0 here)
+ *   total      his orders' delivery fees at their real price (a free order at its own)
  *   share      his % of total; company = total − share
- *   free       his % of the free orders' real fee (the promo is the company's cost)
+ *   free       the fees he did NOT collect: the free / discounted orders' discount and
+ *              the pharmacy's (it pays on account). It comes off the cash he hands in,
+ *              never off or onto his money (the office's own sheet, 2026-11-17)
  *   bonus      the rules' bonus (or the accountant's amount) + any + line
  *   deduction  lateness + absence (rules or amounts) + any − line
- *   remaining  share + free + bonus − deduction: what the day leaves for him
- *   cash       the cash he collected (not wallets, not the pharmacy's; a typed total
- *              moves it by its difference): what he hands in
+ *   remaining  share + bonus − deduction: what the day leaves for him
+ *   cash       total − free − what wallets paid the company: what he hands in (a
+ *              typed total or free moves it by its difference)
  *   owed       remaining ± a short/extra hand-in once the day is closed
  * net = remaining and handOver = cash, for the callers that read those.
  */
@@ -8696,7 +8699,6 @@ function acctDriverDaySheet(string $day, ?string $only = null): array {
             SUM($due) share,
             SUM(CASE WHEN $W > $fee THEN 1 ELSE 0 END) free,
             SUM(GREATEST($W - $fee, 0)) freeCost,
-            SUM(CASE WHEN $W > $fee THEN $due * ($W - $fee) / $W ELSE 0 END) freeShare,
             SUM(CASE WHEN COALESCE(o.driverSettlementStatus, 'PENDING') <> 'SETTLED' THEN 1 ELSE 0 END) unpaid
         FROM `Order` o LEFT JOIN `DriverProfile` dp ON dp.userId = o.assignedDriverId
         WHERE o.status IN ('DELIVERED','COMPLETED') AND o.assignedDriverId IS NOT NULL AND o.createdAt >= ? AND o.createdAt < ?"
@@ -8782,11 +8784,12 @@ function acctDriverDaySheet(string $day, ?string $only = null): array {
         $adjSaved = round($adjRow[$id] ?? 0.0, 2);
         $manual = round((float) ($amt['EXTRA'] ?? 0) - $adjSaved, 2);    // the ± lines, not the typed figures' row
         $shareAll = round((float) ($o['share'] ?? 0), 2);
-        $freeAuto = round((float) ($o['freeShare'] ?? 0), 2);
-        $sAuto = round($shareAll - $freeAuto, 2);
-        $tAuto = round((float) ($o['charged'] ?? 0), 2);
         $worth = round((float) ($o['worth'] ?? 0), 2);
+        $sAuto = $shareAll;
+        $tAuto = $worth;
         $freeValue = round((float) ($o['freeCost'] ?? 0), 2);
+        $phFees = round((float) ($o['pharmacyFees'] ?? 0), 2);
+        $freeAuto = round($freeValue + $phFees, 2);
         $cashFees = round((float) ($o['cashFees'] ?? 0), 2);
         $pAuto = $worth > 0 ? $shareAll / $worth * 100 : (float) ($weekPct[$id]['pct'] ?? $profilePct[$id] ?? 0);
         $bAuto = round($amt['BONUS'] + max(0.0, $manual), 2);
@@ -8801,12 +8804,12 @@ function acctDriverDaySheet(string $day, ?string $only = null): array {
         elseif ($ev('pct') !== null) { $p = $ev('pct'); $S = round($T * $p / 100, 2); }
         elseif ($ev('total') !== null) { $p = $pAuto; $S = round($T * $p / 100, 2); }
         else { $p = $pAuto; $S = $sAuto; }
-        $M = $ev('free') ?? ($split ? round($freeValue * $p / 100, 2) : $freeAuto);
+        $M = $ev('free') ?? $freeAuto;
         $B = $ev('bonus') ?? $bAuto;
         $D = $ev('deduction') ?? $dAuto;
-        $rCalc = round($S + $M + $B - $D, 2);
+        $rCalc = round($S + $B - $D, 2);
         $R = $ev('remaining') ?? $rCalc;
-        $cashExp = round(max(0.0, $cashFees + $T - $tAuto), 2);
+        $cashExp = round(max(0.0, $cashFees + ($T - $tAuto) - ($M - $freeAuto)), 2);
         $unpaid = (int) ($o['unpaid'] ?? 0);
         $closing = null;
         if ($c) {
@@ -9515,8 +9518,9 @@ if (str_starts_with($path, '/admin/accounting')) {
                            ON DUPLICATE KEY UPDATE value = VALUES(value), note = VALUES(note), setById = VALUES(setById), setByName = VALUES(setByName), setAt = NOW(3)')
                 ->execute([$driverId, $day, $field, $v, $note ?: null, $acctBy, $st->fetchColumn() ?: null]);
         }
-        // «المتبقي له» typed is the last word only until another figure of the day changes
-        if ($field !== 'remaining') $del->execute([$driverId, $day, 'remaining']);
+        // «المتبقي له» typed is the last word only until another figure of his money changes
+        // («المجاني» only moves the cash he hands in)
+        if (!in_array($field, ['remaining', 'free'], true)) $del->execute([$driverId, $day, 'remaining']);
         if ($line = acctDriverDayLine($driverId, $day)) acctSyncDayAdj($line, $day);
         jsonOk(['line' => acctDriverDayLine($driverId, $day)]);
     }

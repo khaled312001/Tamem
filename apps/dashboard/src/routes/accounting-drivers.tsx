@@ -1,11 +1,11 @@
 /**
  * «تقفيل المناديب» — each driver's work day, the way the accountant closes it.
  *
- * He hands the office ALL the cash he collected every day; what the day leaves for
- * him (his % of the fees + his % of the free orders + bonus − deductions) waits for
- * his week (Tue → Mon), whose closing pays him. Every figure of the row (total,
- * the company's, his, free orders, bonus, deduction, what's left for him) can be
- * typed over, with a reason. Closing his day records the cash he handed in.
+ * He hands the office ALL the cash he collected every day: the total (every fee at its
+ * real price) less «المجاني» (what he didn't collect: free / discounted orders, the
+ * pharmacy's). What the day leaves for him (his % of the total + bonus − deductions)
+ * waits for his week (Tue → Mon), whose closing pays him. Every figure of the row can
+ * be typed over, with a reason. Closing his day records the cash he handed in.
  */
 import { useIsFetching, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
@@ -200,10 +200,10 @@ export const FIG_LABEL: Record<Figure, string> = {
 };
 const FIG_HINT: Record<Figure, string> = {
   total:
-    'توصيل أوردراته زي ما اتدفع (المجاني بصفر). لو فيه أوردرات متسجلتش اكتب الإجمالي الصح: نسبته بتتحسب عليه، والكاش المطلوب منه بيتغير بالفرق.',
+    'توصيل كل أوردراته بسعره الأصلي (المجاني كمان). لو فيه أوردرات متسجلتش اكتب الإجمالي الصح: نسبته بتتحسب عليه، والكاش المطلوب منه بيتغير بالفرق.',
   company: 'اللي الشركة بتاخده من الإجمالي، والباقي ليه.',
   share: 'نسبته من الإجمالي، والباقي للشركة.',
-  free: 'نسبته من السعر الأصلي للأوردرات المجانية (الشركة شايلة الخصم).',
+  free: 'التوصيل اللي ما اتحصلش منه كاش: الأوردرات المجانية أو بخصم وصيدلية الطاهر. بيتخصم من الكاش اللي يسلّمه، ومالوش دعوة بالمتبقي له.',
   bonus: 'بونص القواعد وأي إضافة.',
   deduction: 'خصم التأخير والغياب وأي خصم تاني.',
   remaining:
@@ -254,9 +254,9 @@ export function OrdersNotes({
 }) {
   const notes = [
     l.free > 0 &&
-      `${l.free} أوردر مجاني أو بخصم: الشركة شالت ${money(l.freeCost)} من توصيلهم، ونسبته منهم على سعرهم الأصلي في «المجاني».`,
+      `${l.free} أوردر مجاني أو بخصم: العميل مدفعش ${money(l.freeCost)} من توصيلهم. محسوبين في الإجمالي بسعرهم الأصلي ونسبته منهم عادي، والـ ${money(l.freeCost)} في «المجاني» بتتخصم من الكاش.`,
     l.pharmacy > 0 &&
-      `${l.pharmacy} أوردر صيدلية الطاهر: رسومهم ${money(l.pharmacyFees)} الصيدلية بتدفعها للشركة، مش معاه. نسبته منهم عادي.`,
+      `${l.pharmacy} أوردر صيدلية الطاهر: رسومهم ${money(l.pharmacyFees)} الصيدلية بتدفعها للشركة، مش معاه، فهي في «المجاني». نسبته منهم عادي.`,
     l.otherFees > 0 &&
       `${money(l.otherFees)} توصيل اتدفعوا فودافون كاش أو إنستاباي للشركة على طول، مش معاه.`,
   ].filter((x): x is string => !!x);
@@ -453,7 +453,7 @@ export function figText(f: Figure, v: number) {
 export const FIG_TONE: Partial<Record<Figure, string>> = {
   share: 'text-emerald-700',
   bonus: 'text-emerald-700',
-  free: 'text-emerald-700',
+  free: 'text-amber-700',
   deduction: 'text-destructive',
   remaining: 'font-black',
 };
@@ -644,9 +644,9 @@ export function DriversDayTab({
             ))}
           </div>
           <p className="text-xs leading-relaxed text-muted-foreground">
-            المندوب بيسلّم الكاش كله للمكتب كل يوم. المتبقي له = نسبته + المجاني + البونص − الخصم،
-            وبياخده آخر الأسبوع لما تقفّل أسبوعه. دوس على أي رقم عشان تعدّله، أو على اسم المندوب
-            عشان تشوف تفاصيله وتقفّل يومه.
+            المندوب بيسلّم الكاش كله للمكتب كل يوم: الإجمالي − المجاني. المتبقي له = نسبته + البونص
+            − الخصم، وبياخده آخر الأسبوع لما تقفّل أسبوعه. دوس على أي رقم عشان تعدّله، أو على اسم
+            المندوب عشان تشوف تفاصيله وتقفّل يومه.
           </p>
           {data.lines.length === 0 ? (
             <p className="rounded-xl border border-border bg-card p-6 text-center text-sm text-muted-foreground">
@@ -727,7 +727,7 @@ export function DriversDayTab({
                         <FigureCell
                           c={l.calc}
                           f="free"
-                          sub={l.free ? `${l.free} أوردر` : null}
+                          sub={l.free + l.pharmacy ? `${l.free + l.pharmacy} أوردر` : null}
                           onEdit={ed('free')}
                         />
                         <FigureCell c={l.calc} f="bonus" onEdit={ed('bonus')} />
@@ -912,8 +912,10 @@ function FigureEditor({
             : r2(c.total - n);
       const p = c.total > 0 ? (his / c.total) * 100 : c.pct;
       preview = `نسبته ${money(his)} (${pctLabel(r2(p))}) · الشركة ${money(r2(c.total - his))}`;
-    } else if (f === 'bonus' || f === 'free') {
-      preview = `المتبقي له ${signed(r2(c.remainingCalc - c[f] + n))}`;
+    } else if (f === 'free') {
+      preview = `الكاش المطلوب ${money(r2(Math.max(0, c.cash + c.free - n)))} · المتبقي له زي ما هو`;
+    } else if (f === 'bonus') {
+      preview = `المتبقي له ${signed(r2(c.remainingCalc - c.bonus + n))}`;
     } else if (f === 'deduction') {
       preview = `المتبقي له ${signed(r2(c.remainingCalc + c.deduction - n))}`;
     } else if (f === 'total') {
@@ -1172,11 +1174,11 @@ function DriverDayDialog({
         <p className="text-xs text-muted-foreground">
           {l.orders} أوردر
           {l.weekPct
-            ? ` · نسبة الأسبوع ${pctLabel(l.weekPct.pct)}${l.weekPct.note ? ` (${l.weekPct.note})` : ''}`
+            ? ` · نسبته في الأسبوع ${pctLabel(l.weekPct.pct)}${l.weekPct.note ? ` (${l.weekPct.note})` : ''}`
             : ` · نسبته في ملفه ${pctLabel(l.profilePct)}`}
           {editable && ' · دوس على أي رقم عشان تعدّله'}
         </p>
-        <FigureTiles c={c} freeCount={l.free} onEdit={editable ? onEdit : null} />
+        <FigureTiles c={c} freeCount={l.free + l.pharmacy} onEdit={editable ? onEdit : null} />
         {a && a.status !== 'off' && (
           <p className="text-xs">
             <span className={cn('rounded-full px-2 py-0.5 font-bold', STATUS_TONE[a.status])}>
@@ -1255,7 +1257,6 @@ function DriverDayDialog({
         <section className="rounded-xl border-2 border-brand-red/20 bg-brand-red/[0.03] p-3 tabular-nums">
           {[
             [`نسبته (${pctLabel(c.pct)})`, money(c.share)],
-            ['المجاني', c.free ? `+ ${money(c.free)}` : '0'],
             ['البونص', c.bonus ? `+ ${money(c.bonus)}` : '0'],
             ['الخصم', c.deduction ? `− ${money(c.deduction)}` : '0'],
           ].map(([k, v]) => (
@@ -1274,7 +1275,21 @@ function DriverDayDialog({
             <span>المتبقي له (بياخده آخر الأسبوع)</span>
             <span>{signed(c.remaining)}</span>
           </div>
-          <div className="flex justify-between py-0.5 text-base font-black">
+        </section>
+        <section className="rounded-xl border border-border bg-card p-3 tabular-nums">
+          {(
+            [
+              ['الإجمالي', money(c.total)],
+              ['المجاني (ما اتحصلش منه كاش)', c.free ? `− ${money(c.free)}` : '0'],
+              l.otherFees > 0 && ['اتدفع للشركة على طول (محفظة)', `− ${money(l.otherFees)}`],
+            ].filter(Boolean) as [string, string][]
+          ).map(([k, v]) => (
+            <div key={k} className="flex justify-between py-0.5">
+              <span className="text-muted-foreground">{k}</span>
+              <span>{v}</span>
+            </div>
+          ))}
+          <div className="mt-1 flex justify-between border-t border-border pt-1.5 text-base font-black">
             <span>يسلّم كاش للمكتب</span>
             <span>{money(c.cash)}</span>
           </div>
